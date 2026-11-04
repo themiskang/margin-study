@@ -24,7 +24,7 @@ interface StoreHost {
   saveData(data: any): Promise<void>;
 }
 type LibrarySnapshot = { data: PluginData; annotations: [string, Annotation[]][] };
-type HistoryEntry = { label: string; before: LibrarySnapshot; after: LibrarySnapshot };
+type HistoryEntry = { label: string; before: LibrarySnapshot; after: LibrarySnapshot } | { label: string; nodeMove: { id: string; before: {x:number;y:number}; after: {x:number;y:number} } };
 type BackupFile = { path: string; storedPath: string; sha256: string; bytes: number };
 type BackupManifest = { format: "margin-study-backup"; version: 2; createdAt: string; dataSha256: string; files: BackupFile[]; missingFiles?: string[] };
 const clone = <T>(value: T): T => value == null ? value : JSON.parse(JSON.stringify(value));
@@ -627,9 +627,9 @@ export class Store {
   getLibraryHistoryState(): {canUndo:boolean;canRedo:boolean;undoLabel?:string;redoLabel?:string;revision:number} {
     return {canUndo:this.history.length>0,canRedo:this.future.length>0,undoLabel:this.history[this.history.length-1]?.label,redoLabel:this.future[this.future.length-1]?.label,revision:this.libraryHistoryRevision};
   }
-  undoLibraryChange(): boolean { const item = this.history.pop(); if (!item) return false; this.future.push(item); this.libraryHistoryRevision++; this.restoreSnapshot(item.before, item.after); this.restoreCardAnchors(); return true; }
+  undoLibraryChange(): boolean { const item = this.history.pop(); if (!item) return false; this.future.push(item); this.libraryHistoryRevision++; if ('nodeMove' in item) { const node=this.getNode(item.nodeMove.id); if(node) Object.assign(node,item.nodeMove.before); this.save(); } else { this.restoreSnapshot(item.before, item.after); this.restoreCardAnchors(); } return true; }
   libraryTransaction<T>(label: string, action: () => T): T { return this.mutate(label, action); }
-  redoLibraryChange(): boolean { const item = this.future.pop(); if (!item) return false; this.history.push(item); this.libraryHistoryRevision++; this.restoreSnapshot(item.after, item.before); this.restoreCardAnchors(); return true; }
+  redoLibraryChange(): boolean { const item = this.future.pop(); if (!item) return false; this.history.push(item); this.libraryHistoryRevision++; if ('nodeMove' in item) { const node=this.getNode(item.nodeMove.id); if(node) Object.assign(node,item.nodeMove.after); this.save(); } else { this.restoreSnapshot(item.after, item.before); this.restoreCardAnchors(); } return true; }
   private restoreCardAnchors(): void {
     for (const c of this.cards.filter(c => !c.groupId)) for (const source of this.sources(c)) {
       if (!source.anchorAnnId) continue;
@@ -963,6 +963,12 @@ export class Store {
   }
 
   getNode(id: string): MindNode | undefined { return this.nodes.find(n => n.id === id); }
+  moveNode(id: string, x: number, y: number): void {
+    const node = this.getNode(id); if (!node || !Number.isFinite(x) || !Number.isFinite(y) || (node.x === x && node.y === y)) return;
+    const before = { x: node.x, y: node.y }; node.x = x; node.y = y;
+    this.history.push({ label: "移动节点", nodeMove: { id, before, after: { x, y } } });
+    if (this.history.length > 20) this.history.shift(); this.future = []; this.libraryHistoryRevision++; this.save();
+  }
   addNode(n: MindNode): void { this.mutate("添加节点", () => {
     if (this.getNode(n.id)) throw new Error("节点 id 已存在");
     const parent = n.parentId ? this.getNode(n.parentId) : undefined;

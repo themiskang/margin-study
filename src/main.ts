@@ -128,7 +128,12 @@ export default class MarginStudyPlugin extends Plugin {
     }));
     this.register(this.store.subscribe(() => {
       if (this.refreshTimer !== null) return;
-      this.refreshTimer = window.setTimeout(() => { this.refreshTimer = null; this.refreshSidebar(); this.refreshMindmap(); }, 50);
+      this.refreshTimer = window.setTimeout(() => {
+        this.refreshTimer = null;
+        this.sidebar?.refresh();
+        this.mindmapView?.refresh();
+        // StudyWorkspace subscribes to the store itself and schedules its own refresh.
+      }, 50);
     }));
     void this.reconcileMissingSources();
     this.register(this.store.subscribeNavigation(({canvasId,documentPath}) => {
