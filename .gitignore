@@ -13,3 +13,4 @@ pdf.worker.js
 
 # Git bundle 自排除，交接文本仍入库
 handoff-to-edict/margin-study.bundle
+handoff-to-edict/verify-final.log
