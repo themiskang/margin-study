@@ -1042,3 +1042,7 @@ Pad 选中卡片卡顿继续修复（2026-11-04）：用户实测指出选中时
 Pad 拖动松手闪回修复（2026-11-04）：用户反馈松手后卡片先回原位置再瞬移。原因是清除 transform 预览时尚未把 DOM 坐标设为目标值；现先写入最终 left/top 再清除 transform 并保存。新增触摸松手前后矩形差小于 1px 断言，完整 npm run verify 退出 0（Reader 213/213、Workspace 285/285）。已构建并安装 Pad 隔离库、重启；尚需用户真实拖动确认闪回与手感，A30/Pad 专项仍未关闭。
 
 Pad 已选卡片纵向拖动排查（2026-11-04）：用户反馈选中后上下拖动仍卡。相同 Pad 合成拖动选中态 LayoutCount 43，未选中态此前约 1；尝试预缓存相连边几何并在拖动时临时隐藏操作栏，复测仍 42，说明二者不是已确认根因，不得宣称根治。20 步纵向合成 trace：Layerize 43 次合计25.5ms、UpdateLayoutTree 16次12.0ms、Paint 34次10.9ms、Layout 14次1.8ms；仅合成输入，不代表实际手感。上述候选已构建安装隔离 Pad，完整 npm run verify 退出 0（Reader 213/213、Workspace 285/285）。用户物理卡顿尚未解决，A30/Pad 专项未关闭。下一步第一动作：检查选中态真实卡片 DOM 和宿主渲染层为何触发逐帧 layerize/paint，做有/无底部 backdrop-filter 的隔离对照，针对结果修复；不要再要求用户反复试未经量化的候选。
+
+## 2026-11-04 迁入 edict 交接完成
+
+交接包 `handoff-to-edict/` 已完成，`verify-handoff.sh` 机械验收 12 项全部 PASS；收尾完整 `npm run verify` 退出 0，Workspace 285/285、Reader 213/213。Git 基线 tag 为 `handoff-20261104`，bundle 已复核。edict 侧 8 席 SOUL 与 agents.json 改动已形成 `patches/edict-margin-local.patch`，未运行 install.sh。切换后旧 IDE 仅保留查证据与答问，不再接开发任务；src 写操作只能经 edict 兵部的 Codex 包装器，禁止双写。A30、Pad 及其他未关闭项仍按 `handoff-to-edict/ASSERTIONS.csv` 保留，不因交接完成而写成通过。
