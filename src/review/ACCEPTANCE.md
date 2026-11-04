@@ -1,0 +1,56 @@
+# 复习与卡片验收
+
+验收使用合成卡片、内存存储和隔离浏览器。测试不读取用户的活跃 Obsidian 库，也不控制原版应用。
+
+## 行为与持久化
+
+- 命名卡组保存成员、学习集绑定和进度；同一卡片在不同卡组中拥有独立题目与调度。旧的有作用域、无作用域记录保留原键，并通过兼容卡组继续使用。
+- 普通新卡片不自动加入复习。显式加入立即到期；未来到期的卡片仍是卡组成员，可从“浏览全部卡片”查看。
+- 浏览、收藏、编辑、前后翻页与筛选不产生评分。AQ 是进入问答评分的独立操作；显示答案是允许四档评分的独立门槛。
+- 收藏、标签、来源、颜色、最后评分可交集筛选；支持加入顺序、文档位置、文本与稳定随机排序。
+- 原始内容与复习问题分别保存。标题、强调内容、全文和手写自定义问题只改变复习投影；批量设置默认保留已有自定义问题。
+- 复习副本可选择标题、摘录、笔记、图片和遮挡。刷新来源只更新明确选中的部分，保留副本身份、独立遮挡及已有进度。
+- 每题一条待复习记录。评分、批注、实际手绘、内容快照、撤销与重开均保留。初始化审计与已完成历史、每日计数分开。
+- 冲突合并保留相互一致的卡片、脑图、卡组与题目关系；合并组员与解除合并保持来源及复习身份。
+- 卡片编辑器的格式栏操作真实选区，可保存字体、字号、图片与手绘，并显示 Markdown 预览。
+
+## 原版参照与界面
+
+原版运行截图由主任务另行采集，位于 `evidence/native-max-l4/`：
+
+| 参照 | 用途 | 隔离浏览器证据 |
+| --- | --- | --- |
+| `02-four-ratings.png` | 1512×949 桌面评分白卡、顶部计数、四个底部评分按钮与颜色 | [评分](native-acceptance-evidence/review-native-reference.png) |
+| `06-editor-reference.png` | 520×560 浮动 Note Card 编辑器与底部格式栏 | [编辑器](native-acceptance-evidence/card-editor-native-reference.png) |
+| `12-review-browse-reference.png` | 1512×859 的 AQ 前浏览：白卡约 x162、y80、1188×680，20px 正文，独立 Prev/Next 底栏 | [浏览](native-acceptance-evidence/browse-native-reference.png) |
+
+浏览与评分采用不同的呈现参数。卡组管理、筛选面板及高级设置属于插件实现，未声称与原版每个子菜单一致。源卡中明确保存的字体设置优先于默认参照字号。
+
+## 可重复验收
+
+在开发目录运行：
+
+```sh
+node src/review/acceptance.mjs --audit
+node src/review/pending-acceptance.mjs
+node src/review/deck-acceptance.mjs
+node src/review/ui-acceptance.mjs --output-dir src/review/acceptance-evidence
+node src/review/ui-acceptance.mjs --native-only --output-dir src/review/native-acceptance-evidence
+npx tsc --noEmit
+```
+
+2026-10-16 已通过：42 项核心复习检查、10 项持久化审计、24 项待复习/历史检查、23 项卡组/来源刷新检查、34 项完整浏览器交互；其中 7 项参照界面检查可单独复跑。最新完整结果在 `evidence/verification/review-ui/results.json`，菜单回归的先失败/后通过结果在 `evidence/verification/review-footer-red` 和 `review-footer-green`。这些数字不表示原版功能覆盖率。
+
+## 真实 Obsidian 复查与漏检修正
+
+2026-10-16 已实际编辑合成 U2 卡片的笔记、预览 Markdown、保存并确认脑图同步；原文回跳打开第 1 页，见 `evidence/native-max-l4/21-*`、`23-*`。新建验收卡组、显式加入样例卡片后，浏览页与问答评分页分别显示，显示答案后出现四档评分。本轮没有给验收库卡片评分。
+
+用户指出刚打开卡组的浏览页底部菜单错误。实机截图 `24-*`、`25-*` 确认 Prev/Next、AQ 与关闭按钮被 Obsidian 默认 `button:not(.clickable-icon)` 样式盖出不透明底色，文字对比不足；此前独立浏览器通过没有覆盖该宿主规则，不能算视觉验收通过。现已提高复习界面按钮样式的局部优先级，并把 Obsidian 1.14.4 实际规则加入现有 UI 验收，先复现失败，再验证修复。
+
+重新启用验收库插件后，真实窗口中的底色消失、文字和图标可读，见 `26-*`。实际点击 AQ → 返回浏览 → 关闭，均到达对应页面；再加入第二张合成卡片，实际 Next 从 1/2 到 2/2、Prev 返回 1/2，首尾按钮相应禁用，见 `27-*`。这次修复不证明其余底栏或子菜单已经逐项对齐。
+
+## 证据边界
+
+浏览器使用真实鼠标与键盘，调用实际 Store、卡片和复习模块。Obsidian 宿主及 Markdown 渲染器使用合成替身；这些结果不能代替用户真实 Obsidian 中的安装验收。麦克风权限与实际音频硬件未在此测试。
+
+原版运行截图证明所见布局与操作，手册证明已记载行为；未观察的参数或内部算法仍属未知。调度使用公开 `ts-fsrs`，没有声称评分后的数值间隔等同原版。`cN` 与独立图片遮挡题属于插件扩展，不能计作已证实的原版行为。

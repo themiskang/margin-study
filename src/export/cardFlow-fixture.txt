@@ -1,0 +1,14 @@
+import { PDFDocument } from '__PROJECT__/node_modules/pdf-lib/es/index.js';
+import { buildCardFlowPdf } from '__PROJECT__/src/export/cardFlow';
+const results:any[]=[];(window as any).results=results;
+(async()=>{try{
+ const cards:any[]=[{id:'a',front:'A 中文摘录',title:'A 标题',back:'A 评论',type:'excerpt',docPath:'x',links:[],tags:[],createdAt:'today'},{id:'b',front:'B '+('long text '.repeat(900)),title:'B 标题',type:'excerpt',docPath:'x',links:[],tags:[],createdAt:'today'}];
+ const sample=document.createElement('canvas');sample.width=80;sample.height=40;const paint=sample.getContext('2d')!;paint.fillStyle='#ff0000';paint.fillRect(0,0,40,40);paint.fillStyle='#0000ff';paint.fillRect(40,0,40,40);cards[0].image=sample.toDataURL('image/png');
+ const tall=document.createElement('canvas');tall.width=100;tall.height=1000;const tp=tall.getContext('2d')!;tp.fillStyle='#00bb00';tp.fillRect(0,0,100,500);tp.fillStyle='#ff00ff';tp.fillRect(0,500,100,500);cards.push({id:'c',front:'C END MARKER',title:'C 标题',back:'C 评论',image:tall.toDataURL('image/png'),type:'excerpt',docPath:'x',links:[],tags:[],createdAt:'today'});
+ const nodes:any[]=[{id:'b-node',cardId:'b',parentId:'a-node',x:200,y:30,collapsed:false},{id:'a-node',cardId:'a',parentId:null,x:20,y:20,collapsed:true},{id:'duplicate',cardId:'a',parentId:null,x:10,y:200,collapsed:false},{id:'c-node',cardId:'c',parentId:null,x:30,y:300,collapsed:false}];
+ const before=JSON.stringify({cards,nodes});const store:any={getScopedNodes:()=>nodes,getCard:(id:string)=>cards.find(c=>c.id===id)};
+ const output=await buildCardFlowPdf({store,app:{vault:{getAbstractFileByPath:()=>null}}} as any,{columns:2,includeInk:true});
+ (window as any).cardFlowPdf=Array.from(output.bytes).map(b=>String.fromCharCode(b)).join('');(window as any).cardFlowPdf=btoa((window as any).cardFlowPdf);
+ const pdf=await PDFDocument.load(output.bytes);if(pdf.getPageCount()!==output.pageCount||output.pageCount<2)throw Error('invalid page count');if(output.cardIds.join(',')!=='a,b,c')throw Error('order or unique card mismatch');if(JSON.stringify({cards,nodes})!==before)throw Error('source data mutated');
+ results.push({name:'PDF has ordered unique cards, correct pagination and unchanged source',passed:true});
+ }catch(error){results.push({name:'PDF has ordered unique cards, correct pagination and unchanged source',passed:false,error:String(error)});}finally{(window as any).done=true;}})();

@@ -1,0 +1,132 @@
+import { Store } from '__PROJECT__/src/model/store';
+import { MindmapRenderer } from '__PROJECT__/src/mindmap/mindmapRenderer';
+import { exportMindmapPng } from '__PROJECT__/src/export/mindmapExport';
+import { MarkdownRenderer } from 'obsidian';
+
+const target=document.querySelector('#fixtures') as HTMLElement,results:any[]=[],mounted:MindmapRenderer[]=[],stores:Store[]=[],errors:string[]=[];
+(window as any).results=results;
+(HTMLElement.prototype as any).empty=function(){this.replaceChildren();};
+Element.prototype.setPointerCapture=function(){};Element.prototype.releasePointerCapture=function(){};
+(MarkdownRenderer as any).render=async(_app:any,text:string,host:HTMLElement)=>{host.textContent=text;};
+window.addEventListener('error',event=>errors.push(event.message));
+window.addEventListener('unhandledrejection',event=>errors.push(String(event.reason)));
+function assert(value:any,message:string){if(!value)throw new Error(message);}
+function button(root:ParentNode,label:string):HTMLButtonElement{const node=[...root.querySelectorAll<HTMLButtonElement>('button')].find(value=>value.getAttribute('aria-label')===label||value.textContent===label);assert(node,'Missing button '+label);return node!;}
+const pause=()=>new Promise<void>(resolve=>setTimeout(resolve,0));
+const surface=(p:any)=>p.host.querySelector('[aria-label="脑图手写画布"]') as SVGSVGElement;
+function pointer(node:Element,type:string,x:number,y:number,extra:any={}){node.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,pointerId:17,button:0,isPrimary:true,clientX:x,clientY:y,...extra}));}
+function gesture(p:any,points:number[][],extra:any={}){const node=surface(p),rect=node.getBoundingClientRect(),world=p.host.querySelector('.ms-mindmap-world') as HTMLElement,scale=rect.width/world.offsetWidth;points.forEach((point,index)=>pointer(node,index===0?'pointerdown':index===points.length-1?'pointerup':'pointermove',rect.left+point[0]*scale,rect.top+point[1]*scale,extra));}
+function ink(p:any){return (p.store.canvases.find((canvas:any)=>canvas.id===p.canvasId) as any)?.handwriting;}
+async function test(name:string,action:()=>any){try{for(const view of mounted.splice(0))view.dispose();target.replaceChildren();document.querySelectorAll('.ms-modal-bg,#test-menu').forEach(node=>node.remove());await action();results.push({name,passed:true});}catch(error){results.push({name,passed:false,error:String(error),stack:(error as any).stack});}}
+async function fresh(existing?:any){
+ let disk:any={},files=new Map<string,string>();const app:any={vault:{getFiles:()=>[],getAbstractFileByPath:()=>null,adapter:{exists:async(path:string)=>files.has(path),mkdir:async(path:string)=>files.set(path,''),write:async(path:string,value:string)=>files.set(path,value),read:async(path:string)=>files.get(path)}}};
+ const storage=existing??{app,loadData:async()=>structuredClone(disk),saveData:async(value:any)=>{disk=structuredClone(value);}};
+ const store=new Store(storage);await store.load();stores.push(store);const set=store.studySets[0]??store.createStudySet('Handwriting');const canvasId=store.activeCanvasId!;
+ const plugin:any={app:storage.app,store,activeReader:null,viewEvents:{},refreshSidebar(){},refreshMindmap(){}};
+ const host=document.createElement('section');host.style.cssText='height:650px;width:1050px;max-width:100%;position:relative';target.append(host);
+ let calls:string[]=[];const view=new MindmapRenderer(plugin,{nativeChrome:true,onHandwritingModeChange:(mode:any)=>calls.push(mode)} as any);view.mount(host);mounted.push(view);return{store,set,canvasId,plugin,host,view,storage,calls};
+}
+try{
+ await test('Canvas handwriting mode is observable without duplicate callbacks and a pen stroke survives reopening',async()=>{
+  const p=await fresh(),events:string[]=[];assert(p.view.getHandwritingMode()==='off','initial handwriting mode must be off');const unsubscribe=p.view.subscribeHandwritingModeChange(mode=>events.push(mode));
+  p.view.setHandwritingMode('pen');p.view.setHandwritingMode('pen');assert(events.join(',')==='pen'&&p.calls.join(',')==='pen','unchanged mode echoed a callback');
+  assert(surface(p)&&getComputedStyle(surface(p)).pointerEvents!=='none','real drawing surface was not enabled');gesture(p,[[100,100],[150,120],[200,100]],{pointerType:'pen',pressure:.7});
+  assert(ink(p)?.layers[0].strokes.length===1,'pen stroke was not saved to the current mind map');assert(p.host.querySelectorAll('[data-map-ink-stroke]').length===1,'saved stroke was not rendered');
+  const saved=JSON.stringify(ink(p));await p.store.flush();p.view.dispose();const reopened=await fresh(p.storage);assert(JSON.stringify(ink(reopened))===saved&&reopened.host.querySelector('[data-map-ink-stroke]'),'reopening lost handwritten ink');
+  unsubscribe();p.view.setHandwritingMode('off');assert(events.join(',')==='pen','unsubscribe retained a mode callback');
+ });
+ await test('Brush opacity and straight line settings affect only new strokes, survive reload, and cancellation writes nothing',async()=>{
+  const p=await fresh();p.view.setHandwritingMode('pen');gesture(p,[[100,100],[150,140],[200,100]]);const old=JSON.stringify(ink(p).layers[0].strokes[0]);button(p.host,'脑图手写设置').click();
+  const opacity=p.host.querySelector<HTMLInputElement>('[aria-label="脑图画笔透明度"]'),line=p.host.querySelector<HTMLSelectElement>('[aria-label="脑图直线模式"]');assert(opacity&&line,'brush settings entry exposes only layers');
+  opacity!.value='.4';opacity!.dispatchEvent(new Event('input',{bubbles:true}));line!.value='always';line!.dispatchEvent(new Event('change',{bubbles:true}));gesture(p,[[100,200],[150,240],[200,200]]);
+  let strokes=ink(p).layers[0].strokes;assert(JSON.stringify(strokes[0])===old&&strokes[1].points.length===2&&strokes[1].points[0].y===strokes[1].points[1].y,'straight line modified old ink or retained curved path');assert(strokes[1].opacity===.4&&p.host.querySelector(`[data-map-ink-stroke="${strokes[1].id}"]`)?.getAttribute('opacity')==='0.4','opacity does not affect rendered ink');
+  const select=p.host.querySelector<HTMLSelectElement>('[aria-label="脑图直线模式"]')!;select.value='auto';select.dispatchEvent(new Event('change'));gesture(p,[[100,300],[150,301],[200,300]]);gesture(p,[[100,400],[150,450],[200,400]]);strokes=ink(p).layers[0].strokes;assert(strokes[2].points.length===2&&strokes[3].points.length===3,'Auto does not distinguish near-line from curve');
+  const before=JSON.stringify(ink(p)),node=surface(p),bounds=node.getBoundingClientRect();pointer(node,'pointerdown',bounds.left+100,bounds.top+500);pointer(node,'pointermove',bounds.left+200,bounds.top+500);node.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));pointer(node,'pointerup',bounds.left+250,bounds.top+500);assert(JSON.stringify(ink(p))===before,'Escape persisted cancelled ink');await p.store.flush();const reopened=await fresh(p.storage);assert(JSON.stringify(ink(reopened))===before&&reopened.host.querySelector('[opacity="0.4"]'),'reload lost opacity or stroke geometry');
+ });
+ await test('Finishing an ink gesture preserves strokes added by another view during that gesture',async()=>{
+  const p=await fresh();p.view.setHandwritingMode('pen');gesture(p,[[100,100],[200,100]]);const node=surface(p),bounds=node.getBoundingClientRect();pointer(node,'pointerdown',bounds.left+100,bounds.top+200);pointer(node,'pointermove',bounds.left+160,bounds.top+200);
+  let concurrent=structuredClone(ink(p));concurrent.layers[0].strokes.push({id:'other-view-stroke',tool:'pen',color:'#3366aa',width:3,points:[{x:100,y:300},{x:200,y:300}]});p.store.updateCanvas(p.canvasId,{handwriting:concurrent});pointer(node,'pointerup',bounds.left+200,bounds.top+200);
+  assert(ink(p).layers[0].strokes.length===3&&ink(p).layers[0].strokes.some((stroke:any)=>stroke.id==='other-view-stroke'),'drawing overwrote another view\'s ink');
+  p.view.setHandwritingMode('eraser');pointer(node,'pointerdown',bounds.left+150,bounds.top+70);pointer(node,'pointermove',bounds.left+150,bounds.top+110);concurrent=structuredClone(ink(p));concurrent.layers[0].strokes.push({id:'other-view-newer',tool:'pen',color:'#3366aa',width:3,points:[{x:100,y:400},{x:200,y:400}]});p.store.updateCanvas(p.canvasId,{handwriting:concurrent});pointer(node,'pointerup',bounds.left+150,bounds.top+130);
+  assert(ink(p).layers[0].strokes.length===3&&ink(p).layers[0].strokes.some((stroke:any)=>stroke.id==='other-view-newer'),'eraser overwrote another view\'s new ink');
+ });
+ await test('Pure handwritten maps export SVG and PNG with only the active and read-only overlay layers',async()=>{
+  const p=await fresh();p.store.updateCanvas(p.canvasId,{handwriting:{version:1,activeLayerId:'writing',overlayLayerId:'reference',layers:[
+   {id:'writing',name:'Writing',strokes:[{id:'export-pen',tool:'pen',color:'#30343b',width:3,points:[{x:100,y:100,pressure:.1},{x:130,y:100,pressure:.9},{x:160,y:100,pressure:.4}]}]},
+   {id:'reference',name:'Reference',strokes:[{id:'export-highlight',tool:'highlight',color:'#ffd54f',width:16,points:[{x:100,y:140},{x:160,y:140}]}]},
+   {id:'hidden',name:'Hidden',strokes:[{id:'export-hidden',tool:'pen',color:'#ff0000',width:3,points:[{x:9000,y:9000},{x:9200,y:9000}]}]},
+  ]}});const foreign=p.store.createCanvas(p.set.id,'Other');p.store.addNode({id:'foreign-node',canvasId:foreign.id,parentId:null,title:'FOREIGN MAP CONTENT',collapsed:false,x:12000,y:12000});p.store.setActiveCanvas(p.canvasId);p.view.render();
+  const blobs:Blob[]=[],original=URL.createObjectURL,stop=(event:MouseEvent)=>{if((event.target as HTMLElement)?.closest('a[download]'))event.preventDefault();};URL.createObjectURL=(blob:Blob|MediaSource)=>{if(blob instanceof Blob)blobs.push(blob);return original.call(URL,blob);};document.addEventListener('click',stop,true);
+  try{
+   exportMindmapPng(p.plugin);let modal=document.querySelector('.ms-modal')!;assert(modal,'pure handwritten map was considered empty');button(modal,'SVG 矢量').click();assert(blobs.length===1,'SVG file was not offered for download');const xml=await blobs[0].text(),doc=new DOMParser().parseFromString(xml,'image/svg+xml');assert(!doc.querySelector('parsererror'),'exported SVG is invalid');
+   assert(doc.querySelectorAll('[data-map-ink-stroke]').length===2&&doc.querySelector('[data-map-ink-stroke="export-pen"]')&&doc.querySelector('[data-map-ink-stroke="export-highlight"]'),'visible pen/highlighter ink missing from export');assert(!xml.includes('export-hidden')&&!xml.includes('FOREIGN MAP CONTENT')&&Number(doc.documentElement.getAttribute('width'))<500,'hidden layer or foreign map leaked into exported bounds');assert(new Set([...doc.querySelectorAll('[data-map-ink-stroke="export-pen"] path')].map(node=>node.getAttribute('stroke-width'))).size>1,'export lost pressure widths');
+   exportMindmapPng(p.plugin);modal=document.querySelector('.ms-modal')!;button(modal,'PNG 图片').click();for(let tries=0;tries<100&&!blobs.some(blob=>blob.type==='image/png');tries++)await new Promise(resolve=>setTimeout(resolve,10));assert(blobs.some(blob=>blob.type==='image/png'&&blob.size>100),'handwritten map PNG was not rendered');
+  }finally{URL.createObjectURL=original;document.removeEventListener('click',stop,true);}
+ });
+ await test('Deleting the active sketch layer selects a surviving layer and cannot delete the last layer',async()=>{
+  const p=await fresh();p.view.setHandwritingMode('pen');gesture(p,[[100,100],[200,100]]);button(p.host,'脑图手写设置').click();button(p.host,'新建手写图层').click();let modal=document.querySelector('.ms-modal')!;(modal.querySelector('textarea') as HTMLTextAreaElement).value='Temporary';button(modal,'确定').click();gesture(p,[[100,200],[200,200]]);const saved=JSON.stringify(ink(p));
+  button(p.host,'编辑手写图层').click();button(p.host,'删除图层 Temporary').click();modal=document.querySelector('.ms-modal')!;button(modal,'确定').click();assert(ink(p).layers.length===1&&ink(p).activeLayerId===ink(p).layers[0].id&&ink(p).layers[0].strokes[0].points[0].y===100,'deleting active layer lost surviving ink or left invalid selection');
+  assert(button(p.host,'删除图层 Default').disabled,'last layer can be deleted');button(p.host,'撤销脑图手写').click();assert(JSON.stringify(ink(p))===saved,'layer deletion was not recoverable in one undo');
+ });
+ await test('Zooming out leaves the full visible map available for world-coordinate handwriting',async()=>{
+  const p=await fresh();p.view.setHandwritingMode('pen');const scroll=p.host.querySelector('.ms-mindmap') as HTMLElement;
+  for(let index=0;index<8;index++)scroll.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,ctrlKey:true,deltaY:100,clientX:100,clientY:100}));
+  const rect=scroll.getBoundingClientRect(),hit=document.elementFromPoint(rect.left+rect.width-100,rect.top+rect.height-100);assert(hit?.closest('[aria-label="脑图手写画布"]'),'visible map stops accepting ink after zoom-out');
+ });
+ await test('Canvas coordinates survive zoom; cancellation and canvas switches keep writes in the owning map',async()=>{
+  const p=await fresh();p.view.setHandwritingMode('pen');const node=surface(p),rect=node.getBoundingClientRect();pointer(node,'pointerdown',rect.left+100,rect.top+100);pointer(node,'pointermove',rect.left+160,rect.top+100);pointer(node,'pointercancel',rect.left+160,rect.top+100);assert(!ink(p),'cancelled stroke was saved');
+  gesture(p,[[100,150],[200,150]]);const original=JSON.stringify(ink(p));const scroll=p.host.querySelector('.ms-mindmap')!;scroll.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,ctrlKey:true,deltaY:-100,clientX:300,clientY:300}));
+  gesture(p,[[100,250],[200,250]]);assert(Math.abs(ink(p).layers[0].strokes[1].points[0].x-100)<.01&&Math.abs(ink(p).layers[0].strokes[1].points[0].y-250)<.01,'zoom changed persisted world coordinates');
+  const second=p.store.createCanvas(p.set.id,'Second');const first=p.canvasId,prior=JSON.stringify(ink(p));p.store.setActiveCanvas(second.id);p.view.render();assert(!p.host.querySelector('[data-map-ink-stroke]'),'first map ink leaked into second canvas');gesture(p,[[300,300],[400,300]]);assert(p.store.canvases.find(canvas=>canvas.id===first)!.handwriting&&JSON.stringify(p.store.canvases.find(canvas=>canvas.id===first)!.handwriting)===prior,'drawing in second map changed first map');
+  p.store.setActiveCanvas(first);p.view.render();assert(p.host.querySelectorAll('[data-map-ink-stroke]').length===2,'switch back lost first map ink');const now=surface(p).getBoundingClientRect();pointer(surface(p),'pointerdown',now.left+20,now.top+40);pointer(surface(p),'pointermove',now.left+40,now.top+60);p.view.dispose();
+  assert(ink(p).layers[0].strokes.length===3,'closing discarded unfinished drawing');await p.store.flush();assert(original!==JSON.stringify(ink(p)),'fixture did not exercise persistent changes');
+ });
+ await test('Ink ignores another pointer cancellation and switching native selection tools releases drawing',async()=>{
+  const p=await fresh();p.view.setHandwritingMode('pen');const node=surface(p),bounds=node.getBoundingClientRect();pointer(node,'pointerdown',bounds.left+100,bounds.top+100);pointer(node,'pointercancel',bounds.left+100,bounds.top+100,{pointerId:99});pointer(node,'pointerup',bounds.left+200,bounds.top+100);assert(ink(p)?.layers[0].strokes.length===1,'another pointer discarded active ink');
+  const count=p.store.nodes.length;node.dispatchEvent(new MouseEvent('dblclick',{bubbles:true,cancelable:true,clientX:200,clientY:200}));assert(!document.querySelector('.ms-modal')&&p.store.nodes.length===count,'drawing double-click opened new-card dialog');
+  button(p.host,'连接卡片').click();assert(p.view.getHandwritingMode()==='off','link tool left canvas ink capturing node input');p.view.setHandwritingMode('pen');button(p.host,'多选').click();assert(p.view.getHandwritingMode()==='off','Select left canvas ink capturing cards');
+ });
+ await test('Sketch layers save independently; an overlay is visible but protected from the eraser',async()=>{
+  const p=await fresh();p.view.setHandwritingMode('pen');gesture(p,[[100,100],[200,100]]);const defaultId=ink(p).activeLayerId;
+  button(p.host,'脑图手写设置').click();button(p.host,'新建手写图层').click();let modal=document.querySelector('.ms-modal')!;(modal.querySelector('textarea') as HTMLTextAreaElement).value='Exercises';button(modal,'确定').click();
+  assert(ink(p).layers.length===2&&ink(p).activeLayerId!==defaultId,'new layer did not become editable');gesture(p,[[100,200],[200,200]]);assert(ink(p).layers.every((layer:any)=>layer.strokes.length===1),'strokes leaked between layers');
+  const overlay=p.host.querySelector('[aria-label="只读叠加手写图层"]') as HTMLSelectElement;overlay.value=defaultId;overlay.dispatchEvent(new Event('change',{bubbles:true}));assert(p.host.querySelectorAll('[data-map-ink-stroke]').length===2,'selected overlay is not visible');
+  p.view.setHandwritingMode('eraser');gesture(p,[[150,70],[150,130]]);assert(ink(p).layers.find((layer:any)=>layer.id===defaultId).strokes.length===1,'eraser changed read-only overlay');gesture(p,[[150,170],[150,230]]);assert(ink(p).layers.find((layer:any)=>layer.id!==defaultId).strokes.length===0,'eraser could not edit active layer');
+  button(p.host,'撤销脑图手写').click();button(p.host,'编辑手写图层').click();button(p.host,'重命名图层 Exercises').click();modal=document.querySelector('.ms-modal')!;(modal.querySelector('textarea') as HTMLTextAreaElement).value='Solutions';button(modal,'确定').click();
+  assert(ink(p).layers.some((layer:any)=>layer.name==='Solutions'),'layer rename was not saved');button(p.host,'合并图层 Default 到当前图层').click();assert(ink(p).layers.length===1&&ink(p).layers[0].strokes.length===2,'merge lost a layer or its strokes');button(p.host,'撤销脑图手写').click();assert(ink(p).layers.length===2,'layer merge was not one undoable operation');
+ });
+ await test('Lasso moves selected strokes as one undoable change and Delete removes only selected ink',async()=>{
+  const p=await fresh();p.view.setHandwritingMode('pen');gesture(p,[[100,100],[160,120],[220,100]]);gesture(p,[[100,250],[160,270],[220,250]]);const before=JSON.stringify(ink(p));
+  p.view.setHandwritingMode('lasso');gesture(p,[[80,80],[240,80],[240,145],[80,145],[80,80]]);assert(p.host.querySelector('[aria-label="已选中的脑图笔迹"]'),'lasso did not show a selection');
+  gesture(p,[[150,110],[175,140],[200,150]]);let strokes=ink(p).layers[0].strokes;assert(strokes[0].points[0].x===150&&strokes[0].points[0].y===140&&strokes[1].points[0].y===250,'lasso movement misplaced ink or moved unselected stroke');
+  button(p.host,'撤销脑图手写').click();assert(JSON.stringify(ink(p))===before,'lasso movement was not one undoable operation');button(p.host,'重做脑图手写').click();
+  gesture(p,[[120,120],[300,120],[300,200],[120,200],[120,120]]);surface(p).dispatchEvent(new KeyboardEvent('keydown',{key:'Delete',bubbles:true,cancelable:true}));strokes=ink(p).layers[0].strokes;
+  assert(strokes.length===1&&strokes[0].points[0].y===250,'Delete removed wrong ink');button(p.host,'撤销脑图手写').click();assert(ink(p).layers[0].strokes.length===2,'Delete could not be undone');
+ });
+ await test('Erasing the final default stroke leaves no empty container after reopen and remains undoable',async()=>{
+  const p=await fresh();p.view.setHandwritingMode('pen');gesture(p,[[100,100],[200,100]]);const before=JSON.stringify(ink(p));
+  p.view.setHandwritingMode('eraser');gesture(p,[[150,70],[150,130]]);assert(!ink(p),'last stroke left an implicit empty container');assert(!p.host.querySelector('[data-map-ink-stroke]'),'erased stroke remains visible');
+  await p.store.flush();const reopened=new Store((p.store as any).host);await reopened.load();assert(!reopened.canvases.find(canvas=>canvas.id===p.canvasId)?.handwriting,'reopen materialized an empty container');
+  button(p.host,'撤销脑图手写').click();assert(JSON.stringify(ink(p))===before,'Undo lost the original stroke');button(p.host,'重做脑图手写').click();assert(!ink(p),'Redo recreated empty container');
+ });
+ await test('Whole-stroke eraser removes intersected ink and undo/redo recover the exact strokes',async()=>{
+  const p=await fresh();p.view.setHandwritingMode('pen');gesture(p,[[100,100],[180,100],[240,100]]);gesture(p,[[100,190],[180,190],[240,190]]);
+  const before=JSON.stringify(ink(p));p.view.setHandwritingMode('eraser');gesture(p,[[170,70],[170,110],[170,130]]);assert(ink(p).layers[0].strokes.length===1&&ink(p).layers[0].strokes[0].points[0].y===190,'eraser did not remove only the entire intersected stroke');
+  button(p.host,'撤销脑图手写').click();assert(JSON.stringify(ink(p))===before,'one undo did not recover exact stroke data');button(p.host,'重做脑图手写').click();assert(ink(p).layers[0].strokes.length===1,'redo failed to restore erasure');
+  const node=surface(p);node.dispatchEvent(new KeyboardEvent('keydown',{key:'z',ctrlKey:true,bubbles:true,cancelable:true}));assert(JSON.stringify(ink(p))===before,'keyboard undo did not recover the erased stroke');
+ });
+ await test('Pen pressure changes visible thickness and highlighter is translucent with its own saved brush',async()=>{
+  const p=await fresh();button(p.host,'脑图手写').click();assert(p.view.getHandwritingMode()==='pen','waveform did not enable canvas ink');
+  const node=surface(p),rect=node.getBoundingClientRect();pointer(node,'pointerdown',rect.left+100,rect.top+160,{pointerType:'pen',pressure:.1});pointer(node,'pointermove',rect.left+150,rect.top+165,{pointerType:'pen',pressure:.2});pointer(node,'pointermove',rect.left+200,rect.top+160,{pointerType:'pen',pressure:.9});pointer(node,'pointerup',rect.left+240,rect.top+170,{pointerType:'pen',pressure:0});
+  const saved=ink(p).layers[0].strokes[0],paths=[...p.host.querySelectorAll('[data-map-ink-stroke] path')];assert(saved.points.some((point:any)=>Math.abs(point.pressure-.1)<.001)&&saved.points.some((point:any)=>point.pressure>.8),'stylus pressure was not retained');
+  assert(new Set(paths.map(node=>node.getAttribute('stroke-width'))).size>1,'pressure has no visible effect on width');
+  button(p.host,'荧光笔').click();gesture(p,[[100,200],[180,200],[240,200]]);const highlighter=ink(p).layers[0].strokes[1],group=p.host.querySelector(`[data-map-ink-stroke="${highlighter.id}"]`)!;
+  assert(highlighter.tool==='highlight'&&highlighter.width>=10,'highlighter saved as an ordinary pen');assert(Number(group.getAttribute('opacity'))>.1&&Number(group.getAttribute('opacity'))<.5,'highlighter is not translucent');
+  button(p.host,'手形工具').click();assert(p.view.getHandwritingMode()==='off'&&getComputedStyle(surface(p)).pointerEvents==='none','hand tool did not release the canvas');
+ });
+ (window as any).acceptanceScenes=['map-ink-layers'];
+ (window as any).showAcceptanceScene=async()=>{
+  for(const view of mounted.splice(0))view.dispose();target.replaceChildren();const p=await fresh();p.view.setHandwritingMode('pen');gesture(p,[[470,210],[500,170],[530,220],[560,160],[590,210]]);p.view.setHandwritingMode('highlight');gesture(p,[[470,245],[600,245]]);button(p.host,'脑图手写设置').click();button(p.host,'新建手写图层').click();const modal=document.querySelector('.ms-modal')!;(modal.querySelector('textarea') as HTMLTextAreaElement).value='Exercises';button(modal,'确定').click();const overlay=p.host.querySelector('[aria-label="只读叠加手写图层"]') as HTMLSelectElement;overlay.value='default';overlay.dispatchEvent(new Event('change',{bubbles:true}));await pause();
+ };
+ if(errors.length)throw new Error('Unhandled browser errors: '+errors.join('; '));
+}catch(error){(window as any).fatal=String(error);}finally{for(const store of stores)await store.flush();(window as any).done=true;}

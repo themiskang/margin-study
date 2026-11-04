@@ -1,0 +1,15 @@
+node_modules/
+.tools/
+native/
+analysis/
+evidence/
+.local/
+.DS_Store
+
+# 构建产物：由源码重新生成，指纹记入交接文档
+main.js
+styles.css
+pdf.worker.js
+
+# Git bundle 自排除，交接文本仍入库
+handoff-to-edict/margin-study.bundle

@@ -1,0 +1,30 @@
+export const notices: string[] = [];
+export class Notice { constructor(text: string) { notices.push(text); } hide() {} }
+export class TFile {
+  path: string; extension: string; name: string; basename: string; stat: any;
+  constructor(path: string, size = 10) { this.path = path; this.name = path.split('/').pop()!; this.extension = this.name.split('.').pop()!; this.basename = this.name.replace(/\.[^.]+$/, ''); this.stat = {size,mtime:1,ctime:1}; }
+}
+export class Component { load() {} unload() {} addChild(c: any) {return c;} removeChild() {} register() {} }
+export class Scope { handlers:any[]=[];constructor(_parent?:any){} register(modifiers:any,key:any,callback:any){const handler={modifiers,key,callback};this.handlers.push(handler);return handler;} unregister(handler:any){this.handlers=this.handlers.filter(item=>item!==handler);} }
+export class ItemView extends Component {
+  app: any; containerEl: HTMLElement;
+  constructor(public leaf: any) { super(); this.app = leaf.app; this.containerEl = document.createElement('div'); this.containerEl.className='test-view'; this.containerEl.append(document.createElement('div'), document.createElement('div')); document.querySelector('#fixtures')!.append(this.containerEl); }
+  registerDomEvent(target: any, event: string, handler: any) {target.addEventListener(event,handler);}
+}
+export class Menu { addItem(cb: any) {cb({setTitle(){return this;},setIcon(){return this;},onClick(){return this;}});return this;} showAtMouseEvent() {} }
+export const Platform = { isMobile: false };
+export function setIcon(element: HTMLElement, icon: string) {
+ element.setAttribute('data-icon',icon);element.replaceChildren();
+ // A few geometric glyphs keep settings-layout QA representative. This remains
+ // an adapter, not the actual Obsidian icon library.
+ const paths:Record<string,string>={check:'M20 6 9 17 4 12',plus:'M12 5v14M5 12h14',ellipsis:'M5 12h.01M12 12h.01M19 12h.01'};
+ if(!paths[icon]){element.textContent=icon;return;}
+ const svg=document.createElementNS('http://www.w3.org/2000/svg','svg'),path=document.createElementNS(svg.namespaceURI,'path');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('width','24');svg.setAttribute('height','24');svg.setAttribute('fill','none');svg.setAttribute('stroke','currentColor');svg.setAttribute('stroke-width','2');svg.setAttribute('stroke-linecap','round');svg.setAttribute('stroke-linejoin','round');path.setAttribute('d',paths[icon]);svg.append(path);element.append(svg);
+}
+export function sanitizeHTMLToDom(html: string) { const template = document.createElement('template'); template.innerHTML = html; template.content.querySelectorAll('script,iframe,object,embed').forEach(n=>n.remove()); for(const n of template.content.querySelectorAll('*'))for(const a of [...n.attributes])if(/^on/i.test(a.name))n.removeAttribute(a.name); return template.content; }
+export class MarkdownRenderer {
+  static async render(app: any, markdown: string, host: HTMLElement) {
+    (window as any).renderedMarkdown = markdown;
+    host.innerHTML = markdown.split('\n').map(line=>/^# /.test(line)?`<h1>${line.slice(2)}</h1>`:/^## /.test(line)?`<h2>${line.slice(3)}</h2>`:`<p>${line}</p>`).join('');
+  }
+}

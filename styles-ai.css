@@ -1,0 +1,73 @@
+/* AI chrome follows native-max-l4/11-ai-chat-reference.png. Custom model and draft controls are our own implementation. */
+.ms-ai-panel { position:relative; display:flex; flex-direction:column; width:100%; height:100%; min-height:260px; min-width:280px; color:#141416; background:#f7f7f7; font:13px/1.45 -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif; overflow:hidden; }
+.ms-ai-panel *, .ms-ai-settings * { box-sizing:border-box; }
+.ms-ai-panel button, .ms-ai-panel select, .ms-ai-settings button { font:inherit; cursor:pointer; box-shadow:none; }
+.ms-ai-panel button:focus-visible, .ms-ai-panel select:focus-visible, .ms-ai-panel input:focus-visible, .ms-ai-panel textarea:focus-visible { outline:2px solid #007aff; outline-offset:2px; }
+.ms-ai-panel button:disabled { cursor:default; opacity:.4; }
+.ms-ai-panel [hidden], .ms-ai-settings [hidden] { display:none !important; }
+.ms-ai-header { flex:0 0 32px; display:flex; align-items:center; gap:18px; padding:0 12px; border-bottom:1px solid #e4e4e6; background:white; }
+.ms-ai-panel .ms-ai-icon { display:inline-flex; align-items:center; justify-content:center; flex:0 0 24px; width:24px; height:26px; min-height:0; padding:0; border:0; border-radius:0; color:#7b8490; background:transparent; }
+.ms-ai-header .ms-ai-mode { position:absolute; top:0; left:calc(50% - 42px); width:84px; height:32px; padding:0 5px; border:0; border-radius:0; font-size:16px; line-height:32px; text-align:center; appearance:none; color:#141416; background:white; box-shadow:none; }
+.ms-ai-header .ms-ai-icon:last-child { margin-left:auto; }
+.ms-ai-template-row { flex:0 0 40px; padding:10px 18px 6px; }
+.ms-ai-panel .ms-ai-template { width:100%; height:24px; min-height:24px; border:1px solid #c8c8cd; border-radius:6px; background:#ececef; color:#626b79; font-size:12px; padding:1px 8px; }
+.ms-ai-body { position:relative; flex:1; min-height:0; overflow:auto; padding:12px 20px 18px; overflow-wrap:anywhere; }
+.ms-ai-empty { position:absolute; left:24px; right:24px; top:47%; transform:translateY(-50%); color:#c3c3c7; text-align:center; font-size:15px; line-height:1.25; }
+.ms-ai-panel .ms-ai-connect { display:block; margin:0 auto 12px; padding:4px 12px; border:0; border-radius:4px; background:transparent; color:#007aff; font-size:12px; }
+.ms-ai-composer { position:relative; flex:0 0 auto; background:white; padding:6px 12px 8px; }
+.ms-ai-tools { display:flex; align-items:center; gap:18px; height:30px; margin-bottom:4px; }
+.ms-ai-panel .ms-ai-tier { padding:0 4px; height:26px; border:0; border-radius:0; background:transparent; color:#7b8490; font-size:14px; }
+.ms-ai-panel .ms-ai-tier[aria-pressed="true"] { color:#3b4350; font-weight:500; }
+.ms-ai-panel .ms-ai-task { margin-left:auto; width:112px; height:26px; min-height:24px; padding:1px 5px; border:0; border-radius:0; box-shadow:none; background:transparent; color:#7b8490; font-size:12px; }
+.ms-ai-panel .ms-ai-service { max-width:160px; height:26px; min-height:24px; padding:1px 4px; border:0; box-shadow:none; background:transparent; color:#626b79; font-size:12px; }
+.ms-ai-input-row { display:flex; align-items:flex-end; gap:8px; min-height:36px; }
+.ms-ai-input-row > .ms-ai-icon { margin-bottom:5px; }
+.ms-ai-panel .ms-ai-input { flex:1; display:block; width:0; min-width:0; min-height:36px; height:36px; max-height:150px; resize:none; padding:8px 28px 7px 10px; background:#f8f8f9; border:0; border-radius:5px; box-shadow:none; color:#232328; font:14px/20px -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif; }
+.ms-ai-input::placeholder { color:#b8bac0; }
+.ms-ai-input-row .ms-ai-icon:nth-last-child(2) { margin-left:-36px; margin-right:0; color:#7b8490; z-index:1; }
+.ms-ai-panel .ms-ai-send { flex:0 0 50px; height:30px; margin-bottom:3px; min-height:0; padding:0 6px; border:0; border-radius:5px; background:#007aff; color:white; font-size:14px; }
+.ms-ai-panel .ms-ai-send:disabled { background:#cececf; color:white; opacity:1; }
+.ms-ai-status { color:#7b8490; font-size:11px; padding-top:3px; }
+.ms-ai-status:empty { display:none; }
+.ms-ai-attachments { display:flex; align-items:center; flex-wrap:wrap; gap:5px; max-height:100px; overflow:auto; }
+.ms-ai-attachments:empty { display:none; }
+.ms-ai-context-chip { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:4px 7px; color:#626b79; background:#f0f2f5; border:0; border-radius:4px; font-size:11px; }
+.ms-ai-image-chip { height:48px; display:flex; align-items:center; gap:3px; border:0; padding:2px; background:#f0f2f5; color:#626b79; }
+.ms-ai-image-chip img { width:42px; height:42px; object-fit:contain; }
+.ms-ai-attachment-menu { position:absolute; bottom:82px; right:12px; display:flex; flex-direction:column; min-width:150px; padding:4px; border:1px solid #d1d1d6; border-radius:7px; background:white; box-shadow:0 8px 22px #0002; z-index:3; }
+.ms-ai-attachment-menu button, .ms-ai-history button { padding:7px 10px; text-align:left; border:0; background:white; color:#30343b; border-radius:3px; }
+.ms-ai-attachment-menu button:hover, .ms-ai-history button:hover { background:#f0f2f5; }
+.ms-ai-history { position:absolute; left:8px; right:8px; top:32px; z-index:4; display:flex; flex-direction:column; max-height:260px; overflow:auto; padding:5px; border:1px solid #d1d1d6; border-radius:6px; background:white; box-shadow:0 6px 20px #0002; }
+.ms-ai-message { margin:0 0 16px; padding:0; font-size:14px; line-height:1.6; }
+.ms-ai-message-text { white-space:pre-wrap; }
+.ms-ai-message-user { margin-left:28px; padding:8px 12px; border-radius:10px; background:#eceef2; }
+.ms-ai-message-assistant { margin-right:8px; }
+.ms-ai-panel .ms-ai-response-to-card { margin-top:6px; border:0; padding:2px 0; background:transparent; color:#007aff; font-size:11px; }
+.ms-ai-draft { margin:14px 0 18px; padding:10px 0 0; border-top:1px solid #d9dade; color:#30343b; font-size:12px; }
+.ms-ai-draft strong { display:block; margin-bottom:8px; font-size:13px; font-weight:500; }
+.ms-ai-draft-content input, .ms-ai-draft-content textarea, .ms-ai-draft-content select { width:100%; margin:0; padding:6px 7px; border:1px solid #dedee3; border-radius:4px; color:#232328; background:white; font:12px/1.5 -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif; box-shadow:none; }
+.ms-ai-preview-card { display:grid; gap:4px; margin-bottom:10px; }
+.ms-ai-preview-outline { display:grid; grid-template-columns:40px 1fr; gap:4px; margin-top:6px; }
+.ms-ai-preview-outline textarea { grid-column:1/-1; }
+.ms-ai-draft-content > input, .ms-ai-draft-content > textarea { margin-bottom:5px; }
+.ms-ai-markdown-editor { resize:vertical; min-height:160px; font-family:ui-monospace,SFMono-Regular,monospace !important; }
+.ms-ai-preview-actions { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:5px; }
+.ms-ai-preview-actions span { color:#8b8e98; font-size:10px; }
+.ms-ai-panel .ms-ai-preview-save { flex:0 0 auto; padding:4px 9px; border:0; border-radius:4px; background:#007aff; color:white; font-size:12px; }
+.ms-ai-draft-status { margin-top:4px; color:#626b79; font-size:11px; }
+.ms-ai-dragover { outline:2px solid #007aff; outline-offset:-2px; }
+.ms-ai-settings { width:560px; max-width:calc(100vw - 48px); color:var(--text-normal); }
+.ms-ai-settings-help { margin:0 0 14px; font-size:12px; color:var(--text-muted); line-height:1.6; }
+.ms-ai-field { display:flex; flex-direction:column; gap:4px; margin-bottom:10px; font-size:12px; }
+.ms-ai-settings input[type="url"], .ms-ai-settings input[type="text"], .ms-ai-settings input[type="password"] { width:100%; padding:7px 9px; border:1px solid var(--background-modifier-border); border-radius:4px; font-size:13px; }
+.ms-ai-clear-key { display:flex; align-items:center; gap:5px; margin:0 0 12px; font-size:11px; color:var(--text-muted); }
+.ms-ai-clear-key input { width:auto; }
+.ms-ai-settings-status { min-height:34px; font-size:12px; color:var(--text-muted); }
+.ms-ai-settings-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
+.ms-ai-settings-actions button { padding:6px 12px; border:1px solid var(--background-modifier-border); border-radius:4px; background:var(--background-primary); }
+.ms-ai-settings-actions .ms-ai-primary { background:#007aff; color:white; border-color:#007aff; }
+.ms-ai-text-context textarea { width:100%; min-height:220px; margin-bottom:10px; }
+.ms-ai-bridge-modal { width:600px; max-width:calc(100vw - 48px); }
+.ms-ai-bridge-modal textarea { display:block; width:100%; min-height:240px; margin:10px 0; resize:vertical; font:13px/1.5 -apple-system,BlinkMacSystemFont,sans-serif; }
+.ms-ai-bridge-modal p { font-size:12px; color:var(--text-muted); line-height:1.6; }
+.ms-ai-bridge-actions { display:flex; justify-content:flex-end; gap:8px; }

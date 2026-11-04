@@ -1,0 +1,208 @@
+import { Store } from '__PROJECT__/src/model/store';
+import { MindmapRenderer } from '__PROJECT__/src/mindmap/mindmapRenderer';
+import { SidebarView } from '__PROJECT__/src/sidebar/sidebarView';
+import { renderStudyControls } from '__PROJECT__/src/study/studyControls';
+import { openNodeSplit, showNodeActions } from '__PROJECT__/src/study/nodeActions';
+import { maskEmphasis } from '__PROJECT__/src/study/reveal';
+import { MarkdownRenderer } from 'obsidian';
+
+const target = document.querySelector('#fixtures') as HTMLElement;
+const results: any[] = [];
+const stores: Store[] = [];
+const renderers: MindmapRenderer[] = [];
+(window as any).results = results;
+(HTMLElement.prototype as any).empty = function () {this.replaceChildren();};
+const pause = () => new Promise(done => setTimeout(done,0));
+function assert(value: any, message: string) {if(!value) throw new Error(message);}
+async function test(name: string, run: () => any) {try{document.querySelectorAll('.ms-modal-bg,#test-menu').forEach(node=>node.remove());target.replaceChildren();await run();results.push({name,passed:true});}catch(error){results.push({name,passed:false,error:String(error)});}}
+function button(root: ParentNode, label: string): HTMLButtonElement {const found=[...root.querySelectorAll('button')].find(node=>node.textContent===label);assert(found,`Missing button ${label}`);return found!;}
+function change(control: HTMLInputElement|HTMLSelectElement, value: string|boolean) {if(typeof value==='boolean')(control as HTMLInputElement).checked=value;else control.value=value;control.dispatchEvent(new Event('change',{bubbles:true}));}
+const encode = (text: string) => text.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+(MarkdownRenderer as any).render = async (_app: any, markdown: string, host: HTMLElement) => { const format=(value:string)=>encode(value).replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>').replace(/==([^=]+)==/g,'<mark>$1</mark>');host.innerHTML=markdown.includes('\n\n')?markdown.split(/\n\n+/).map(value=>'<p>'+format(value)+'</p>').join(''):format(markdown); };
+async function fresh() {
+  let disk: any = {};const files=new Map<string,string>();
+  const app: any = {vault:{getAbstractFileByPath:()=>null,getFiles:()=>[],adapter:{exists:async(path:string)=>files.has(path),mkdir:async(path:string)=>files.set(path,''),write:async(path:string,value:string)=>files.set(path,value),read:async(path:string)=>files.get(path)}}};
+  const host: any = {app,loadData:async()=>structuredClone(disk),saveData:async(value:any)=>{disk=structuredClone(value);}};
+  const store=new Store(host);await store.load();stores.push(store);
+  const set=store.createStudySet('Synthetic set');const canvasId=store.activeCanvasId!;store.setActiveCanvas(canvasId);
+  const plugin: any={store,app,activeReader:null,refreshSidebar(){},refreshMindmap(){},openDocument:async()=>({}),sidebar:null};
+  const addCard=(id:string,text:string,title?:string)=>{store.addCard({id,docPath:'sample.pdf',type:'excerpt',front:text,title,back:'note-'+id,tags:['tag-'+id],links:[],createdAt:'2026-10-15T00:00:00Z'});};
+  const addNode=(id:string,cardId?:string,patch:any={})=>{store.addNode({id,cardId,canvasId,parentId:null,title:'local-'+id,collapsed:false,x:40+(store.nodes.length*290),y:70,...patch});return store.getNode(id)!;};
+  const mount=()=>{const wrap=document.createElement('div');wrap.style.height='600px';target.append(wrap);const renderer=new MindmapRenderer(plugin);renderer.mount(wrap);renderers.push(renderer);return {renderer,wrap};};
+  return {store,plugin,set,canvasId,addCard,addNode,mount,host};
+}
+try {
+  await test('Graph title edit preserves excerpt and note as separate content',async()=>{
+    const p=await fresh();p.addCard('a','excerpt-a','Title A');p.addNode('n','a');const {wrap}=p.mount();await pause();
+    assert(wrap.textContent?.includes('Title A')&&wrap.textContent.includes('excerpt-a')&&wrap.textContent.includes('note-a'),'separate fields not rendered');
+    wrap.querySelector('.ms-node')!.dispatchEvent(new MouseEvent('dblclick',{bubbles:true}));
+    const input=document.querySelector('.ms-modal textarea') as HTMLTextAreaElement;input.value='Edited title';button(document.querySelector('.ms-modal')!,'确定').click();
+    assert(p.store.getCard('a')!.title==='Edited title'&&p.store.getCard('a')!.front==='excerpt-a','title edit overwrote excerpt');
+  });
+  await test('Hidden nodes can be recovered without hiding another reference',async()=>{
+    const p=await fresh();p.addCard('a','Shared');p.addNode('one','a',{hidden:true});p.addNode('two','a');p.addNode('child',undefined,{parentId:'one'});const {wrap}=p.mount();
+    assert(!wrap.querySelector('[data-id="one"]')&&!wrap.querySelector('[data-id="child"]')&&wrap.querySelector('[data-id="two"]'),'local hidden state leaked or hid another reference');
+    button(wrap,'显示隐藏').click();assert(wrap.querySelector('[data-id="one"]'),'hidden node cannot be recovered');button(wrap.querySelector('[data-id="one"]')!,'显示').click();
+    assert(!p.store.getNode('one')!.hidden&&!p.store.getNode('two')!.hidden,'restore changed other reference');
+  });
+  await test('Single peek remasks the previous whole-card reveal and conceals metadata',async()=>{
+    const p=await fresh();p.store.updateCanvas(p.canvasId,{singlePeek:true});p.addCard('a','Answer A');p.addCard('b','Answer B');p.addNode('one','a',{occluded:true});p.addNode('two','b',{occluded:true});const {wrap}=p.mount();await pause();
+    assert(!wrap.innerText.includes('Answer A')&&!wrap.innerText.includes('tag-a'),'whole-card mask leaked visible content');
+    button(wrap.querySelector('[data-id="one"]')!,'••• 揭晓').click();await pause();assert((wrap.querySelector('[data-id="one"]') as HTMLElement).innerText.includes('Answer A'),'first reveal failed');
+    button(wrap.querySelector('[data-id="two"]')!,'••• 揭晓').click();await pause();assert(!(wrap.querySelector('[data-id="one"]') as HTMLElement).innerText.includes('Answer A')&&(wrap.querySelector('[data-id="two"]') as HTMLElement).innerText.includes('Answer B'),'single peek retained two visible answers');
+    assert(p.store.getNode('one')!.occluded&&p.store.getCard('a')!.front==='Answer A','peek mutated saved content');
+  });
+  await test('Occlusion retains a distinct title and card geometry while concealing the answer',async()=>{
+    const p=await fresh();p.addCard('a','Hidden answer','Visible title');p.addNode('one','a',{occluded:true});const {wrap}=p.mount();await pause();
+    const masked=wrap.querySelector('[data-id="one"]') as HTMLElement;const before=masked.getBoundingClientRect();
+    assert(masked.innerText.includes('Visible title')&&!masked.innerText.includes('Hidden answer'),'title or answer visibility incorrect');
+    assert(masked.querySelector('[data-card-remaining]')?.textContent==='还有 1 处','masked answer remaining count incorrect');
+    button(masked,'••• 揭晓').click();await pause();const revealed=wrap.querySelector('[data-id="one"]') as HTMLElement;const after=revealed.getBoundingClientRect();
+    assert(revealed.innerText.includes('Hidden answer'),'answer did not reveal');
+    assert(!revealed.querySelector('[data-card-remaining]'),'revealed answer still counted as masked');
+    assert(['x','y','width','height'].every(key=>(before as any)[key]===(after as any)[key]),'reveal changed card bounds');
+    button(revealed,'重新遮回').click();await pause();const remasked=wrap.querySelector('[data-id="one"]') as HTMLElement;const finalBounds=remasked.getBoundingClientRect();
+    assert(!remasked.innerText.includes('Hidden answer')&&remasked.innerText.includes('Visible title'),'re-cover did not restore the mask');
+    assert(remasked.querySelector('[data-card-remaining]')?.textContent==='还有 1 处','re-covered answer was not counted');
+    assert(['x','y','width','height'].every(key=>(before as any)[key]===(finalBounds as any)[key]),'re-cover changed card bounds');
+  });
+  await test('Untitled question-and-answer cards retain the question while masking the answer',async()=>{
+    const p=await fresh();p.addCard('a','Question text\n\nExtra secret');p.store.updateCard('a',{type:'flashcard',back:'Secret answer'});p.addNode('one','a',{occluded:true});const {wrap}=p.mount();await pause();
+    const node=wrap.querySelector('[data-id="one"]') as HTMLElement;assert(node.innerText.includes('Question text')&&!node.innerText.includes('Secret answer')&&!node.innerText.includes('Extra secret'),'untitled question-and-answer card hid the question or exposed the answer');
+    const before=node.getBoundingClientRect();button(node,'••• 揭晓').click();await pause();const shown=wrap.querySelector('[data-id="one"]') as HTMLElement;const after=shown.getBoundingClientRect();assert(shown.innerText.includes('Extra secret')&&shown.innerText.includes('Secret answer'),'answer blocks did not reveal');assert(['x','y','width','height'].every(key=>(before as any)[key]===(after as any)[key]),'question reveal changed card bounds');
+  });
+  await test('A loaded image remains concealed and card bounds stay fixed during reveal',async()=>{
+    const p=await fresh();p.addCard('a','Image answer','Image title');p.store.updateCard('a',{image:'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="160" height="80"%3E%3Crect width="160" height="80" fill="red"/%3E%3C/svg%3E'});p.addNode('one','a',{occluded:true});const {wrap}=p.mount();
+    const imageReady=async()=>{for(let i=0;i<100;i++){const img=wrap.querySelector('img.ms-node-img') as HTMLImageElement;if(img?.complete&&img.naturalWidth)return;await new Promise(done=>setTimeout(done,10));}throw new Error('fixture image did not load');};
+    await imageReady();let node=wrap.querySelector('[data-id="one"]') as HTMLElement;const before=node.getBoundingClientRect();assert(getComputedStyle(node.querySelector('.ms-node-images')!).visibility==='hidden','image visible while masked');
+    button(node,'••• 揭晓').click();await imageReady();node=wrap.querySelector('[data-id="one"]') as HTMLElement;const after=node.getBoundingClientRect();assert(getComputedStyle(node.querySelector('.ms-node-images')!).visibility==='visible','image did not reveal');
+    assert(['x','y','width','height'].every(key=>(before as any)[key]===(after as any)[key]),'image reveal changed card bounds');
+  });
+  await test('Revealing a card before its image loads keeps its bounds stable',async()=>{
+    const p=await fresh();p.addCard('a','Delayed image','Delayed title');p.store.updateCard('a',{image:'https://delayed.invalid/image.png'});p.addNode('one','a',{occluded:true});const {wrap}=p.mount();await pause();
+    const node=()=>wrap.querySelector('[data-id="one"]') as HTMLElement;const img=node().querySelector('img') as HTMLImageElement;Object.defineProperty(img,'complete',{configurable:true,get:()=>false});button(node(),'••• 揭晓').click();await pause();assert(button(node(),'••• 揭晓').disabled,'reveal did not wait for pending image');
+    Object.defineProperty(img,'complete',{configurable:true,get:()=>true});img.src='data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="400" height="300"/%3E';for(let i=0;i<100&&!img.naturalWidth;i++)await new Promise(done=>setTimeout(done,10));assert(img.naturalWidth>0,'fixture image failed to load');const before=node().getBoundingClientRect();img.dispatchEvent(new Event('load'));await pause();const after=node().getBoundingClientRect();assert(['x','y','width','height'].every(key=>(before as any)[key]===(after as any)[key]),'reveal after image load changed card bounds');
+  });
+  await test('A stalled image allows the reveal to be retried',async()=>{
+    const p=await fresh();p.addCard('a','Delayed image','Delayed title');p.store.updateCard('a',{image:'https://delayed.invalid/image.png'});p.addNode('one','a',{occluded:true});const {wrap}=p.mount();await pause();
+    const node=()=>wrap.querySelector('[data-id="one"]') as HTMLElement;const img=node().querySelector('img') as HTMLImageElement;Object.defineProperty(img,'complete',{configurable:true,get:()=>false});
+    const original=window.setTimeout;let expire:(()=>void)|undefined;window.setTimeout=((fn:TimerHandler,ms?:number,...args:any[])=>ms===10000?(expire=()=>{if(typeof fn==='function')fn(...args);},999999):original(fn,ms,...args)) as typeof window.setTimeout;
+    try{button(node(),'••• 揭晓').click();assert(button(node(),'••• 揭晓').disabled&&expire,'pending image did not disable reveal');expire!();assert(!button(node(),'••• 揭晓').disabled&&button(node(),'••• 揭晓').title.includes('重试'),'stalled image left reveal disabled');Object.defineProperty(img,'complete',{configurable:true,get:()=>true});button(node(),'••• 揭晓').click();await pause();assert(node().innerText.includes('Delayed image'),'retry did not reveal the card');}finally{window.setTimeout=original;}
+  });
+  await test('Recall image masks reveal independently and can be restored without editing the card',async()=>{
+    const p=await fresh();p.addCard('a','Image','Image title');p.store.updateCard('a',{image:'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="160" height="80"%3E%3Crect width="160" height="80" fill="red"/%3E%3C/svg%3E',occlusions:[{id:'left',x:.1,y:.1,width:.3,height:.5},{id:'right',x:.6,y:.1,width:.3,height:.5}]});p.addNode('one','a');
+    const {wrap,renderer}=p.mount();wrap.classList.add('ms-study-workspace');wrap.setAttribute('data-recall-mask-emphasis-images','');const reader=document.createElement('div');reader.className='ms-reader-root ms-recall';wrap.append(reader);renderer.render();await pause();
+    const node=()=>wrap.querySelector('[data-id="one"]') as HTMLElement;const before=JSON.stringify(p.store.getCard('a'));assert(node().querySelectorAll('[data-image-mask]').length===2,'two image masks missing');assert(node().querySelector('[data-card-remaining]')?.textContent==='还有 2 处','image count should include both masks');
+    (node().querySelector('[data-image-mask="left"]') as HTMLButtonElement).click();await pause();assert(node().querySelector('[data-image-mask="left"]')?.getAttribute('aria-pressed')==='true'&&node().querySelector('[data-image-mask="right"]')?.getAttribute('aria-pressed')==='false'&&node().querySelector('[data-card-remaining]')?.textContent==='还有 1 处','image masks did not reveal independently');
+    (node().querySelector('[data-image-mask="left"]') as HTMLButtonElement).click();await pause();assert(node().querySelector('[data-image-mask="left"]')?.getAttribute('aria-pressed')==='false'&&JSON.stringify(p.store.getCard('a'))===before,'image re-cover failed or wrote business data');
+  });
+  await test('Recall emphasis reveals each marked answer independently',async()=>{
+    const p=await fresh();p.addCard('a','Context **first** and ==second==','Heading');p.addNode('one','a');const {wrap,renderer}=p.mount();wrap.classList.add('ms-study-workspace');wrap.setAttribute('data-recall-mask-emphasis-images','');const reader=document.createElement('div');reader.className='ms-reader-root ms-recall';wrap.append(reader);renderer.render();await pause();
+    const node=()=>wrap.querySelector('[data-id="one"]') as HTMLElement;assert(node().querySelectorAll('[aria-label="揭晓强调内容"]').length===2&&node().querySelector('[data-card-remaining]')?.textContent==='还有 2 处','two emphasis masks missing');
+    (node().querySelector('[aria-label="揭晓强调内容"]') as HTMLButtonElement).click();await pause();assert(node().innerText.includes('first')&&!node().innerText.includes('second')&&node().querySelectorAll('[aria-label="揭晓强调内容"]').length===1&&node().querySelector('[data-card-remaining]')?.textContent==='还有 1 处','revealing one emphasis exposed another');
+    renderer.resetRecallState();await pause();assert(node().querySelectorAll('[aria-label="揭晓强调内容"]').length===2,'reset did not re-cover emphasis');
+    button(node(),'揭开本卡全部遮挡').click();await pause();assert(node().innerText.includes('first')&&node().innerText.includes('second')&&!node().querySelector('[data-card-remaining]'),'reveal all left a hidden emphasis mask');
+    button(node(),'重新遮回').click();await pause();assert(node().querySelectorAll('[aria-label="揭晓强调内容"]').length===2,'re-cover did not restore all emphasis masks');
+  });
+  await test('Single reveal in recall re-covers the previous card mask',async()=>{
+    const p=await fresh();p.addCard('a','**first answer**','First');p.addCard('b','**second answer**','Second');p.addNode('one','a');p.addNode('two','b');const {wrap,renderer}=p.mount();wrap.classList.add('ms-study-workspace');wrap.setAttribute('data-recall-mask-emphasis-images','');wrap.setAttribute('data-recall-single','');const reader=document.createElement('div');reader.className='ms-reader-root ms-recall';wrap.append(reader);renderer.render();await pause();
+    const node=(id:string)=>wrap.querySelector(`[data-id="${id}"]`) as HTMLElement;
+    (node('one').querySelector('[aria-label="揭晓强调内容"]') as HTMLButtonElement).click();await pause();(node('two').querySelector('[aria-label="揭晓强调内容"]') as HTMLButtonElement).click();await pause();
+    assert(!node('one').innerText.includes('first answer')&&node('two').innerText.includes('second answer'),'single reveal retained more than one answer');
+  });
+  await test('Leaving and reentering recall clears temporary card reveals',async()=>{
+    const p=await fresh();p.addCard('a','Question','Title');p.store.updateCard('a',{type:'flashcard',back:'Hidden answer'});p.addNode('one','a');const {wrap,renderer}=p.mount();wrap.classList.add('ms-study-workspace');wrap.setAttribute('data-recall-mask-body','');const reader=document.createElement('div');reader.className='ms-reader-root ms-recall';wrap.append(reader);renderer.render();await pause();
+    const node=()=>wrap.querySelector('[data-id="one"]') as HTMLElement;button(node(),'••• 揭晓').click();await pause();assert(node().innerText.includes('Hidden answer'),'fixture did not reveal');reader.classList.remove('ms-recall');renderer.render();reader.classList.add('ms-recall');renderer.render();await pause();assert(!node().innerText.includes('Hidden answer')&&node().querySelector('[aria-label="揭晓整卡内容"]'),'reentering recall retained a temporary reveal');
+  });
+  await test('Mixed emphasis and image masks report remaining items and reveal all together',async()=>{
+    const p=await fresh();p.addCard('a','**hidden word**','Title');p.store.updateCard('a',{image:'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="80" height="80"/%3E',occlusions:[{id:'picture',x:.1,y:.1,width:.4,height:.4}]});p.addNode('one','a');const {wrap,renderer}=p.mount();wrap.classList.add('ms-study-workspace');wrap.setAttribute('data-recall-mask-emphasis-images','');const reader=document.createElement('div');reader.className='ms-reader-root ms-recall';wrap.append(reader);renderer.render();await pause();
+    const node=()=>wrap.querySelector('[data-id="one"]') as HTMLElement;assert(node().querySelector('[data-card-remaining]')?.textContent==='还有 2 处','mixed count did not include both masks');
+    await Promise.all(Array.from(node().querySelectorAll('img')).map(image=>image.decode().catch(()=>{})));await document.fonts.ready;await new Promise(done=>setTimeout(done,250));renderer.render();await pause();await Promise.all(Array.from(node().querySelectorAll('img')).map(image=>image.decode().catch(()=>{})));await pause();const initial=node().getBoundingClientRect();const diagnostic=()=>({world:wrap.querySelector('.ms-mindmap-world')!.getBoundingClientRect().toJSON(),scroll:(wrap.querySelector('.ms-mindmap') as HTMLElement).scrollTop,clientHeight:(wrap.querySelector('.ms-mindmap') as HTMLElement).clientHeight,worldTop:(wrap.querySelector('.ms-mindmap-world') as HTMLElement).style.top,scrollRect:wrap.querySelector('.ms-mindmap')!.getBoundingClientRect().toJSON(),nodeTop:node().style.top,viewport:wrap.getBoundingClientRect().toJSON(),windowScroll:window.scrollY});const initialDiagnostic=diagnostic();const assertBounds=()=>{const current=node().getBoundingClientRect();assert(['x','y','width','height'].every(key=>(initial as any)[key]===(current as any)[key]),'mixed mask reveal changed card bounds: '+JSON.stringify({initial:initial.toJSON(),current:current.toJSON(),initialDiagnostic,currentDiagnostic:diagnostic()}));};
+    (node().querySelector('[data-image-mask]') as HTMLButtonElement).click();await pause();assertBounds();assert(node().querySelector('[data-card-remaining]')?.textContent==='还有 1 处','mixed count did not update on image reveal');
+    button(node(),'揭开本卡全部遮挡').click();await pause();assertBounds();assert(!node().querySelector('[data-card-remaining]')&&node().innerText.includes('hidden word'),'reveal all did not clear mixed masks');
+    button(node(),'重新遮回').click();await pause();assertBounds();assert(node().querySelector('[data-card-remaining]')?.textContent==='还有 2 处','re-cover did not restore mixed masks');
+  });
+  await test('Single reveal can re-cover an already opened image mask',async()=>{
+    const p=await fresh();p.addCard('a','Image','Title');p.store.updateCard('a',{image:'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="80" height="80"/%3E',occlusions:[{id:'a',x:.1,y:.1,width:.3,height:.4},{id:'b',x:.6,y:.1,width:.3,height:.4}]});p.addNode('one','a');const {wrap,renderer}=p.mount();wrap.classList.add('ms-study-workspace');wrap.setAttribute('data-recall-mask-emphasis-images','');wrap.setAttribute('data-recall-single','');const reader=document.createElement('div');reader.className='ms-reader-root ms-recall';wrap.append(reader);renderer.render();await pause();
+    const mask=(id:string)=>wrap.querySelector<HTMLButtonElement>(`[data-image-mask="${id}"]`)!;mask('a').click();await pause();mask('b').click();await pause();assert(mask('a').getAttribute('aria-pressed')==='false'&&mask('b').getAttribute('aria-pressed')==='true','single image reveal did not switch');mask('b').click();await pause();assert(mask('b').getAttribute('aria-pressed')==='false','single image mask could not re-cover itself');
+  });
+  await test('Emphasis in separate comments has independent reveal identities',async()=>{
+    const p=await fresh();p.addCard('a','Front','Title');p.addNode('one','a',{comments:['**first comment**','**second comment**']});const {wrap,renderer}=p.mount();wrap.classList.add('ms-study-workspace');wrap.setAttribute('data-recall-mask-emphasis-images','');const reader=document.createElement('div');reader.className='ms-reader-root ms-recall';wrap.append(reader);renderer.render();await pause();const node=()=>wrap.querySelector('[data-id="one"]') as HTMLElement;
+    assert(node().querySelector('[data-card-remaining]')?.textContent==='还有 2 处','comment masks not counted');(node().querySelector('[aria-label="揭晓强调内容"]') as HTMLButtonElement).click();await pause();assert(node().innerText.includes('first comment')&&!node().innerText.includes('second comment')&&node().querySelector('[data-card-remaining]')?.textContent==='还有 1 处','one comment revealed another');
+  });
+  await test('Recall hierarchy reveals layers without changing saved collapse state',async()=>{
+    const p=await fresh();p.addNode('root',undefined,{collapsed:true});p.addNode('child',undefined,{parentId:'root',collapsed:true});p.addNode('grandchild',undefined,{parentId:'child'});
+    const {wrap,renderer}=p.mount();wrap.classList.add('ms-study-workspace');const reader=document.createElement('div');reader.className='ms-reader-root ms-recall';wrap.append(reader);
+    const before=JSON.stringify(p.store.nodes);renderer.setRecallHierarchy(1);assert(wrap.querySelector('[data-id="root"]')&&!wrap.querySelector('[data-id="child"]'),'first layer incorrect');
+    renderer.setRecallHierarchy(2);assert(wrap.querySelector('[data-id="child"]')&&!wrap.querySelector('[data-id="grandchild"]'),'second layer incorrect');
+    renderer.setRecallHierarchy(3);assert(wrap.querySelector('[data-id="grandchild"]'),'third layer missing');
+    const arrow=()=>wrap.querySelector<HTMLButtonElement>('[data-id="root"] [title="折叠/展开"]')!;arrow().click();assert(!wrap.querySelector('[data-id="child"]'),'recall arrow did not temporarily collapse the branch');assert(JSON.stringify(p.store.nodes)===before,'recall arrow changed saved node state');
+    arrow().click();assert(wrap.querySelector('[data-id="grandchild"]'),'recall arrow did not restore the branch');assert(JSON.stringify(p.store.nodes)===before,'recall changed saved node state');
+  });
+  await test('Layered recall starts with title cards and reveals one child layer without persisting collapse',async()=>{
+    const p=await fresh();p.addCard('a','Root question','Root title');p.store.updateCard('a',{type:'flashcard',back:'Root answer'});p.addCard('b','Child question','Child title');p.store.updateCard('b',{type:'flashcard',back:'Child answer'});p.addNode('root','a',{collapsed:true});p.addNode('child','b',{parentId:'root',collapsed:true});p.addNode('grandchild',undefined,{parentId:'child'});
+    const {wrap,renderer}=p.mount();wrap.classList.add('ms-study-workspace');wrap.setAttribute('data-recall-layered','');wrap.setAttribute('data-recall-mask-body','');wrap.setAttribute('data-recall-single','');const reader=document.createElement('div');reader.className='ms-reader-root ms-recall';wrap.append(reader);const before=JSON.stringify(p.store.nodes);renderer.render();await pause();
+    const node=(id:string)=>wrap.querySelector(`[data-id="${id}"]`) as HTMLElement;assert(node('root')&&!node('child')&&node('root').innerText.includes('Root title')&&!node('root').innerText.includes('Root answer'),'layered recall did not begin with root title');
+    node('root').click();await pause();assert(node('root').innerText.includes('Root answer')&&node('child')&&!node('grandchild')&&!node('child').innerText.includes('Child answer'),'opening root did not reveal its answer and one child layer');
+    assert(node('child').querySelector('[aria-label="揭开下一层"]')&&!node('child').querySelector('[aria-label="揭晓整卡内容"]'),'layered card exposed competing reveal actions');
+    button(node('child'),'揭开下一层').click();await pause();assert(node('child').innerText.includes('Child answer')&&node('grandchild')&&JSON.stringify(p.store.nodes)===before,'single reveal collapsed the open parent, changed saved nodes or missed next layer');
+  });
+  await test('Title-only recall keeps headings visible and hides answer content without resizing cards',async()=>{
+    const p=await fresh();p.addNode('root');p.addCard('a','Private answer','Visible heading');p.addNode('child','a',{parentId:'root'});const {wrap}=p.mount();await pause();
+    target.classList.add('ms-study-workspace','ms-recall-title-only');wrap.classList.add('ms-workspace-map');const node=wrap.querySelector('[data-id="child"]') as HTMLElement;
+    const title=node.querySelector('.ms-node-heading') as HTMLElement,answer=node.querySelector('.ms-node-excerpt') as HTMLElement;
+    try { assert(getComputedStyle(title).visibility==='visible'&&getComputedStyle(answer).visibility==='hidden','title-only mode exposed an answer or hid its heading'); }
+    finally { target.classList.remove('ms-study-workspace','ms-recall-title-only'); }
+  });
+  await test('Emphasis cloze only masks rendered emphasis during graph review',async()=>{
+    const p=await fresh();p.store.updateCanvas(p.canvasId,{emphasisCloze:true,singlePeek:true});p.addCard('a','Context **secret**');p.addNode('n','a');const {wrap}=p.mount();await pause();assert(wrap.textContent!.includes('secret'),'normal mode masked emphasis');
+    const selection=wrap.querySelector('select[title="脑图复习模式"]') as HTMLSelectElement;change(selection,'expand');await pause();assert(!wrap.innerText.includes('secret')&&wrap.querySelector('[aria-label="揭晓强调内容"]'),'review did not mask emphasis');
+    const maskedBounds=(wrap.querySelector('[data-id="n"]') as HTMLElement).getBoundingClientRect();
+    (wrap.querySelector('[aria-label="揭晓强调内容"]') as HTMLButtonElement).click();await pause();assert(wrap.textContent!.includes('secret'),'emphasis did not reveal');
+    const shownBounds=(wrap.querySelector('[data-id="n"]') as HTMLElement).getBoundingClientRect();assert(['x','y','width','height'].every(key=>(maskedBounds as any)[key]===(shownBounds as any)[key]),'emphasis reveal changed card bounds');
+    const fragment=document.createElement('div');fragment.innerHTML='<pre><code><strong>literal</strong></code></pre><strong>answer</strong>';maskEmphasis(fragment,()=>{});assert(fragment.textContent==='literal•••','code emphasis was treated as answer');
+  });
+  await test('Long emphasized answers preserve their card bounds when revealed',async()=>{
+    const p=await fresh();p.store.updateCanvas(p.canvasId,{emphasisCloze:true});p.addCard('a','Heading **A long emphasized answer contains enough words to wrap onto several separate lines inside the card** tail','Title');p.addNode('n','a');const {wrap}=p.mount();await pause();
+    change(wrap.querySelector('select[title="脑图复习模式"]') as HTMLSelectElement,'expand');await pause();const before=(wrap.querySelector('[data-id="n"]') as HTMLElement).getBoundingClientRect();
+    (wrap.querySelector('[aria-label="揭晓强调内容"]') as HTMLButtonElement).click();await pause();const after=(wrap.querySelector('[data-id="n"]') as HTMLElement).getBoundingClientRect();
+    assert(['x','y','width','height'].every(key=>(before as any)[key]===(after as any)[key]),'long emphasis changed card bounds');
+  });
+  await test('Split dialog uses explicit content parts and keeps emoji boundaries',async()=>{
+    const p=await fresh();p.addCard('a','A😀B','Title');const node=p.addNode('n','a',{comments:['local comment']});const calls:any[]=[];
+    p.store.splitNodeContent=((...args:any[])=>{calls.push(args);return 'new';}) as any;openNodeSplit(p.plugin,node,()=>{});
+    const modal=document.querySelector('.ms-modal')!;const part=modal.querySelector('select') as HTMLSelectElement;change(part,'note');assert((modal.querySelector('textarea') as HTMLTextAreaElement).value==='note-a','local comments substituted for note');change(part,'excerpt');const count=modal.querySelector('input') as HTMLInputElement;count.value='3';button(modal,'拆分').click();assert(calls.length===0,'split accepted an empty tail');count.value='2';button(modal,'拆分').click();
+    assert(calls.length===1&&calls[0][1]==='excerpt'&&calls[0][2]===3,'split did not use explicit part or cut emoji');
+    openNodeSplit(p.plugin,node,()=>{});const next=document.querySelector('.ms-modal')!;p.store.updateCard('a',{title:'Changed while open'});button(next,'拆分').click();assert(calls.length===1,'stale preview was submitted');
+  });
+  await test('Context menu routes group occlusion once and single-node detach independently',async()=>{
+    const p=await fresh();p.addCard('a','Shared');p.addNode('one','a');p.addNode('two','a');let calls=0;const original=p.store.toggleNodeOcclusion.bind(p.store);p.store.toggleNodeOcclusion=((ids:string[])=>{calls++;original(ids);}) as any;
+    showNodeActions(p.plugin,['one','two'],new MouseEvent('contextmenu'),()=>{});assert(button(document.querySelector('#test-menu')!,'断开引用').disabled,'multi-node detach should require a single selection');button(document.querySelector('#test-menu')!,'切换整卡遮挡').click();assert(calls===1&&p.store.getNode('one')!.occluded&&p.store.getNode('two')!.occluded,'group occlusion not one Store operation');
+    showNodeActions(p.plugin,['one'],new MouseEvent('contextmenu'),()=>{});button(document.querySelector('#test-menu')!,'断开引用').click();assert(p.store.getNode('one')!.cardId!=='a'&&p.store.getNode('two')!.cardId==='a','detach changed shared original');
+  });
+  await test('Canvas kind and review options stay scoped and survive persistence',async()=>{
+    const p=await fresh();const other=p.store.createCanvas(p.set.id,'Other');const controls=document.createElement('div');target.append(controls);const draw=()=>renderStudyControls(controls,p.plugin,draw);draw();
+    change(controls.querySelector('[aria-label="脑图类型"]') as HTMLSelectElement,'review');change(controls.querySelector('[aria-label="强调即挖空"]') as HTMLInputElement,true);change(controls.querySelector('[aria-label="单处揭晓"]') as HTMLInputElement,true);
+    const canvas=p.store.canvases.find(c=>c.id===p.canvasId)!;assert(canvas.kind==='review'&&canvas.singlePeek&&canvas.emphasisCloze,'options did not update canvas');assert(!other.singlePeek&&!other.emphasisCloze,'options changed another canvas');
+    await p.store.flush();const reload=new Store(p.host);stores.push(reload);await reload.load();assert(reload.canvases.find(c=>c.id===p.canvasId)!.singlePeek,'canvas options lost after reload');assert(controls.textContent!.includes('最近访问'),'last visit missing');
+  });
+  await test('Outline exposes the same menu, hides locally and preserves excerpt on rename',async()=>{
+    const p=await fresh();p.addCard('a','Original excerpt','Heading');p.addNode('one','a',{hidden:true});p.addNode('two','a');const view=new SidebarView({app:p.plugin.app} as any,p.plugin);await view.onOpen();view.setTab('outline');await pause();
+    assert(!target.querySelector('.ms-ol-node[data-id="one"]')&&target.querySelector('.ms-ol-node[data-id="two"]'),'outline ignored hidden state');change(target.querySelector('[aria-label="显示隐藏节点"]') as HTMLInputElement,true);const row=target.querySelector('.ms-ol-node[data-id="one"]')!;assert(row,'outline cannot recover hidden nodes');button(row,'更多').click();assert(button(document.querySelector('#test-menu')!,'按内容拆分…'),'outline menu lacks split');button(document.querySelector('#test-menu')!,'在此处显示').click();await pause();
+    button(target.querySelector('.ms-ol-node[data-id="one"]')!,'改名').click();const input=document.querySelector('.ms-modal textarea') as HTMLTextAreaElement;input.value='New heading';button(document.querySelector('.ms-modal')!,'确定').click();assert(p.store.getCard('a')!.title==='New heading'&&p.store.getCard('a')!.front==='Original excerpt','outline rename overwrote excerpt');await view.onClose();
+  });
+  await test('Grouped source nodes stay hidden in both views until the unmerge action',async()=>{
+    const p=await fresh();p.addCard('a','Head');p.addCard('b','Member');p.store.updateCard('a',{mergedCards:[structuredClone(p.store.getCard('b')!)]});p.store.updateCard('b',{groupId:'a'});p.addNode('head','a');p.addNode('member','b',{hidden:true});const {renderer,wrap}=p.mount();button(wrap,'显示隐藏').click();assert(!wrap.querySelector('[data-id="member"]'),'graph exposed grouped member');
+    const view=new SidebarView({app:p.plugin.app} as any,p.plugin);await view.onOpen();view.setTab('outline');await pause();change(target.querySelector('[aria-label="显示隐藏节点"]') as HTMLInputElement,true);assert(!target.querySelector('.ms-ol-node[data-id="member"]'),'outline exposed grouped member');
+    let unmerged='';p.store.unmergeCard=((id:string)=>{unmerged=id;p.store.updateCard('b',{groupId:undefined});p.store.setNodeHidden('member',false);return [p.store.getCard('b')!];}) as any;showNodeActions(p.plugin,['head'],new MouseEvent('contextmenu'),()=>renderer.render());button(document.querySelector('#test-menu')!,'解除合并').click();assert(unmerged==='a'&&wrap.querySelector('[data-id="member"]'),'unmerge menu did not restore the member');await view.onClose();
+  });
+  await test('Outline indent skips invisible siblings and outdent preserves visible order',async()=>{
+    const p=await fresh();p.addCard('a','Group head');p.addCard('b','Grouped');p.store.updateCard('b',{groupId:'a'});p.addNode('hidden',undefined,{hidden:true,order:0});p.addNode('head','a',{order:1});p.addNode('member','b',{order:2});p.addNode('target',undefined,{order:3});const view=new SidebarView({app:p.plugin.app} as any,p.plugin);await view.onOpen();view.setTab('outline');await pause();
+    button(target.querySelector('.ms-ol-node[data-id="head"]')!,'缩进').click();assert(p.store.getNode('head')!.parentId===null,'indent targeted a hidden sibling');
+    button(target.querySelector('.ms-ol-node[data-id="target"]')!,'缩进').click();assert(p.store.getNode('target')!.parentId==='head','indent targeted a grouped member');
+    button(target.querySelector('.ms-ol-node[data-id="target"]')!,'升级').click();const ordered=p.store.getScopedNodes().filter(node=>node.parentId===null).sort((a,b)=>(a.order??0)-(b.order??0));assert(ordered.findIndex(node=>node.id==='target')===ordered.findIndex(node=>node.id==='head')+1,'outdent used a visible index as the Store insertion index');await view.onClose();
+  });
+  const sample=await fresh();sample.addCard('a','Excerpt remains visible below the title','Source card');sample.addCard('b','Recall this answer','Practice card');sample.addNode('one','a');sample.addNode('two','b',{occluded:true});const controls=document.createElement('div');target.replaceChildren(controls);renderStudyControls(controls,sample.plugin,()=>{});sample.mount();
+  await Promise.all(stores.map(store=>store.flush()));
+} catch(error) {(window as any).fatal=String(error);}
+finally {for(const renderer of renderers.slice(0,-1))renderer.destroy();(window as any).done=true;}

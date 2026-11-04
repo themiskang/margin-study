@@ -1,0 +1,36 @@
+import { Store } from "__PROJECT__/src/model/store";
+import { AiService } from "__PROJECT__/src/ai/service";
+import { mountAiPanel } from "__PROJECT__/src/ai/panel";
+import type { ChatTransport } from "__PROJECT__/src/ai/contracts";
+(async () => {
+  let disk: any = { cards: [
+    { id: "canary", docPath: "private.pdf", front: "CANARY_NOT_SELECTED", type: "comment", tags: [], links: [], createdAt: "2020-01-01T00:00:00.000Z" },
+    { id: "drag-card", title: "Selected card", docPath: "selected.pdf", front: "EXPLICIT_DRAG_CARD", back: "User-provided note", type: "comment", tags: [], links: [], createdAt: "2020-01-01T00:00:00.000Z" },
+  ], nodes: [], edges: [], srs: {}, reviewPending: [], reviewLogs: [], studySets: [{ id: "study", name: "Study", docPaths: [], cardIds: ["canary", "drag-card"], createdAt: "2020-01-01T00:00:00.000Z" }],
+    canvases: [{ id: "canvas", name: "Main", studySetId: "study", createdAt: "2020-01-01T00:00:00.000Z" }], activeStudySetId: "study", activeCanvasId: "canvas" };
+  const local = new Map(), secrets = new Map(), files = new Map();
+  const app: any = { loadLocalStorage: (key: string) => structuredClone(local.get(key) ?? null), saveLocalStorage: (key: string, value: any) => local.set(key, structuredClone(value)),
+    secretStorage: { getSecret: (key: string) => secrets.get(key) ?? null, setSecret: (key: string, value: string) => secrets.set(key, value) },
+    vault: { getFiles: () => [], getAbstractFileByPath: (name: string) => files.has(name) ? {path:name} : null,
+      create: async (name: string, text: string) => { if (files.has(name)) throw new Error("exists"); files.set(name,text); return {path:name}; },
+      adapter: { exists: async (name: string) => files.has(name), mkdir: async (name: string) => files.set(name,""), write: async (name: string,text: string) => files.set(name,text), read: async (name: string) => files.get(name), remove: async (name: string) => files.delete(name) } } };
+  const bridge = { version:"2.3.30", commands:[] as string[], prefills:[] as string[], input:"已有草稿", sends:0, inputs:[] as unknown[][], requests:[] as string[], activeSession:"synthetic-session", reply:"SYNTHETIC_CLAUDIAN_REPLY", replyReads:[] as string[], handlers:new Map<string,Function>() };
+  if (new URL(location.href).searchParams.has("claudian")) {
+    const registry={acquire:()=>({isCurrent:()=>true,onInvalidated:()=>()=>{},release:async()=>{},session:{execute:(request:any)=>{bridge.sends++;bridge.inputs.push(structuredClone(request.input));bridge.requests.push(request.input[0].text);return {cancel:()=>{},events:(async function*(){if(request.input[0].text.includes('FAIL_REQUEST')){yield {type:'execution_error',category:'provider'};return;}yield {type:'text_delta',text:JSON.stringify({cards:[{title:'Direct question',excerpt:'Direct streamed question',note:'Direct streamed answer',tags:[]}]})};yield {type:'turn_completed',reason:'completed'};})()};}}})};
+    const runtime={model:{ensureExecutionInitialized:async()=>true},executionCoordinator:{deps:{resolveBackend:()=>({providerId:'synthetic'}),lifecycleRegistry:registry,vaultWorkingDirectory:'/synthetic'}}};
+    app.plugins={getPlugin:(id:string)=>id==="realclaudian"?{manifest:{get version(){return bridge.version;}},api:{version:1,getActiveSessionId:()=>bridge.activeSession,read:async(sessionId:string)=>{bridge.replyReads.push(sessionId);return bridge.reply;}},chatHost:{getActiveModelSelection:()=>({providerId:'synthetic',model:'synthetic-model'})}}:null};
+    app.commands={commands:{"realclaudian:open-view":{}},executeCommandById:(id:string)=>{bridge.commands.push(id);return true;}};
+    app.workspace={getLeavesOfType:(type:string)=>type==="claudian-view"?[{view:{getActiveTab:()=>({session:{runtime}}),appendToActiveInput:(text:string)=>{bridge.prefills.push(text);bridge.input+=" "+text;return true;},focusActiveInput:()=>{}}}]:[],on:(name:string,callback:Function)=>{bridge.handlers.set(name,callback);return {off:()=>bridge.handlers.delete(name)};},offref:(ref:any)=>ref?.off?.()};
+  }
+  const host: any = { app, loadData: async () => structuredClone(disk), saveData: async (value: any) => {disk=structuredClone(value);} };
+  host.store = new Store(host); await host.store.load();
+  const transport: ChatTransport = { async *stream(endpoint, key, body, signal) {
+    const response = await fetch(endpoint,{method:"POST",headers:{"Content-Type":"application/json",...(key?{Authorization:`Bearer ${key}`}:{})},body:JSON.stringify(body),signal});
+    if (!response.ok || !response.body) throw new Error("synthetic transport failure");
+    const reader=response.body.getReader(); try { while(true){const chunk=await reader.read();if(chunk.done)break;yield chunk.value;} } finally { await reader.cancel().catch(()=>{}); }
+  } };
+  const service = new AiService(app,transport), handle = mountAiPanel(document.getElementById("host")!,host,{service,getContext:()=>({text:"ONLY_SELECTED_PARAGRAPH",label:"当前选择",docPath:"selected.pdf"})});
+  const drag=document.getElementById("drag-card")!; drag.addEventListener("dragstart",event=>{event.dataTransfer?.setData("text/plain","drag-card");});
+  document.getElementById("undo")!.addEventListener("click",()=>host.store.undoLibraryChange());
+  (window as any).aiFixture={ready:true,dispose:()=>handle.dispose(),suspend:()=>handle.suspend(),resume:()=>handle.resume(document.getElementById("host")!),setClaudianVersion:(version:string)=>{bridge.version=version;},emitReply:(sessionId:string)=>bridge.handlers.get("claudian:turn-ended")?.({sessionId}),inspect:()=>({bridge:structuredClone({...bridge,handlers:undefined}),bound:service.isBound(),config:service.configuration(),cards:structuredClone(host.store.cards),nodes:structuredClone(host.store.nodes),pending:structuredClone(host.store.reviewPending),files:[...files],local:[...local],secretCount:secrets.size,keyLeaked:JSON.stringify([...local]).includes("synthetic-ui-key")})};
+})().catch(error=>{(window as any).fixtureError=String(error.stack||error);});

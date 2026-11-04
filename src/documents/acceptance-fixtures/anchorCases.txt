@@ -1,0 +1,185 @@
+import { ReaderView } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/readerView';
+import { ReaderView as RealReaderView } from 'marginstudy-real-reader';
+import { PDFDocument, StandardFonts } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/node_modules/pdf-lib/es/index.js';
+import { clientRectToPdfRect, pdfRectToCssRect, pdfRectsIntersect } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/anchors/pdfGeometry';
+
+export function croppedPdf(rotations=[0]): ArrayBuffer {
+  const stream='BT /F1 12 Tf 100 600 Td (Synthetic CropBox reference) Tj ET\n';
+  const objects=['<< /Type /Catalog /Pages 2 0 R >>',`<< /Type /Pages /Kids [${rotations.map((_,index)=>`${index+5} 0 R`).join(' ')}] /Count ${rotations.length} >>`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',`<< /Length ${stream.length} >>\nstream\n${stream}endstream`,
+    ...rotations.map(rotation=>`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /CropBox [50 70 550 770] /Rotate ${rotation} /Resources << /Font << /F1 3 0 R >> >> /Contents 4 0 R >>`)];
+  let source='%PDF-1.4\n'; const offsets=[0];
+  objects.forEach((object,index)=>{offsets.push(source.length);source+=`${index+1} 0 obj\n${object}\nendobj\n`;});
+  const xref=source.length;source+=`xref\n0 ${objects.length+1}\n0000000000 65535 f \n`;
+  source+=offsets.slice(1).map(offset=>`${String(offset).padStart(10,'0')} 00000 n \n`).join('');
+  source+=`trailer\n<< /Size ${objects.length+1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return new TextEncoder().encode(source).buffer as ArrayBuffer;
+}
+
+export async function runAnchorAcceptance(context:any){
+  const {test,assert,wait,plugin,add,app,htmlController,selection,realPdf}=context;
+  const near=(actual:number,expected:number,message:string,tolerance=0.001)=>assert(Math.abs(actual-expected)<=tolerance,`${message}: ${actual} vs ${expected}`);
+  const waitFor=async(condition:()=>boolean)=>{const end=Date.now()+5000;while(!condition()&&Date.now()<end)await wait(20);assert(condition(),'timed out waiting for navigation');};
+  const settled=async(scroll:HTMLElement)=>{let previous=NaN,stable=0;for(let i=0;i<150&&stable<5;i++){await wait(20);const top=scroll.scrollTop;stable=Math.abs(top-previous)<0.25?stable+1:0;previous=top;}};
+
+  await test('Assistive image extraction detects a real PDF image and saves its original source rectangle',async()=>{
+    const pdf=await PDFDocument.create(),page=pdf.addPage([600,800]),canvas=document.createElement('canvas');canvas.width=80;canvas.height=40;canvas.getContext('2d')!.fillStyle='#1234ef';canvas.getContext('2d')!.fillRect(0,0,80,40);const image=await pdf.embedPng(canvas.toDataURL());page.drawImage(image,{x:70,y:300,width:160,height:80});const bytes=await pdf.save();add('assist-image.pdf',{bytes:bytes.buffer});await realPdf.initPdfWorker(app);
+    const p=plugin(),view=new RealReaderView({app} as any,p as any);await view.onOpen();await view.loadFileByPath('assist-image.pdf');
+    try{await view.renderPage(1);view.getReaderToolbar().querySelector<HTMLButtonElement>('[aria-label="辅助识别摘录"]')!.click();await wait(60);const frame=view.getScrollContainer().querySelector<HTMLButtonElement>('[aria-label^="辅助摘录图片"]');assert(frame,'no detected image frame in real PDF');frame!.click();view.getScrollContainer().querySelector<HTMLButtonElement>('[aria-label="一键摘录"]')!.click();const anns=await p.store.loadAnnotations('assist-image.pdf');assert(anns.length===1&&anns[0].image?.startsWith('data:image/'),'image batch extraction lost its bitmap');const captured=new Image();captured.src=anns[0].image!;await captured.decode();assert(captured.naturalWidth>100&&captured.naturalHeight>40,'image extraction produced an empty bitmap');const check=document.createElement('canvas');check.width=check.height=1;check.getContext('2d')!.drawImage(captured,0,0,1,1);const pixel=check.getContext('2d')!.getImageData(0,0,1,1).data;assert(pixel[2]>180&&pixel[0]<70,'image extraction captured the wrong page region');const rect=anns[0].rects[0];assert(Math.abs(rect.x-70)<1&&Math.abs(rect.y-300)<1&&Math.abs(rect.w-160)<1&&Math.abs(rect.h-80)<1,'image extraction lost canonical PDF geometry');}finally{await view.onClose();view.containerEl.remove();}
+  });
+  await test('Real PDF.js keeps all fifteen rows of each column together at narrow and wide scales',async()=>{
+    await realPdf.initPdfWorker(app);
+    const pdf=await PDFDocument.create(),page=pdf.addPage([600,800]),font=await pdf.embedFont(StandardFonts.Helvetica);
+    page.drawText('COLUMN DOCUMENT',{x:50,y:750,size:24,font});
+    for(let i=0;i<15;i++){page.drawText('LEFT '+i+' Exact SAMPLE select near highlights.',{x:40,y:680-i*28,size:12,font});page.drawText('RIGHT '+i+' Separate column source.',{x:350,y:680-i*28,size:12,font});}
+    const bytes=await pdf.save();add('actual-columns.pdf',{bytes:bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)});
+    const view=new RealReaderView({app} as any,plugin() as any);await view.onOpen();
+    try{await view.loadFileByPath('actual-columns.pdf');for(const scale of [.3,.5,1.138,2]){view.setScale(scale);await view.renderPage(1);const lines=[...view.getPageRecord(1)!.textLayer.querySelectorAll('span')].map(node=>node.textContent).filter(text=>/^(LEFT|RIGHT)/.test(text??''));assert(lines.join('|')===[...Array.from({length:15},(_,i)=>'LEFT '+i+' Exact SAMPLE select near highlights.'),...Array.from({length:15},(_,i)=>'RIGHT '+i+' Separate column source.')].join('|'),'real glyph order interleaves columns at '+scale+': '+lines.join('|'));}}
+    finally{await view.onClose();view.containerEl.remove();}
+  });
+
+  await test('Real PDF.js CropBox projection round-trips at 0/90/180/270 degrees and 30/140/300 percent',async()=>{
+    await realPdf.initPdfWorker(app);const doc=await realPdf.loadPdf(croppedPdf());
+    try {const page=await doc.getPage(1);assert(page.view.join(',')==='50,70,550,770','CropBox fixture was not actually applied');
+      const raw={x:120,y:240,w:160,h:22};
+      for(const rotation of [0,90,180,270])for(const scale of [0.3,1.4,3]){
+        const viewport=page.getViewport({scale,rotation});const canvas={left:11.25,top:17.75,width:Math.floor(viewport.width),height:Math.floor(viewport.height),right:11.25+Math.floor(viewport.width),bottom:17.75+Math.floor(viewport.height)};
+        const css=pdfRectToCssRect(raw,viewport,canvas)!;assert(css,'projection missing');
+        const expected:Record<number,number[]>={0:[70,508,160,22],90:[170,70,22,160],180:[270,170,160,22],270:[508,270,22,160]};
+        const [x,y,w,h]=expected[rotation];
+        near(css.left,x*scale*canvas.width/viewport.width,'rotation X');near(css.top,y*scale*canvas.height/viewport.height,'rotation Y');
+        near(css.width,w*scale*canvas.width/viewport.width,'rotation width');near(css.height,h*scale*canvas.height/viewport.height,'rotation height');
+        const client={...css,left:canvas.left+css.left,top:canvas.top+css.top,right:canvas.left+css.left+css.width,bottom:canvas.top+css.top+css.height};
+        const restored=clientRectToPdfRect(client,canvas,viewport)!;assert(restored,'inverse missing');
+        for(const key of ['x','y','w','h'] as const)near(restored[key],raw[key],`inverse ${key}`);
+      }
+      const viewport=page.getViewport({scale:3,rotation:90});const canvas={left:5,top:7,width:viewport.width,height:viewport.height,right:5+viewport.width,bottom:7+viewport.height};
+      const clipped=clientRectToPdfRect({left:-20,top:7,width:40,height:30,right:20,bottom:37},canvas,viewport)!;
+      assert(clipped&&clipped.w>0&&clipped.h>0,'clipped range lost');
+      const projected=pdfRectToCssRect(clipped,viewport)!;near(projected.left,0,'canvas clipping');
+      assert(pdfRectsIntersect({x:10,y:10,w:10,h:10},{x:21.5,y:10,w:10,h:10},2),'2pt tolerance rejected close text');
+      assert(!pdfRectsIntersect({x:10,y:10,w:10,h:10},{x:22.1,y:10,w:10,h:10},2),'2pt tolerance accepted distant text');
+    }finally{await doc.destroy();}
+  });
+
+  await test('Fitting a rotated reading page keeps its text visible and subsequent zoom retains the reading position',async()=>{
+    add('real-fit-rotation.pdf',{bytes:croppedPdf([0,90,0,0,0,0])});
+    const p=plugin(),view=new RealReaderView({app} as any,p as any);
+    view.containerEl.style.width='360px';view.setWorkspaceChrome(true);
+    await view.setState({filePath:'real-fit-rotation.pdf',scale:1.138,position:{page:2,pageOffset:0,left:0}});await view.onOpen();
+    try {
+      const scroll=view.getScrollContainer();assert((view.getState() as any).position.page===2,'fixture did not restore the rotated reading page');
+      view.fitWidth();await waitFor(()=>view.getScale()<.6);await view.renderPage(2);await settled(scroll);
+      const fitted=view.getState() as any;
+      assert(fitted.position.page===2&&Math.abs(fitted.position.pageOffset)<.02,'fit width jumped away from the rotated reading page: '+JSON.stringify(fitted.position));
+      const text=view.getPageRecord(2)!.textLayer.querySelector('span')!;
+      const bounds=text.getBoundingClientRect(),viewport=scroll.getBoundingClientRect();
+      assert(bounds.width>0&&bounds.height>0&&bounds.left>=viewport.left&&bounds.right<=viewport.right&&bounds.top>=viewport.top&&bounds.bottom<=viewport.bottom,'fitted rotated text remains outside the reader viewport');
+      const canvas=view.getPageRecord(2)!.canvas,pixels=canvas.getContext('2d')!.getImageData(0,0,canvas.width,canvas.height).data;
+      assert(pixels.some((value,index)=>index%4!==3&&value<180),'rotated PDF canvas has no visible ink');
+      for(const scale of [.9,1.6,.55]){
+        view.setScale(scale);await view.renderPage(2);await settled(scroll);
+        const position=(view.getState() as any).position;
+        assert(position.page===2&&Math.abs(position.pageOffset)<.02,'zoom lost the reading position at '+scale+': '+JSON.stringify(position));
+      }
+    }finally{await view.onClose();view.containerEl.remove();}
+  });
+
+  await test('PDF cross-page selection persists three page geometries and redraws without duplicating overlays',async()=>{
+    add('across.pdf',{name:'Across',pages:3,crop:[50,70,550,770],rotations:[0,90,180],textItems:[{str:'Cross-page excerpt sample',x:100,y:350,w:180,h:18}]});
+    const p=plugin();const view:any=new ReaderView({app} as any,p as any);await view.onOpen();
+    try {await view.loadFileByPath('across.pdf');await Promise.all([view.renderPage(1),view.renderPage(2),view.renderPage(3)]);
+      const first=view.getPageRecord(1).textLayer.querySelector('span').firstChild,last=view.getPageRecord(3).textLayer.querySelector('span').firstChild;
+      const range=document.createRange();range.setStart(first,5);range.setEnd(last,10);
+      const target=view.annController.resolveSelection(range);assert(target?.pdfCoordinateSpace==='pdf'&&target.pdfGeometry.length===3,'cross-page geometry missing');
+      assert(target.pdfGeometry.map((g:any)=>g.page).join(',')==='1,2,3'&&target.pageNum===1,'page order/compatibility fields');
+      for(const geometry of target.pdfGeometry)assert(geometry.rects.length>0&&geometry.rects.every((r:any)=>[r.x,r.y,r.w,r.h].every(Number.isFinite)&&r.w>0&&r.h>0),'invalid page geometry');
+      assert(target.pdfGeometry[1].rects.length===1&&view.projectRect(2,target.pdfGeometry[1].rects[0],'pdf').height<25,'selected container box was mistaken for text geometry');
+      view.annController.commitAnnotation(target,'highlight','#ff0','Cross-page excerpt');
+      const annotations=await p.store.loadAnnotations('across.pdf');assert(annotations.length===1&&annotations[0].pdfGeometry.length===3,'geometry was not persisted');
+      const count=(page:number)=>view.getPageRecord(page).annLayer.querySelectorAll('.ms-ann-highlight').length;
+      const counts=[count(1),count(2),count(3)];assert(counts.every(n=>n>0),'one page missing overlay');
+      view.annController.refreshAll();view.annController.refreshAll();assert([1,2,3].every((page,index)=>count(page)===counts[index]),'refresh duplicated segments');
+      view.annController.releasePage(1);assert(count(1)===0&&count(2)===counts[1]&&count(3)===counts[2],'release removed another page');view.annController.renderPage(1);assert(count(1)===counts[0],'released geometry did not restore');
+      [1,2,3].forEach(page=>view.visiblePages.add(page));view.setScale(3);await Promise.all([1,2,3].map(page=>view.renderPage(page)));
+      for(const geometry of target.pdfGeometry){const divs=[...view.getPageRecord(geometry.page).annLayer.querySelectorAll('.ms-ann-highlight')] as HTMLElement[];
+        geometry.rects.forEach((rect:any,index:number)=>{const expected=view.projectRect(geometry.page,rect,'pdf');near(parseFloat(divs[index].style.left),expected.left,'zoomed overlay X');near(parseFloat(divs[index].style.top),expected.top,'zoomed overlay Y');});}
+      view.annController.deleteAnn(annotations[0]);assert(!view.scrollEl.querySelector('[data-ann-id]'),'cross-page deletion left segments');
+    }finally{await view.onClose();}
+  });
+
+  await test('Real PDF reader aligns selected text and overlays on rotated CropBox pages before and after 300 percent zoom',async()=>{
+    add('real-anchors.pdf',{bytes:croppedPdf([0,90,180,270])});const p=plugin();const view:any=new RealReaderView({app} as any,p as any);await view.onOpen();
+    const selected=(page:number)=>{const layer=view.getPageRecord(page).textLayer;const span=[...layer.querySelectorAll('span')].find((element:any)=>element.textContent.includes('CropBox')) as HTMLElement;
+      assert(span,'real text layer is empty');const node=span.firstChild as Text;const start=node.data.indexOf('CropBox');const range=document.createRange();range.setStart(node,start);range.setEnd(node,start+7);return range;};
+    try {await view.loadFileByPath('real-anchors.pdf');const persistedGeometry=new Map<number,any>();
+      for(let page=1;page<=4;page++){view.visiblePages.add(page);await view.renderPage(page);const range=selected(page);const target=view.annController.resolveSelection(range);
+        assert(target?.pageNum===page&&target.pdfCoordinateSpace==='pdf','real reader selection did not produce canonical PDF geometry');
+        persistedGeometry.set(page,structuredClone(target.pdfGeometry));view.annController.commitAnnotation(target,'highlight','#ff0','CropBox');
+        const element=view.getPageRecord(page).annLayer.querySelector('.ms-ann-highlight') as HTMLElement;const text=range.getBoundingClientRect(),overlay=element.getBoundingClientRect();
+        near(overlay.left,text.left,`real overlay X before zoom page ${page}`,1);near(overlay.top,text.top,`real overlay Y before zoom page ${page}`,1);
+      }
+      const assertPersistedGeometry=async(stage:string)=>{const annotations=await p.store.loadAnnotations('real-anchors.pdf');
+        for(const [page,geometry] of persistedGeometry){const annotation=annotations.find((item:any)=>item.page===page);assert(annotation?.pdfCoordinateSpace==='pdf'&&JSON.stringify(annotation.pdfGeometry)===JSON.stringify(geometry),`persisted PDF geometry changed ${stage} page ${page}`);}};
+      await assertPersistedGeometry('before zoom');
+      view.setScale(3);await Promise.all([1,2,3,4].map(page=>view.renderPage(page)));
+      await assertPersistedGeometry('after zoom');
+      for(let page=1;page<=4;page++){const text=selected(page).getBoundingClientRect(),overlay=view.getPageRecord(page).annLayer.querySelector('.ms-ann-highlight').getBoundingClientRect();
+        // The 100% DOM selection is pixel-quantized; PDF.js re-lays text at 300% and exposes the 2px difference.
+        const zoomOffsetTolerance=2;near(overlay.left,text.left,`real overlay X at 300% page ${page}`,zoomOffsetTolerance);near(overlay.top,text.top,`real overlay Y at 300% page ${page}`,zoomOffsetTolerance);near(overlay.width,text.width,`real overlay width at 300% page ${page}`,1);near(overlay.height,text.height,`real overlay height at 300% page ${page}`,1);}
+    }finally{await view.onClose();}
+  });
+
+  await test('PDF source jump records history, expands folded pages, matches within 2pt and centers the reference',async()=>{
+    add('navigation.pdf',{name:'Navigation',pages:4,textItems:[{str:'Reference destination',x:170,y:350,w:180,h:18}]});
+    const p=plugin();const view:any=new ReaderView({app} as any,p as any);await view.onOpen();
+    try {await view.loadFileByPath('navigation.pdf');await view.renderPage(3);
+      const rec=view.getPageRecord(3),box=rec.textLayer.querySelector('span').getBoundingClientRect();
+      const text=clientRectToPdfRect(box,rec.canvas.getBoundingClientRect(),rec.viewport)!;
+      const reference={...text,y:text.y-text.h-1.5};
+      view.annController.commitAnnotation({kind:'pdf',pageNum:3,rects:[reference],pdfGeometry:[{page:3,rects:[reference]}],pdfCoordinateSpace:'pdf'},'highlight','#ff0','Reference destination');
+      const id=(await p.store.loadAnnotations('navigation.pdf'))[0].id;
+      view.scrollEl.scrollTo({top:180,behavior:'instant'});await wait(30);const before=view.scrollEl.scrollTop;
+      view.toggleFold(3);view.flashAnnotation(id);await waitFor(()=>!!view.getPageRecord(3).annLayer.querySelector('.ms-ann-flash'));await settled(view.scrollEl);
+      assert(!view.folded.has(3)&&view.getPageRecord(3).renderedScale===view.getScale(),'folded source stayed hidden');
+      const destination=view.getPageRecord(3).textLayer.querySelector('span').getBoundingClientRect(),scroll=view.scrollEl.getBoundingClientRect();
+      near(destination.top+destination.height/2,scroll.top+view.scrollEl.clientHeight/2,'tolerant text centering',3);
+      const atSource=view.scrollEl.scrollTop;await view.goBack();await settled(view.scrollEl);near(view.scrollEl.scrollTop,before,'back lost previous location',2);
+      await view.goForward();await settled(view.scrollEl);near(view.scrollEl.scrollTop,atSource,'forward lost source location',2);
+    }finally{await view.onClose();}
+  });
+
+  await test('Legacy rotated PDF annotations retain their old display coordinates without sidecar rewriting',async()=>{
+    add('legacy-rotation.pdf',{name:'Legacy',pages:1,rotation:90,crop:[50,70,550,770]});
+    const p=plugin();const view:any=new ReaderView({app} as any,p as any);await view.onOpen();
+    try {await view.loadFileByPath('legacy-rotation.pdf');await view.renderPage(1);
+      const rect={x:20,y:200,w:120,h:18};view.annController.commitAnnotation({kind:'pdf',pageNum:1,rects:[rect]},'highlight','#ff0','old sidecar');
+      const ann=(await p.store.loadAnnotations('legacy-rotation.pdf'))[0],before=JSON.stringify(ann);
+      const div=view.scrollEl.querySelector('.ms-ann-highlight');near(parseFloat(div.style.left),20,'legacy X');near(parseFloat(div.style.top),282,'legacy display Y');
+      view.annController.refreshAll();assert(JSON.stringify(ann)===before&&!ann.pdfCoordinateSpace&&!ann.pdfGeometry,'legacy anchor was silently rewritten');
+    }finally{await view.onClose();}
+  });
+
+  await test('EPUB quote anchors outrank chapter ratios; unresolved or ambiguous quotes only get approximate navigation',async()=>{
+    const paragraphs=(n:number,label:string)=>Array.from({length:n},(_,i)=>`<p>${label} paragraph ${i} with enough text to reflow.</p>`).join('');
+    const original=`<section data-ms-section="one">${paragraphs(30,'First')}</section><section data-ms-section="two">${paragraphs(20,'Before')}<p>Unique reference answer</p>${paragraphs(30,'After')}</section>`;
+    const p=plugin(),h=htmlController(p,'ratio.epub',original);await h.load();
+    try {const target=h.ann.resolveSelection(selection(h.body,'Unique reference answer'));
+      assert(target.range.section==='two'&&target.range.sectionRatio>0&&target.range.sectionRatio<1,'chapter ratio not captured as 0..1');
+      h.ann.commitAnnotation(target,'highlight','#ff0','Unique reference answer');const ann=(await p.store.loadAnnotations('ratio.epub'))[0];
+      h.ann.setHtml(original.replace('<p>Unique reference answer</p>',paragraphs(18,'Inserted')+'<p>Unique reference answer</p>'));
+      h.scroll.scrollTo({top:40,behavior:'instant'});h.ann.flashAnnotation(ann.id);await settled(h.scroll);
+      assert(h.body.dataset.msAnchorNavigation==='exact','ratio overrode a valid quote');
+      const exact=h.body.querySelector('.ms-hl').getBoundingClientRect(),scroll=h.scroll.getBoundingClientRect();near(exact.top+exact.height/2,scroll.top+h.scroll.clientHeight/2,'exact quote centering',3);
+      h.ann.goBack();await settled(h.scroll);near(h.scroll.scrollTop,40,'HTML source history',2);
+      h.ann.setHtml(original.replace('Unique reference answer','Original quote was removed'));
+      ann.range.sectionRatio=0.6;h.scroll.scrollTo({top:0,behavior:'instant'});h.ann.flashAnnotation(ann.id);await settled(h.scroll);
+      assert(h.body.dataset.msAnchorNavigation==='approximate'&&!h.body.querySelector('.ms-hl'),'ratio guessed a highlight');
+      const section=h.body.querySelector('[data-ms-section="two"]').getBoundingClientRect(),container=h.scroll.getBoundingClientRect();near(section.top+section.height*0.6,container.top+h.scroll.clientHeight/2,'chapter ratio navigation',3);
+      assert(h.body.dataset.msUnresolvedAnnotations==='1'&&(await p.store.loadAnnotations('ratio.epub')).length===1,'fallback removed unresolved data');
+      ann.range.exact='duplicate';ann.range.prefix='';ann.range.suffix='';h.ann.setHtml(original.replace('Unique reference answer','duplicate</p><p>duplicate'));h.ann.flashAnnotation(ann.id);await settled(h.scroll);
+      assert(!h.body.querySelector('.ms-hl')&&h.body.dataset.msAnchorNavigation==='approximate','ratio broke ambiguity refusal');
+      ann.range.sectionRatio=60;h.ann.flashAnnotation(ann.id);assert(h.body.dataset.msAnchorNavigation==='unresolved','foreign ratio units were guessed');
+    }finally{await h.close();}
+  });
+}

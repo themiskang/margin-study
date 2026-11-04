@@ -1,0 +1,71 @@
+import { SpeechCoordinator, speechChunks } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/audio/speech';
+import { readableDomText } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/audio/speechControls';
+import { ReaderView } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/readerView';
+import { DocumentReaderView } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/documents/documentReader';
+import { WordReaderView } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/word/wordReader';
+
+class VoiceEngine {
+ spoken:any[]=[];current:any=null;pauses=0;resumes=0;cancels=0;
+ create(text:string){return {text,rate:1,lang:'',onend:null,onerror:null,onboundary:null} as any;}
+ speak(utterance:any){this.current=utterance;this.spoken.push(utterance);}
+ pause(){this.pauses++;}resume(){this.resumes++;}cancel(){this.cancels++;this.current=null;}
+ finish(){const utterance=this.current;this.current=null;utterance?.onend?.({});}
+}
+export async function runSpeechAcceptance({test,assert,wait,plugin,add,app,selection}:any){
+ await test('Shared speech continuously queues long text, supports pause/resume, live rate and completion',async()=>{
+  const engine=new VoiceEngine(),session=new SpeechCoordinator(()=>engine).createSession('long');
+  const text='完整句子用于连续阅读。'.repeat(450);assert(await session.start(text),'speech did not start');
+  assert(engine.spoken[0].text.length<=220,'long utterance not chunked');session.pause();assert(session.state.status==='paused'&&engine.pauses===1,'pause failed');
+  const before=engine.spoken.length;engine.finish();await wait();assert(engine.spoken.length===before,'paused queue continued');
+  session.resume();await wait();assert(engine.spoken.length===before+1,'resume did not continue');
+  const current=engine.current;current.onboundary({charIndex:8});session.setRate(1.75);await wait();
+  assert(engine.current.rate===1.75&&engine.current.text===current.text.slice(8).trimStart(),'live rate lost boundary');
+  for(let i=0;i<100&&session.state.status!=='finished';i++){engine.finish();await wait();}
+  assert(session.state.status==='finished'&&engine.spoken.length>20,'full document was truncated');
+  assert(speechChunks('😀'.repeat(30),7).every(part=>!/^[\uDC00-\uDFFF]|[\uD800-\uDBFF]$/.test(part)),'chunk split emoji');session.dispose();
+ });
+ await test('Speech stop cancels pending sources immediately; owners cannot cancel another reader',async()=>{
+  const engine=new VoiceEngine(),coordinator=new SpeechCoordinator(()=>engine),a=coordinator.createSession('a'),b=coordinator.createSession('b');
+  const pending=a.start(async function*(){await new Promise(()=>{});yield{text:'stale'};});await wait();a.stop();
+  const result=await Promise.race([pending,wait(80).then(()=> 'timeout')]);assert(result===false,'stop waited for uncooperative source');
+  await a.start('reader a');await b.start('reader b');assert(a.state.status==='stopped'&&b.state.status==='speaking','ownership switch failed');
+  const cancellations=engine.cancels;a.dispose();assert(engine.cancels===cancellations&&engine.current.text==='reader b','unrelated view cancelled owner');
+  b.pause();b.setRate(2);await wait();assert(b.state.status==='paused'&&!engine.current,'paused rate restarted early');b.resume();await wait();assert(engine.current.rate===2,'paused rate not applied');
+  b.dispose();const unavailable=new SpeechCoordinator(()=>null).createSession('unsupported');assert(!await unavailable.start('text')&&unavailable.state.status==='error','unsupported engine falsely succeeded');unavailable.dispose();
+  const empty=coordinator.createSession('empty');assert(!await empty.start('  ')&&empty.state.status==='error','empty source falsely finished');
+  let closed=false;const source={async *[Symbol.asyncIterator](){try{yield{text:'error case'};yield{text:'must not continue'};}finally{closed=true;}}};
+  await empty.start(source);engine.current.onerror({error:'voice-unavailable'});await wait();assert(empty.state.status==='error'&&empty.state.error==='voice-unavailable'&&closed,'voice error not reported or source not closed');empty.dispose();
+ });
+ await test('All reader speech controls use current document, accept long selections and stop on switch/close',async()=>{
+  const engine=new VoiceEngine();const speechDescriptor=Object.getOwnPropertyDescriptor(window,'speechSynthesis'),utteranceDescriptor=Object.getOwnPropertyDescriptor(window,'SpeechSynthesisUtterance');
+  Object.defineProperty(window,'speechSynthesis',{configurable:true,value:engine});Object.defineProperty(window,'SpeechSynthesisUtterance',{configurable:true,value:class{constructor(public text:string){} }});
+  const p=plugin();const html:any=new DocumentReaderView({app} as any,p),pdf:any=new ReaderView({app} as any,p),word:any=new WordReaderView({app} as any,p);
+  try{
+   add('speech.html',{content:'<h1>标题</h1><p>'+'长选区正文。'.repeat(650)+'</p>'});add('speech-other.html',{content:'<p>新的内容</p>'});
+   add('speech.pdf',{name:'Spoken',pages:3});add('speech.docx',{content:'<p>Word spoken body</p>'});
+   await html.onOpen();await pdf.onOpen();await word.onOpen();await html.loadFileByPath('speech.html');
+   const range=selection(html.bodyEl,'长选区正文。'.repeat(650));window.getSelection()!.removeAllRanges();window.getSelection()!.addRange(range);
+   assert(await html.speech.start('selection'),'long selection rejected');assert(engine.current.text.includes('长选区正文'),'wrong selection');window.getSelection()!.removeAllRanges();
+   await html.loadFileByPath('speech-other.html');assert(!engine.current&&html.speech.session.state.status==='stopped','HTML switch kept speaking');
+   await pdf.loadFileByPath('speech.pdf');assert(await pdf.speech.start(),'PDF full text failed');
+   for(let i=0;i<3;i++){assert(engine.current.text.includes('Spoken page '+(i+1)),'PDF page order');assert(pdf.getState().position.page===i+1,'spoken page did not follow source position');engine.finish();await wait(35);}
+   assert(pdf.speech.session.state.status==='finished','PDF did not finish');
+   await word.loadFileByPath('speech.docx');assert(await word.speech.start()&&engine.current.text==='Word spoken body','Word speech missing');
+   await html.onClose();assert(engine.current.text==='Word spoken body','closing idle reader stopped Word owner');
+   const pause=word.toolbarEl.querySelector('[aria-label="暂停朗读"]');pause.click();assert(word.speech.session.state.status==='paused','pause UI failed');word.toolbarEl.querySelector('[aria-label="继续朗读"]').click();assert(word.speech.session.state.status==='speaking','resume UI failed');
+   await word.onClose();assert(!engine.current,'closing reader kept speaking');
+   const root=document.createElement('div');root.innerHTML='<p>first<span class="ms-hl"> excerpt</span></p><p>second</p><button>control</button><span class="ms-ann-note">private note</span>';
+   assert(readableDomText(root)==='first excerpt\nsecond','spoken text duplicated or read controls');
+  }finally{await pdf.onClose();if(!html.destroyed)await html.onClose();if(!word.destroyed)await word.onClose();
+   if(speechDescriptor)Object.defineProperty(window,'speechSynthesis',speechDescriptor);else delete(window as any).speechSynthesis;
+   if(utteranceDescriptor)Object.defineProperty(window,'SpeechSynthesisUtterance',utteranceDescriptor);else delete(window as any).SpeechSynthesisUtterance;
+  }
+ });
+ await test('Extend Advanced Speech reads its own paragraphs, pauses, skips and stops on Reader close without changing the paper',async()=>{
+  const engine=new VoiceEngine(),speechDescriptor=Object.getOwnPropertyDescriptor(window,'speechSynthesis'),utteranceDescriptor=Object.getOwnPropertyDescriptor(window,'SpeechSynthesisUtterance');Object.defineProperty(window,'speechSynthesis',{configurable:true,value:engine});Object.defineProperty(window,'SpeechSynthesisUtterance',{configurable:true,value:class{constructor(public text:string){} }});
+  const p=plugin(),view:any=new ReaderView({app} as any,p);add('extend-speech.pdf',{name:'PDF body must not be spoken',pages:1});await view.onOpen();
+  try{await view.loadFileByPath('extend-speech.pdf');const id=await view.createExtend(1,{x:.5,y:.4});await view.finishExtendEditing();await view.updateExtend(id,{text:'Extend first paragraph.\nSecond paragraph.'});const saved=JSON.stringify(view.getExtendNotes());view.containerEl.querySelector('[aria-label="留白菜单"]').click();view.containerEl.querySelector('[role="tab"][aria-label="Advanced"]').click();const speech=view.containerEl.querySelector('[aria-label="Speech"]');assert(speech,'Advanced is missing Speech');speech.click();await wait(30);assert(engine.current?.text==='Extend first paragraph.','Extend speech read PDF body or wrong text');const panel=()=>document.querySelector('[aria-label="留白朗读"]');assert(panel(),'speech controls missing');panel().querySelector('[aria-label="暂停朗读"]').click();assert(engine.pauses===1,'Extend pause failed');panel().querySelector('[aria-label="继续朗读"]').click();assert(engine.resumes===1,'Extend resume failed');panel().querySelector('[aria-label="下一段"]').click();await wait(30);assert(engine.current?.text==='Second paragraph.','Extend next paragraph failed');panel().querySelector('[aria-label="上一段"]').click();await wait(30);assert(engine.current?.text==='Extend first paragraph.','Extend previous paragraph failed');assert(JSON.stringify(view.getExtendNotes())===saved,'speech changed note');await view.onClose();assert(!engine.current&&!panel(),'closing Reader kept Extend speech alive');
+  }finally{if(!view.destroyed)await view.onClose();view.containerEl.remove();if(speechDescriptor)Object.defineProperty(window,'speechSynthesis',speechDescriptor);else delete(window as any).speechSynthesis;if(utteranceDescriptor)Object.defineProperty(window,'SpeechSynthesisUtterance',utteranceDescriptor);else delete(window as any).SpeechSynthesisUtterance;}
+ });
+
+}

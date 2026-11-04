@@ -1,0 +1,56 @@
+/** Public host adapters for an isolated workspace contract test. */
+export const notices: string[] = [];
+export class Notice { constructor(text: string) { notices.push(text); } }
+export class TFile {
+  path: string; extension: string; name: string; basename: string; stat: any;
+  constructor(path: string, size = 10) { this.path=path;this.name=path.split('/').pop()!;this.extension=this.name.split('.').pop()!;this.basename=this.name.replace(/\.[^.]+$/,'');this.stat={size,mtime:1,ctime:1}; }
+}
+export class Component {
+  private callbacks: (()=>void)[]=[];
+  private children: Component[]=[];
+  private loaded=false;
+  load(){if(this.loaded)return;this.loaded=true;(this as any).onload?.();for(const child of this.children)child.load();}
+  unload(){if(!this.loaded)return;this.loaded=false;for(const child of [...this.children])child.unload();for(const callback of this.callbacks.splice(0).reverse())callback();(this as any).onunload?.();}
+  addChild<T extends Component>(child:T):T{this.children.push(child);if(this.loaded)child.load();return child;}
+  removeChild<T extends Component>(child:T):T{this.children=this.children.filter(value=>value!==child);child.unload();return child;}
+  register(callback:()=>void){this.callbacks.push(callback);}
+  registerEvent(reference:any){this.register(()=>reference.off());}
+  registerDomEvent(target:any,event:string,handler:any,options?:any){target.addEventListener(event,handler,options);this.register(()=>target.removeEventListener(event,handler,options));}
+}
+export class ItemView extends Component {
+  app:any;containerEl:HTMLElement;contentEl:HTMLElement;
+  constructor(public leaf:any){super();this.app=leaf.app;this.containerEl=document.createElement('section');this.containerEl.className='test-item-view';this.contentEl=document.createElement('div');this.contentEl.className='view-content';this.containerEl.append(document.createElement('header'),this.contentEl);document.querySelector('#fixtures')!.append(this.containerEl);}
+}
+export class WorkspaceLeaf {}
+export class Scope { handlers:any[]=[];constructor(_parent?:any){} register(modifiers:any,key:any,callback:any){const handler={modifiers,key,callback};this.handlers.push(handler);return handler;} unregister(handler:any){this.handlers=this.handlers.filter(item=>item!==handler);} }
+export class Menu {
+  private items:any[]=[];
+  setUseNativeMenu(_value:boolean){return this;}
+  private hidden:()=>void=()=>{};
+  hide(){document.querySelector('#test-menu')?.remove();this.hidden();return this;}
+  onHide(callback:()=>void){this.hidden=callback;}
+  addItem(callback:any){const item:any={title:'',disabled:false,action:()=>{},setTitle(value:string){this.title=value;return this;},setIcon(){return this;},setChecked(){return this;},setDisabled(value:boolean){this.disabled=value;return this;},onClick(action:any){this.action=action;return this;}};callback(item);this.items.push(item);return this;}
+  addSeparator(){return this;}
+  showAtMouseEvent(){document.querySelector('#test-menu')?.remove();const menu=document.createElement('div');menu.id='test-menu';menu.setAttribute('role','menu');for(const item of this.items){const button=document.createElement('button');button.setAttribute('role','menuitem');button.textContent=item.title;button.disabled=item.disabled;button.addEventListener('click',event=>{menu.remove();item.action(event);});menu.append(button);}document.body.append(menu);}
+  showAtPosition(){this.showAtMouseEvent();}
+}
+export const Platform={isMobile:false};
+export function setIcon(host:HTMLElement,name:string){host.dataset.icon=name;const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('fill','none');svg.setAttribute('stroke','currentColor');const path=document.createElementNS(svg.namespaceURI,'path');path.setAttribute('d','M4 5h16M4 12h16M4 19h16');svg.append(path);host.replaceChildren(svg);}
+export function sanitizeHTMLToDom(html:string){const template=document.createElement('template');template.innerHTML=html;template.content.querySelectorAll('script,iframe,object,embed').forEach(node=>node.remove());for(const node of template.content.querySelectorAll('*'))for(const attr of [...node.attributes])if(/^on/i.test(attr.name))node.removeAttribute(attr.name);return template.content;}
+export const markdownTiming={delayMs:0};
+export class MarkdownRenderer {
+  static async render(_app:any,source:string,host:HTMLElement){if(markdownTiming.delayMs)await new Promise(resolve=>setTimeout(resolve,markdownTiming.delayMs));host.replaceChildren();for(const line of source.split('\n')){const heading=line.match(/^(#{1,6}) (.*)$/),node=document.createElement(heading?'h'+heading[1].length:'p');node.textContent=heading?heading[2]:line;host.append(node);}}
+}
+export async function requestUrl(){throw new Error('Network requests are disabled in this synthetic workspace fixture');}
+
+export class TFolder { constructor(public path:string){} }
+export class PluginSettingTab { containerEl=document.createElement('div'); constructor(public app:any,public plugin:any){} }
+export class Setting { constructor(_container:any){} }
+export class Plugin extends Component {
+  views=new Map<string,any>(); disk:any={settings:{backupEnabled:false}};
+  constructor(public app:any){super();}
+  async loadData(){return structuredClone(this.disk);}
+  async saveData(data:any){this.disk=structuredClone(data);}
+  registerView(type:string,factory:any){this.views.set(type,factory);}
+  registerExtensions(){} registerObsidianProtocolHandler(){} addCommand(){} addRibbonIcon(){} addSettingTab(){}
+}

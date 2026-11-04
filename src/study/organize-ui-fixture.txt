@@ -1,0 +1,281 @@
+import { openDetail } from '__PROJECT__/src/cards/cardView';
+import { mountTemplateControls } from '__PROJECT__/src/review/templates';
+import { Store } from '__PROJECT__/src/model/store';
+import { MindmapRenderer } from '__PROJECT__/src/mindmap/mindmapRenderer';
+import { OutlineRenderer } from '__PROJECT__/src/outline/outlineRenderer';
+import { CardBoardRenderer } from '__PROJECT__/src/board/cardBoardRenderer';
+import { BOARD_DRAG_TYPE, boardMatchesQuery, cardsFromBoardSource, copyBoardCards, groupBoardCards } from '__PROJECT__/src/board/boardModel';
+import { MarkdownRenderer, TFile } from 'obsidian';
+
+const target = document.querySelector('#fixtures') as HTMLElement;
+const results: any[] = [], stores: Store[] = [], mounted: { dispose(): void }[] = [];
+(window as any).results = results;
+(HTMLElement.prototype as any).empty = function () { this.replaceChildren(); };
+const pause = () => new Promise(done => setTimeout(done, 0));
+function assert(value: any, message: string) { if (!value) throw new Error(message); }
+(MarkdownRenderer as any).render = async (_app: any, text: string, host: HTMLElement) => {
+  host.replaceChildren(); let list: HTMLUListElement | null = null;
+  for (const line of text.split('\n')) {
+    const heading = /^(#{1,6}) (.*)$/.exec(line), bullet = /^- (.*)$/.exec(line);
+    const block = document.createElement(heading ? `h${heading[1].length}` : bullet ? 'li' : 'p');
+    for (const part of (heading?.[2] ?? bullet?.[1] ?? line).split(/(\*\*[^*]+\*\*)/g)) {
+      if (part.startsWith('**') && part.endsWith('**')) { const strong = document.createElement('strong'); strong.textContent = part.slice(2,-2); block.append(strong); }
+      else block.append(document.createTextNode(part));
+    }
+    if (bullet) { if (!list) { list = document.createElement('ul'); host.append(list); } list.append(block); }
+    else { list = null; host.append(block); }
+  }
+};
+const button = (root: ParentNode, label: string): HTMLButtonElement => { const value = [...root.querySelectorAll<HTMLButtonElement>('button')].find(node => node.getAttribute('aria-label') === label || node.textContent === label); assert(value, `Missing button ${label}`); return value!; };
+const row = (root: ParentNode, id: string) => [...root.querySelectorAll<HTMLElement>('.ms-ol-node')].find(node => node.dataset.id === id)!;
+const editor = (root: ParentNode, id: string, part = 'excerpt') => [...root.querySelectorAll<HTMLTextAreaElement>('textarea[data-node-id]')].find(node => node.dataset.nodeId === id && node.dataset.part === part)!;
+const boardCard = (root: ParentNode, id: string) => [...root.querySelectorAll<HTMLElement>('.ms-board-card')].find(node => node.dataset.cardId === id)!;
+const graphCard = (root: ParentNode, id: string) => [...root.querySelectorAll<HTMLElement>('.ms-node')].find(node => node.dataset.id === id)!;
+function change(input: HTMLInputElement | HTMLSelectElement, value: any) { if (input instanceof HTMLInputElement && input.type === 'checkbox') input.checked = value; else input.value = value; input.dispatchEvent(new Event('change', { bubbles: true })); }
+function key(input: HTMLElement, name: string, extra: any = {}) { const event = new KeyboardEvent('keydown', { key: name, bubbles: true, cancelable: true, ...extra }); input.dispatchEvent(event); return event; }
+async function test(name: string, run: () => any) { try { for (const view of mounted.splice(0)) view.dispose(); document.querySelectorAll('.ms-modal-bg,#test-menu').forEach(node => node.remove()); target.replaceChildren(); target.style.width = ''; await run(); results.push({name,passed:true}); } catch (error) { results.push({name,passed:false,error:String(error)}); } }
+async function fresh(existing?: any) {
+  let disk: any = {}; const files = new Map<string,string>();
+  const pdf = new TFile('Alpha.pdf');
+  const app: any = { vault: { getFiles: () => [pdf], getAbstractFileByPath: (path: string) => path === pdf.path ? pdf : null,
+    adapter: { exists: async (path: string) => files.has(path), mkdir: async (path: string) => files.set(path,''), write: async (path: string,value: string) => files.set(path,value), read: async (path: string) => files.get(path) } } };
+  const host = existing ?? { app, loadData: async () => structuredClone(disk), saveData: async (value: any) => { disk = structuredClone(value); } };
+  const store = new Store(host); await store.load(); stores.push(store);
+  const set = store.studySets[0] ?? store.createStudySet('Study'); const canvasId = store.activeCanvasId!;
+  let opens = 0; const events: string[] = [], sentinel = { name: 'independent-sidebar' };
+  const plugin: any = { store, app: host.app, activeReader: null, sidebar: sentinel, refreshSidebar(){}, refreshMindmap(){}, viewEvents: { onMindmapCardSelect: (id: string) => events.push(id) },
+    openDocument: async () => { opens++; return { flashAnnotation(){}, gotoPage(){} }; } };
+  const addCard = (id: string, text: string, patch: any = {}) => store.addCard({ id, docPath:'Alpha.pdf', type:'excerpt', front:text, tags:[], links:[], color:'#ffd54f', createdAt:'2026-10-15T01:00:00Z', ...patch });
+  const addNode = (id: string, cardId?: string, patch: any = {}) => { store.addNode({id,cardId,canvasId,title:id,parentId:null,order:store.nodes.length,collapsed:false,x:50+store.nodes.length*260,y:90,...patch}); return store.getNode(id)!; };
+  const hostElement = () => { const host = document.createElement('div'); host.style.cssText='height:620px;min-width:0'; target.append(host); return host; };
+  const outline = (options: any = {}) => { const host=hostElement(), view=new OutlineRenderer(plugin,options); view.mount(host); mounted.push(view); return {host,view}; };
+  const board = (options: any = {}) => { const host=hostElement(), view=new CardBoardRenderer(plugin,options); view.mount(host); mounted.push(view); return {host,view}; };
+  const graph = (options: any = {}) => { const host=hostElement(), view=new MindmapRenderer(plugin,options); view.mount(host); mounted.push(view); return {host,view}; };
+  return {store,plugin,set,canvasId,host,addCard,addNode,outline,board,graph,events,sentinel,opens:()=>opens};
+}
+const edgeSignature = (edges: any[]) => JSON.stringify(edges.map(edge => ({ from:edge.from, to:edge.to, label:edge.label })));
+async function loadWithEdges(p: any, edges: {from:string;to:string;label?:string}[]) {
+  p.store.edges = structuredClone(edges);
+  await p.store.flush();
+  const loaded = await fresh(p.host);
+  assert(edgeSignature(loaded.store.edges) === edgeSignature(edges), `synthetic legacy edge fixture was not loaded: ${edgeSignature(loaded.store.edges)}`);
+  return loaded;
+}
+async function parentChild(edge?: {from:string;to:string;label?:string}, childFirst = false) {
+  const p = await fresh(); p.addCard('parent','Parent'); p.addCard('child','Child');
+  p.addNode('parent-node','parent',{order:childFirst?1:0}); p.addNode('child-node','child',{parentId:'parent-node',order:childFirst?0:1});
+  return edge ? loadWithEdges(p,[edge]) : loadWithEdges(p,[]);
+}
+function selectAndLink(host: HTMLElement, ids: string[]) {
+  button(host,'多选').click(); for (const id of ids) graphCard(host,id).click(); button(host,'链接').click();
+}
+
+try {
+  await test('Review enrollment derives editor type across shared decks without rewriting excerpt cards', async () => {
+    const p=await fresh();p.addCard('a','France?',{back:'Paris',keywords:[]});const before=JSON.stringify(p.store.getCard('a'));
+    openDetail(p.plugin,p.store.getCard('a')!);let modal=document.querySelector('.ms-native-card-editor')!;
+    assert(button(modal,'卡片模板与类型').textContent==='Note Card ▾','legacy excerpt is not Note Card');document.querySelector('.ms-modal-bg')!.remove();
+    const first=p.store.createReviewDeck('First'),second=p.store.createReviewDeck('Shared');p.store.enqueueReviewInDeck(['a'],first.id);p.store.enqueueReviewInDeck(['a'],second.id);p.store.removeCardsFromReviewDeck(['a'],first.id);
+    const enrolled=JSON.stringify(p.store.getCard('a'));openDetail(p.plugin,p.store.getCard('a')!);modal=document.querySelector('.ms-native-card-editor')!;
+    assert(button(modal,'卡片模板与类型').textContent==='Review Card ▾'&&modal.querySelector('.ms-card-type')?.textContent==='复习卡','remaining shared deck did not derive Review Card');
+    assert(button(modal,'复习记录'),'review records unavailable');button(modal,'保存').click();await p.store.flush();const reopened=await fresh(p.host);
+    assert(JSON.stringify(reopened.store.getCard('a'))===enrolled&&reopened.store.getCard('a')!.type==='excerpt','editor changed source card contract: '+enrolled+' => '+JSON.stringify(reopened.store.getCard('a')));
+    reopened.store.removeCardsFromReviewDeck(['a'],second.id);openDetail(reopened.plugin,reopened.store.getCard('a')!);modal=document.querySelector('.ms-native-card-editor')!;assert(button(modal,'卡片模板与类型').textContent==='Note Card ▾','retained schedules incorrectly determine Review Card');
+    assert(JSON.parse(before).front===reopened.store.getCard('a')!.front,'front changed');
+  });
+  await test('Applying a field template updates the editor and persists its rendered Markdown through save/reopen', async () => {
+    const p=await fresh();p.addCard('a','Original excerpt',{back:'Original note'});
+    p.store.upsertCardTemplate({id:'fields',name:'Field template',front:'# {{front}}\n- {{source}}',back:'**{{back}}**'});
+    const host=document.createElement('div'),front=document.createElement('textarea'),back=document.createElement('textarea');front.value='New excerpt';back.value='Study note';target.append(host);
+    let applied='';mountTemplateControls(host,p.plugin,p.store.getCard('a')!,front,back,()=>{},id=>applied=id);
+    (host.querySelector('select') as HTMLSelectElement).value='fields';button(host,'应用模板').click();
+    assert(front.value==='# New excerpt\n- Alpha.pdf'&&back.value==='**Study note**','template fields did not expand in the editor');
+    assert(applied==='fields','applied template identity was not returned to the editor');p.store.updateCard('a',{front:front.value,back:back.value,templateId:applied});
+    await p.store.flush();const reopened=await fresh(p.host);assert(reopened.store.getCard('a')!.front==='# New excerpt\n- Alpha.pdf'&&reopened.store.getCard('a')!.back==='**Study note**'&&reopened.store.getCard('a')!.templateId==='fields','saved template result did not survive reload');
+  });
+  await test('Saved template selection survives editor reopen and deleting a template can be undone without changing card text', async () => {
+    const p=await fresh();p.addCard('a','Original excerpt',{back:'Original note',templateId:'saved'});
+    p.store.upsertCardTemplate({id:'saved',name:'Saved template',front:'**{{front}}**',back:'{{back}}'});
+    const controls=()=>{const host=document.createElement('div'),front=document.createElement('textarea'),back=document.createElement('textarea');front.value='Original excerpt';back.value='Original note';target.append(host);mountTemplateControls(host,p.plugin,p.store.getCard('a')!,front,back,()=>{},()=>{});return host;};
+    let host=controls();assert((host.querySelector('select') as HTMLSelectElement).value==='saved','saved template is not selected when reopening editor');
+    button(host,'删除模板').click();button(document.querySelector('.ms-modal')!,'确定').click();assert(!p.store.cardTemplates.length,'template not deleted');
+    assert(p.store.undoLibraryChange()&&p.store.cardTemplates[0]?.id==='saved','template deletion cannot be undone');
+    assert(p.store.getCard('a')!.front==='Original excerpt'&&p.store.getCard('a')!.back==='Original note','template deletion/undo changed card text');
+    await p.store.flush();const reopened=await fresh(p.host);assert(reopened.store.cardTemplates[0]?.id==='saved','restored template not saved');
+  });
+  await test('Outline edit Tab/ShiftTab retain focus and use the nearest visible sibling', async () => {
+    const p=await fresh();p.addCard('a','Alpha');p.addCard('b','Beta');p.addNode('hidden',undefined,{hidden:true});p.addNode('one','a');p.addNode('two','b');const {host,view}=p.outline();
+    button(host,'编辑大纲').click();let input=editor(host,'two');input.focus();input.setSelectionRange(2,2);key(input,'Tab');
+    assert(p.store.getNode('two')!.parentId==='one','Tab did not indent');assert(document.activeElement===editor(host,'two')&&editor(host,'two').selectionStart===2,'Tab lost editor/caret');
+    key(editor(host,'two'),'Tab',{shiftKey:true});assert(p.store.getNode('two')!.parentId===null,'ShiftTab did not outdent');
+    const nodes=p.store.getScopedNodes().filter(n=>n.parentId===null).sort((a,b)=>(a.order??0)-(b.order??0));assert(nodes.findIndex(n=>n.id==='two')===nodes.findIndex(n=>n.id==='one')+1,'outdent order is wrong');
+    assert(p.store.undoLibraryChange(),'outdent not undoable');view.render();assert(p.store.getNode('two')!.parentId==='one','outdent undo was not atomic');
+  });
+  await test('Outline Enter splits at the caret, preserves anchor/children, and focuses the tail', async () => {
+    const p=await fresh();p.addCard('a','AlphaBeta',{anchorAnnId:'anchor-a',page:1});p.addNode('one','a',{comments:['Keep local comment']});p.addNode('child',undefined,{parentId:'one'});const {host}=p.outline();button(host,'编辑大纲').click();
+    const input=editor(host,'one');input.focus();input.setSelectionRange(5,5);key(input,'Enter');const nodes=p.store.getScopedNodes().filter(n=>n.parentId===null).sort((a,b)=>(a.order??0)-(b.order??0));
+    assert(nodes.length===2&&p.store.getCard(nodes[0].cardId!)!.front==='Alpha'&&p.store.getCard(nodes[1].cardId!)!.front==='Beta','split did not preserve head/tail order');
+    assert(p.store.getCard(nodes[0].cardId!)!.anchorAnnId==='anchor-a'&&!p.store.getCard(nodes[1].cardId!)!.anchorAnnId,'split assigned the wrong source anchor');
+    assert(p.store.getNode('child')!.parentId===nodes[0].id,'split lost/misparented children');assert(document.activeElement===editor(host,nodes[1].id)&&editor(host,nodes[1].id).selectionStart===0,'tail did not receive caret');
+    assert(p.store.undoLibraryChange()&&p.store.getNode('child')!.parentId==='one'&&p.store.getCard('a')!.front==='AlphaBeta','split needs multiple undo steps');
+  });
+  await test('Outline end-Enter adds a blank sibling; IME/ShiftEnter do not split; drafts save on dispose', async () => {
+    const p=await fresh();p.addCard('a','Text');p.addNode('one','a');const {host,view}=p.outline();button(host,'编辑大纲').click();let input=editor(host,'one');input.focus();input.setSelectionRange(4,4);
+    key(input,'Enter',{isComposing:true});assert(p.store.nodes.length===1,'IME Enter split');assert(!key(input,'Enter',{shiftKey:true}).defaultPrevented,'ShiftEnter was trapped');
+    key(input,'Enter');assert(p.store.nodes.length===2,'end Enter did not add');const next=p.store.nodes.find(n=>n.id!=='one')!;assert(editor(host,next.id)?.value==='','new card is not an editable blank');
+    input=editor(host,next.id);input.value='Saved without blur';input.dispatchEvent(new Event('input',{bubbles:true}));view.dispose();assert(p.store.getCard(next.cardId!)!.front==='Saved without blur','dispose discarded draft');assert(p.plugin.sidebar===p.sentinel,'outline captured global sidebar ownership');
+  });
+  await test('Outline start-Backspace joins content and keeps sources, comments, children and one-step undo', async () => {
+    const p=await fresh();p.addCard('a','Head',{anchorAnnId:'aa',page:1});p.addCard('b','Tail',{anchorAnnId:'bb',page:2});p.addNode('one','a',{comments:['first']});p.addNode('two','b',{comments:['second']});p.addNode('child',undefined,{parentId:'two'});const {host}=p.outline();button(host,'编辑大纲').click();const input=editor(host,'two');input.focus();input.setSelectionRange(0,0);key(input,'Backspace');
+    const keep=p.store.getNode('one')!, merged=p.store.getCard(keep.cardId!)!;assert(!p.store.getNode('two')&&merged.front==='HeadTail','Backspace did not join exact fields');
+    assert(merged.sources?.some(s=>s.anchorAnnId==='aa')&&merged.sources?.some(s=>s.anchorAnnId==='bb'),'merge lost sources');assert(keep.comments?.join(',')==='first,second'&&p.store.getNode('child')!.parentId==='one','merge lost comments/children');
+    assert(editor(host,'one').selectionStart===4,'merge caret not at former boundary');assert(p.store.undoLibraryChange()&&p.store.getNode('two')&&p.store.getCard('a')!.front==='Head'&&p.store.getCard('b')!.front==='Tail','join is not reversible in one step');
+  });
+  await test('Outline read-mode gesture switch gates Tab; drag changes order/level without cycles', async () => {
+    const p=await fresh();p.addNode('one');p.addNode('two');p.addNode('three');const {host}=p.outline();row(host,'two').click();assert(!key(row(host,'two'),'Tab').defaultPrevented&&p.store.getNode('two')!.parentId===null,'inactive gesture trapped Tab');
+    change(host.querySelector('[aria-label="大纲缩进手势"]') as HTMLInputElement,true);row(host,'two').click();key(row(host,'two'),'Tab');assert(p.store.getNode('two')!.parentId==='one','gesture Tab did not indent');
+    const transfer=new DataTransfer();row(host,'three').dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:transfer,clientX:20}));const box=row(host,'two').getBoundingClientRect();row(host,'two').dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer,clientX:80,clientY:box.top+2}));
+    assert(p.store.getNode('three')!.parentId==='two','right-drag did not indent');
+    const cycle=new DataTransfer();row(host,'one').dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:cycle,clientX:20}));row(host,'three').dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:cycle,clientX:90,clientY:0}));assert(p.store.getNode('one')!.parentId===null,'drag allowed a cycle');
+  });
+  await test('Board renders saved Markdown excerpts and notes, refreshes edits, and keeps stored source text intact', async () => {
+    const p=await fresh(),note='## Study note\n- **Beta** keeps its emphasis\n- A second point';
+    p.addCard('a','An **important** excerpt',{back:note});const {host,view}=p.board({nativeChrome:true});await pause();
+    const card=boardCard(host,'a');assert(card.querySelector('.ms-board-card-excerpt strong')?.textContent==='important','board excerpt displays Markdown markers');
+    assert(card.querySelector('.ms-board-card-note h2')?.textContent==='Study note'&&card.querySelectorAll('.ms-board-card-note li').length===2&&card.querySelector('.ms-board-card-note strong')?.textContent==='Beta','board note did not render heading/list/emphasis');
+    assert(p.store.getCard('a')!.back===note&&p.store.getCard('a')!.front==='An **important** excerpt','rendering rewrote saved Markdown');
+    p.store.updateCard('a',{back:'Changed **note**'});view.render();await pause();assert(boardCard(host,'a').querySelector('.ms-board-card-note strong')?.textContent==='note'&&!boardCard(host,'a').querySelector('h2'),'board retained stale note after edit');
+  });
+  await test('Board nests document/color, filters source/groups and searches note/local-comment content', async () => {
+    const p=await fresh();p.addCard('a','Alpha',{tags:['focus'],back:'Important note'});p.addCard('b','Beta',{color:'#80cbc4'});p.addCard('c','Gamma',{docPath:'Beta.pdf',color:'#80cbc4'});p.addNode('one','a',{comments:['Private comment needle']});const {host}=p.board();
+    assert(host.querySelectorAll('.ms-board-group:not(.is-secondary)').length===2&&host.querySelectorAll('.ms-board-group.is-secondary').length===3,'not two-level document/color groups');
+    change(host.querySelector('[aria-label="卡片来源"]') as HTMLSelectElement,'doc:Alpha.pdf');assert(boardCard(host,'a')&&boardCard(host,'b')&&!boardCard(host,'c'),'source document leaked');
+    button(host,'筛选二级分组组别').click();const yellow=host.querySelector('[data-group-key="#ffd54f"]') as HTMLInputElement;change(yellow,false);assert(!boardCard(host,'a')&&boardCard(host,'b'),'color group filter ignored');
+    button(host,'重置组别筛选').click();const search=host.querySelector('[aria-label="搜索看板卡片"]') as HTMLInputElement;search.value='note:"Important note"';search.dispatchEvent(new Event('input'));assert(boardCard(host,'a')&&!boardCard(host,'b'),'note query not applied');search.value='"Private comment needle"';search.dispatchEvent(new Event('input'));assert(boardCard(host,'a'),'local comments not searchable');
+    assert(boardMatchesQuery(p.store,p.store.getCard('a')!,'tag:focus -title:Missing | doc:Beta.pdf'),'AND/OR/exclusion matcher failed');
+  });
+  await test('Board tag overlaps do not duplicate selection; batch colors/tags affect only selected cards and undo atomically', async () => {
+    const p=await fresh();p.addCard('a','Alpha',{tags:['one','two']});p.addCard('b','Beta',{tags:['one']});p.addCard('c','Gamma');const {host}=p.board();change(host.querySelector('[aria-label="一级分组"]') as HTMLSelectElement,'tag');change(host.querySelector('[aria-label="二级分组"]') as HTMLSelectElement,'none');
+    button(host,'多选看板卡片').click();boardCard(host,'a').click();boardCard(host,'b').click();button(host,'颜色').click();button(document.querySelector('.ms-modal')!,`使用颜色 ${p.store.settings.colors[2]}`).click();assert(p.store.getCard('a')!.color===p.store.settings.colors[2]&&p.store.getCard('b')!.color===p.store.settings.colors[2]&&p.store.getCard('c')!.color==='#ffd54f','batch color selection leaked');
+    assert(p.store.undoLibraryChange()&&p.store.getCard('a')!.color==='#ffd54f'&&p.store.getCard('b')!.color==='#ffd54f','batch color did not undo together');
+    button(host,'标签').click();const modal=document.querySelector('.ms-modal')!;(modal.querySelector('textarea') as HTMLTextAreaElement).value='new';button(modal,'确定').click();assert(p.store.getCard('a')!.tags.includes('two')&&p.store.getCard('a')!.tags.includes('new')&&p.store.getCard('b')!.tags.includes('new')&&!p.store.getCard('c')!.tags.includes('new'),'batch tag append lost old tags/leaked');
+  });
+  await test('Directory grouping keeps chapter cards visible beside nested subsection cards in either grouping level', async () => {
+    const p=await fresh();p.addCard('chapter','Chapter overview',{page:1});p.addCard('section','Section details',{page:3});
+    const context={outlines:new Map([['Alpha.pdf',[{title:'Chapter 1',page:1,level:0},{title:'Section 1.1',page:3,level:1}]]])};
+    const {host}=p.board({context});change(host.querySelector('[aria-label="二级分组"]') as HTMLSelectElement,'none');change(host.querySelector('[aria-label="一级分组"]') as HTMLSelectElement,'directory');
+    const chapter=boardCard(host,'chapter'),section=boardCard(host,'section');assert(chapter&&section,'internal chapter card vanished');
+    const chapterGroup=chapter.closest('.ms-board-group')!,sectionGroup=section.closest('.ms-board-group')!;
+    assert(chapterGroup!==sectionGroup&&chapterGroup.contains(sectionGroup),'directory hierarchy was flattened');
+    assert(host.querySelectorAll('.ms-board-card[data-card-id="chapter"]').length===1&&host.querySelectorAll('.ms-board-card[data-card-id="section"]').length===1,'hierarchy duplicates direct cards');
+    change(host.querySelector('[aria-label="一级分组"]') as HTMLSelectElement,'color');change(host.querySelector('[aria-label="二级分组"]') as HTMLSelectElement,'directory');
+    assert(boardCard(host,'chapter')&&boardCard(host,'section'),'secondary directory grouping lost a direct card');
+  });
+  await test('Create-map failure rolls back all copies and never announces successful creation', async () => {
+    const p=await fresh();p.addCard('a','Alpha');p.addCard('b','Beta');let callbacks=0;const {host}=p.board({onCreateMindmap:()=>callbacks++});
+    button(host,'全选筛选结果').click();const snapshot=()=>JSON.stringify({cards:p.store.cards.map(card=>({...card,keywords:card.keywords??[]})),nodes:p.store.nodes,canvases:p.store.canvases,active:p.store.activeCanvasId});const before=snapshot();
+    const clone=p.store.cloneCard.bind(p.store);let calls=0;p.store.cloneCard=((id:string)=>{if(++calls===2)throw new Error('Synthetic second-copy failure');return clone(id);}) as any;
+    button(host,'生成脑图').click();const modal=document.querySelector('.ms-modal')!;button(modal,'确定').click();
+    assert(calls===2,'copy failure was not reached');assert(callbacks===0,'failed creation fired success callback');
+    assert(before===snapshot(),'failed copy left a partial canvas/card or switched active map');
+  });
+  await test('Board displays local nodes without writes; editing materializes once and undo restores the local node', async () => {
+    const p=await fresh();p.addNode('local',undefined,{title:'Local topic',comments:['Comment only']});const before=p.store.cards.length;const {host,view}=p.board();assert(boardCard(host,'board-node:local')&&p.store.cards.length===before&&!p.store.getNode('local')!.cardId,'viewing changed canonical data');
+    boardCard(host,'board-node:local').click();button(host,'颜色').click();button(document.querySelector('.ms-modal')!,`使用颜色 ${p.store.settings.colors[1]}`).click();assert(p.store.getNode('local')!.cardId&&p.store.cards.length===before+1,'local node did not materialize');assert(p.store.getCard(p.store.getNode('local')!.cardId!)!.front==='Local topic','local content changed');
+    assert(p.store.undoLibraryChange()&&!p.store.getNode('local')!.cardId&&p.store.cards.length===before,'materialization+color are not one undo');view.render();assert(boardCard(host,'board-node:local'),'undo failed to restore visible local node');
+  });
+  await test('Board source study/canvas scopes are independent; occluded cards support single-peek without content mutation', async () => {
+    const p=await fresh();p.addCard('a','Secret Alpha',{occluded:true});p.addNode('one','a');p.addCard('b','Secret Beta',{occluded:true});p.addNode('two','b');p.store.updateCanvas(p.canvasId,{singlePeek:true});
+    const other=p.store.createStudySet('Other');p.addCard('outside','Outside');p.addNode('outside-node','outside',{canvasId:p.store.activeCanvasId});p.store.setActiveStudySet(p.set.id);p.store.setActiveCanvas(p.canvasId);const {host,view}=p.board();
+    assert(!boardCard(host,'outside')&&!boardCard(host,'a').querySelector('.ms-board-card-excerpt'),'source/occlusion leaked');button(boardCard(host,'a'),'揭晓整卡内容').click();assert(boardCard(host,'a').textContent!.includes('Secret Alpha'),'first peek failed');button(boardCard(host,'b'),'揭晓整卡内容').click();assert(!boardCard(host,'a').querySelector('.ms-board-card-excerpt')&&boardCard(host,'b').textContent!.includes('Secret Beta'),'single peek left both open');
+    change(host.querySelector('[aria-label="卡片来源"]') as HTMLSelectElement,`study:${other.id}`);assert(boardCard(host,'outside')&&!boardCard(host,'a'),'selected study scope leaked');change(host.querySelector('[aria-label="卡片来源"]') as HTMLSelectElement,'canvas');assert(boardCard(host,'a')&&!boardCard(host,'outside')&&!boardCard(host,'a').querySelector('.ms-board-card-excerpt'),'canvas scope/peek reset failed');
+    assert(p.store.getCard('a')!.front==='Secret Alpha'&&p.store.getCard('a')!.occluded,'peeking mutated content/mask');
+  });
+  await test('Board merge/delete preserve selected identity; unselected children survive and reload reflects changes', async () => {
+    const p=await fresh();p.addCard('a','Alpha',{page:1,anchorAnnId:'a'});p.addCard('b','Beta',{page:2,anchorAnnId:'b'});p.addCard('c','Child');p.addNode('one','a');p.addNode('two','b');p.addNode('child','c',{parentId:'two'});const {host,view}=p.board();button(host,'多选看板卡片').click();boardCard(host,'a').click();boardCard(host,'b').click();button(host,'合并').click();assert(p.store.getCard('a')!.mergedCards?.length===2&&p.store.getCard('b')!.groupId==='a','batch merge missed group model');
+    assert(p.store.undoLibraryChange(),'merge not undoable');view.render();button(host,'清除看板选择').click();boardCard(host,'b').click();button(host,'删除').click();assert(!p.store.getCard('b')&&!p.store.getNode('two')&&p.store.getNode('child')?.parentId===null,'delete lost unselected child or left ghost node');
+    await p.store.flush();const again=await fresh(p.host);assert(!again.store.getCard('b')&&again.store.getNode('child'),'reload disagrees with deletion');
+  });
+  await test('Board drag copies independent cards into a map and preserves the source; ordinary source-drop remains a reference', async () => {
+    const p=await fresh();p.addCard('a','Alpha',{page:1,anchorAnnId:'a'});p.addNode('local',undefined,{title:'Topic'});const {host:board}=p.board();const {host:graph}=p.graph();const sourceCount=p.store.cards.length;
+    const transfer=new DataTransfer();boardCard(board,'a').dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:transfer}));assert(transfer.getData(BOARD_DRAG_TYPE),'board payload missing');const scroll=graph.querySelector('.ms-mindmap') as HTMLElement,world=graph.querySelector('.ms-mindmap-world') as HTMLElement,drop=new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer,clientX:100,clientY:100}),worldBounds=world.getBoundingClientRect(),worldScale=worldBounds.width/world.offsetWidth,expected={x:Math.max(10,(drop.clientX-worldBounds.left)/worldScale-60),y:Math.max(10,(drop.clientY-worldBounds.top)/worldScale-20)};scroll.dispatchEvent(drop);
+    const copy=p.store.cards.find(card=>card.id!=='a')!,dropped=p.store.nodes.find(node=>node.cardId===copy.id)!;assert(p.store.cards.length===sourceCount+1&&copy.front==='Alpha'&&copy.anchorAnnId==='a','board drag did not copy full content/source');assert(dropped&&Math.abs(dropped.x-expected.x)<.01&&Math.abs(dropped.y-expected.y)<.01,`board drop lost the world coordinate: expected=${JSON.stringify(expected)}, actual=${JSON.stringify(dropped&&{x:dropped.x,y:dropped.y})}`);p.store.updateCard(copy.id,{front:'Changed copy'});assert(p.store.getCard('a')!.front==='Alpha','board copy still shares content');
+    const localCopies=copyBoardCards(p.store,['board-node:local'],{canvasId:p.canvasId});assert(localCopies.length===1&&!p.store.getNode('local')!.cardId,'copy materialized/changed original local node');
+    p.addCard('plain','Ordinary source');const plain=new DataTransfer();plain.setData('text/plain','plain');graph.querySelector('.ms-mindmap')!.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:plain,clientX:100,clientY:100}));assert(p.store.nodes.some(node=>node.cardId==='plain'&&node.reference),'ordinary drag ceased being a reference');
+  });
+  await test('Only ordinary graph click/keyboard selection emits linkage; reveal expands/scrolls without feedback or permanent hidden changes', async () => {
+    const p=await fresh();p.addCard('a','Alpha');p.addCard('b','Beta');p.addNode('one','a',{collapsed:true,hidden:true});p.addNode('two','b',{parentId:'one',x:1800,y:1200,hidden:true});const {host,view}=p.graph();assert(view.revealCard('b'),'reveal failed');assert(p.store.getNode('one')!.collapsed&&p.store.getNode('one')!.hidden&&p.store.getNode('two')!.hidden,'reveal permanently changed collapsed or hidden');assert(graphCard(host,'two')?.classList.contains('is-selected')&&p.events.length===0,'reveal missed selection or echoed callback');
+    graphCard(host,'two').click();key(graphCard(host,'two'),'Enter');assert(p.events.join(',')==='b,b','ordinary click/keyboard not linked');button(graphCard(host,'two'),'跳转到原文').click();await pause();assert(p.events.length===2,'source button emitted selection callback');button(host,'多选').click();graphCard(host,'one').click();assert(p.events.length===2,'multi-select emitted callback');
+    assert(!view.revealCard('missing'),'nonexistent card falsely revealed');const other=p.store.createCanvas(p.set.id,'Other');p.store.setActiveCanvas(other.id);assert(!view.revealCard('a'),'reveal crossed active canvas');
+  });
+  await test('[G1-A MAP-01] Loaded legacy parent-child explicit edges survive both selection directions', async () => {
+    for (const legacy of [{from:'parent-node',to:'child-node'},{from:'child-node',to:'parent-node'}]) for (const childFirst of [false,true]) {
+      const p=await parentChild(legacy,childFirst),{host}=p.graph();selectAndLink(host,childFirst?['child-node','parent-node']:['parent-node','child-node']);
+      assert(edgeSignature(p.store.edges)===edgeSignature([legacy]),`selection rewrote loaded legacy edge ${JSON.stringify(legacy)}: ${edgeSignature(p.store.edges)}`);
+    }
+  });
+  await test('[G1-A MAP-02] A parent-child without a legacy explicit edge gains no duplicate in either selection direction', async () => {
+    for (const childFirst of [false,true]) {
+      const p=await parentChild(undefined,childFirst),{host}=p.graph();selectAndLink(host,childFirst?['child-node','parent-node']:['parent-node','child-node']);
+      assert(!p.store.edges.length,`structural parent-child link created an explicit edge: ${edgeSignature(p.store.edges)}`);
+    }
+  });
+  await test('[G1-A MAP-03] An ordinary UI link participates atomically in undo and redo', async () => {
+    const p=await fresh();p.addNode('left');p.addNode('right');const {host,view}=p.graph();selectAndLink(host,['left','right']);
+    const created=edgeSignature(p.store.edges);assert(created===edgeSignature([{from:'left',to:'right'}]),`ordinary link was not created: ${created}`);
+    button(host,'撤销').click();view.render();assert(!p.store.edges.length,'ordinary link was not undone');
+    button(host,'重做').click();view.render();assert(edgeSignature(p.store.edges)===created,`ordinary link was not redone: ${edgeSignature(p.store.edges)}`);
+  });
+  await test('[G1-A MAP-04] A loaded labeled legacy edge remains labeled when parent and child are linked again', async () => {
+    const legacy={from:'child-node',to:'parent-node',label:'legacy label'},p=await parentChild(legacy),{host}=p.graph();
+    assert(host.querySelector('.ms-edge-label')?.textContent==='legacy label','loaded labeled edge was not rendered');selectAndLink(host,['parent-node','child-node']);
+    assert(edgeSignature(p.store.edges)===edgeSignature([legacy]),`labeled legacy edge changed: ${edgeSignature(p.store.edges)}`);
+  });
+  await test('[G1-A MAP-05] Labeled legacy and newly linked edges save and reopen exactly', async () => {
+    const p=await parentChild({from:'child-node',to:'parent-node',label:'persisted legacy'});p.addNode('other-node',undefined,{order:2});const {host}=p.graph();selectAndLink(host,['parent-node','other-node']);
+    const saved=edgeSignature(p.store.edges);assert(saved===edgeSignature([{from:'child-node',to:'parent-node',label:'persisted legacy'},{from:'parent-node',to:'other-node'}]),`pre-save edges differ: ${saved}`);
+    await p.store.flush();const reopened=await fresh(p.host);assert(edgeSignature(reopened.store.edges)===saved,`save/reopen changed edges: ${edgeSignature(reopened.store.edges)}`);
+  });
+  await test('Selection actions follow the card, avoid covering it, and stay reachable when scrolled offscreen or resized', async () => {
+    const p=await fresh();p.addCard('a','France?');p.addNode('one','a',{x:300,y:280});target.style.width='760px';const {host}=p.graph({nativeChrome:true});graphCard(host,'one').click();await pause();
+    const bar=host.querySelector<HTMLElement>('.ms-selection-actions')!,scroll=host.querySelector<HTMLElement>('.ms-mindmap')!;
+    let card=graphCard(host,'one').getBoundingClientRect(),box=bar.getBoundingClientRect(),viewport=scroll.getBoundingClientRect();
+    assert(box.bottom<=card.top&&card.top-box.bottom<=20,'selection actions are not above the selected card');
+    assert(button(bar,'概要').disabled&&button(bar,'重新分组').disabled&&button(bar,'合并').disabled,'single selection enables pair actions');
+    for(const x of [0,700]) { p.store.updateNode('one',{x});const graph=mounted[mounted.length-1] as MindmapRenderer;graph.render();graphCard(host,'one').click();await pause();for(const end of [0,bar.scrollWidth]){bar.scrollLeft=end;box=bar.getBoundingClientRect();viewport=scroll.getBoundingClientRect();assert(box.left>=viewport.left&&box.right<=viewport.right,'near-edge selection actions cross map bounds');} }
+    p.store.updateNode('one',{x:300});(mounted[mounted.length-1] as MindmapRenderer).render();graphCard(host,'one').click();
+    scroll.scrollTop+=150;scroll.dispatchEvent(new Event('scroll'));await pause();box=bar.getBoundingClientRect();card=graphCard(host,'one').getBoundingClientRect();assert(box.bottom<=card.top&&card.top-box.bottom<=20,'scroll detached actions from card');
+    const offWorld=host.querySelector('.ms-mindmap-world') as HTMLElement,offScale=offWorld.getBoundingClientRect().width/offWorld.offsetWidth;scroll.scrollTop=offWorld.offsetTop+(graphCard(host,'one').offsetTop+graphCard(host,'one').offsetHeight)*offScale+200;scroll.dispatchEvent(new Event('scroll'));target.style.width='360px';await new Promise(done=>setTimeout(done,60));box=bar.getBoundingClientRect();viewport=scroll.getBoundingClientRect();
+    assert(box.left>=viewport.left&&box.right<=viewport.right&&box.top>=viewport.top&&box.bottom<=viewport.bottom,`offscreen fallback left the visible map: ${JSON.stringify({box:{left:box.left,right:box.right,top:box.top,bottom:box.bottom},viewport:{left:viewport.left,right:viewport.right,top:viewport.top,bottom:viewport.bottom},scrollTop:scroll.scrollTop})}`);bar.scrollLeft=bar.scrollWidth;const close=button(bar,'退出多选').getBoundingClientRect();assert(close.left>=box.left&&close.right<=box.right,'scroll cannot reach close action');button(bar,'退出多选').click();assert(getComputedStyle(bar).display==='none','cannot exit selection');
+  });
+  await test('Card menus remain clickable beneath the canvas selector before and after scrolling', async () => {
+    const p=await fresh();p.addCard('a','Top card');p.addCard('b','Lower card');p.addNode('one','a',{x:310,y:20});p.addNode('two','b',{x:310,y:380});target.style.width='760px';const {host}=p.graph({nativeChrome:true});await pause();
+    const clickMenu=(id:string)=>{
+      const more=button(graphCard(host,id),'卡片更多操作'),box=more.getBoundingClientRect(),hit=document.elementFromPoint(box.left+box.width/2,box.top+box.height/2) as HTMLElement;
+      assert(hit===more||more.contains(hit),`visible card menu ${id} was covered by ${hit?.getAttribute('aria-label')||hit?.className}`);hit.click();
+      assert(document.querySelector('#test-menu')?.textContent?.includes('按内容拆分…')&&!document.querySelector('#test-menu')?.textContent?.includes('新建脑图…'),'card menu opened canvas selection');document.querySelector('#test-menu')?.remove();
+    };
+    clickMenu('one');const scroll=host.querySelector('.ms-mindmap')!;graphCard(host,'two').scrollIntoView({block:'center',inline:'center',behavior:'auto'});scroll.dispatchEvent(new Event('scroll'));await pause();clickMenu('two');
+    button(host,'选择脑图').click();assert(document.querySelector('#test-menu')?.textContent?.includes('新建脑图…'),'canvas selector is no longer reachable');
+  });
+  await test('Native chrome places controls at the right, keeps old tools reachable, and opens locally owned floating panels', async () => {
+    const p=await fresh();p.addCard('a','Article excerpt');p.addNode('one','a');target.style.width='760px';const {host,view}=p.graph({nativeChrome:true});assert(!host.querySelector('.ms-mindmap-root > .ms-toolbar'),'native workspace retained long top toolbar');
+    const rail=host.querySelector('.ms-native-map-rail')!, bounds=rail.getBoundingClientRect(),outer=host.getBoundingClientRect();assert(bounds.right<=outer.right&&bounds.left>outer.left+outer.width/2&&bounds.width<=52,'tool rail not right aligned');
+    assert(button(host,'多选').getBoundingClientRect().top>bounds.bottom,'Select overlaps the floating tool rail');
+    const hostStyle=document.createElement('style');hostStyle.textContent='button:not(.clickable-icon){background-color:#e0e0e0;color:#000}';target.append(hostStyle);
+    const pill=getComputedStyle(button(host,'选择脑图'));assert(pill.color==='rgb(116, 123, 134)'&&pill.backgroundColor!=='rgb(224, 224, 224)','host button styles replaced native canvas pill colors');hostStyle.remove();
+    for(const label of ['手形工具','复制与粘贴'])assert(button(host,label).querySelector('svg')?.getAttribute('fill')==='currentColor',`${label} is not a filled glyph`);
+    assert(button(host,'脑图手写').querySelector('svg')?.getAttribute('stroke')==='currentColor','handwriting glyph lost its continuous line');
+    button(host,'大纲').click();assert(host.querySelector('.ms-map-floating-panel .ms-outline-renderer.is-native')&&p.plugin.sidebar===p.sentinel,'outline float absent/stole sidebar');button(host,'关闭面板').click();button(host,'卡片分组看板').click();assert(host.querySelector('.ms-map-floating-panel .ms-card-board.is-native'),'board float absent');button(host,'关闭面板').click();
+    button(host,'选择脑图').click();button(document.querySelector('#test-menu')!,'脑图工具与设置…').click();assert(button(document.querySelector('.ms-modal')!,'导入范围卡片')&&button(document.querySelector('.ms-modal')!,'自动布局'),'low-frequency commands lost');
+    document.querySelector('.ms-modal-bg')!.remove();button(host,'多选').click();assert(host.querySelector('[data-selection-mode="multiple"]'),'Select did not enable selection');view.dispose();
+  });
+  (window as any).acceptanceScenes=['outline-edit','board-two-level','native-map','native-cards'];
+  (window as any).showAcceptanceScene=async(scene:string)=>{
+    for(const view of mounted.splice(0))view.dispose();target.replaceChildren();target.style.width=scene==='native-cards'?'340px':'';
+    const p=await fresh();p.addCard('a','Unique sentence U2: beta marker. Selection dragging works over these lines.',{title:scene==='outline-edit'?'Understanding source anchors':undefined,tags:['focus'],back:scene==='outline-edit'?'Keep the argument in context.':undefined});p.addCard('b','The capital of France is Paris. Water boils at 100 degrees.',{color:'#d7e8fa',tags:['review']});p.addNode('one','a',{x:70,y:160});p.addNode('two','b',{x:370,y:210});p.addNode('root',undefined,{title:'Study notebook',x:30,y:70});
+    if(scene==='outline-edit'){const {host}=p.outline();button(host,'编辑大纲').click();editor(host,'one','title').focus();}
+    else if(scene==='board-two-level')p.board();else if(scene==='native-cards')p.board({nativeChrome:true});else p.graph({nativeChrome:true});await pause();
+  };
+  await (window as any).showAcceptanceScene('native-map');await Promise.all(stores.map(store=>store.flush()));
+}catch(error){(window as any).fatal=String(error);}finally{(window as any).done=true;}

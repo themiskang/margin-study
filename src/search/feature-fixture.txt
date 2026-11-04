@@ -1,0 +1,199 @@
+/** A06 功能搜索验收：合成插件 + 命令间谍 + 真实 settings.ts 渲染；绝不读取真实 vault。 */
+import { FEATURE_INDEX, openFeatureSearch, runFeature, queryFeatures, installFeatureSearchHotkey, openSettingAndReveal } from "__PROJECT__/src/search/featureSearch";
+import { MarginStudySettingTab } from "__PROJECT__/src/settings";
+
+const results: { name: string; passed: boolean; info?: string }[] = [];
+const closeAllPalettes = () => {
+  for (let guard = 0; guard < 8 && document.querySelectorAll(".ms-modal-bg").length; guard++) {
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  }
+};
+const check = (name: string, fn: () => void) => {
+  try { closeAllPalettes(); fn(); results.push({ name, passed: true }); }
+  catch (error) { results.push({ name, passed: false, info: String((error as Error)?.stack ?? error) }); }
+};
+const assert = (ok: boolean, message: string) => { if (!ok) throw new Error(message); };
+
+// main.ts 当前注册的全部命令 id（fixture 固化清单：索引必须与命令注册表双向一致）
+const MAIN_COMMAND_IDS = [
+  "feature-search", "open-reader", "pdf-search", "open-word-reader", "open-document-reader",
+  "open-study-workspace", "import-web-article", "open-research-browser", "manage-review-decks",
+  "open-cards", "start-review", "open-sidebar", "open-mindmap", "export-markdown", "export-edited-pdf",
+  "export-html", "export-canvas", "import-canvas", "show-stats", "global-search", "export-anki-tsv", "export-anki-apkg",
+  "review-wrong", "backup-data", "export-all-html", "export-mindmap-png", "dedup-cards",
+  "export-pdf-outline", "toggle-recall", "save-now", "restore-backup", "resolve-save-conflict",
+  "undo-library", "redo-library",
+];
+
+const calls: Record<string, number> = {};
+const commands: Record<string, unknown> = {};
+for (const id of MAIN_COMMAND_IDS) {
+  commands[`margin-study:${id}`] = { id, name: id, callback: () => { calls[id] = (calls[id] ?? 0) + 1; } };
+}
+
+const settingHost = document.createElement("div");
+settingHost.id = "setting-host";
+settingHost.style.cssText = "position:relative;width:640px;height:320px;overflow:auto;border:1px solid #999;margin-top:12px";
+const spacer = document.createElement("div");
+spacer.style.height = "900px";
+settingHost.append(spacer);
+document.body.append(settingHost);
+
+let openCount = 0;
+const openTabLog: string[] = [];
+let tab: MarginStudySettingTab | null = null;
+const plugin: any = {
+  manifest: { id: "margin-study" },
+  app: { commands: { commands } },
+  registerDomEvent(target: any, type: string, handler: any, options?: any) { target.addEventListener(type, handler, options); },
+  store: { settings: {
+    colors: ["#ffd54f", "#a5d6a7"], defaultColor: "#ffd54f", scale: 1.2, pageGap: 12, layout: "mind",
+    immersive: false, theme: "auto", accent: "indigo", autoCardOnHighlight: true, autoCardOnRegion: true,
+    autoNodeOnCard: true, tagColors: { 刑法: "#ff5b8a" }, backupEnabled: true, replaceNativeReader: true,
+  } },
+};
+plugin.app.setting = {
+  containerEl: settingHost,
+  open() { openCount++; },
+  openTabById(id: string) {
+    if (!tab) tab = new MarginStudySettingTab(plugin.app, plugin);
+    tab.display();
+    settingHost.append(tab.containerEl);
+    openTabLog.push(id);
+  },
+};
+
+const resetCalls = () => { for (const key of Object.keys(calls)) delete calls[key]; };
+const modalCount = () => document.querySelectorAll(".ms-modal-bg").length;
+const palette = () => document.querySelector(".ms-feature-search") as HTMLElement | null;
+const paletteInput = () => palette()?.querySelector("input.ms-search") as HTMLInputElement | null;
+const paletteRows = () => [...(palette()?.querySelectorAll(".ms-feature-item") ?? [])] as HTMLElement[];
+const selectedRow = () => palette()?.querySelector(".ms-feature-item.ms-feature-selected") as HTMLElement | null;
+const press = (target: EventTarget, type: string, init: KeyboardEventInit) => target.dispatchEvent(new KeyboardEvent(type, { bubbles: true, cancelable: true, ...init }));
+const typeQuery = (value: string) => { const input = paletteInput(); assert(input, "palette input missing"); input.value = value; input.dispatchEvent(new Event("input", { bubbles: true })); };
+
+// 1. 注册表完整性：显式 ID 唯一、字段齐全
+check("feature registry has unique explicit ids and complete fields", () => {
+  const ids = FEATURE_INDEX.map((entry) => entry.id);
+  assert(new Set(ids).size === ids.length, "duplicate feature id: " + ids.join(","));
+  for (const entry of FEATURE_INDEX) {
+    assert(entry.id.length > 0 && entry.title.length > 0 && entry.description.length > 0, "empty field in " + entry.id);
+    assert(entry.keywords.length > 0, "no keywords in " + entry.id);
+    if (entry.kind === "setting") assert(!!entry.setting, "setting target missing in " + entry.id);
+  }
+});
+
+// 2. 命令功能与 main.ts 命令注册表双向一致（索引不遗漏、不虚构）
+check("command features and main.ts command ids match in both directions", () => {
+  const indexed = FEATURE_INDEX.filter((entry) => entry.kind === "command").map((entry) => entry.id).sort();
+  const registered = [...MAIN_COMMAND_IDS].sort();
+  assert(JSON.stringify(indexed) === JSON.stringify(registered), "index/command mismatch:\nindex=" + indexed.join(",") + "\nmain=" + registered.join(","));
+});
+
+// 3. 每个设置功能指向 settings.ts 中真实存在的设置项
+check("every settings feature names an existing rendered setting", () => {
+  if (!tab) tab = new MarginStudySettingTab(plugin.app, plugin);
+  tab.display();
+  settingHost.append(tab.containerEl);
+  const names = [...settingHost.querySelectorAll(".setting-item-name")].map((node) => (node as HTMLElement).textContent!.trim());
+  assert(names.length === 14, "expected 14 settings, got " + names.length + ": " + names.join(","));
+  const settingEntries = FEATURE_INDEX.filter((entry) => entry.kind === "setting");
+  assert(settingEntries.length === names.length, "settings entries " + settingEntries.length + " != rendered " + names.length);
+  for (const entry of settingEntries) assert(names.includes(entry.setting!), "setting missing: " + entry.setting);
+});
+
+// 4. runFeature：每个功能命中唯一动作，且只执行该动作一次
+check("runFeature executes exactly one unique action per command feature", () => {
+  for (const entry of FEATURE_INDEX.filter((item) => item.kind === "command")) {
+    resetCalls();
+    const ok = runFeature(plugin, entry.id);
+    assert(ok, "runFeature returned false for " + entry.id);
+    assert(calls[entry.id] === 1, "expected exactly one call for " + entry.id + ", got " + JSON.stringify(calls));
+    assert(Object.keys(calls).length === 1, "extra actions fired for " + entry.id);
+  }
+});
+
+// 5. 无效旧功能 ID：不执行、不可搜索
+check("invalid legacy feature ids never execute and never match", () => {
+  const legacy = ["export-anki-legacy", "open-card-manager", "mn-recall-toggle", "feature-palette"];
+  for (const id of legacy) {
+    resetCalls();
+    assert(queryFeatures(id).length === 0, "legacy id unexpectedly matched: " + id);
+    assert(runFeature(plugin, id) === false, "legacy id executed: " + id);
+    assert(Object.keys(calls).length === 0, "legacy id fired a command: " + id);
+  }
+});
+
+// 6. 设置跳转：目标存在且滚动后可见并高亮
+check("settings jump reaches a visible, flashed target for every settings feature", () => {
+  for (const entry of FEATURE_INDEX.filter((item) => item.kind === "setting")) {
+    const ok = openSettingAndReveal(plugin, entry.setting!);
+    assert(ok, "openSettingAndReveal returned false for " + entry.id);
+    assert(openTabLog[openTabLog.length - 1] === "margin-study", "openTabById not called with plugin id");
+    const item = [...settingHost.querySelectorAll(".setting-item")]
+      .find((node) => node.querySelector(".setting-item-name")?.textContent?.trim() === entry.setting) as HTMLElement | undefined;
+    assert(item, "setting item not rendered: " + entry.setting);
+    assert(item!.classList.contains("ms-setting-flash"), "target not flashed: " + entry.setting);
+    const rect = item!.getBoundingClientRect();
+    const host = settingHost.getBoundingClientRect();
+    assert(rect.top >= host.top - 1 && rect.bottom <= host.bottom + 1, "target not scrolled into view: " + entry.setting);
+    assert(item!.offsetParent !== null, "target not visible: " + entry.setting);
+  }
+});
+
+// 7. 面板检索：唯一命中 + 点击执行唯一动作并自动关闭
+check("palette search hits a unique feature and clicking runs exactly its action", () => {
+  resetCalls();
+  openFeatureSearch(plugin);
+  assert(modalCount() === 1, "palette did not open");
+  typeQuery("export-anki-tsv");
+  const rows = paletteRows();
+  assert(rows.length === 1 && rows[0].dataset.featureId === "export-anki-tsv", "expected unique hit, got " + rows.map((r) => r.dataset.featureId).join(","));
+  rows[0].click();
+  assert(calls["export-anki-tsv"] === 1 && Object.keys(calls).length === 1, "click did not run the unique action");
+  assert(modalCount() === 0, "palette did not close after execution");
+});
+
+// 8. 面板键盘：↑↓ 移动选中项，Enter 执行选中项
+check("palette keyboard selection executes the selected feature only", () => {
+  resetCalls();
+  openFeatureSearch(plugin);
+  typeQuery("canvas");
+  const rows = paletteRows();
+  assert(rows.length >= 2, "expected multiple canvas hits");
+  assert(selectedRow()?.dataset.featureId === rows[0].dataset.featureId, "first row should start selected");
+  press(paletteInput()!, "keydown", { key: "ArrowDown" });
+  assert(selectedRow()?.dataset.featureId === rows[1].dataset.featureId, "ArrowDown should move selection");
+  const targetId = selectedRow()!.dataset.featureId!;
+  press(paletteInput()!, "keydown", { key: "Enter" });
+  assert(calls[targetId] === 1 && Object.keys(calls).length === 1, "Enter did not run exactly the selected action: " + targetId);
+  assert(modalCount() === 0, "palette did not close after Enter");
+});
+
+// 9. Esc：容器无残留
+check("Escape closes the palette and leaves no residual containers", () => {
+  openFeatureSearch(plugin);
+  assert(modalCount() === 1, "palette did not open");
+  press(document, "keydown", { key: "Escape" });
+  assert(modalCount() === 0, "container remained after Escape");
+  press(document, "keydown", { key: "Escape" });
+  assert(modalCount() === 0, "second Escape broke the page");
+});
+
+// 10. Cmd/Ctrl+Shift+P 打开功能搜索；无修饰键不触发
+check("Cmd/Ctrl+Shift+P opens the feature palette; plain keys do not", () => {
+  installFeatureSearchHotkey(plugin);
+  press(window, "keydown", { key: "p", metaKey: true, shiftKey: true });
+  assert(modalCount() === 1, "Cmd+Shift+P did not open palette");
+  press(document, "keydown", { key: "Escape" });
+  press(window, "keydown", { key: "p", ctrlKey: true, shiftKey: true });
+  assert(modalCount() === 1, "Ctrl+Shift+P did not open palette");
+  press(document, "keydown", { key: "Escape" });
+  press(window, "keydown", { key: "p" });
+  press(window, "keydown", { key: "p", metaKey: true });
+  press(window, "keydown", { key: "x", metaKey: true, shiftKey: true });
+  assert(modalCount() === 0, "non-matching keys opened the palette");
+});
+
+(window as any).results = results;
+(window as any).done = true;

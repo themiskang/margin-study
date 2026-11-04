@@ -1,0 +1,287 @@
+{
+  "done": true,
+  "results": [
+    {
+      "name": "Pointer pen commits each stroke, ignores another pointer, flushes on switch",
+      "passed": true
+    },
+    {
+      "name": "Quote anchors survive inserted text and preserve chapter identity",
+      "passed": true
+    },
+    {
+      "name": "Ambiguous quotes are retained without guessing; context selects a unique duplicate",
+      "passed": true
+    },
+    {
+      "name": "Two annotation views share additions/deletions and auto-create one source card",
+      "passed": true
+    },
+    {
+      "name": "EPUB parses all spine chapters, EPUB3 nested TOC, internal links and packaged images",
+      "passed": true
+    },
+    {
+      "name": "EPUB rejects traversal, oversized declared entries, expansion bombs, DRM, and unsafe URIs",
+      "passed": true
+    },
+    {
+      "name": "HTML sanitization blocks remote loads, script URLs, inline handlers and CSS",
+      "passed": true
+    },
+    {
+      "name": "Generic reader ignores old HTML load, loads EPUB, searches across nodes, follows chapter links",
+      "passed": true
+    },
+    {
+      "name": "Generic reader HTML reload and static Markdown use native renderer adapter",
+      "passed": true
+    },
+    {
+      "name": "PDF rapid switches destroy stale documents and expose only the latest pages",
+      "passed": true
+    },
+    {
+      "name": "PDF canvas cache and pixel budgets, zoom cancellation, fold/unfold, close cleanup",
+      "passed": true
+    },
+    {
+      "name": "PDF recall masks cover whole excerpts, reveal all segments, update notes and delete last annotation",
+      "passed": true
+    },
+    {
+      "name": "Word switch and explicit reload ignore late conversion and preserve current file",
+      "passed": true
+    },
+    {
+      "name": "Voice creates audio folder safely, awaits commit before document release, cleans failed mic",
+      "passed": true
+    },
+    {
+      "name": "Vision OCR merges top-to-bottom lines and repeated words without wrong string lookup",
+      "passed": true
+    },
+    {
+      "name": "Real PDF.js CropBox projection round-trips at 0/90/180/270 degrees and 30/140/300 percent",
+      "passed": true
+    },
+    {
+      "name": "PDF cross-page selection persists three page geometries and redraws without duplicating overlays",
+      "passed": true
+    },
+    {
+      "name": "Real PDF reader aligns selected text and overlays on rotated CropBox pages before and after 300 percent zoom",
+      "passed": true
+    },
+    {
+      "name": "PDF source jump records history, expands folded pages, matches within 2pt and centers the reference",
+      "passed": true
+    },
+    {
+      "name": "Legacy rotated PDF annotations retain their old display coordinates without sidecar rewriting",
+      "passed": true
+    },
+    {
+      "name": "EPUB quote anchors outrank chapter ratios; unresolved or ambiguous quotes only get approximate navigation",
+      "passed": true
+    },
+    {
+      "name": "PDF recall preserves cross-page reveal, single peek and persistent scope without writing reveal state",
+      "passed": true
+    },
+    {
+      "name": "HTML recall restores all range segments after render and keeps persistent card state separate",
+      "passed": true
+    },
+    {
+      "name": "Word and generic document recall buttons update controller state and expose the view-only scope",
+      "passed": true
+    },
+    {
+      "name": "PDF four layouts preserve shells, group odd final page, persist modes and restore location",
+      "passed": true
+    },
+    {
+      "name": "PDF paged source jumps/history, focused keyboard steps, limits and spread fit width",
+      "passed": true
+    },
+    {
+      "name": "PDF tab states restore independent explicit scales and ignore absent or invalid legacy scale",
+      "passed": true
+    },
+    {
+      "name": "Shared speech continuously queues long text, supports pause/resume, live rate and completion",
+      "passed": true
+    },
+    {
+      "name": "Speech stop cancels pending sources immediately; owners cannot cancel another reader",
+      "passed": true
+    },
+    {
+      "name": "All reader speech controls use current document, accept long selections and stop on switch/close",
+      "passed": true
+    },
+    {
+      "name": "Stylus captures pressure and renders variable width; legacy and mouse ink stay uniform",
+      "passed": true
+    },
+    {
+      "name": "Pen eraser and lasso intersect sparse segments; moving a group clamps without distorting ink",
+      "passed": true
+    },
+    {
+      "name": "HTML pen edits persist across split views, undo/redo, lasso move/delete and preserve source IDs",
+      "passed": true
+    },
+    {
+      "name": "PDF pen edits are page scoped, survive zoom and reload, and empty ink does not block text",
+      "passed": true
+    },
+    {
+      "name": "All four notebook templates are real renderable PDFs with stable metadata and page coordinates",
+      "passed": true
+    },
+    {
+      "name": "Notebook creates independent vault files in a study set; template/page updates preserve ink and source cards",
+      "passed": true
+    },
+    {
+      "name": "Notebook creation form creates and opens the selected paper in the selected study set",
+      "passed": true
+    },
+    {
+      "name": "Handwriting layers preserve legacy ink/non-ink, switch and overlay one read-only layer, hide reference in recall",
+      "passed": true
+    },
+    {
+      "name": "Pending handwriting stays on original layer; rename/merge preserve annotation/source identity and permanent default",
+      "passed": true
+    },
+    {
+      "name": "PDF layers render on the correct pages, persist overlay state, and layer controls survive reopening",
+      "passed": true
+    },
+    {
+      "name": "Handwriting settings list creates/selects/overlays, same-name merges, deletes non-default ink only after confirmation",
+      "passed": true
+    },
+    {
+      "name": "Handwriting settings anchors to its tool without dimming, keeps native row order, and stores sync intent without claiming unavailable map handwriting",
+      "passed": true
+    },
+    {
+      "name": "All reader types expose callable labelled tools and hide internal chrome; PDF native search remains visible",
+      "passed": true
+    },
+    {
+      "name": "Document notebooks isolate all annotations and handwriting layers, preserve legacy IDs, and source jumps switch notebooks",
+      "passed": true
+    },
+    {
+      "name": "PDF notebooks isolate folds/bookmarks/layout and keep a pending stroke in its original notebook",
+      "passed": true
+    },
+    {
+      "name": "Document notebook manager creates/renames and distinguishes clearing current from deleting an inactive notebook",
+      "passed": true
+    },
+    {
+      "name": "Virtual page collection renders original PDF pages across documents and never writes or embeds source PDF content",
+      "passed": true
+    },
+    {
+      "name": "Selection/new and append map live excerpts, snapshot other notes, preserve source jumps, and leave source metadata intact",
+      "passed": true
+    },
+    {
+      "name": "Reference reordering and removal preserve local annotation/source IDs, remap ink and metadata, and never guess removed-page jumps",
+      "passed": true
+    },
+    {
+      "name": "Reference manifests reject invalid paths/duplicate IDs/missing pages, respect cancellation, and parse ordered page ranges",
+      "passed": true
+    },
+    {
+      "name": "Page reorganization form creates an openable reference document and its reorder UI persists entry order",
+      "passed": true
+    },
+    {
+      "name": "PDF outline supports async API, legacy property, named/array/integer destinations and page zero",
+      "passed": true
+    },
+    {
+      "name": "Public vault PDF rename updates exact msref paths and still renders/jumps without changing source bytes, annotations or reference IDs",
+      "passed": true
+    },
+    {
+      "name": "Rapid A-B-C PDF moves serialize manifest rewrites, preserve concurrent edits, and leave backup/recovery snapshots unchanged",
+      "passed": true
+    },
+    {
+      "name": "Three readers expose five real handwriting modes, idempotent notifications, unsubscribe, and off cancels pending placement",
+      "passed": true
+    },
+    {
+      "name": "Free fluorescent ink persists its brush across tool switch, reopening, and ordinary pen remains opaque",
+      "passed": true
+    },
+    {
+      "name": "PDF free text places, edits, moves, resizes, creates a source card, and delete/undo/redo retain source identity",
+      "passed": true
+    },
+    {
+      "name": "Real PDF.js free text stays canonical through CropBox rotations, drag/resize and 300 percent zoom",
+      "passed": true
+    },
+    {
+      "name": "Image annotations decode a real local File, use their own picker, replace, move/resize and undo without region capture",
+      "passed": true
+    },
+    {
+      "name": "Asynchronous image loading cannot place into a newly selected layer or document",
+      "passed": true
+    },
+    {
+      "name": "HTML and Word free overlays use normalized boxes, follow reflow, and do not pollute source quote ranges",
+      "passed": true
+    },
+    {
+      "name": "Text/image overlays isolate notebooks and ink layers; references stay read-only, merge keeps IDs and layer delete is final",
+      "passed": true
+    },
+    {
+      "name": "Overlay gestures cancel on Escape or rebuild; stale multi-view undo cannot overwrite another view",
+      "passed": true
+    },
+    {
+      "name": "PDF page recycling and file release cancel free-overlay pointer listeners before late pointerup",
+      "passed": true
+    },
+    {
+      "name": "Reference collections snapshot overlays independently and reorder their stable page identity without moving source geometry",
+      "passed": true
+    },
+    {
+      "name": "All readers expose chronological handwriting/free-overlay undo, ordered redo, immediate state subscriptions and unsubscribe",
+      "passed": true
+    },
+    {
+      "name": "Legacy independent undo buttons share the same journal and any new family clears every redo branch",
+      "passed": true
+    },
+    {
+      "name": "Shared history clears across layer/notebook/file changes and stale overlay or ink conflicts invalidate both families",
+      "passed": true
+    },
+    {
+      "name": "Source cards inherit annotation colors for PDF, Word and HTML excerpts, comments and flashcards",
+      "passed": true
+    },
+    {
+      "name": "Real PDF uses native browser Worker and leaves window fetch/pdfjsWorker unchanged",
+      "passed": true
+    }
+  ],
+  "unexpectedAutomaticResources": [],
+  "environment": "isolated Chromium; synthetic files; Obsidian/Mammoth adapters mocked; real bundled PDF.js Worker"
+}

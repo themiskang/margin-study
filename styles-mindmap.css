@@ -1,0 +1,315 @@
+/* L4 4.4.6 screenshots: neutral canvas, white cards with source-color headers,
+   dashed blue selection, and a compact dark selection action bar. */
+.ms-mindmap-root {
+  --ms-map-canvas: #f2f2f2;
+  --ms-map-paper: #fff;
+  --ms-map-text: #252525;
+  --ms-map-selection: #5060ff;
+  --ms-map-bar: #666;
+  position: relative;
+  isolation: isolate;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.ms-mindmap-root .ms-mindmap {
+  background: var(--ms-map-canvas);
+  background-image: none;
+}
+.ms-mindmap-root .ms-node {
+  box-sizing: border-box;
+  width: 230px;
+  min-width: 120px;
+  max-width: 300px;
+  padding: 0;
+  overflow: visible;
+  border: 1px solid var(--ms-node-color, #d7d7d7);
+  border-radius: 8px;
+  color: var(--ms-map-text);
+  background: var(--ms-map-paper);
+  box-shadow: 0 1px 4px #0003;
+  font-size: 13px;
+  line-height: 1.35;
+  transition: none;
+}
+.ms-mindmap-root .ms-node:hover,
+.ms-mindmap-root .ms-node.is-root {
+  transform: none;
+  border-color: var(--ms-node-color, #d7d7d7);
+  color: var(--ms-map-text);
+  background: var(--ms-map-paper);
+  box-shadow: 0 1px 4px #0003;
+}
+.ms-mindmap-root .ms-node.is-selected {
+  outline: 2px dashed var(--ms-map-selection);
+  outline-offset: 0;
+}
+.ms-mindmap-root .ms-node:focus-visible {
+  outline: 2px solid var(--ms-map-selection);
+  outline-offset: 3px;
+}
+.ms-mindmap-root.is-multi-select .ms-node { cursor: pointer; }
+.ms-mindmap-root .ms-node-header {
+  display: flex;
+  align-items: center;
+  height: 19px;
+  padding: 0 3px 0 7px;
+  border-radius: 7px 7px 0 0;
+  background: var(--ms-node-color, #f5f5f5);
+}
+.ms-mindmap-root .ms-node-header button {
+  appearance: none;
+  height: 19px;
+  min-width: 20px;
+  margin: 0;
+  padding: 0 3px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  box-shadow: none;
+  color: #50503d;
+  cursor: pointer;
+}
+.ms-mindmap-root .ms-node-menu { font-size: 11px; letter-spacing: 1px; opacity: .55; }
+.ms-mindmap-root .ms-node-header .ms-node-source { margin-left: auto; font-size: 24px; line-height: 16px; }
+.ms-mindmap-root .ms-node-header button:hover { background: #0000000d; }
+.ms-mindmap-root .ms-node-reference { margin: 0 0 0 5px; font-size: 10px; color: #666; }
+.ms-mindmap-root .ms-node-title,
+.ms-mindmap-root .ms-node-excerpt,
+.ms-mindmap-root .ms-node-body {
+  margin: 0;
+  padding: 8px 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--ms-map-text);
+}
+
+/* Recall's title-only option keeps card headings while masking their contents. */
+.ms-study-workspace.ms-recall-title-only .ms-workspace-map .ms-node:not(.is-root) .ms-node-excerpt:not(.ms-node-title),
+.ms-study-workspace.ms-recall-title-only .ms-workspace-map .ms-node:not(.is-root) .ms-node-body,
+.ms-study-workspace.ms-recall-title-only .ms-workspace-map .ms-node:not(.is-root) .ms-node-images,
+.ms-study-workspace.ms-recall-title-only .ms-workspace-map .ms-node:not(.is-root) .ms-node-tags,
+.ms-study-workspace.ms-recall-title-only .ms-workspace-map .ms-node:not(.is-root) .ms-node-sources {visibility:hidden;pointer-events:none;user-select:none;}
+.ms-mindmap-root .ms-node-heading { background: var(--ms-node-color, #f5f5f5); }
+.ms-mindmap-root .ms-node [data-field] p { margin: 0; }
+.ms-mindmap-root .ms-node-note,
+.ms-mindmap-root .ms-node-comment { border-top: 1px solid #0000000d; }
+.ms-mindmap-root .ms-node-tags { margin: 0; padding: 0 10px 6px; gap: 3px; }
+.ms-mindmap-root .ms-node-tag {
+  margin: 0;
+  padding: 1px 5px;
+  border: 0;
+  border-radius: 4px;
+  background: #f1f1f1;
+  font-size: 10px;
+  color: #626262;
+}
+.ms-mindmap-root .ms-node-images { padding: 0 7px 7px; gap: 5px; }
+.ms-mindmap-root .ms-node-img {
+  width: auto;
+  max-width: 100%;
+  max-height: 340px;
+  margin: 0;
+  border-radius: 2px;
+  box-shadow: none;
+}
+.ms-mindmap-root .ms-node-sources { padding: 0 8px; }
+.ms-mindmap-root .ms-node-actions {
+  min-height: 16px;
+  margin: 0;
+  padding: 0 7px 4px;
+  gap: 4px;
+  align-items: center;
+}
+.ms-mindmap-root .ms-node-actions .ms-node-del {
+  width: 18px;
+  height: 18px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 12px;
+}
+.ms-mindmap-root .ms-node-merged { color: #8e8e8e; letter-spacing: 1px; margin-right: auto; }
+.ms-mindmap-root .ms-node-review-badges { display: flex; flex-wrap: wrap; gap: 3px; padding: 0 7px 5px; }
+.ms-mindmap-root .ms-node-review-badge {
+  max-width: 100%;
+  padding: 2px 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #303030;
+  background: #fff;
+  border: 1px solid #e1e1d5;
+  border-radius: 3px;
+  font-size: 10px;
+}
+.ms-ol-review-badge {
+  flex: 0 1 auto;
+  max-width: 100px;
+  margin-left: 4px;
+  padding: 1px 4px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  border: 1px solid var(--background-modifier-border, #dedede);
+  border-radius: 3px;
+  background: var(--background-primary, #fff);
+  color: var(--text-muted, #666);
+  font-size: 10px;
+}
+.ms-mindmap-root .ms-selection-actions {
+  position: absolute;
+  z-index: 12;
+  right: auto;
+  bottom: auto;
+  left: 12px;
+  top: 12px;
+  transform: none;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  min-height: 68px;
+  padding: 6px 9px;
+  gap: 1px;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-start;
+  overflow-x: auto;
+  border: 1px solid #878787;
+  border-radius: 30px;
+  background: var(--ms-map-bar);
+  box-shadow: 0 12px 24px #0003, inset 0 0 0 1px #ffffff1a;
+  scrollbar-width: thin;
+}
+.ms-mindmap-root .ms-selection-actions[data-selection]::before { content: none; display: none; }
+.ms-mindmap-root .ms-selection-actions .ms-node-tb-item {
+  appearance: none;
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 46px;
+  height: 54px;
+  margin: 0;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  box-shadow: none;
+  color: #fff;
+  font-size: 11px;
+  line-height: 1.15;
+  transition: none;
+}
+.ms-mindmap-root .ms-selection-actions .ms-node-tb-item:hover:enabled { background: #ffffff1a; color: #fff; }
+.ms-mindmap-root .ms-selection-actions .ms-node-tb-item:disabled { opacity: .35; cursor: default; }
+.ms-mindmap-root .ms-selection-icon { display: flex; align-items: center; justify-content: center; height: 26px; }
+.ms-mindmap-root .ms-selection-icon svg { width: 25px; height: 25px; stroke-width: 1.7; }
+.ms-mindmap-root .ms-selection-label { white-space: nowrap; }
+.ms-mindmap-root .ms-node-tb-item[data-action="close"] {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  min-width: 36px;
+  background: var(--ms-map-bar);
+  box-shadow: -5px 0 6px var(--ms-map-bar);
+}
+.ms-mindmap-root .ms-node-tb-item[data-action="close"] .ms-selection-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.ms-mindmap-root button:focus-visible { outline: 2px solid #5476ff; outline-offset: 2px; }
+.ms-mindmap-root .ms-tb-btn.is-active { color: #388cfa; background: #eaf4ff; }
+body.ms-theme-dark .ms-mindmap-root {
+  --ms-map-canvas: #242424;
+  --ms-map-paper: #303030;
+  --ms-map-text: #eee;
+}
+body.ms-theme-dark .ms-mindmap-root .ms-node.has-color .ms-node-heading { color: #252525; }
+body.ms-theme-dark .ms-mindmap-root .ms-node-note,
+body.ms-theme-dark .ms-mindmap-root .ms-node-comment { border-top-color: #ffffff1a; }
+.ms-mindmap-root.is-native-chrome { --ms-map-canvas: #f2f2f2; }
+.ms-mindmap-root.is-native-chrome { background: var(--ms-map-canvas); }
+/* Keep the scroll viewport below the selector so scrolling never hides a card menu under it. */
+.ms-mindmap-root.is-native-chrome > .ms-mindmap { margin-top: 64px; min-height: 0; }
+.ms-mindmap-root.is-native-chrome > button.ms-native-canvas-menu {
+  position: absolute; z-index: 5; top: 12px; left: 50%; transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  box-sizing: border-box; width: min(200px, 48%); min-height: 40px; margin: 0; padding: 4px 15px 3px;
+  height: auto; appearance: none; border: 0; border-radius: 24px; background: #fafafae8; background-image: none; color: #747b86; box-shadow: none;
+  font-family: inherit; font-size: 13px; font-weight: 600; line-height: 1.1;
+}
+.ms-mindmap-root.is-native-chrome > button.ms-native-canvas-menu:hover { background: #fff; color: #747b86; box-shadow: none; }
+.ms-mindmap-root.is-native-chrome > button.ms-native-canvas-menu > span:first-child { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ms-native-canvas-chevron { font-size: 20px; height: 15px; font-weight: 400; line-height: 11px; }
+.ms-native-map-rail {
+  position: absolute; z-index: 6; top: 18%; right: 9px; display: flex; flex-direction: column; align-items: center;
+  box-sizing: border-box; width: 48px; max-height: calc(82% - 90px); overflow-y: auto; padding: 9px 6px; gap: 8px; border-radius: 26px; background: #fafafae8;
+}
+.ms-mindmap-root button.ms-native-map-icon {
+  display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
+  box-sizing:border-box; width: 34px; height: 34px; margin: 0; padding: 5px; border: 0; border-radius: 18px;
+  color: #7f8792; background: transparent; box-shadow: none;
+}
+.ms-native-map-icon svg { width: 23px; height: 23px; stroke-width: 1.7; }
+.ms-mindmap-root .ms-native-map-icon:hover { color: #4a95f4; background: #edf6ff; }
+.ms-mindmap-root .ms-native-map-icon.is-active { color: #4a95f4; background: #edf6ff; }
+.ms-native-map-rail-divider { width: 25px; height: 1px; margin: 2px 0; background: #b9b9b9; }
+.ms-mindmap-root .ms-native-map-select {
+  position: absolute; z-index: 6; top: min(calc(18% + 325px), calc(100% - 64px)); right: 9px; display: flex; align-items: center; justify-content: center;
+  width: 49px; height: 49px; margin: 0; padding: 3px; border: 0; border-radius: 50%;
+  background: #fafafae8; color: #747b86; font-size: 12px; font-weight: 600; box-shadow: none;
+}
+.ms-mindmap-root .ms-native-map-select.is-active { color: #488ef3; background: #eaf5ff; }
+.ms-map-floating-panel {
+  position: absolute; z-index: 14; top: 12px; right: 67px; bottom: 14px; display: flex; flex-direction: column;
+  width: min(340px, calc(100% - 90px)); min-width: 180px; overflow: hidden;
+  border: 1px solid #e2e2e2; border-radius: 10px; background: #fff; box-shadow: 0 5px 20px #00000012;
+}
+.ms-map-floating-header { display: flex; align-items: center; justify-content: space-between; min-height: 36px; padding: 0 6px 0 14px; border-bottom: 1px solid #eee; color: #6c737d; font-size: 13px; }
+.ms-map-floating-header .ms-native-map-icon { width: 28px; height: 28px; padding: 6px; }
+.ms-map-floating-body { flex: 1; min-height: 0; overflow: hidden; }
+.ms-native-tools-menu { display: flex; flex-wrap: wrap; gap: 8px; padding: 6px 0; max-width: 570px; }
+.ms-mindmap-root.is-connect-mode [data-native-tool="link"] { color: #4a95f4; background: #edf6ff; }
+.ms-mindmap-root.is-connect-mode [data-native-tool="hand"] { color: #7f8792; background: transparent; }
+@media (max-width: 520px) {
+  .ms-mindmap-root .ms-selection-actions { bottom: 10px; min-height: 62px; border-radius: 22px; }
+  .ms-mindmap-root .ms-selection-actions .ms-node-tb-item { min-width: 42px; height: 48px; padding: 2px 4px; }
+  .ms-mindmap-root .ms-selection-icon svg { width: 22px; height: 22px; }
+}
+.ms-map-ink{position:absolute;inset:0;width:100%;height:100%;overflow:visible;z-index:30;touch-action:none;outline:none}
+.ms-map-ink-palette{position:absolute;left:12px;top:50%;transform:translateY(-50%);z-index:40;display:flex;flex-direction:column;gap:4px;padding:8px;background:rgba(83,84,85,.84);border-radius:14px;box-shadow:0 8px 25px #0002}
+.ms-map-ink-palette[hidden]{display:none}
+.ms-mindmap-root .ms-map-ink-palette>button{appearance:none;background:none;border:0;box-shadow:none;color:#eee;width:34px;height:34px;padding:5px;border-radius:9px;font-size:24px;line-height:1}
+.ms-mindmap-root .ms-map-ink-palette>button[aria-pressed="true"]{background:#ffffff30}
+.ms-map-ink-palette svg{width:24px;height:24px}
+.ms-map-ink-palette input[type="color"]{appearance:none;align-self:center;width:25px;height:25px;padding:0;border:1px solid #ffffff80;border-radius:50%;overflow:hidden;background:transparent;cursor:pointer}
+.ms-map-ink-palette input[type="color"]::-webkit-color-swatch-wrapper{padding:0}
+.ms-map-ink-palette input[type="color"]::-webkit-color-swatch{border:0;border-radius:50%}
+.ms-map-ink-palette input[type="range"]{width:34px;max-width:34px;margin:8px 0;accent-color:#fff}
+.ms-map-ink-palette{max-height:calc(100% - 36px);overflow-y:auto;scrollbar-width:none}
+.ms-map-ink-palette>button[hidden]{display:none}
+.ms-map-ink-settings{position:absolute;left:72px;top:56px;z-index:45;width:330px;max-width:calc(100% - 92px);max-height:calc(100% - 80px);overflow:auto;background:var(--background-primary,#fff);color:var(--text-normal,#24262a);border-radius:15px;box-shadow:0 6px 26px #0003;border:1px solid #d6d6d655;font-size:15px}
+.ms-map-ink-settings-header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 14px;border-bottom:1px solid #aaa4;background:#f7f7f880;font-size:14px}
+.ms-map-ink-settings-header strong{flex:1;text-align:center;font-weight:600}
+.ms-map-ink-settings button{appearance:none;border:0;box-shadow:none;background:none;color:inherit;font:inherit;height:auto;line-height:1.4;white-space:normal}
+.ms-map-ink-settings-header>button{font-size:22px;padding:0 4px;color:#888}
+.ms-map-brush-settings{margin:12px;border:1px solid #aaa4;border-radius:8px;min-width:0;padding:10px}
+.ms-map-brush-settings label{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0}
+.ms-map-brush-settings input[type=range]{flex:1;min-width:80px;max-width:100%}
+.ms-map-ink-layer-title{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:#88808007}
+.ms-map-ink-layer-title button{font-size:12px;color:#81858b;padding:0}
+.ms-map-ink-layer-row{border-bottom:1px solid #aaa4}
+.ms-map-ink-layer-row>button{display:flex;align-items:center;justify-content:space-between;width:100%;padding:15px 20px;text-align:left}
+.ms-map-ink-layer-check{color:#448aff;font-size:20px}
+.ms-map-ink-layer-actions{display:flex;gap:6px;padding:0 12px 10px}
+.ms-map-ink-layer-actions button{padding:4px 8px;font-size:11px;background:#8881;border-radius:5px}
+.ms-map-ink-settings .ms-map-ink-new-layer{display:block;width:100%;padding:14px 18px;text-align:left;border-bottom:1px solid #aaa4;font-size:17px}
+.ms-map-ink-overlay-label{display:flex;align-items:center;justify-content:space-between;padding:14px;gap:12px}
+.ms-map-ink-overlay-label select{max-width:170px}
+.ms-map-ink-layer-hint{padding:0 14px 12px;margin:0;font-size:11px;color:#85898f}

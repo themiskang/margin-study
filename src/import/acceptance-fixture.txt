@@ -1,0 +1,121 @@
+import { importWebArticle, openWebImport, WebImportError } from '__PROJECT__/src/import/webImport';
+import { Store } from '__PROJECT__/src/model/store';
+import { TFile, notices } from 'obsidian';
+import { sanitizeStaticHtml } from '__PROJECT__/src/documents/content';
+
+const results: any[] = [], stores: Store[] = [];
+(window as any).results = results;
+function assert(value: any, message: string) { if (!value) throw new Error(message); }
+const pause = () => new Promise(done => setTimeout(done, 0));
+async function until(run: () => any) { for (let i = 0; i < 300; i++) { if (run()) return; await pause(); } throw new Error('UI completion timeout'); }
+async function test(name: string, run: () => any) {
+  try { document.querySelectorAll('.ms-modal-bg').forEach(node => node.remove()); await run(); results.push({ name, passed: true }); }
+  catch (error) { results.push({ name, passed: false, error: String(error) }); }
+}
+async function rejects(run: () => Promise<any>, pattern: RegExp) {
+  try { await run(); } catch (error) { assert(pattern.test(String(error)), `Unexpected rejection ${error}`); return error as any; }
+  throw new Error('Unexpected success');
+}
+const url = (path: string) => new URL(path, location.origin).href;
+const tinyPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==';
+async function fresh() {
+  let disk: any = { settings: { backupEnabled: false } }; const entries = new Map<string, any>(); const text = new Map<string, string>(); const binary = new Map<string, ArrayBuffer>();
+  let failWrite = false, failOpen = false, onBinary: (() => void) | undefined; const opened: string[] = [], deleted: string[] = [];
+  const vault: any = {
+    getAbstractFileByPath: (path: string) => entries.get(path), getFiles: () => [...entries.values()].filter(file => file instanceof TFile),
+    createFolder: async (path: string) => { if (entries.has(path)) throw new Error('Already exists'); const folder = { path }; entries.set(path, folder); return folder; },
+    create: async (path: string, value: string) => { if (failWrite && path.endsWith('.html')) throw new Error('Synthetic write denied'); if (entries.has(path)) throw new Error('Already exists'); const file = new TFile(path, value.length); entries.set(path, file); text.set(path, value); return file; },
+    createBinary: async (path: string, value: ArrayBuffer) => { const file = new TFile(path, value.byteLength); entries.set(path, file); binary.set(path, value); onBinary?.(); return file; },
+    delete: async (entry: any) => { deleted.push(entry.path); for (const path of entries.keys()) if (path === entry.path || path.startsWith(entry.path + '/')) { entries.delete(path); text.delete(path); binary.delete(path); } },
+    adapter: { exists: async (path: string) => entries.has(path), mkdir: async (path: string) => { entries.set(path, { path }); }, read: async (path: string) => text.get(path) ?? '', write: async (path: string, value: string) => { text.set(path, value); } },
+  };
+  const app: any = { vault };
+  const host: any = { app, loadData: async () => structuredClone(disk), saveData: async (data: any) => { disk = structuredClone(data); } };
+  const store = new Store(host); await store.load(); stores.push(store); const set = store.createStudySet('Imported articles');
+  const plugin: any = { app, store, openDocument: async (file: TFile) => { if (failOpen) throw new Error('Synthetic reader unavailable'); opened.push(file.path); return { getFilePath: () => file.path }; } };
+  return { plugin, store, set, entries, text, binary, opened, deleted, host, failWrite: () => { failWrite = true; }, failOpen: () => { failOpen = true; }, onBinary: (callback: () => void) => { onBinary = callback; } };
+}
+try {
+  await test('HTTP article becomes local static HTML with deduplicated raster assets, source metadata and study membership', async () => {
+    const p = await fresh(); const result = await importWebArticle(p.plugin, { url: url('/article') }); const html = p.text.get(result.file.path)!;
+    assert(result.opened && p.opened[0] === result.file.path && result.imageCount === 1, 'document did not open or deduplicate images');
+    assert(html.includes('Paragraph 7') && !html.includes('UNRELATED NAVIGATION'), 'Readability did not extract the article');
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    assert(!doc.querySelector('script,iframe,style,link,[onload],[onclick],a[href^="javascript:"]'), 'active content survived');
+    assert([...doc.querySelectorAll('img')].every(img => img.getAttribute('src') === 'assets/image-001.png'), 'remote image references survived');
+    assert(p.binary.size === 1 && p.store.documents.find(item => item.path === result.file.path)?.sourceUrl === url('/article'), 'source registry or local image is missing');
+    assert(p.store.studySets.find(item => item.id === p.set.id)!.docPaths.includes(result.file.path), 'not enrolled in selected study set');
+    const readerHtml = sanitizeStaticHtml(html, result.file.path, reference => reference.startsWith('assets/') ? 'app://local/' + reference : undefined);
+    assert(readerHtml.includes('app://local/assets/image-001.png'), 'saved image did not survive reader sanitization');
+    await p.store.flush(); const reloaded = new Store(p.host); stores.push(reloaded); await reloaded.load();
+    assert(reloaded.documents.some(item => item.path === result.file.path && item.sourceUrl === url('/article')), 'source metadata did not persist');
+  });
+  await test('WeChat js_content and lazy data-src are extracted; a failed image is reported without hiding saved text', async () => {
+    const p = await fresh(); const result = await importWebArticle(p.plugin, { url: url('/wechat') }); const html = p.text.get(result.file.path)!;
+    assert(result.title === '合成微信文章' && html.includes('微信正文保留在这里') && !html.includes('UNRELATED WECHAT FOOTER'), 'WeChat article selection is incorrect');
+    assert(result.imageCount === 1 && result.warnings.length === 1 && result.warnings[0].includes('图片'), 'failed image was reported as complete');
+    assert(!html.includes('must-not-load-tracker') && !html.includes('/bad-image'), 'lazy tracker or failed remote image remained active');
+  });
+  await test('Disabling image downloads never fetches image resources and reports the omitted images', async () => {
+    const p = await fresh(); let imageFetches = 0;
+    const result = await importWebArticle(p.plugin, { html: '<article><p>Deliberately pasted article body.</p><img src="https://example.invalid/sample.png"></article>', downloadImages: false }, {
+      fetch: async (_url, kind) => { if (kind === 'image') imageFetches++; throw new Error('Transport should not be used'); },
+    });
+    assert(imageFetches === 0 && p.binary.size === 0 && result.warnings.some(item => item.includes('未下载')), 'image opt-out performed a network request or hid the omission');
+    const doc = new DOMParser().parseFromString(p.text.get(result.file.path)!, 'text/html'); assert(!doc.querySelector('img[src]'), 'image opt-out left a remote source');
+  });
+  await test('Pasted HTML bypasses page fetching, localizes inline raster images and sanitizes the filename', async () => {
+    const p = await fresh(); const result = await importWebArticle(p.plugin, { html: `<article onclick="evil()"><p>Offline pasted content.</p><img src="data:image/png;base64,${tinyPng}"><svg onload="evil()"></svg><a href="javascript:evil()">link</a></article>`, title: '../Unsafe / title?', studySetId: null }, {
+      fetch: async () => { throw new Error('Pasted content fetched the network'); },
+    });
+    assert(result.imageCount === 1 && !result.sourceUrl && !result.file.path.includes('/../') && !result.file.path.includes('?'), 'pasted content was not saved safely');
+    assert(p.store.studySets[0].docPaths.length === 0, 'explicit unfiled option was ignored');
+    assert(!p.text.get(result.file.path)!.includes('onclick') && !p.text.get(result.file.path)!.includes('javascript:'), 'pasted event or script URL survived');
+  });
+  await test('Invalid URLs, HTTP errors, non-HTML, verification pages and script-only pages reject without phantom documents', async () => {
+    for (const [input, pattern] of [
+      [{ url: 'javascript:alert(1)' }, /http/], [{ url: 'https://user:password@example.invalid/' }, /凭据/],
+      [{ url: url('/forbidden') }, /HTTP 403/], [{ url: url('/not-html') }, /不是 HTML/],
+      [{ url: url('/blocked') }, /验证/], [{ url: url('/empty') }, /正文/], [{ html: '   ' }, /网址|HTML/],
+    ] as [any, RegExp][]) {
+      const p = await fresh(); await rejects(() => importWebArticle(p.plugin, input), pattern);
+      assert(p.store.documents.length === 0 && ![...p.text.keys()].some(path => path.endsWith('.html')), 'failed fetch created a phantom imported document');
+    }
+  });
+  await test('A failed HTML write cleans only the newly created import directory', async () => {
+    const p = await fresh(); await p.plugin.app.vault.create('keep.txt', 'untouched'); p.failWrite();
+    await rejects(() => importWebArticle(p.plugin, { url: url('/article') }), /write denied/);
+    assert(p.text.get('keep.txt') === 'untouched' && p.binary.size === 0 && p.store.documents.length === 0, 'write rollback touched unrelated data or left an import');
+    assert(p.deleted.length === 1 && p.deleted[0].startsWith('MarginStudyImports/'), 'write rollback did not target the owned import folder');
+  });
+  await test('Cancellation during fetch or asset writing produces no registered document', async () => {
+    const read = await fresh(); const controller = new AbortController();
+    const pending = importWebArticle(read.plugin, { url: url('/article') }, { signal: controller.signal, fetch: () => new Promise(() => {}) }); controller.abort();
+    await rejects(() => pending, /AbortError|取消/); assert(read.store.documents.length === 0 && read.text.size === 0, 'cancelled fetch wrote data');
+    const write = await fresh(); const writeController = new AbortController(); write.onBinary(() => writeController.abort());
+    await rejects(() => importWebArticle(write.plugin, { url: url('/article') }, { signal: writeController.signal }), /AbortError|取消/);
+    assert(write.store.documents.length === 0 && write.binary.size === 0 && ![...write.text.keys()].some(path => path.endsWith('.html')), 'cancelled write left partial import');
+  });
+  await test('Storage registration failures identify the saved path; reader failures return explicit partial success', async () => {
+    const p = await fresh(); const flush = p.store.flush.bind(p.store); p.store.flush = async () => { throw new Error('Synthetic metadata disk failure'); };
+    const error = await rejects(() => importWebArticle(p.plugin, { html: '<p>Saved source remains recoverable after metadata failure.</p>' }), /文件已保存.*登记未完成/);
+    assert(error instanceof WebImportError && error.savedPath && p.text.has(error.savedPath) && p.opened.length === 0, 'metadata failure hid or lost its saved path'); p.store.flush = flush;
+    const q = await fresh(); q.failOpen(); const result = await importWebArticle(q.plugin, { html: '<p>This article saves even when the reader cannot open it.</p>' });
+    assert(!result.opened && q.text.has(result.file.path) && result.warnings.some(item => item.includes('已保存，但未能打开')), 'reader failure falsely reported a fully opened import');
+  });
+  await test('Import form keeps fetch errors visible and can complete using pasted HTML', async () => {
+    const p = await fresh(); openWebImport(p.plugin); const modal = document.querySelector('.ms-web-import')!;
+    const input = modal.querySelector('[aria-label="文章网址"]') as HTMLInputElement; input.value = url('/blocked');
+    const submit = [...modal.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === '导入并打开')!; submit.click();
+    await until(() => !submit.disabled); assert(modal.querySelector('.ms-web-import-status.is-error')?.textContent?.includes('验证'), 'form hid fetch failure');
+    assert((modal.querySelector('details') as HTMLDetailsElement).open && !p.store.documents.length, 'fallback did not open or failed page was saved');
+    assert(submit.getBoundingClientRect().bottom <= window.innerHeight && submit.getBoundingClientRect().top >= 0, 'fallback expanded past the available action buttons');
+    (modal.querySelector('[aria-label="粘贴网页 HTML"]') as HTMLTextAreaElement).value = '<article><h1>Browser-copied article</h1><p>The pasted article is used instead of fetching the blocked page again.</p></article>';
+    submit.click(); await until(() => !document.body.contains(modal)); assert(p.opened.length === 1 && notices.some(note => note.includes('已导入')), 'pasted fallback did not complete truthfully');
+  });
+  await Promise.all(stores.map(store => store.flush()));
+  const sample = await fresh(); openWebImport(sample.plugin);
+  (document.querySelector('[aria-label="文章网址"]') as HTMLInputElement).value = url('/blocked');
+  const submit = [...document.querySelectorAll<HTMLButtonElement>('.ms-web-import button')].find(button => button.textContent === '导入并打开')!; submit.click(); await until(() => !submit.disabled);
+} catch (error) { (window as any).fatal = String(error); }
+finally { (window as any).done = true; }

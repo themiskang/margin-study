@@ -1,0 +1,266 @@
+import { ReaderView } from 'marginstudy-real-reader';
+import { PDFDocument, StandardFonts, degrees, rgb, PDFName, PDFString, PDFArray, PDFNumber } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/node_modules/pdf-lib/es/index.js';
+import { loadPdf } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/pdfjs';
+import { savePdfExport } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/pdfExportSave';
+import { imagePagesPdf, isPageImage } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/imagePages';
+
+export async function runPdfExportAcceptance({test,assert,wait,plugin,add,app}:any){
+ const make=async(labels:string[],rotation=0)=>{const pdf=await PDFDocument.create(),font=await pdf.embedFont(StandardFonts.Helvetica);for(const label of labels){const page=pdf.addPage([500,700]);page.drawText(label,{x:80,y:500,font,size:20});page.drawRectangle({x:100,y:100,width:50,height:50,color:rgb(1,0,0)});page.setRotation(degrees(rotation));}return (await pdf.save()).slice().buffer;};
+ await test('PDF export keeps preset ink widths and opacity including pressure, invisible ink and legacy defaults',async()=>{
+  const source=await PDFDocument.create();source.addPage([500,700]);const path='export-preset-ink.pdf';add(path,{bytes:(await source.save()).slice().buffer});const p=plugin(),view=new ReaderView({app} as any,p);await view.onOpen();
+  const samples=[
+   {id:'normal',y:100,width:12,opacity:.7,color:'#0000ff',expectedWidth:12,expected:[77,77,255]},
+   {id:'marker',y:200,width:20,opacity:.6,color:'#00ff00',brush:'highlight',expectedWidth:20,expected:[102,255,102]},
+   {id:'pressure',y:300,width:9,opacity:.5,color:'#0000ff',pressure:.4,expectedWidth:8.4,expected:[128,128,255]},
+   {id:'legacy-normal',y:400,color:'#0000ff',expectedWidth:3,expected:[0,0,255]},
+   {id:'legacy-marker',y:500,color:'#00ff00',brush:'highlight',expectedWidth:16,expected:[173,255,173]},
+   {id:'invisible',y:600,width:18,opacity:0,color:'#0000ff',expectedWidth:0,expected:[255,255,255]}
+  ];
+  p.store.saveAnnotationsDebounced(path,samples.map(sample=>({id:sample.id,docPath:path,docKind:'pdf',page:1,type:'pen',rects:[],text:'',color:sample.color,createdAt:'today',inkBrush:sample.brush??'pen',inkWidth:sample.width,inkOpacity:sample.opacity,strokes:[[{x:.2,y:sample.y/700,...(sample.pressure===undefined?{}:{pressure:sample.pressure})},{x:.8,y:sample.y/700,...(sample.pressure===undefined?{}:{pressure:sample.pressure})}]]})));
+  try{await view.loadFileByPath(path);const before=JSON.stringify(await p.store.loadAnnotations(path)),bytes=await view.exportEditedPdf(),pdf=await loadPdf(bytes.slice().buffer);
+   try{const page=await pdf.getPage(1),viewport=page.getViewport({scale:2}),canvas=document.createElement('canvas');canvas.width=viewport.width;canvas.height=viewport.height;const ctx=canvas.getContext('2d')!;await page.render({canvasContext:ctx,viewport}).promise;
+    for(const sample of samples){const pixel=Array.from(ctx.getImageData(500,sample.y*2,1,1).data).slice(0,3);assert(pixel.every((channel,index)=>Math.abs(channel-sample.expected[index])<=3),sample.id+' opacity changed in PDF: '+pixel);let rows=0;for(let y=sample.y*2-45;y<sample.y*2+45;y++){const data=ctx.getImageData(500,y,1,1).data;if(Math.min(data[0],data[1],data[2])<245)rows++;}assert(Math.abs(rows/2-sample.expectedWidth)<=1,sample.id+' width changed in PDF: '+rows/2);}
+   }finally{await pdf.destroy();}assert(JSON.stringify(await p.store.loadAnnotations(path))===before,'export modified ink sidecars');
+  }finally{await view.onClose();view.containerEl.remove();}
+ });
+ await test('Free overlay rotation exports around its center into the same visible PDF location',async()=>{
+  const path='export-overlay-angle.pdf';add(path,{bytes:await make(['ROTATION SOURCE'])});const p=plugin(),view=new ReaderView({app} as any,p);await view.onOpen();
+  const canvas=document.createElement('canvas');canvas.width=120;canvas.height=40;canvas.getContext('2d')!.fillStyle='#00ff00';canvas.getContext('2d')!.fillRect(0,0,120,40);
+  p.store.saveAnnotationsDebounced(path,[{id:'rotated-overlay',docPath:path,docKind:'pdf',page:1,type:'note',rects:[{x:100,y:300,w:120,h:40}],pdfCoordinateSpace:'pdf',text:'',color:'#111111',image:canvas.toDataURL(),overlay:{kind:'image',rotation:90},createdAt:'today'}]);
+  try{await view.loadFileByPath(path);const bytes=await view.exportEditedPdf(),doc=await loadPdf(bytes.slice().buffer);try{const page=await doc.getPage(1),vp=page.getViewport({scale:1}),out=document.createElement('canvas');out.width=vp.width;out.height=vp.height;const ctx=out.getContext('2d')!;await page.render({canvasContext:ctx,viewport:vp}).promise;
+    const vertical=ctx.getImageData(160,330,1,1).data,horizontal=ctx.getImageData(110,380,1,1).data;assert(vertical[1]>220&&vertical[0]<40&&vertical[2]<40,'exported overlay did not rotate into the vertical target');assert(horizontal[0]>240&&horizontal[1]>240&&horizontal[2]>240,'exported overlay retained unrotated horizontal pixels');
+  }finally{await doc.destroy();}}finally{await view.onClose();view.containerEl.remove();}
+ });
+ await test('User TOC survives page reorder and exports Unicode hierarchy with correct destinations',async()=>{
+  const path='export-custom-toc.pdf';add(path,{bytes:await make(['ONE','TWO','THREE'])});const p=plugin(),view=new ReaderView({app} as any,p);await view.onOpen();
+  try{await view.loadFileByPath(path);await view.setEditableOutline([{id:'root',title:'目录 中文',page:1,level:0},{id:'child',title:'Conclusion',page:3,level:1}]);await view.movePdfPage(3,1);
+   assert((await view.getEditableOutline())[1].page===1,'TOC did not follow moved page');
+   const bytes=await view.exportEditedPdf({includeAnnotations:false}),pdf=await loadPdf(bytes.slice().buffer);
+   try{const outline=await pdf.getOutline();assert(outline?.[0].title==='目录 中文'&&outline[0].items[0].title==='Conclusion'&&await pdf.getPageIndex(outline[0].items[0].dest[0])===0,'edited TOC was lost or pointed at the wrong output page');}finally{await pdf.destroy();}
+  }finally{await view.onClose();}
+ });
+ await test('Exported PDF preserves edited page order, deletion, rotation, blank and imported pages, crop and selectable source text',async()=>{
+  const path='export-edited.pdf',original=await make(['SOURCE ONE','SOURCE TWO','SOURCE THREE']),source=add(path,{bytes:original}),p=plugin(),view=new ReaderView({app} as any,p);await view.onOpen();
+  try{await view.loadFileByPath(path);await view.insertBlankPage(1);await view.insertPdfPages(2,new File([await make(['IMPORTED VECTOR'],90)],'external.pdf'),[1]);await view.movePdfPage(3,2);await view.rotatePdfPage(2);await view.removePdfPage(4);await view.setPageCrop({left:.1,top:0,right:1,bottom:.9});
+   const baseline=JSON.stringify(p.store.getDocMeta(path)),state=JSON.stringify(view.getState());const bytes=await (view as any).exportEditedPdf({includeAnnotations:false}),pdf=await loadPdf(bytes.slice().buffer);
+   try{assert(pdf.numPages===4,'exported page count ignored edits');const texts=[],sizes=[];for(let i=1;i<=4;i++){const page=await pdf.getPage(i),vp=page.getViewport({scale:1});texts.push((await page.getTextContent()).items.map((x:any)=>x.str).join(''));sizes.push([vp.width,vp.height]);}
+    assert(texts[0].includes('SOURCE ONE')&&texts[1].includes('IMPORTED VECTOR')&&!texts[2]&&texts[3].includes('SOURCE THREE')&&!texts.join().includes('SOURCE TWO'),'page order or selectable text lost '+texts);
+    assert(sizes.every(size=>Math.abs(size[0]-450)<.01&&Math.abs(size[1]-630)<.01),'export crop/rotation dimensions differ '+JSON.stringify(sizes));assert((await pdf.getPage(2)).rotate===180,'imported source rotation and extra rotation were not composed');
+   }finally{await pdf.destroy();}
+   assert(JSON.stringify(p.store.getDocMeta(path))===baseline&&JSON.stringify(view.getState())===state,'export mutated metadata or reading position');assert(new Uint8Array(await app.vault.readBinary(source)).every((x,i)=>x===new Uint8Array(original)[i]),'export overwrote the source');
+  }finally{await view.onClose();view.containerEl.remove();}
+ });
+ await test('Flattened export retains visible highlights, Chinese text and ink after rotation and leaves hidden notebooks out',async()=>{
+  const path='export-annotations.pdf';add(path,{bytes:await make(['SOURCE ONE','SOURCE TWO'])});const p=plugin(),view=new ReaderView({app} as any,p);await view.onOpen();
+  const base={docPath:path,docKind:'pdf',page:1,rects:[],text:'',color:'#00ff00',createdAt:'today'};
+  p.store.saveAnnotationsDebounced(path,[{...base,id:'highlight',type:'highlight',pdfCoordinateSpace:'pdf',rects:[{x:100,y:400,w:80,h:25}]},{...base,id:'ink',type:'pen',color:'#0000ff',strokes:[[{x:.2,y:.5},{x:.4,y:.5}]]},{...base,id:'text',type:'note',color:'#111111',pdfCoordinateSpace:'pdf',rects:[{x:80,y:200,w:220,h:60}],text:'中文导出 TEST',overlay:{kind:'text',fontSize:24}},{...base,id:'hidden',type:'highlight',documentNotebookId:'hidden',pdfCoordinateSpace:'pdf',color:'#ff00ff',rects:[{x:300,y:400,w:50,h:50}]}]);
+  try{await view.loadFileByPath(path);await view.rotatePdfPage(1);await view.setPageCrop({left:-.1,top:0,right:1,bottom:1});const before=JSON.stringify(await p.store.loadAnnotations(path));const bytes=await (view as any).exportEditedPdf(),pdf=await loadPdf(bytes.slice().buffer),plain=await (view as any).exportEditedPdf({includeAnnotations:false}),without=await loadPdf(plain.slice().buffer);
+   try{const render=async(doc:any)=>{const page=await doc.getPage(1),vp=page.getViewport({scale:1}),canvas=document.createElement('canvas');canvas.width=vp.width;canvas.height=vp.height;await page.render({canvasContext:canvas.getContext('2d'),viewport:vp}).promise;return canvas;};const canvas=await render(pdf),clean=await render(without),a=canvas.getContext('2d')!,b=clean.getContext('2d')!,pixel=(x:number,y:number)=>Array.from(a.getImageData(x,y,1,1).data);
+    assert(pixel(410,180)[1]>240&&pixel(410,180)[0]<230,'visible highlight missing from rotated export '+pixel(410,180));assert(pixel(350,180)[2]>200&&pixel(350,180)[0]<80,'visible blue ink missing');assert(pixel(410,390).slice(0,3).every((n:any)=>n>240),'hidden notebook leaked');
+    let changed=0;for(let y=140;y<360;y++)for(let x=200;x<260;x++){const one=a.getImageData(x,y,1,1).data,two=b.getImageData(x,y,1,1).data;if(one[0]<150&&two[0]>220)changed++;}assert(changed>50,'Chinese/text overlay was omitted');
+    assert((await (await pdf.getPage(1)).getTextContent()).items.some((item:any)=>item.str.includes('SOURCE ONE')),'flattening removed selectable source text');
+   }finally{await pdf.destroy();await without.destroy();}assert(JSON.stringify(await p.store.loadAnnotations(path))===before,'flattening rewrote sidecar coordinates');
+  }finally{await view.onClose();view.containerEl.remove();}
+ });
+ await test('Export page selection has MN4 controls, empty-selection protection, validated ranges, annotated pages and cancellation without a PDF write',async()=>{
+  const path='export-selection.pdf';add(path,{bytes:await make(['ONE','TWO','THREE'])});const p=plugin(),view=new ReaderView({app} as any,p);await view.onOpen();p.store.saveAnnotationsDebounced(path,[{id:'a',docPath:path,docKind:'pdf',page:2,type:'highlight',rects:[{x:100,y:400,w:20,h:20}],pdfCoordinateSpace:'pdf',text:'',color:'#ff0',createdAt:'today'}]);
+  try{await view.loadFileByPath(path);const before=app.vault.getFiles().length,meta=JSON.stringify(p.store.getDocMeta(path));(view as any).openPdfExport();const root=document.querySelector<HTMLElement>('[aria-label="Select Pages for Export"]')!;assert(root,'export page selection is missing');const button=(label:string)=>root.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
+   assert(button('Export Selected Pages').textContent==='Export (3)','default selection is not all pages');button('Clear').click();assert(button('Export Selected Pages').disabled,'empty selection can export');button('Page Range').click();const input=document.querySelector<HTMLInputElement>('[aria-label="Pages to Export"]')!;input.value='0, 8';document.querySelector<HTMLButtonElement>('[aria-label="Select Page Range"]')!.click();assert(input.getAttribute('aria-invalid')==='true'&&button('Export Selected Pages').disabled,'invalid range was silently accepted');input.value='1, 3';document.querySelector<HTMLButtonElement>('[aria-label="Select Page Range"]')!.click();assert(button('Export Selected Pages').textContent==='Export (2)','range did not select the requested pages');button('Clear').click();button('Annotated').click();for(let i=0;i<100&&button('Export Selected Pages').disabled;i++)await wait(10);assert(button('Export Selected Pages').textContent==='Export (1)'&&button('Select Export Page 2').getAttribute('aria-pressed')==='true','Annotated did not select page two');button('Cancel PDF Export').click();await wait(20);assert(!root.isConnected&&app.vault.getFiles().length===before&&JSON.stringify(p.store.getDocMeta(path))===meta,'cancelling export wrote a file or modified page edits');
+  }finally{await view.onClose();view.containerEl.remove();}
+ });
+ await test('Export rejects stale or aborted work, missing imported sources and overlapping exports without creating a partial PDF',async()=>{
+  const path='export-races.pdf',other='export-other.pdf',bytes=await make(['SOURCE']);add(path,{bytes});add(other,{bytes});const p=plugin(),view=new ReaderView({app} as any,p);await view.onOpen();const originalRead=app.vault.readBinary;let release!:()=>void,started=false;
+  const rejected=async(action:Promise<any>)=>{let fail=false;try{await action;}catch{fail=true;}assert(fail,'invalid or stale export unexpectedly succeeded');};
+  try{await view.loadFileByPath(path);await view.insertPdfPages(1,new File([await make(['IMPORTED'])],'import.pdf'),[1]);const count=app.vault.getFiles().length,meta=JSON.stringify(p.store.getDocMeta(path)),gate=new Promise<void>(resolve=>release=resolve);
+   app.vault.readBinary=async(file:any)=>{if(file.path.startsWith('MarginStudyImports/page-assets/')){started=true;await gate;}return originalRead(file);};
+   const pending=(view as any).exportEditedPdf({includeAnnotations:false});for(let i=0;i<100&&!started;i++)await wait(10);assert(started,'export never reached the imported source');await rejected((view as any).exportEditedPdf());await view.loadFileByPath(other);release();await rejected(pending);
+   app.vault.readBinary=originalRead;await view.loadFileByPath(path);const controller=new AbortController();controller.abort();await rejected((view as any).exportEditedPdf({signal:controller.signal}));
+   app.vault.readBinary=async(file:any)=>{if(file.path.startsWith('MarginStudyImports/page-assets/'))throw Error('missing import');return originalRead(file);};await rejected((view as any).exportEditedPdf());
+   assert(app.vault.getFiles().length===count&&JSON.stringify(p.store.getDocMeta(path))===meta,'failed export left a file or altered edits');
+  }finally{release?.();app.vault.readBinary=originalRead;await view.onClose();view.containerEl.remove();}
+ });
+ await test('Selected-page export sorts unique display pages and supports a nonzero CropBox with an intrinsically rotated source',async()=>{
+  const pdf=await PDFDocument.create(),font=await pdf.embedFont(StandardFonts.Helvetica);for(const label of ['FIRST','SECOND','THIRD']){const page=pdf.addPage([500,700]);page.setCropBox(20,30,400,600);page.setRotation(degrees(270));page.drawText(label,{x:100,y:300,font,size:24});}const path='export-offset.pdf';add(path,{bytes:(await pdf.save()).slice().buffer});const view=new ReaderView({app} as any,plugin());await view.onOpen();
+  try{await view.loadFileByPath(path);await view.rotatePdfPage(1);await view.setPageCrop({left:-.1,top:.1,right:1.2,bottom:.9});const bytes=await(view as any).exportEditedPdf({pages:[3,1,3],includeAnnotations:false}),out=await loadPdf(bytes.slice().buffer);
+   try{assert(out.numPages===2,'duplicate or unselected pages were exported');const first=await out.getPage(1),last=await out.getPage(2),one=first.getViewport({scale:1}),three=last.getViewport({scale:1});assert(first.rotate===0&&Math.abs(one.width-320)<.01&&Math.abs(one.height-780)<.01&&Math.abs(three.width-780)<.01&&Math.abs(three.height-320)<.01,'nonzero CropBox or four-way rotation crop mismatch '+JSON.stringify({one:[one.width,one.height],three:[three.width,three.height]}));assert((await first.getTextContent()).items.some((x:any)=>x.str==='FIRST')&&(await last.getTextContent()).items.some((x:any)=>x.str==='THIRD'),'selected page order changed');}finally{await out.destroy();}
+  }finally{await view.onClose();view.containerEl.remove();}
+ });
+ await test('Long image stacks the edited pages in order at one shared width and keeps each page intact',async()=>{
+  const path='export-long.png.pdf';add(path,{bytes:await make(['LONG ONE','LONG TWO','LONG THREE'])});const p=plugin(),view=new ReaderView({app} as any,p);await view.onOpen();
+  try{await view.loadFileByPath(path);await view.rotatePdfPage(2);const result=await (view as any).exportEditedPdfLongImage();const bitmap=await createImageBitmap(new Blob([result.bytes],{type:'image/png'}));
+   // Page one and three are 500×700; page two is rotated 90° and displays 700×500.
+   // MN4 uses one shared width: 1400px wide, with heights 1960 / 1000 / 1960 = 4920px.
+   try{assert(result.pages===3&&result.width===1400&&result.height===4920,'long image dimensions or page count differ '+JSON.stringify({width:result.width,height:result.height,pages:result.pages}));
+    const canvas=document.createElement('canvas');canvas.width=result.width;canvas.height=result.height;const context=canvas.getContext('2d')!;context.drawImage(bitmap,0,0);
+    // Under the shared width each 50×50pt square becomes 140px on the portrait pages (19600 red pixels) and 100px on the rotated page (10000).
+    const redInBand=(top:number,bottom:number)=>{const data=context.getImageData(0,top,result.width,bottom-top).data;let count=0;for(let i=0;i<data.length;i+=4)if(data[i]>200&&data[i+1]<80&&data[i+2]<80)count++;return count;};
+    const bands=[redInBand(0,1960),redInBand(1960,2960),redInBand(2960,4920)];
+    assert(bands[0]>15000&&bands[0]<24000&&bands[1]>7000&&bands[1]<13000&&bands[2]>15000&&bands[2]<24000,'a page is missing, duplicated or not scaled to the shared width '+JSON.stringify(bands));
+    assert(!context.getImageData(0,1300,result.width,100).data.some((value:number,index:number)=>index%4!==3&&value<240),'pages overlap or blank space was painted with page content');
+    const blank=context.getImageData(5,5,1,1).data;assert(blank[0]===255&&blank[1]===255&&blank[2]===255,'sheet background is not white');
+   }finally{bitmap.close();}
+   const meta=JSON.stringify(p.store.getDocMeta(path));assert(meta.length>0,'long image export mutated the document');
+  }finally{await view.onClose();view.containerEl.remove();}
+ });
+ await test('Long image export follows the selected page range and saves only a readable PNG',async()=>{
+  const path='export-long-ui.pdf';add(path,{bytes:await make(['UI ONE','UI TWO','UI THREE'])});const view=new ReaderView({app} as any,plugin());await view.onOpen();
+  const until=async(check:()=>any)=>{for(let i=0;i<300&&!check();i++)await wait(10);assert(check(),'long image export did not reach the expected state');};
+  try{await view.loadFileByPath(path);const before=app.vault.getFiles().length;view.openPdfExport();
+   document.querySelector<HTMLButtonElement>('[aria-label="Page Range"]')!.click();const input=document.querySelector<HTMLInputElement>('[aria-label="Pages to Export"]')!;input.value='3';document.querySelector<HTMLButtonElement>('[aria-label="Select Page Range"]')!.click();
+   document.querySelector<HTMLButtonElement>('[aria-label="Export Selected Pages"]')!.click();const long=document.querySelector<HTMLButtonElement>('[aria-label="Export as Long Image"]');assert(long&&!long.disabled,'Long Image format is disabled');
+   long.click();await until(()=>document.querySelector('[aria-label="Save PNG"]'));document.querySelector<HTMLButtonElement>('[aria-label="Save PNG"]')!.querySelectorAll('button').forEach(node=>{if(node.textContent==='Save')node.click();});
+   await until(()=>!document.querySelector('[aria-label="Save PNG"]'));
+   const file=app.vault.getAbstractFileByPath('MarginStudyExports/export-long-ui_Flatten.png');assert(file,'long image was not saved as PNG');
+   assert(app.vault.getFiles().length===before+1,'long image export also wrote another file');
+   const bytes=await app.vault.readBinary(file),bitmap=await createImageBitmap(new Blob([bytes],{type:'image/png'}));try{assert(bitmap.width===1000&&bitmap.height===1400,'saved PNG ignored the page selection: '+bitmap.width+'x'+bitmap.height);}finally{bitmap.close();}
+  }finally{await view.onClose();view.containerEl.remove();}
+ });
+ await test('Fallback PDF save cancels during storage checks without a late file and can then save a readable PDF',async()=>{
+  const path='fallback.pdf';add(path,{bytes:await make(['FALLBACK READABLE'])});const view=new ReaderView({app} as any,plugin());await view.onOpen();const exists=app.vault.adapter.exists;let release!:()=>void,checking=false;
+  const until=async(check:()=>any)=>{for(let i=0;i<300&&!check();i++)await wait(10);assert(check(),'save UI did not reach the expected state');};
+  const savePanel=async()=>{view.openPdfExport();document.querySelector<HTMLButtonElement>('[aria-label="Export Selected Pages"]')!.click();document.querySelector<HTMLButtonElement>('[aria-label="Export as PDF"]')!.click();await until(()=>document.querySelector('[aria-label="Save PDF"]'));return document.querySelector<HTMLElement>('[aria-label="Save PDF"]')!;};
+  try{await view.loadFileByPath(path);const before=app.vault.getFiles().length,gate=new Promise<void>(resolve=>release=resolve);app.vault.adapter.exists=async(name:string)=>{if(name==='MarginStudyExports/fallback_Flatten.pdf'){checking=true;await gate;}return exists(name);};
+   const panel=await savePanel(),button=(name:string)=>Array.from(panel.querySelectorAll('button')).find(x=>x.textContent===name)!;button('Save').click();await until(()=>checking);button('Cancel').click();release();await wait(80);assert(!panel.isConnected&&app.vault.getFiles().length===before,'cancelled save wrote a late PDF');
+   app.vault.adapter.exists=exists;document.querySelector<HTMLButtonElement>('[aria-label="Cancel PDF Export"]')!.click();const retry=await savePanel();Array.from(retry.querySelectorAll('button')).find(x=>x.textContent==='Save')!.click();await until(()=>!retry.isConnected);const file=app.vault.getAbstractFileByPath('MarginStudyExports/fallback_Flatten.pdf');assert(file,'retry did not create the vault export');const pdf=await loadPdf(await app.vault.readBinary(file));try{assert(pdf.numPages===1&&(await(await pdf.getPage(1)).getTextContent()).items.some((x:any)=>x.str==='FALLBACK READABLE'),'saved vault PDF is unreadable');}finally{await pdf.destroy();}
+  }finally{release?.();app.vault.adapter.exists=exists;await view.onClose();view.containerEl.remove();}
+ });
+  await test('Long image keeps mixed page widths, a nonzero CropBox and rotation at one shared width without a blank tail',async()=>{
+   const pdf=await PDFDocument.create(),font=await pdf.embedFont(StandardFonts.Helvetica);
+   const one=pdf.addPage([500,700]);one.drawText('MIX ONE',{x:80,y:500,font,size:20});one.drawRectangle({x:100,y:100,width:50,height:50,color:rgb(1,0,0)});
+   const two=pdf.addPage([300,500]);two.setRotation(degrees(90));two.drawRectangle({x:50,y:50,width:50,height:50,color:rgb(1,0,0)});
+   const three=pdf.addPage([800,400]);three.setCropBox(50,50,250,150);three.drawRectangle({x:100,y:100,width:50,height:50,color:rgb(1,0,0)});
+   const path='export-long-mixed.pdf';add(path,{bytes:(await pdf.save()).slice().buffer});const view=new ReaderView({app} as any,plugin());await view.onOpen();
+   try{await view.loadFileByPath(path);const result=await (view as any).exportEditedPdfLongImage();
+    // Displays are 500×700, 500×300 (rotated) and 250×150 (CropBox). MN4's shared
+    // width makes them 1000px wide with heights 1400 / 600 / 600 = 2600px.
+    assert(result.pages===3&&result.width===1000&&result.height===2600,'mixed page long image dimensions differ '+JSON.stringify(result));
+    const bitmap=await createImageBitmap(new Blob([result.bytes],{type:'image/png'})),canvas=document.createElement('canvas');canvas.width=result.width;canvas.height=result.height;const context=canvas.getContext('2d')!;context.drawImage(bitmap,0,0);
+    try{const redBand=(top:number,bottom:number)=>{const data=context.getImageData(0,top,result.width,bottom-top).data;let count=0;for(let i=0;i<data.length;i+=4)if(data[i]>200&&data[i+1]<80&&data[i+2]<80)count++;return count;};
+     const bands=[redBand(0,1400),redBand(1400,2000),redBand(2000,2600)];
+     assert(bands[0]>7000&&bands[0]<13000&&bands[1]>7000&&bands[1]<13000&&bands[2]>30000&&bands[2]<50000,'a mixed-size page is missing, not scaled to the shared width or out of order '+JSON.stringify(bands));
+     // The tiny CropBox page is stretched to the shared width, so its square starts at x=200 (not the old centered x=350).
+     const square=context.getImageData(300,2300,1,1).data;assert(square[0]>200&&square[1]<80&&square[2]<80,'the CropBox page was not stretched to the shared width');
+    }finally{bitmap.close();canvas.width=canvas.height=0;}
+   }finally{await view.onClose();view.containerEl.remove();}
+  });
+  await test('Long image scaling caps keep every page, never exceed the canvas limits and do not shrink mixed-width pages twice',async()=>{
+   const pdf=await PDFDocument.create();for(const size of [[500,700],[300,500]]){const page=pdf.addPage(size as [number,number]);page.drawRectangle({x:20,y:20,width:50,height:50,color:rgb(1,0,0)});}
+   const path='export-long-cap.pdf';add(path,{bytes:(await pdf.save()).slice().buffer});const view=new ReaderView({app} as any,plugin());await view.onOpen();
+   try{await view.loadFileByPath(path);const result=await (view as any).exportEditedPdfLongImage({maxHeight:1600,maxPixels:1_000_000});
+    assert(result.pages===2,'scaling cap dropped pages');
+    assert(result.height<=1600&&result.width*result.height<=1_000_000,'scaling cap exceeded '+result.width+'x'+result.height);
+    // Widths are 500 and 300 at 2×; under MN4's shared width the real stack is
+    // 1400 + 500×1000/300 ≈ 3067px tall, so the cap yields 521×1597.
+    assert(result.width===521&&result.height===1597,'shared width used a wrong stack height: '+result.width+'x'+result.height);
+    const bitmap=await createImageBitmap(new Blob([result.bytes],{type:'image/png'})),canvas=document.createElement('canvas');canvas.width=result.width;canvas.height=result.height;const context=canvas.getContext('2d')!;context.drawImage(bitmap,0,0);
+    try{const red=(top:number,bottom:number)=>{const data=context.getImageData(0,top,result.width,bottom-top).data;let count=0;for(let i=0;i<data.length;i+=4)if(data[i]>200&&data[i+1]<80&&data[i+2]<80)count++;return count;};
+     assert([red(0,729),red(729,1597)].every(count=>count>1500&&count<11000),'a capped page was clipped or missing');
+    }finally{bitmap.close();canvas.width=canvas.height=0;}
+   }finally{await view.onClose();view.containerEl.remove();}
+  });
+  await test('Long image export can be cancelled before or during rendering and leaves the reader usable',async()=>{
+   const path='export-long-cancel.pdf';add(path,{bytes:await make(['CANCEL ONE','CANCEL TWO'])});const view=new ReaderView({app} as any,plugin());await view.onOpen();
+   const rejects=async(action:Promise<any>)=>{let failed=false;try{await action;}catch{failed=true;}return failed;};
+   try{await view.loadFileByPath(path);const controller=new AbortController();controller.abort();
+    assert(await rejects((view as any).exportEditedPdfLongImage({signal:controller.signal})),'pre-aborted long image export produced bytes');
+    const mid=new AbortController(),pending=(view as any).exportEditedPdfLongImage({signal:mid.signal});mid.abort();
+    assert(await rejects(pending),'long image export ignored an abort that arrived during export');
+    const result=await (view as any).exportEditedPdfLongImage();
+    assert(result.pages===2&&result.width===1000&&result.height===2800,'reader did not recover after a cancelled long image export');
+   }finally{await view.onClose();view.containerEl.remove();}
+  });
+  await test('PNG system-save branch appends the extension, stages an atomic temp file and refuses unconfirmed suffixed overwrite (dialog mocked; real panel not exercised)',async()=>{
+   const path='save-system.png.pdf';add(path,{bytes:await make(['SAVE SYSTEM'])});const view=new ReaderView({app} as any,plugin());await view.onOpen();
+   const previous=(window as any).require;const writes:{path:string;options:any}[]=[],links:string[][]=[],unlinks:string[]=[];let mode:'ok'|'cancel'|'exists'='ok';
+   const require=(name:string)=>{if(name==='@electron/remote')return {dialog:{showSaveDialog:async()=>mode==='cancel'?{canceled:true}:{canceled:false,filePath:'/virtual/out/result'}}};if(name==='fs')return {promises:{writeFile:async(filePath:string,bytes:any,options:any)=>{writes.push({path:filePath,options});},stat:async()=>null,rename:async(from:string,to:string)=>{links.push([from,to]);},link:async(from:string,to:string)=>{if(mode==='exists'){const error:any=new Error('exists');error.code='EEXIST';throw error;}links.push([from,to]);},unlink:async(filePath:string)=>{unlinks.push(filePath);}}};if(name==='path')return {resolve:(...parts:string[])=>parts.join('/'),join:(...parts:string[])=>parts.join('/'),dirname:(filePath:string)=>filePath.slice(0,filePath.lastIndexOf('/'))};return undefined;};
+   (window as any).require=require;
+   try{await view.loadFileByPath(path);const bytes=new Uint8Array([137,80,78,71]);
+    assert(await savePdfExport(view,bytes,()=>{},undefined,undefined,'png')==='/virtual/out/result.png','system save did not append .png');
+    assert(writes.length===1&&/^\/virtual\/out\/\.marginstudy-export-.+\.tmp$/.test(writes[0].path)&&writes[0].options?.flag==='wx','system save did not stage an atomic temp file');
+    assert(links.length===1&&links[0][1]==='/virtual/out/result.png','system save published to the wrong path');
+    assert(unlinks.includes(writes[0].path),'system save left its temp file behind');
+    mode='cancel';assert(await savePdfExport(view,bytes,()=>{},undefined,undefined,'png')===null&&writes.length===1,'cancelled system save wrote a file');
+    mode='exists';let refused=false;try{await savePdfExport(view,bytes,()=>{},undefined,undefined,'png');}catch(error){refused=String(error).includes('已存在');}
+    assert(refused,'system save did not refuse an existing file');
+    assert(unlinks.filter(filePath=>filePath===writes[writes.length-1].path).length===1,'failed system save did not clean its temp file');
+   }finally{(window as any).require=previous;await view.onClose();view.containerEl.remove();}
+  });
+  await test('Page-image import decodes PNG/JPEG/WebP/GIF/BMP, composites transparency on white and rejects HEIC',async()=>{
+   const canvas=document.createElement('canvas');canvas.width=40;canvas.height=30;const context=canvas.getContext('2d')!;context.clearRect(0,0,40,30);context.fillStyle='#ff0000';context.fillRect(10,10,10,10);
+   const encode=(type:string)=>new Promise<Blob>((resolve,reject)=>canvas.toBlob(value=>value?resolve(value):reject(new Error('cannot encode '+type)),type));
+   const files=[new File([await encode('image/png')],'alpha.png',{type:'image/png'}),new File([await encode('image/jpeg')],'photo.jpg',{type:'image/jpeg'}),new File([await encode('image/webp')],'shot.webp',{type:'image/webp'})];
+   files.push(new File([Uint8Array.from(atob('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'),character=>character.charCodeAt(0))],'tiny.gif',{type:'image/gif'}));
+   // 2×2 24-bit BMP, bottom-up rows padded to 4 bytes.
+   const bmp=new Uint8Array(70),header=new DataView(bmp.buffer);bmp.set([66,77],0);header.setUint32(2,70,true);header.setUint32(10,54,true);header.setUint32(14,40,true);header.setInt32(18,2,true);header.setInt32(22,2,true);header.setUint16(26,1,true);header.setUint16(28,24,true);header.setUint32(34,16,true);bmp.set([0,0,255,0,0,255],54);bmp.set([0,0,255,0,0,255],62);
+   files.push(new File([bmp],'tiny.bmp',{type:'image/bmp'}));
+   const output=await imagePagesPdf(files,()=>{}),pdf=await loadPdf(await output.arrayBuffer());
+   try{assert(pdf.numPages===5,'page-image import lost formats: '+pdf.numPages);const sizes:number[][]=[];for(let page=1;page<=5;page++){const viewport=(await pdf.getPage(page)).getViewport({scale:1});sizes.push([Math.round(viewport.width),Math.round(viewport.height)]);}
+    assert(JSON.stringify(sizes)===JSON.stringify([[40,30],[40,30],[40,30],[1,1],[2,2]]),'page-image sizes changed '+JSON.stringify(sizes));
+    const scale=10,page=await pdf.getPage(1),viewport=page.getViewport({scale}),surface=document.createElement('canvas');surface.width=viewport.width;surface.height=viewport.height;await page.render({canvasContext:surface.getContext('2d'),viewport}).promise;
+    const corner=surface.getContext('2d').getImageData(0,0,1,1).data;assert(corner[0]===255&&corner[1]===255&&corner[2]===255&&corner[3]===255,'transparent PNG was not composited on white: '+Array.from(corner));surface.width=surface.height=0;
+   }finally{await pdf.destroy();}
+   assert(!isPageImage(new File([new Uint8Array(2)],'camera.heic')),'HEIC is still accepted although it cannot be decoded');
+  });
+
+  await test('Complex PDF export keeps page text, native link/highlight annotations and the form appearance widget',async()=>{
+   const pdf=await PDFDocument.create(),font=await pdf.embedFont(StandardFonts.Helvetica);
+   const page1=pdf.addPage([500,700]),page2=pdf.addPage([500,700]);
+   page1.drawText('COMPLEX SOURCE ONE',{x:60,y:620,font,size:20});page2.drawText('COMPLEX TARGET TWO',{x:60,y:620,font,size:20});
+   const linkRef=pdf.context.register(pdf.context.obj({Type:'Annot',Subtype:'Link',Rect:[60,560,300,580],Border:[0,0,0],A:{Type:'Action',S:'URI',URI:PDFString.of('https://example.com/complex')}}));
+   const highlightRef=pdf.context.register(pdf.context.obj({Type:'Annot',Subtype:'Highlight',Rect:[60,480,300,500],QuadPoints:[60,500,300,500,60,480,300,480],C:[1,1,0],Contents:PDFString.of('native highlight')}));
+   page1.node.set(PDFName.of('Annots'),pdf.context.obj([linkRef,highlightRef]));
+   const dest=pdf.context.obj([page1.ref,PDFName.of('XYZ'),PDFNumber.of(0),PDFNumber.of(700),PDFNumber.of(0)]);
+   const internalRef=pdf.context.register(pdf.context.obj({Type:'Annot',Subtype:'Link',Rect:[60,300,300,320],Dest:dest}));
+   page2.node.set(PDFName.of('Annots'),pdf.context.obj([internalRef]));
+   const form=pdf.getForm(),field=form.createTextField('student.name');field.setText('Ada');field.addToPage(page2,{x:60,y:100,width:200,height:24});
+   const outlinesRef=pdf.context.nextRef();
+   const item2Ref=pdf.context.register(pdf.context.obj({Title:PDFString.of('Chapter 2'),Parent:outlinesRef,Dest:[page2.ref,PDFName.of('Fit')]}));
+   const item1Ref=pdf.context.register(pdf.context.obj({Title:PDFString.of('Chapter 1'),Parent:outlinesRef,Next:item2Ref,Dest:[page1.ref,PDFName.of('Fit')]}));
+   pdf.context.assign(outlinesRef,pdf.context.obj({Type:'Outlines',First:item1Ref,Last:item2Ref,Count:2}));
+   pdf.catalog.set(PDFName.of('Outlines'),outlinesRef);
+   const path='complex-source.pdf';add(path,{bytes:(await pdf.save()).slice().buffer});
+   const view=new ReaderView({app} as any,plugin());await view.onOpen();
+   try{await view.loadFileByPath(path);const bytes=await (view as any).exportEditedPdf({includeAnnotations:false});const out=await PDFDocument.load(bytes);
+    const annots=(page:any)=>{const a=page.node.lookupMaybe(PDFName.of('Annots'),PDFArray);if(!a)return [];const r:any[]=[];for(let i=0;i<a.size();i++){const item=a.lookup(i);r.push(String(item.get(PDFName.of('Subtype'))));}return r;};
+    const viewer=await loadPdf(bytes.slice().buffer);const vp=await viewer.getPage(1);const text1=(await vp.getTextContent()).items.map((x:any)=>x.str).join('').includes('COMPLEX SOURCE ONE');await viewer.destroy();
+    assert(out.getPageCount()===2&&text1,'complex export lost a page or selectable text');
+    const page1Kinds=annots(out.getPage(0));assert(page1Kinds.includes('/Link')&&page1Kinds.includes('/Highlight'),'native link/highlight annotations were dropped: '+JSON.stringify(page1Kinds));
+    const page2Kinds=annots(out.getPage(1));assert(page2Kinds.includes('/Link')&&page2Kinds.includes('/Widget'),'page two native link or form appearance widget was dropped: '+JSON.stringify(page2Kinds));
+    assert(out.getForm().getTextField('student.name').getText()==='Ada','export lost registered form field/value');
+    const widgetEdit=await PDFDocument.load(bytes);widgetEdit.getForm().getTextField('student.name').acroField.getWidgets()[0].dict.set(PDFName.of('V'),PDFString.of('Widget editor value'));assert((await PDFDocument.load(await widgetEdit.save({updateFieldAppearances:false}))).getForm().getTextField('student.name').getText()==='Widget editor value','single-widget editor leaves stale canonical parent value');
+    out.getForm().getTextField('student.name').setText('Grace');const reopened=await PDFDocument.load(await out.save());assert(reopened.getForm().getTextField('student.name').getText()==='Grace','form value did not survive save/reopen');
+    const interactive=await loadPdf(bytes.slice().buffer);try{
+     const links=await(await interactive.getPage(2)).getAnnotations();const internal=links.find((x:any)=>x.dest);assert(internal&&await interactive.getPageIndex(internal.dest[0])===0,'internal link does not reach exported page one');
+     const outline=await interactive.getOutline();assert(outline?.length===2&&await interactive.getPageIndex(outline[1].dest[0])===1,'outline destinations were lost');
+     const external=(await(await interactive.getPage(1)).getAnnotations()).find((x:any)=>x.url);assert(external?.url==='https://example.com/complex','external URI changed');
+    }finally{await interactive.destroy();}
+   }finally{await view.onClose();view.containerEl.remove();}
+  });
+  await test('Interactive export rebinds named links after reorder, prunes excluded targets and keeps shared widgets, hierarchy and imported field names',async()=>{
+   const pdf=await PDFDocument.create(),font=await pdf.embedFont(StandardFonts.Helvetica),pages=[1,2,3].map(n=>{const p=pdf.addPage([500,700]);p.drawText('INTERACTIVE PAGE '+n,{x:60,y:620,font,size:20});return p;});
+   const destination=pdf.context.obj([pages[0].ref,PDFName.of('Fit')]);
+   pdf.catalog.set(PDFName.of('Names'),pdf.context.obj({Dests:{Names:[PDFString.of('home'),destination]}}));
+   const good=pdf.context.register(pdf.context.obj({Type:'Annot',Subtype:'Link',Rect:[60,500,300,530],A:{S:'GoTo',D:PDFString.of('home')}}));
+   const deleted=pdf.context.register(pdf.context.obj({Type:'Annot',Subtype:'Link',Rect:[60,450,300,480],Dest:[pages[1].ref,PDFName.of('Fit')]}));
+   pages[2].node.set(PDFName.of('Annots'),pdf.context.obj([good,deleted]));
+   const form=pdf.getForm(),field=form.createTextField('student.name');field.setText('Ada');field.addToPage(pages[0],{x:60,y:100,width:200,height:24});field.addToPage(pages[2],{x:60,y:100,width:200,height:24});
+   const check=form.createCheckBox('accepted');check.addToPage(pages[0],{x:300,y:100,width:24,height:24});check.check();
+   const root=pdf.context.nextRef(),parent=pdf.context.nextRef(),child=pdf.context.register(pdf.context.obj({Title:PDFString.of('Kept child'),Parent:parent,Dest:[pages[0].ref,PDFName.of('Fit')]}));
+   pdf.context.assign(parent,pdf.context.obj({Title:PDFString.of('Deleted parent target'),Parent:root,Dest:[pages[1].ref,PDFName.of('Fit')],First:child,Last:child,Count:1}));
+   pdf.context.assign(root,pdf.context.obj({Type:'Outlines',First:parent,Last:parent,Count:2}));pdf.catalog.set(PDFName.of('Outlines'),root);
+   const input=(await pdf.save()).slice().buffer,path='interactive-edits.pdf';add(path,{bytes:input});const view=new ReaderView({app} as any,plugin());await view.onOpen();
+   try{await view.loadFileByPath(path);await view.movePdfPage(3,1);await view.removePdfPage(3);await view.insertBlankPage(1);
+    const bytes=await (view as any).exportEditedPdf({includeAnnotations:false}),out=await PDFDocument.load(bytes),viewer=await loadPdf(bytes.slice().buffer);
+    try{const link=(await(await viewer.getPage(1)).getAnnotations()).find((x:any)=>x.dest);assert(link&&await viewer.getPageIndex(link.dest[0])===2,'named link ignored reordered destination');assert((await(await viewer.getPage(1)).getAnnotations()).filter((x:any)=>x.subtype==='Link').length===1,'deleted target link was left dangling');
+     const outline=await viewer.getOutline();assert(outline?.[0].items.length===1&&await viewer.getPageIndex(outline[0].items[0].dest[0])===2&&!outline[0].dest,'outline hierarchy/selected target pruning failed');
+     assert(out.getForm().getTextField('student.name').acroField.getWidgets().length===2&&out.getForm().getCheckBox('accepted').isChecked(),'shared form widget or checkbox state lost');
+     out.getForm().getTextField('student.name').setText('Grace');const reread=await PDFDocument.load(await out.save());assert(reread.getForm().getTextField('student.name').getText()==='Grace','shared field cannot save new value');
+    }finally{await viewer.destroy();}
+    const subset=await (view as any).exportEditedPdf({pages:[1],includeAnnotations:false}),one=await loadPdf(subset.slice().buffer);try{assert(!(await(await one.getPage(1)).getAnnotations()).some((x:any)=>x.subtype==='Link'),'subset kept dead links');assert((await PDFDocument.load(subset)).getForm().getTextField('student.name').acroField.getWidgets().length===1,'subset retained unexported widget');}finally{await one.destroy();}
+    await view.insertPdfPages(3,new File([input],'second.pdf'),[1,3]);const combined=await PDFDocument.load(await (view as any).exportEditedPdf({includeAnnotations:false}));
+    const names=combined.getForm().getFields().map((x:any)=>x.getName());assert(names.includes('student.name')&&names.includes('student (2).name')&&names.length===4,'imported field collisions lost data: '+names);
+    assert(new Uint8Array(await app.vault.readBinary(app.vault.getAbstractFileByPath(path))).every((x,i)=>x===new Uint8Array(input)[i]),'interactive export mutated source bytes');
+   }finally{await view.onClose();view.containerEl.remove();}
+  });
+
+}

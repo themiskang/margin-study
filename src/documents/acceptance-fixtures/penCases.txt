@@ -1,0 +1,121 @@
+import { PenController } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/annot/pen';
+import { eraseInk, selectInk, transformSelectedInk } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/annot/penGeometry';
+import { ReaderView } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/readerView';
+import { ReaderView as RealReaderView } from 'marginstudy-real-reader';
+import { PDFDocument } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/node_modules/pdf-lib/es/index.js';
+import { loadPdf } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/pdfjs';
+
+function pointer(overlay:SVGSVGElement,host:HTMLElement,type:string,x:number,y:number,extra:any={}){
+ const bounds=host.getBoundingClientRect();overlay.dispatchEvent(new PointerEvent(type,{clientX:bounds.left+x*bounds.width,clientY:bounds.top+y*bounds.height,pointerId:1,button:0,isPrimary:true,bubbles:true,...extra}));
+}
+function drag(overlay:SVGSVGElement,host:HTMLElement,points:number[][]){pointer(overlay,host,'pointerdown',...points[0] as [number,number]);for(const [x,y] of points.slice(1))pointer(overlay,host,'pointermove',x,y);pointer(overlay,host,'pointerup',...points[points.length-1] as [number,number]);}
+async function makePdf(pages=1){const pdf=await PDFDocument.create();for(let i=0;i<pages;i++)pdf.addPage([500,700]);return (await pdf.save()).slice().buffer;}
+function pageHost(view:any,page=1){return view.getPageRecord(page).wrapper as HTMLElement;}
+function temporaryPaths(host:HTMLElement){return host.querySelectorAll('[data-ms-temporary-ink] path');}
+function openVanishPen(view:any,assert:any){
+ const penButton=view.getReaderToolbar().querySelector<HTMLButtonElement>('button[aria-label="手写画笔"]');assert(penButton,'handwriting toolbar entry is absent');
+ penButton.dispatchEvent(new MouseEvent('dblclick',{bubbles:true}));assert(view.getHandwritingMode()==='pen','handwriting toolbar did not activate the pen');
+ const toggle=document.querySelector<HTMLButtonElement>('button[aria-label="消失笔"]');assert(!!toggle,'vanish pen setting is not reachable through document handwriting settings');
+ if(toggle.getAttribute('aria-checked')!=='true')toggle.click();
+ assert(toggle.getAttribute('aria-checked')==='true','vanish pen setting did not turn on');
+ return {overlay:pageHost(view).querySelector<SVGSVGElement>('.ms-pen-overlay')!,toggle};
+}
+function closeHandwritingSettings(){document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));}
+async function openReader(path:string,p:any){const view:any=new RealReaderView({app:p.app} as any,p);await view.onOpen();await view.loadFileByPath(path);await view.renderPage(1);return view;}
+async function drawPermanent(view:any,p:any,points:number[][],wait:any){
+ view.setHandwritingMode('pen');const host=pageHost(view),overlay=host.querySelector<SVGSVGElement>('.ms-pen-overlay')!;drag(overlay,host,points);await wait(20);view.setHandwritingMode('off');await p.store.flush();
+}
+export async function runPenAcceptance({test,assert,wait,plugin,add,app,htmlController}:any){
+ await test('Stylus captures pressure and renders variable width; legacy and mouse ink stay uniform',()=>{
+  const host=document.createElement('div');host.style.cssText='width:400px;height:200px;position:relative';document.querySelector('#fixtures')!.append(host);let saved:any;
+  const pen=new PenController(host,{getColor:()=>'red',onCommit:strokes=>saved=strokes});pen.setActive(true);const overlay=host.querySelector('svg')!;
+  pointer(overlay,host,'pointerdown',.1,.2,{pointerType:'pen',pressure:.1});pointer(overlay,host,'pointermove',.3,.3,{pointerType:'pen',pressure:.9});pointer(overlay,host,'pointermove',.4,.4,{pointerType:'pen',pressure:.9});pointer(overlay,host,'pointerup',.4,.4,{pointerType:'pen',pressure:0});
+  assert(Math.abs(saved[0][0].pressure-.1)<1e-6&&saved[0][1].pressure>.89,'pressure not captured');
+  const rendered=document.createElement('div');PenController.render(rendered,saved,400,200,'red');const paths=rendered.querySelectorAll('path');assert(paths.length===2&&paths[0].style.strokeWidth!==paths[1].style.strokeWidth,'pressure not rendered');
+  PenController.render(rendered,[[{x:.1,y:.1},{x:.2,y:.2}]],400,200,'red');assert(!rendered.querySelectorAll('svg')[1].querySelector('path')!.style.strokeWidth,'legacy width changed');
+  drag(overlay,host,[[.2,.2],[.4,.2]]);assert(saved[0].every((point:any)=>point.pressure===undefined),'mouse invented pressure');pen.destroy();host.remove();
+ });
+ await test('Preset width scales live stylus pressure exactly like saved ink and legacy markers retain their defaults',()=>{
+  const host=document.createElement('div');host.style.cssText='width:400px;height:200px;position:relative';document.querySelector('#fixtures')!.append(host);let saved:any,width:any;
+  const pen=new PenController(host,{getColor:()=>'#123456',getWidth:()=>9,getOpacity:()=>.5,onCommit:(strokes,_brush,w)=>{saved=strokes;width=w;}});pen.setActive(true);const overlay=host.querySelector('svg')!;
+  try{pointer(overlay,host,'pointerdown',.1,.2,{pointerType:'pen',pressure:.4});pointer(overlay,host,'pointermove',.5,.2,{pointerType:'pen',pressure:.4});const live=Number(overlay.querySelector('path')!.style.strokeWidth);assert(Math.abs(live-8.4)<.01,'live pressure ignored preset width: '+live);pointer(overlay,host,'pointerup',.5,.2,{pointerType:'pen',pressure:0});const rendered=document.createElement('div');PenController.render(rendered,saved,400,200,'#123456','pen',width,.5);assert(Math.abs(Number(rendered.querySelector('path')!.style.strokeWidth)-live)<.01,'live and saved pressure widths differ');PenController.render(rendered,[[{x:.1,y:.2},{x:.5,y:.2}]],400,200,'#ffff00','highlight');const old=rendered.querySelectorAll('svg')[1];assert(old.style.opacity==='0.32'&&old.querySelector('path')!.style.strokeWidth==='16','legacy marker defaults changed');}finally{pen.destroy();host.remove();}
+ });
+ await test('Pen eraser and lasso intersect sparse segments; moving a group clamps without distorting ink',()=>{
+  const strokes=[[{x:.1,y:.2,pressure:.2},{x:.8,y:.2,pressure:.8}],[{x:.1,y:.7},{x:.8,y:.7}]],records=[{id:'ink',strokes}];
+  const erased=eraseInk(records,[{x:.5,y:0},{x:.5,y:.4}],400,200);assert(erased.length===1&&erased[0].after.length===1&&erased[0].after[0][0].y===.7,'sparse crossing not erased or wrong stroke erased');
+  const selected=selectInk(records,[{x:.4,y:.1},{x:.6,y:.1},{x:.6,y:.3},{x:.4,y:.3}]);assert(selected[0].indexes.join(',')==='0','sparse crossing not selected');
+  const moved=transformSelectedInk(records,selected,{x:.9,y:.1});const after=moved[0].after[0];assert(Math.abs(after[1].x-1)<1e-8&&Math.abs(after[1].x-after[0].x-.7)<1e-8&&after[0].pressure===.2,'clamp distorted ink or lost pressure');
+  assert(transformSelectedInk(records,selected,null)[0].after.length===1,'delete selected removed other ink');
+ });
+ await test('HTML pen edits persist across split views, undo/redo, lasso move/delete and preserve source IDs',async()=>{
+  const p=plugin(),a=htmlController(p,'edit.html'),b=htmlController(p,'edit.html');await a.load();await b.load();a.body.style.cssText='position:relative;width:400px;height:300px';b.body.style.cssText=a.body.style.cssText;
+  a.ann.createPenAnnotation([[{x:.1,y:.2,pressure:.2},{x:.3,y:.2,pressure:.8}],[{x:.6,y:.7},{x:.8,y:.7}]]);const ann=(await p.store.loadAnnotations('edit.html'))[0],id=ann.id;p.store.cards.push({id:'ink-card',anchorAnnId:id});
+  a.ann.selectPenTool('erase');let overlay=a.body.querySelector('.ms-pen-overlay');drag(overlay,a.body,[[.2,.15],[.2,.25]]);
+  assert(ann.strokes.length===1&&b.body.querySelectorAll('.ms-pen-render path').length===1,'erase not persisted/shared');
+  a.ann.undoPenChange();assert(ann.strokes.length===2,'erase undo');a.ann.redoPenChange();assert(ann.strokes.length===1,'erase redo');a.ann.undoPenChange();
+  a.ann.selectPenTool('select');overlay=a.body.querySelector('.ms-pen-overlay');drag(overlay,a.body,[[.05,.1],[.4,.1],[.4,.3],[.05,.3],[.05,.1]]);
+  assert(overlay.querySelector('.ms-pen-selection'),'lasso selection absent');drag(overlay,a.body,[[.2,.2],[.3,.35]]);
+  assert(Math.abs(ann.strokes[0][0].x-.2)<1e-6&&Math.abs(ann.strokes[0][0].y-.35)<1e-6&&ann.strokes[1][0].x===.6,'lasso move wrong group');
+  overlay.dispatchEvent(new KeyboardEvent('keydown',{key:'Delete',bubbles:true,cancelable:true}));assert(ann.strokes.length===1&&ann.strokes[0][0].x===.6,'lasso Delete wrong strokes');
+  a.ann.undoPenChange();assert(ann.strokes.length===2&&ann.strokes[0][0].pressure===.2,'delete undo lost pressure');
+  assert(ann.id===id&&p.store.cards[0].anchorAnnId===id,'source identity changed');
+  ann.strokes[0][0].x=.9;const before=JSON.stringify(ann.strokes);a.ann.undoPenChange();assert(JSON.stringify(ann.strokes)===before,'undo overwrote another view edit');
+  await a.close();await b.close();
+ });
+ await test('PDF pen edits are page scoped, survive zoom and reload, and empty ink does not block text',async()=>{
+  add('ink.pdf',{name:'Ink',pages:2});const p=plugin();const v:any=new ReaderView({app} as any,p);await v.onOpen();await v.loadFileByPath('ink.pdf');await v.renderPage(2);
+  const controller=v.annController;controller.createPenAnnotation(1,[[{x:.2,y:.2,pressure:.2},{x:.4,y:.2,pressure:.9}]]);controller.createPenAnnotation(2,[[{x:.2,y:.2},{x:.4,y:.2}]]);
+  controller.selectPenTool('erase');const host=v.getPageRecord(1).wrapper,overlay=host.querySelector('.ms-pen-overlay');drag(overlay,host,[[.3,.15],[.3,.25]]);
+  let anns=await p.store.loadAnnotations('ink.pdf');assert(anns[0].strokes.length===0&&anns[1].strokes.length===1,'eraser crossed PDF page: '+JSON.stringify({ink:anns.map((ann:any)=>({page:ann.page,strokes:ann.strokes})),tool:overlay?.dataset.tool,host:host.getBoundingClientRect().toJSON()}));
+  assert(!v.getPageRecord(1).annLayer.querySelector('.ms-ann-pen'),'empty ink overlay retained');controller.undoPenChange();
+  v.visiblePages.add(1);v.visiblePages.add(2);v.setScale(2);await v.renderPage(1);await v.renderPage(2);assert(v.getPageRecord(1).annLayer.querySelector('path').style.strokeWidth,'pressure lost on zoom');
+  const id=anns[0].id;await v.onClose();const reopened:any=new ReaderView({app} as any,p);await reopened.onOpen();await reopened.loadFileByPath('ink.pdf');anns=await p.store.loadAnnotations('ink.pdf');
+  assert(anns[0].id===id&&anns[0].strokes[0][0].pressure===.2&&reopened.getPageRecord(1).annLayer.querySelector('path'),'reload lost ink');
+  assert(getComputedStyle(reopened.getPageRecord(1).annLayer.querySelector('.ms-ann-pen')).pointerEvents==='none','ink container blocks reading');await reopened.onClose();
+ });
+ await test('[G1-A INK-01] Existing permanent ink survives persistence and a real-PDF reader reopen',async()=>{
+  const path='g1-ink-01-permanent.pdf';add(path,{bytes:await makePdf()});const p=plugin();let view=await openReader(path,p);
+  try{view.setActiveHandwritingPreset('pen-2');await drawPermanent(view,p,[[.15,.55],[.55,.55]],wait);const saved=(await p.store.loadAnnotations(path))[0];assert(saved?.type==='pen'&&saved.strokes?.length===1&&saved.inkWidth===2.6&&saved.inkPreset==='pen-2','normal pen width was not persisted');
+   const id=saved.id;await view.onClose();view.containerEl.remove();view=await openReader(path,p);const reopened=(await p.store.loadAnnotations(path))[0],rendered=pageHost(view).querySelector('.ms-ann-pen path');
+   assert(reopened.id===id&&reopened.strokes?.[0]?.[0]?.x===saved.strokes[0][0].x&&reopened.inkWidth===2.6,'real-PDF reopen lost the permanent annotation or pen width');assert(rendered&&rendered.style.strokeWidth==='2.6','real-PDF reopen did not render the second pen width');assert(!temporaryPaths(pageHost(view)).length,'reopen invented temporary ink');
+  }finally{await view.onClose();view.containerEl.remove();closeHandwritingSettings();}
+ });
+ await test('[G1-A INK-02] Vanish ink is visible at once, stays out of document data, and expires without removing permanent ink',async()=>{
+  const path='g1-ink-02-expiry.pdf';add(path,{bytes:await makePdf()});const p=plugin(),view=await openReader(path,p);
+  try{await drawPermanent(view,p,[[.15,.7],[.55,.7]],wait);const before=JSON.stringify(await p.store.loadAnnotations(path)),host=pageHost(view),{overlay}=openVanishPen(view,assert);assert(!temporaryPaths(host).length,'temporary ink existed before drawing');
+   drag(overlay,host,[[.2,.3],[.55,.3]]);await wait(10);assert(temporaryPaths(host).length===1,'vanish stroke is not visible immediately');assert(JSON.stringify(await p.store.loadAnnotations(path))===before,'vanish stroke was written as permanent document data');assert(host.querySelector('.ms-ann-pen path'),'existing permanent ink disappeared when vanish pen was enabled');
+   await wait(4200);assert(!temporaryPaths(host).length,'vanish stroke did not clear after about four seconds');assert(host.querySelector('.ms-ann-pen path'),'temporary expiry removed permanent ink');await p.store.flush();assert(JSON.stringify(await p.store.loadAnnotations(path))===before,'vanish stroke changed document data after expiry');
+  }finally{await view.onClose();view.containerEl.remove();closeHandwritingSettings();}
+ });
+ await test('[G1-A INK-03] Multiple vanish strokes keep independent four-second expiry timers',async()=>{
+  const path='g1-ink-03-multiple.pdf';add(path,{bytes:await makePdf()});const p=plugin(),view=await openReader(path,p);
+  try{const host=pageHost(view),{overlay}=openVanishPen(view,assert);drag(overlay,host,[[.1,.25],[.4,.25]]);await wait(1500);drag(overlay,host,[[.1,.45],[.4,.45]]);assert(temporaryPaths(host).length===2,'multiple vanish strokes are not visible together');
+   await wait(2700);assert(temporaryPaths(host).length===1,'first vanish stroke did not expire independently');await wait(1500);assert(!temporaryPaths(host).length,'second vanish stroke did not keep its own later expiry');assert(!(await p.store.loadAnnotations(path)).length,'multiple vanish strokes leaked into permanent data');
+  }finally{await view.onClose();view.containerEl.remove();closeHandwritingSettings();}
+ });
+ await test('[G1-A INK-04] Switching documents clears visible vanish ink and keeps each PDF permanent ink isolated',async()=>{
+  const first='g1-ink-04-first.pdf',second='g1-ink-04-second.pdf';add(first,{bytes:await makePdf()});add(second,{bytes:await makePdf()});const p=plugin(),view=await openReader(first,p);
+  try{await drawPermanent(view,p,[[.15,.65],[.55,.65]],wait);const firstBefore=JSON.stringify(await p.store.loadAnnotations(first)),host=pageHost(view),{overlay}=openVanishPen(view,assert);drag(overlay,host,[[.2,.3],[.55,.3]]);assert(temporaryPaths(host).length===1,'temporary ink was not visible before document switch');
+   await view.loadFileByPath(second);await view.renderPage(1);assert(!temporaryPaths(pageHost(view)).length&&!pageHost(view).querySelector('.ms-ann-pen path'),'vanish or permanent ink followed the reader into another PDF');assert(!(await p.store.loadAnnotations(second)).length,'temporary ink became permanent in the destination PDF');await view.loadFileByPath(first);await view.renderPage(1);assert(!temporaryPaths(pageHost(view)).length&&pageHost(view).querySelector('.ms-ann-pen path'),'switching back restored temporary ink or lost permanent ink');assert(JSON.stringify(await p.store.loadAnnotations(first))===firstBefore,'document switch changed permanent source ink');
+  }finally{await view.onClose();view.containerEl.remove();closeHandwritingSettings();}
+ });
+ await test('[G1-A INK-05] Closing the reader while vanish ink is visible removes it and reopening restores no temporary content',async()=>{
+  const path='g1-ink-05-close.pdf';add(path,{bytes:await makePdf()});const p=plugin();let view=await openReader(path,p);
+  try{const host=pageHost(view),{overlay}=openVanishPen(view,assert);drag(overlay,host,[[.2,.3],[.55,.3]]);assert(temporaryPaths(host).length===1&&overlay.isConnected,'temporary ink was not visible before close');await view.onClose();assert(!overlay.isConnected&&!temporaryPaths(host).length,'closing the reader left temporary ink connected');assert(!(await p.store.loadAnnotations(path)).length,'closing persisted temporary ink');view.containerEl.remove();view=await openReader(path,p);assert(!temporaryPaths(pageHost(view)).length,'reopening rendered vanished ink');
+  }finally{await view.onClose();view.containerEl.remove();closeHandwritingSettings();}
+ });
+ await test('[G1-A INK-06] Public PDF export started while vanish ink is visible renders permanent ink and omits temporary lines',async()=>{
+  const path='g1-ink-06-export.pdf';add(path,{bytes:await makePdf()});const p=plugin(),view=await openReader(path,p);
+  const until=async(check:()=>any)=>{for(let i=0;i<600&&!check();i++)await wait(10);assert(check(),'PDF export UI did not reach the expected state');};
+  try{await drawPermanent(view,p,[[.15,.5],[.55,.5]],wait);const host=pageHost(view),{overlay}=openVanishPen(view,assert);drag(overlay,host,[[.15,.25],[.55,.25]]);assert(temporaryPaths(host).length===1,'temporary export probe line is not visible');
+   const exportAtSeam=view.exportEditedPdf.bind(view);let exportSawTemporary=false;view.exportEditedPdf=async(options:any)=>{exportSawTemporary=!!temporaryPaths(host).length;return exportAtSeam(options);};
+   view.openPdfExport();const exportButton=document.querySelector<HTMLButtonElement>('[aria-label="Export Selected Pages"]');assert(exportButton&&!exportButton.disabled,'public PDF export did not open with a selected page');exportButton.click();const pdfButton=document.querySelector<HTMLButtonElement>('[aria-label="Export as PDF"]');assert(pdfButton,'PDF format action is absent');pdfButton.click();
+   await until(()=>document.querySelector('[aria-label="Save PDF"]'));assert(exportSawTemporary,'PDF export reached its seam only after temporary ink had expired');const savePanel=document.querySelector<HTMLElement>('[aria-label="Save PDF"]')!;Array.from(savePanel.querySelectorAll('button')).find(button=>button.textContent==='Save')!.click();await until(()=>!savePanel.isConnected);
+   const file=app.vault.getAbstractFileByPath('MarginStudyExports/g1-ink-06-export_Flatten.pdf');assert(file,'public PDF export UI did not save a real PDF');const output=await loadPdf(await app.vault.readBinary(file));
+   try{assert(output.numPages===1,'exported PDF page count changed');const page=await output.getPage(1),viewport=page.getViewport({scale:1}),canvas=document.createElement('canvas');canvas.width=viewport.width;canvas.height=viewport.height;await page.render({canvasContext:canvas.getContext('2d')!,viewport}).promise;const context=canvas.getContext('2d')!;
+    const painted=(y:number)=>{const data=context.getImageData(80,y-4,360,9).data;let count=0;for(let i=0;i<data.length;i+=4)if(data[i+3]&&(data[i]<245||data[i+1]<245||data[i+2]<245))count++;return count;};
+    assert(painted(350)>30,'exported PDF did not render the permanent line');assert(painted(175)===0,'exported PDF rendered the temporary vanish line');
+   }finally{await output.destroy();}
+  }finally{await view.onClose();view.containerEl.remove();closeHandwritingSettings();}
+ });
+}

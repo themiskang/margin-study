@@ -1,0 +1,55 @@
+import { setIcon } from "obsidian";
+// Locally drawn toolbar glyphs, sized against the desktop reference screenshots.
+const glyphs: Record<string, string> = {
+  "bottom-writing": '<path d="M7 20.5 9.1 9.2h5.8L17 20.5"/><path d="m9.1 9.2 2.9-6.7 2.9 6.7Z" fill="currentColor" stroke="none"/>',
+  "bottom-pen": '<path d="m8 21 1.6-11h4.8L16 21M9.6 10 12 2l2.4 8M10.1 7.8h3.8"/><path d="m11.2 4.5.8-2.5.8 2.5Z" fill="currentColor" stroke="none"/>',
+  "bottom-more": '<path d="m9 5 5 7-5 7" stroke-width="2.4"/>',
+  "bottom-hierarchy": '<path d="M6 6h16M6 12h12M6 18h16"/><circle cx="2" cy="6" r=".9" fill="currentColor" stroke="none"/><circle cx="2" cy="12" r=".9" fill="currentColor" stroke="none"/><circle cx="2" cy="18" r=".9" fill="currentColor" stroke="none"/><path d="m29 10 4 4 4-4" stroke-width="1.5"/>',
+  "bottom-reset": '<path d="M5.1 7.4a8 8 0 0 1 14.6 3.3M18.9 16.6A8 8 0 0 1 4.3 13.3"/><path d="m16.3 9.3 3.9 5.1 3.3-5.6Z M7.7 14.7l-3.9-5.1-3.3 5.6Z" fill="currentColor" stroke="none"/>',
+  "bottom-highlighter": '<path d="m6.8 14.6 9.4-10 4.1 3.8-9.5 10-4-3.8ZM14 7l4.1 3.8M6.8 14.6l-2 5 6-1.2M3 22h19"/><path d="m4.8 19.6 1.1-2.7 2.1 2Z" fill="currentColor" stroke="none"/>',
+  "bottom-lasso": '<path d="M20.6 10.3c0 4-4.2 6.1-8.6 6.1s-8.6-2.1-8.6-6.1S7.6 3.7 12 3.7s8.6 2.6 8.6 6.6Z"/><path d="M15 16.2c-1.6 1.1-3.2 1.2-3.6-.1-.6-2 2.1-3.5 4-2.7 2.9 1.1 1.6 5-1.5 6.4"/>',
+  "bottom-hand": '<path d="M7.5 12V5a1.3 1.3 0 0 1 2.6 0v6-8a1.3 1.3 0 0 1 2.6 0v8-6.9a1.3 1.3 0 0 1 2.6 0v7.6-5a1.3 1.3 0 0 1 2.6 0v7.7l1.6-2.6a1.3 1.3 0 0 1 2.2 1.4l-3 6.2a5.8 5.8 0 0 1-5.2 3.1h-1.1a5.6 5.6 0 0 1-4.9-2.8L3.4 13a1.3 1.3 0 0 1 2.1-1.6l2 2.6"/>',
+  "bottom-undo": '<path d="m9 4-5 5 5 5M4 9h10a6 6 0 0 1 0 12h-3"/>',
+  "bottom-redo": '<path d="m15 4 5 5-5 5M20 9H10a6 6 0 0 0 0 12h3"/>',
+  "bottom-hint": '<path d="M8 15.5c0-2-3-3.5-3-7a7 7 0 1 1 14 0c0 3.5-3 5-3 7v2H8ZM9 20h6m-5 2h4"/>',
+  "bottom-hint-on": '<path d="M8 15.5c0-2-3-3.5-3-7a7 7 0 1 1 14 0c0 3.5-3 5-3 7v2H8Z" fill="currentColor"/><path d="M9 20h6m-5 2h4"/>',
+  "bottom-recall": '<path d="M14.1 3.2c3.8 0 6.4 2.8 6.4 6.2 0 1.8-.5 3.3-1.8 4.8v2.2c0 1.1-1 2-2.2 2H12v2.2H8.8v-2.4c-1.4-.6-2.6-1.5-3.5-2.7l-1.8.5c-.8.2-1.4-.7-.9-1.4l1.7-2.2c-.2-.8-.3-1.5-.3-2.3 0-2.4 1.4-4.6 3.6-5.6.5-1.5 2.1-2.3 3.7-1.7.8-.5 1.9-.3 2.8.4Z"/><path d="M8.5 9.2c.6-1.4 2-1.9 3.1-1.2.8-.8 2.2-.5 2.6.5.8.1 1.4.8 1.3 1.6.7.6.6 1.7-.2 2.1-.1 1-1 1.6-2 1.4-.5.7-1.5.8-2.2.3-.6.4-1.5.2-1.8-.4-.9 0-1.5-.7-1.4-1.5-.5-.6-.4-1.6.3-2.1Z" stroke-width="1.25"/><circle cx="10.5" cy="9.4" r=".7" fill="currentColor" stroke="none"/><circle cx="13.6" cy="10.2" r=".7" fill="currentColor" stroke="none"/><circle cx="11.5" cy="12" r=".7" fill="currentColor" stroke="none"/><path d="m10.5 9.4 1 2.6 2.1-1.8M11.5 12l1.1 2.3" stroke-width=".9"/>',
+  "bottom-title-link": '<path d="M5.3 4.5h13.4a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-8l-3.7 3v-3H5.3a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2Z"/><path d="m9.1 14 3-6.4 3 6.4M10.2 11.8H14" stroke-width="1.45"/>',
+  "bottom-title-link-on": '<path d="M5.3 4.5h13.4a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-8l-3.7 3v-3H5.3a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2Z" fill="currentColor"/><path d="m9.1 14 3-6.4 3 6.4M10.2 11.8H14" stroke="var(--background)" stroke-width="1.45"/>',
+  "bottom-blocks": '<rect x="3" y="5" width="18" height="6" rx="1"/><rect x="3" y="13" width="18" height="6" rx="1"/>',
+  "book-open": '<path d="M12 5v15M12 5C9 3.5 5 3.5 2 4v15c3-.5 7-.5 10 1 3-1.5 7-1.5 10-1V4c-3-.5-7-.5-10 1Z"/>',
+  brain: '<path d="M9.5 4.2A3.2 3.2 0 0 0 4 6.8a3.3 3.3 0 0 0 .3 6.1A3.5 3.5 0 0 0 8 18.2c.5 1.1 1.4 1.8 2.7 1.8V6.5c0-1-.4-1.8-1.2-2.3ZM14.5 4.2A3.2 3.2 0 0 1 20 6.8a3.3 3.3 0 0 1-.3 6.1 3.5 3.5 0 0 1-3.7 5.3c-.5 1.1-1.4 1.8-2.7 1.8V6.5c0-1 .4-1.8 1.2-2.3Z"/><path d="M7 9.5c1-.2 2 .2 2.5 1M17 9.5c-1-.2-2 .2-2.5 1M7.5 14c.8-.3 1.7 0 2.3.7M16.5 14c-.8-.3-1.7 0-2.3.7"/>',
+  "circle-half": '<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17a8.5 8.5 0 0 0 0-17Z" fill="currentColor" stroke="none"/>',
+  "character-bubble": '<path d="M4 4.5h16v10.7H9.2L4.8 19v-3.8H4V4.5Z"/><path d="m8 12 2.4-5 2.4 5M8.8 10.2h3.2M14.2 7.2h2.1v4.8h-2.1z"/>',
+  "grid-3x3": Array.from({length:9},(_,i)=>`<rect x="${3+i%3*7}" y="${3+Math.floor(i/3)*7}" width="4" height="4" rx=".3"/>`).join(""),
+  bookmark: '<path d="M5 3h14v19l-7-5-7 5V3Z"/>',
+  scribble: '<path d="M2 10c4 5 4 12 6 10S3 3 8 6s5 14 7 11S8 0 14 5s7 9 8 6-2-5-4-6"/>',
+  "sticky-note": '<path d="M3 3h18v13l-5 5H3V3Zm13 18v-5h5M7 7h10M7 11h6"/>',
+  house: '<path d="m2.5 10 9.5-8 9.5 8M5 8v13h5v-7h4v7h5V8" stroke-width="2"/>',
+  "undo-2": '<path d="M7 4 3 7l4 3V7h5a8 8 0 1 1-8 8"/><path d="M3 7h5"/>',
+  "redo-2": '<path d="m17 4 4 3-4 3V7h-5a8 8 0 1 0 8 8"/><path d="M21 7h-5"/>',
+  hand: '<path fill="currentColor" stroke="none" d="M8.5 2a1.4 1.4 0 0 1 2.8 0v7.1c.5-1 2-1.2 2.8 0 .7-1 2.4-.8 2.8.6 1-1 2.8-.3 2.8 1.2v7.5c0 2.3-1.4 3.6-3.4 3.6h-5.7c-1.5 0-2.4-.6-3.4-1.7l-5-5.7c-.9-1.3.9-3.2 2.2-2l3.5 2.7V2Z"/>',
+  baseline: '<path d="m6.5 15 5.5-12 5.5 12M8.8 10.5h6.4M4 18h16M4 21h16" stroke-width="2.4"/>',
+  scan: '<path d="M5 3h14M21 5v14M19 21H5M3 19V5"/><path d="M2 2h4v4H2zm16 0h4v4h-4zM2 18h4v4H2zm16 0h4v4h-4z" fill="currentColor" stroke="none"/>',
+  "between-horizontal-start": '<path d="M8 5H5v14h3m8-14h3v14h-3M12 1v9m-3-6 3-3 3 3M12 23v-9m-3 6 3 3 3-3"/>',
+  rectangle: '<rect x="4" y="5" width="16" height="14" rx="1"/>',
+  pencil: '<path d="m3 17 12-12 4 4L7 21l-5 1 1-5Zm14-14 2-2 4 4-2 2" fill="currentColor" stroke="none"/>',
+  highlighter: '<path d="m5 15 7-10 6 4-5.5 8.5L5 15Z"/><path d="M4 20h16M8.5 17.5 6 21h5l-1.2-3.4"/>',
+  lasso: '<path d="M20 9.5c0 3.6-3.6 6.5-8 6.5S4 13.1 4 9.5 7.6 3 12 3s8 2.9 8 6.5Z"/><path d="M9 15.5c-.8 1.4-.6 2.7.6 3.8M17 15.2c1 .9 1.3 1.7.9 3.1"/>',
+  eraser: '<path d="m4.2 14.7 9.8-9.8 5.1 5.1-8.3 8.3H8.2l-4-3.6Z"/><path d="m9 9.9 5.1 5.1M10 20h10"/>',
+  type: '<path d="M3 5h18v16H3zM1 9h3M20 9h3M8 9h8M12 9v8M10 17h4"/>',
+  image: '<rect x="2" y="4" width="20" height="17" rx="1.5" fill="currentColor" stroke="none"/><path d="m5 17 4-5 4 4 3-3 3 4" stroke="white" stroke-width="2"/><circle cx="16.5" cy="8.5" r="1.5" fill="white" stroke="none"/>',
+  "scan-line": '<path d="M8 2H4a2 2 0 0 0-2 2v4M16 2h4a2 2 0 0 1 2 2v4M22 16v4a2 2 0 0 1-2 2h-4M8 22H4a2 2 0 0 1-2-2v-4"/>',
+  "more-vertical": '<circle cx="12" cy="4" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="20" r="1.3" fill="currentColor" stroke="none"/>',
+  sparkles: '<path d="M11 1c-1.7 6.7-3.3 8.3-10 10 6.7 1.7 8.3 3.3 10 10 1.7-6.7 3.3-8.3 10-10-6.7-1.7-8.3-3.3-10-10ZM20 16c-.7 2.7-1.3 3.3-4 4 2.7.7 3.3 1.3 4 4 .7-2.7 1.3-3.3 4-4-2.7-.7-3.3-1.3-4-4Z" fill="currentColor" stroke="none"/>',
+  hierarchy: '<rect x="9" y="3" width="6" height="4" rx=".7"/><rect x="3" y="16" width="6" height="4" rx=".7"/><rect x="15" y="16" width="6" height="4" rx=".7"/><path d="M12 7v4M6 16v-2h12v2M12 11H6M12 11h6"/>',
+  reset: '<path d="M20 9a8 8 0 0 0-14-3.2L3.5 8.5M3.5 3.5v5h5M4 15a8 8 0 0 0 14 3.2l2.5-2.7M20.5 20.5v-5h-5"/>',
+  "sliders-horizontal": '<path d="M3 6h5M12 6h9M3 12h11M18 12h3M3 18h4M11 18h10" stroke-width="1.8"/><circle cx="10" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="9" cy="18" r="2"/>',
+  "settings-2": '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/>',
+};
+export function setNativeIcon(host: HTMLElement, name: string): void {
+  host.dataset.nativeIcon = name;
+  if (!glyphs[name]) { setIcon(host, name); const icon=host.querySelector<SVGElement>("svg"); if(icon){icon.style.setProperty("flex-shrink","0");icon.style.setProperty("min-width","1em");} return; }
+  host.innerHTML = `<svg viewBox="0 0 ${name === "bottom-hierarchy" ? 38 : 24} 24" width="${name === "bottom-hierarchy" ? 38 : 24}" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${glyphs[name]}</svg>`;
+  const icon=host.querySelector<SVGElement>("svg"); if(icon){icon.style.setProperty("flex-shrink","0");icon.style.setProperty("min-width","1em");}
+}

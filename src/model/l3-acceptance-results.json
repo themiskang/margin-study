@@ -1,0 +1,109 @@
+{
+  "environment": "in-memory synthetic Store and mocked Obsidian; no original-app L4 or native integration",
+  "results": [
+    {
+      "name": "opening restores the newest qualifying ordinary canvas, excluding TOC and review",
+      "passed": true
+    },
+    {
+      "name": "mount without opening does not restore navigation; an empty set creates a named canvas",
+      "passed": true
+    },
+    {
+      "name": "removing a document preserves hidden cards, membership, pending, schedules and logs",
+      "passed": true
+    },
+    {
+      "name": "references share latest title/excerpt/note/media/style but keep local display state",
+      "passed": true
+    },
+    {
+      "name": "nonformal detach and same-canvas detach preserve source positions",
+      "passed": true
+    },
+    {
+      "name": "splitting title keeps only its anchored half shared and round-trips undo",
+      "passed": true
+    },
+    {
+      "name": "splitting excerpt keeps only its anchored half shared and round-trips undo",
+      "passed": true
+    },
+    {
+      "name": "splitting note keeps only its anchored half shared and round-trips undo",
+      "passed": true
+    },
+    {
+      "name": "empty excerpt head stays independent while the original tail keeps the anchor",
+      "passed": true
+    },
+    {
+      "name": "merge retains anchored OR draft entities and snapshots unanchored non-drafts",
+      "passed": true
+    },
+    {
+      "name": "merge guards reject self and members, while a head can absorb another member",
+      "passed": true
+    },
+    {
+      "name": "merging a selected reference materializes it without changing the other canvas",
+      "passed": true
+    },
+    {
+      "name": "unmerge uses current retained member data and preserves head edits without an extra duplicate",
+      "passed": true
+    },
+    {
+      "name": "unmerge restores collapsed children and labels without discarding later graph edits",
+      "passed": true
+    },
+    {
+      "name": "removing a group head recovers its members rather than stranding their pending rows",
+      "passed": true
+    },
+    {
+      "name": "automatic merge gate rejects each protected content or relationship",
+      "passed": true
+    },
+    {
+      "name": "mixed occlusion selection clears the group atomically with synchronized dates and undo",
+      "passed": true
+    },
+    {
+      "name": "local group occlusion survives materialization but stays independent of another reference",
+      "passed": true
+    },
+    {
+      "name": "text range add/remove is one persisted undo action and never cuts a Unicode pair",
+      "passed": true
+    },
+    {
+      "name": "plain cloze export unwraps nested bold once and preserves cN as a separate extension",
+      "passed": true
+    },
+    {
+      "name": "editing an enrolled basic question into plain cloze keeps it due without inventing a review",
+      "passed": true
+    },
+    {
+      "name": "recall keys use the evidenced rect/range formats and a reversible memory-only single peek",
+      "passed": true
+    },
+    {
+      "name": "selected review copy content and masks are independent before enrollment",
+      "passed": true
+    },
+    {
+      "name": "conflicting group versions remap archived members, nodes, pending and reversible presentation",
+      "passed": true
+    },
+    {
+      "name": "conflict merge keeps each excerpt destination attached to its own canvas and node",
+      "passed": true
+    },
+    {
+      "name": "newer visited pending cannot revive an older active row during conflict reconciliation",
+      "passed": true
+    }
+  ]
+}

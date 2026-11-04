@@ -1,0 +1,45 @@
+import { createNotebookBytes, readNotebookMetadata, NOTEBOOK_STYLES } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/documents/notebookFormat';
+import { createNotebook, updateNotebook, openNewNotebook } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/documents/notebook';
+import { ReaderView as RealReaderView } from 'marginstudy-real-reader';
+
+export async function runNotebookAcceptance({test,assert,wait,plugin,app,realPdf,configs}:any){
+ await test('All four notebook templates are real renderable PDFs with stable metadata and page coordinates',async()=>{
+  for(const style of NOTEBOOK_STYLES){
+   const metadata={format:'marginstudy-notebook',version:1,id:'template-test',title:'中文笔记本 <标题>',style:style.id,pageCount:3,width:595,height:842,createdAt:'2026-10-15T00:00:00Z'} as const;
+   const bytes=createNotebookBytes(metadata);assert(readNotebookMetadata(bytes)?.title===metadata.title,'notebook metadata lost');
+   const doc=await realPdf.loadPdf(bytes);try{
+    assert(doc.numPages===3,'notebook page count');const page=await doc.getPage(2),viewport=page.getViewport({scale:1});assert(viewport.width===595&&viewport.height===842,'template changed coordinates');
+    const canvas=document.createElement('canvas');canvas.width=595;canvas.height=842;const context=canvas.getContext('2d')!;await page.render({canvasContext:context,viewport}).promise;
+    const pixels=context.getImageData(0,0,595,842).data;let ink=0;for(let index=0;index<pixels.length;index+=4)if(pixels[index]<248||pixels[index+1]<248||pixels[index+2]<248)ink++;
+    assert(style.id==='blank'?ink===0:ink>300,'paper pattern not rendered: '+style.id+' '+ink);
+    assert((await page.getTextContent()).items.length===0,'paper invented body text');
+   }finally{await doc.destroy();}
+  }
+  assert(!readNotebookMetadata(new TextEncoder().encode('%PDF-1.7\n%MSNOTEBOOK broken').buffer),'malformed notebook accepted');
+ });
+ await test('Notebook creates independent vault files in a study set; template/page updates preserve ink and source cards',async()=>{
+  const p=plugin(),file=await createNotebook(p,{title:'合成课堂笔记',style:'grid',pageCount:2,folder:'notebook-tests/课程'});
+  assert(file.extension==='pdf'&&p.store.studySets[0].docPaths.includes(file.path)&&p.store.documents[0].path===file.path,'notebook not registered in study set');
+  const second=await createNotebook(p,{title:'合成课堂笔记',style:'lines',pageCount:1,folder:'notebook-tests/课程',studySetId:p.store.studySets[0].id});assert(second.path!==file.path&&second.path.endsWith(' 2.pdf'),'existing notebook overwritten');
+  const view:any=new RealReaderView({app} as any,p);await view.onOpen();try{
+   await view.loadFileByPath(file.path);assert(!view.notebookTools.hidden,'notebook paper controls absent');
+   view.annController.createPenAnnotation(1,[[{x:.2,y:.2,pressure:.2},{x:.4,y:.25,pressure:.8}]]);
+   view.annController.commitRegion({kind:'pdf',pageNum:1,rects:[{x:100,y:500,w:150,h:100}],pdfCoordinateSpace:'pdf'},'data:image/png;base64,c3ludGhldGlj','合成手写摘录');
+   const before=await p.store.loadAnnotations(file.path),ids=before.map((ann:any)=>ann.id).join(','),source=p.store.cards[0].anchorAnnId;
+   await view.updateNotebook({style:'dots'});assert(readNotebookMetadata(await app.vault.readBinary(file)).style==='dots'&&view.getPageRecord(1).annLayer.querySelector('.ms-ann-pen'),'paper change lost ink');
+   await view.updateNotebook({pageCount:3});assert(view.getDoc().numPages===3,'page append failed');
+   assert((await p.store.loadAnnotations(file.path)).map((ann:any)=>ann.id).join(',')===ids&&p.store.cards[0].anchorAnnId===source,'notebook update changed source IDs');
+   const original=await app.vault.readBinary(file),external=new Uint8Array(original.byteLength+12);external.set(new Uint8Array(original));external.set(new TextEncoder().encode('% external\n'),original.byteLength);configs.get(file.path).bytes=external.buffer;
+   let rejected=false;try{await updateNotebook(p,file,{style:'blank'});}catch{rejected=true;}assert(rejected&&(await app.vault.readBinary(file)).byteLength===external.length,'external PDF edits overwritten');
+  }finally{await view.onClose();}
+ });
+ await test('Notebook creation form creates and opens the selected paper in the selected study set',async()=>{
+  const p=plugin(),set=p.store.createStudySet('表单学习集');let opened='';p.openDocument=async(file:any)=>{opened=file.path;};
+  openNewNotebook(p);const modal=document.querySelector('.ms-notebook-modal')!;
+  (modal.querySelector('[aria-label="笔记本名称"]') as HTMLInputElement).value='表单合成笔记';(modal.querySelector('[aria-label="初始页数"]') as HTMLInputElement).value='2';
+  const paper=modal.querySelector('[aria-label="纸张样式"]') as HTMLSelectElement;paper.value='lines';paper.dispatchEvent(new Event('change'));
+  assert((modal.querySelector('.ms-notebook-paper-preview') as HTMLElement).dataset.style==='lines','paper preview not updated');
+  [...modal.querySelectorAll('button')].find((button:any)=>button.textContent==='创建并打开')!.dispatchEvent(new MouseEvent('click',{bubbles:true}));
+  for(let index=0;index<100&&!opened;index++)await wait(10);assert(opened&&set.docPaths.includes(opened)&&!document.querySelector('.ms-notebook-modal'),'form did not create/open/close');
+ });
+}

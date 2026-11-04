@@ -1,0 +1,81 @@
+import { Store } from "__PROJECT__/src/model/store";
+import { startReview, openReviewHistory } from "__PROJECT__/src/review/reviewView";
+import { renderQuestion } from "__PROJECT__/src/review/content";
+import { questionsForCard } from "__PROJECT__/src/review/questions";
+import { renderCardList, openDetail } from "__PROJECT__/src/cards/cardView";
+import { openReviewDeckBrowser } from "__PROJECT__/src/review/decks";
+
+Object.defineProperty(HTMLElement.prototype, "empty", { value() { this.replaceChildren(); }, configurable: true });
+const raw = "说明 {{记忆内容}} **强调内容** ==高亮内容== `**代码强调**`";
+const card = { id: "fixture-card", docPath: "", type: "flashcard", front: raw, back: "独立的背面答案", tags: [], links: [], createdAt: "2020-01-01T00:00:00.000Z" };
+const image = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="100"><rect width="400" height="100" fill="#edf1fc"/><text x="30" y="60" font-size="24">Synthetic source image</text></svg>');
+const copySource = { ...card, id: "copy-source", title: "复制标题", front: "复制正文", back: "复制笔记", tags: ["focus"], color: "#fc9959", image,
+  occlusions: [{ id: "left", label: "左侧遮挡", x: 0.05, y: 0.1, width: 0.3, height: 0.7 }, { id: "right", label: "右侧遮挡", x: 0.6, y: 0.1, width: 0.3, height: 0.7 }] };
+let disk: any = { cards: [card, copySource], nodes: [], edges: [], srs: {}, reviewPending: [], reviewLogs: [],
+  studySets: [{ id: "study", name: "合成学习集", docPaths: [], cardIds: [card.id, copySource.id], createdAt: card.createdAt }],
+  canvases: ["a", "b"].map(id => ({ id, name: id, studySetId: "study", emphasisCloze: id === "a", createdAt: card.createdAt })),
+  activeStudySetId: "study", activeCanvasId: "a" };
+const adapter = { exists: async () => false, mkdir: async () => {}, write: async () => {}, read: async () => "[]" };
+const host: any = { app: { vault: { adapter, getFiles: () => [], getAbstractFileByPath: () => undefined } },
+  loadData: async () => structuredClone(disk), saveData: async (value: any) => { disk = structuredClone(value); } };
+const store = new Store(host);
+const plugin: any = { store, app: host.app };
+
+async function main() {
+  await store.load();
+  store.enqueueReview([card.id], "a", new Date("2020-01-02T00:00:00.000Z"));
+  const original = JSON.stringify(store.getCard(card.id));
+  const questionA = questionsForCard(store.getCard(card.id)!, "a")[0];
+  const questionB = questionsForCard(store.getCard(card.id)!, "b")[0];
+  for (const [id, question] of [["scope-a", questionA], ["scope-b", questionB]] as const) {
+    const target = document.getElementById(id)!;
+    await renderQuestion(target, plugin, store.getCard(card.id)!, question, false);
+  }
+  document.getElementById("begin")!.onclick = () => startReview(plugin, { scopeId: "a" });
+  document.getElementById("history")!.onclick = () => openReviewHistory(plugin, card.id);
+  renderCardList(document.getElementById("cards")!, plugin);
+  const nativeCard = { ...card, id: "native-style-card", front: "Unique sentence U2: beta marker. Selection dragging works over these lines", back: "" };
+  const nativeScore = document.createElement("button"); nativeScore.id = "native-visual-score"; nativeScore.textContent = "原版评分布局样例";
+  nativeScore.onclick = () => {
+    if (!store.getCard(nativeCard.id)) store.addCard(nativeCard);
+    const deck = store.reviewDecks.find(item => item.name === "Native reference") ?? store.createReviewDeck("Native reference");
+    store.enqueueReviewInDeck([nativeCard.id], deck.id); startReview(plugin, {deckId:deck.id,presentation:"score"});
+  };
+  const nativeEditor = document.createElement("button"); nativeEditor.id = "native-visual-editor"; nativeEditor.textContent = "原版卡编辑布局样例";
+  nativeEditor.onclick = () => { if (!store.getCard(nativeCard.id)) store.addCard(nativeCard); openDetail(plugin, store.getCard(nativeCard.id)!); };
+  const nativeBrowse = document.createElement("button"); nativeBrowse.id = "native-visual-browse"; nativeBrowse.textContent = "原版浏览布局样例";
+  nativeBrowse.onclick = () => {
+    if (!store.getCard(nativeCard.id)) store.addCard(nativeCard);
+    const deck = store.reviewDecks.find(item => item.name === "Native browse reference") ?? store.createReviewDeck("Native browse reference");
+    store.enqueueReviewInDeck([nativeCard.id], deck.id); openReviewDeckBrowser(plugin, deck.id);
+  };
+  document.body.append(nativeScore,nativeEditor,nativeBrowse);
+  (window as any).reviewFixture = { ready: true, raw, original,
+    setHandwritingWidth: (width: number) => {
+      const presets = store.settings.handwritingPresets ?? [];
+      store.settings.handwritingPresets = presets.length ? presets.map((preset, index) => index ? preset : { ...preset, width }) : [{ id: "pen-1", label: "原子笔 1", type: "ballpoint", color: "#5269dc", width, opacity: 1 }];
+    },
+    setHandwritingWidths: (documentWidth: number, mindmapWidth: number, cardWidth: number) => {
+      const presets = store.settings.handwritingPresets ?? [];
+      store.settings.handwritingPresets = presets.length ? presets.map((preset, index) => index ? preset : { ...preset, width: documentWidth, documentWidth, mindmapWidth, cardWidth }) : [{ id: "pen-1", label: "原子笔 1", type: "ballpoint", color: "#5269dc", width: documentWidth, documentWidth, mindmapWidth, cardWidth, opacity: 1 }];
+    },
+    renderOcclusion: async (cardId: string, maskId: string) => {
+      const target = store.getCard(cardId)!; const question = questionsForCard(target).find(item => item.maskId === maskId)!;
+      const host = document.createElement("div"); host.id = "occlusion-render-check"; document.body.append(host);
+      await renderQuestion(host, plugin, target, question, false);
+    },
+    inspect: () => ({
+      unchanged: JSON.stringify(store.getCard(card.id)) === original,
+      front: store.getCard(card.id)!.front,
+      questionId: questionsForCard(store.getCard(card.id)!, "a")[0].id,
+      logs: structuredClone(store.reviewLogs), pending: structuredClone(store.reviewPending),
+      cards: structuredClone(store.cards),
+      decks: structuredClone(store.reviewDecks), studySets: structuredClone(store.studySets),
+      dailyCount: Object.values(store.reviewHistory).reduce((sum, value) => sum + value, 0),
+      scopeAMasks: document.querySelectorAll("#scope-a .ms-cloze").length,
+      scopeBMasks: document.querySelectorAll("#scope-b .ms-cloze").length,
+      codeMasked: !!document.querySelector("#scope-a code .ms-cloze"),
+    }),
+  };
+}
+void main().catch(error => { (window as any).fixtureError = String(error?.stack || error); });

@@ -1,0 +1,784 @@
+import type MarginStudyPlugin from "../main";
+import { ReaderView } from "./readerView";
+import { Annotation, AnnotationType, Card, HandwritingPresetId, PdfPageGeometry, PdfRect, Stroke } from "../types";
+import { uid } from "../utils/id";
+import { el } from "../utils/dom";
+import { todayStr } from "../srs";
+import { Notice, TFile } from "obsidian";
+import { saveVoiceBlob } from "../audio/voice";
+import { PenController } from "../annot/pen";
+import { handwritingPresetWidth } from "../annot/handwritingPresets";
+import { BaseAnnotationController, SelTarget, VoiceTarget } from "../annot/baseController";
+import { recognizeImage, mergeOcrWords } from "../ocr/ocr";
+import { annotationGeometry, clientRectToPdfRect, uniquePdfRects } from "../anchors/pdfGeometry";
+import { PageCollectionDocument, mapCollectionAnnotation } from "../documents/pageCollection";
+import type { LinkedPageAnnotation } from "../documents/pageCollection";
+import { boundedOverlayBox } from "../annot/overlay";
+import type { OverlayBox, OverlaySurface } from "../annot/overlay";
+import { projectPagePoint, sourcePagePoint, projectPageInk, sourcePageInk } from "./pageCrop";
+import { EditedPdfDocument, mapEditedPdfAnnotation } from "./editedDocument";
+
+type PenCommit = (strokes: Stroke[][]) => void;
+
+/** PDF 标注控制器：坐标换算、rects 增量渲染、per-page 手写（继承公共基类） */
+export class AnnotationController extends BaseAnnotationController {
+  reader: ReaderView;
+  getInkColor(): string { return this.color; }
+
+  // 标注 id → 渲染元素映射（性能优化 D：增量增删，避免整页重建）
+  private elMap = new Map<string, { annId: string; els: HTMLElement[]; scale: number; page: number; fingerprint: string }>();
+
+  // 手写批注（仅平板）：每页一个 PenController
+  private penControllers = new Map<number, PenController>();
+
+  // 套索/区域摘录
+  private lassoOverlay: HTMLElement | null = null;
+  private lassoStart = { x: 0, y: 0, page: 0 };
+  private lassoActive = false;
+  private cleanupLasso: (() => void) | null = null;
+
+  constructor(plugin: MarginStudyPlugin, reader: ReaderView) {
+    super(plugin);
+    this.reader = reader;
+    this.attach();
+    this.bindLasso();
+  }
+
+  protected getScrollContainer(): HTMLElement {
+    return this.reader.getScrollContainer();
+  }
+
+  protected getBodyEl(): HTMLElement {
+    // PDF 无单一 body，返回滚动容器作占位（渲染走 renderOne，不依赖此值）
+    return this.reader.getScrollContainer();
+  }
+
+  protected onLoadDoc(): void {
+    this.elMap.clear();
+  }
+
+  protected onAnnotationsChanged(): void { this.refreshAll(); }
+  protected onTitleLinksChanged(): void { this.refreshAll(); this.renderTitleLinks(); }
+  protected onDocumentNotebookChanged(): void { this.reader.applyDocumentNotebookView(); }
+  protected prepareAnnotation(ann: Annotation, geometryChanged = true): void {
+    if (!geometryChanged && ann.pdfReferencePages?.length) return;
+    if (this.reader.getPdfPageEdits()) {
+      ann.pdfReferencePages = annotationGeometry(ann).flatMap(part => { const id = geometryChanged ? this.reader.getPdfPageId(part.page) : `source:${part.page}`; return id ? [{ id, page: part.page }] : []; });
+      return;
+    }
+    if (!(this.reader.getDoc() instanceof PageCollectionDocument)) return;
+    ann.pdfReferencePages = annotationGeometry(ann).flatMap((part) => { const entry=this.reader.getPageReference(part.page); return entry ? [{id:entry.id,page:part.page}] : []; });
+  }
+  protected mapAnnotationForDisplay(ann: Annotation): Annotation {
+    const doc=this.reader.getDoc();return doc instanceof PageCollectionDocument ? mapCollectionAnnotation(ann,doc.pageCollection) : doc instanceof EditedPdfDocument ? mapEditedPdfAnnotation(ann,doc.edits) : ann;
+  }
+  protected getAnnotationsForDisplay(): Annotation[] {
+    const local=super.getAnnotationsForDisplay(),doc=this.reader.getDoc();
+    return doc instanceof PageCollectionDocument ? [...local,...doc.getLinkedAnnotations().map((ann)=>({...ann,documentNotebookId:this.getDocumentNotebookId()}))] : local;
+  }
+  getPdfExportAnnotations(): import("./exportAnnotations").PdfExportAnnotation[] {
+    return this.getAnnotationsForDisplay().filter(ann => ann.type !== "pen" || this.isInkVisible(ann)).map(annotation => ({
+      annotation: structuredClone(annotation), opacity: this.isNotebookReference(annotation) || (annotation.type === "pen" || annotation.overlay) && this.isInkReference(annotation) ? .35 : 1,
+    }));
+  }
+  protected onAnnClick(ann: Annotation, ev: MouseEvent): void {
+    const source=(ann as LinkedPageAnnotation).referenceSource;
+    if(source){ev.stopPropagation();if(this.handleRecallClick(ann,ev))return;void(async()=>{const file=this.plugin.app.vault.getAbstractFileByPath(source.docPath);if(!(file instanceof TFile))throw new Error("源文档已不存在");const reader=await this.plugin.openDocument(file);await (reader as any).selectDocumentNotebook?.(source.notebookId);reader.flashAnnotation(source.anchorAnnId);})().catch(error=>new Notice(String(error)));return;}
+    const stored = this.cache.find(item => item.id === ann.id) ?? ann;
+    const previous = this.popEl;
+    super.onAnnClick(stored,ev);
+    if (this.popEl && this.popEl !== previous && this.hasExtendSource(stored.id)) {
+      const action = el("button", {text:"Extend"});
+      action.addEventListener("click", () => { this.removePop(); void this.extendAnnotation(stored.id).catch(error => new Notice(String(error))); });
+      this.popEl.append(action);
+    }
+  }
+
+  protected cancelRegionGesture(): void {
+    this.cleanupLasso?.();
+    this.cleanupLasso = null;
+    this.lassoActive = false;
+    this.lassoOverlay?.remove();
+    this.lassoOverlay = null;
+  }
+  protected onReleaseDocument(): void { this.cancelRegionGesture(); }
+
+  async destroy(): Promise<void> {
+    this.getScrollContainer().removeEventListener("pointerdown", this.onLassoPointerDown);
+    await super.destroy();
+    this.elMap.clear();
+  }
+
+  /** 页面回收时同时清掉覆盖层引用，保留 sidecar 中的批注。 */
+  releasePage(pageNum: number): void {
+    const pen = this.penControllers.get(pageNum);
+    pen?.destroy();
+    this.penControllers.delete(pageNum);
+    for (const [id, entry] of this.elMap) {
+      if (entry.page !== pageNum) continue;
+      entry.els.forEach((element) => this.detachAnnotationElement(element));
+      this.elMap.delete(id);
+    }
+  }
+
+  protected onColorChanged(): void {
+    for (const pc of this.penControllers.values()) pc.color = this.color;
+  }
+  protected flushPen(): void { for (const pen of this.penControllers.values()) pen.flush(); }
+  protected onPenToolChanged(): void { for (const pen of this.penControllers.values()) pen.setTool(this.penTool); }
+  protected placeTextInExtend(event: MouseEvent): boolean { return this.reader.placeExtendText(event); }
+  protected resolveOverlaySurface(event: MouseEvent, width: number, height: number): OverlaySurface | null {
+    const page = (event.target as HTMLElement).closest<HTMLElement>(".ms-page"); if (!page) return null;
+    const pageNum = Number(page.dataset.page), rec = this.reader.getPageRecord(pageNum);
+    if (!rec?.viewport || rec.renderedScale !== this.reader.getScale()) return null;
+    const bounds = rec.annLayer.getBoundingClientRect(), scale = this.reader.getScale();
+    return this.overlaySurface(pageNum, boundedOverlayBox({ left: event.clientX - bounds.left, top: event.clientY - bounds.top, width: width * scale, height: height * scale }, rec.annLayer.clientWidth,rec.annLayer.clientHeight));
+  }
+  protected getOverlaySurface(ann: Annotation): OverlaySurface | null {
+    ann = this.mapAnnotationForDisplay(this.cache.find(stored => stored.id === ann.id) ?? ann);
+    const geometry = annotationGeometry(ann).find(part => part.page === ann.page), rect = geometry?.rects[0];
+    const box = rect && this.reader.projectRect(ann.page,rect,ann.pdfCoordinateSpace); return box ? this.overlaySurface(ann.page,box) : null;
+  }
+  private overlaySurface(page: number, box: OverlayBox): OverlaySurface | null {
+    const rec = this.reader.getPageRecord(page); if (!rec?.viewport || rec.renderedScale !== this.reader.getScale()) return null;
+    return { parent: rec.annLayer, box, fontScale: this.reader.getScale(), geometry: value => {
+      if (!rec.viewport || rec.renderedScale !== this.reader.getScale()) return null;
+      const canvas = rec.canvas.getBoundingClientRect(), bounds = rec.annLayer.getBoundingClientRect();
+      const rect = clientRectToPdfRect({ left: bounds.left+value.left, top: bounds.top+value.top, width: value.width, height: value.height, right: bounds.left+value.left+value.width, bottom: bounds.top+value.top+value.height },canvas,rec.viewport);
+      return rect ? { page,docKind:"pdf",rects:[rect],pdfGeometry:[{page,rects:[rect]}],pdfCoordinateSpace:"pdf" } : null;
+    } };
+  }
+
+  // ===== 选区 → PDF 坐标矩形 =====
+  protected resolveSelection(range: Range): SelTarget | null {
+    const scroll = this.getScrollContainer();
+    if (range.collapsed || !scroll.contains(range.startContainer) || !scroll.contains(range.endContainer)) return null;
+    const pdfGeometry: PdfPageGeometry[] = [];
+    for (const page of this.reader.getPageNumbers()) {
+      const rec = this.reader.getPageRecord(page);
+      if (!rec?.viewport || rec.renderedScale !== this.reader.getScale() || !range.intersectsNode(rec.textLayer)) continue;
+      // Clip the DOM range to each page's text layer; wrapper/bar rectangles must never become highlights.
+      const local = document.createRange();
+      local.selectNodeContents(rec.textLayer);
+      if (rec.textLayer.contains(range.startContainer)) local.setStart(range.startContainer, range.startOffset);
+      if (rec.textLayer.contains(range.endContainer)) local.setEnd(range.endContainer, range.endOffset);
+      const canvas = rec.canvas.getBoundingClientRect();
+      const clients: DOMRect[] = [];
+      const walker = document.createTreeWalker(rec.textLayer, NodeFilter.SHOW_TEXT);
+      let node: Node | null;
+      while ((node = walker.nextNode())) {
+        if (!local.intersectsNode(node)) continue;
+        const text = document.createRange(); text.selectNodeContents(node);
+        if (local.startContainer === node) text.setStart(node, local.startOffset);
+        if (local.endContainer === node) text.setEnd(node, local.endOffset);
+        for (const client of Array.from(text.getClientRects())) clients.push(client);
+      }
+      const rects = uniquePdfRects(clients.map((rect) => clientRectToPdfRect(rect, canvas, rec.viewport!))
+        .filter((rect): rect is PdfRect => rect !== null));
+      if (rects.length) pdfGeometry.push({ page, rects });
+    }
+    const first = pdfGeometry[0];
+    return first ? { kind: "pdf", pageNum: first.page, rects: first.rects, pdfGeometry, pdfCoordinateSpace: "pdf" } : null;
+  }
+
+  protected selectionActions(target: SelTarget, text: string): {id?:string;icon?:string;label:string;run:()=>Promise<void>}[] {
+    if (target.kind !== "pdf" || !this.reader.getPdfPageEdits()) return [];
+    const revision = this.documentRevision;
+    const extend = async (mode: "text" | "pen" = "text") => {
+      await this.reader.finishExtendEditing();
+      if (revision !== this.documentRevision || !this.docPath) return;
+      const existing = this.cache.find(ann => (ann.documentNotebookId ?? "default") === this.getDocumentNotebookId() && ann.text === text && ann.type === "highlight" && JSON.stringify(ann.pdfGeometry) === JSON.stringify(target.pdfGeometry));
+      const ann: Annotation = existing ?? {id:uid("ann"),docPath:this.docPath,docKind:"pdf",page:target.pageNum,type:"highlight",rects:target.rects,pdfGeometry:target.pdfGeometry,pdfCoordinateSpace:target.pdfCoordinateSpace,text,color:this.color,createdAt:todayStr()};
+      if (!existing) this.pushAnnotation(ann);
+      await this.extendAnnotation(ann.id);
+
+      if (mode === "pen" && revision === this.documentRevision && this.docPath) {
+        await this.reader.finishExtendEditing();
+        if (revision === this.documentRevision && this.docPath) this.reader.setHandwritingMode("pen");
+      }
+    };
+    return [{ id: "fold", icon: "fold-vertical", label: "折叠", run: async () => {
+      if (revision === this.documentRevision && this.docPath) await this.reader.foldSelection(target.pdfGeometry ?? [{page:target.pageNum,rects:target.rects}]);
+    }}, { id: "insert-toc", label: "Insert into TOC", run: async () => {
+      const items = await this.reader.getEditableOutline();
+      if (revision !== this.documentRevision || !this.docPath) return;
+      const item = {id:uid("toc"),title:text.trim(),page:target.pageNum,level:0,rects:target.rects};
+      const index = items.findIndex(entry => entry.page > item.page);
+      items.splice(index < 0 ? items.length : index, 0, item);
+      await this.reader.setEditableOutline(items);new Notice("已添加文档目录条目");
+    }}, { id: "extend", label: "Extend", run: () => extend() },
+      { id: "extend-text", icon: "type", label: "文本", run: () => extend("text") },
+      { id: "extend-ink", icon: "between-horizontal-start", label: "留白", run: () => extend("pen") }];
+  }
+  hasExtendSource(id: string): boolean {
+    const ann = this.cache.find(item => item.id === id);
+    return !!ann && (ann.documentNotebookId ?? "default") === this.getDocumentNotebookId() && !ann.overlay && ["highlight","underline","region","strike","note"].includes(ann.type) && !!annotationGeometry(this.mapAnnotationForDisplay(ann)).some(part => part.page > 0 && part.rects.length);
+  }
+  async extendAnnotation(id: string): Promise<void> {
+    const revision = this.documentRevision;
+    if (!this.hasExtendSource(id)) return;
+    const ann = this.mapAnnotationForDisplay(this.cache.find(item => item.id === id)!);
+    const parts = annotationGeometry(ann).filter(part => part.page > 0 && part.rects.length), part = parts[parts.length-1];
+    await this.reader.renderPage(part.page);
+    if (revision !== this.documentRevision || !this.hasExtendSource(id)) return;
+    const rec = this.reader.getPageRecord(part.page); if (!rec?.viewport) return;
+    const boxes = part.rects.map(rect => this.reader.projectRect(part.page,rect,ann.pdfCoordinateSpace)).filter(Boolean) as {left:number;top:number;width:number;height:number}[];
+    if (!boxes.length) return;
+    const bottom = Math.max(...boxes.map(box => box.top+box.height));
+    const anchor = this.reader.projectAnnotationPoint(part.page,{x:boxes[0].left/rec.viewport.width,y:Math.min(1,(bottom+1)/rec.viewport.height)},true);
+    await this.reader.createLinkedExtend(part.page,anchor,id);
+  }
+  addExtendSourceToMindmap(id: string): void {
+    if (!this.hasExtendSource(id)) return;
+    this.addRegionToMindmap(this.cache.find(item => item.id === id)!);
+  }
+  ensureExtendSourceCard(id: string): Card | undefined {
+    if(!this.hasExtendSource(id))return;
+    const ann=this.cache.find(item=>item.id===id)!;
+    if(!ann.cardId||!this.plugin.store.getCard(ann.cardId))this.makeCard(ann,"excerpt",true);
+    return ann.cardId?this.plugin.store.getCard(ann.cardId):undefined;
+  }
+  async createRegionExtend(page: number, client: DOMRect): Promise<void> {
+    const rec = this.reader.getPageRecord(page);
+    if (!this.docPath || !rec?.viewport) return;
+    const rect = clientRectToPdfRect(client, rec.canvas.getBoundingClientRect(), rec.viewport);
+    if (!rect) return;
+    const bounds = rec.canvas.getBoundingClientRect();
+    const image = this.captureRegion(page, client.left - bounds.left, client.top - bounds.top, client.width, client.height);
+    const ann: Annotation = { id: uid("ann"), docPath: this.docPath, docKind: "pdf", page, type: "region", rects: [rect], pdfGeometry: [{page,rects:[rect]}], pdfCoordinateSpace: "pdf", text: "", image, color: this.color, createdAt: todayStr() };
+    this.pushAnnotation(ann);
+    if (this.plugin.store.settings.autoCardOnRegion) this.makeCard(ann,"excerpt",true);
+    await this.extendAnnotation(ann.id);
+  }
+
+  protected commitAnnotation(target: SelTarget, type: AnnotationType, color: string, text: string): void {
+    if (!this.docPath || target.kind !== "pdf") return;
+    const ann: Annotation = {
+      id: uid("ann"),
+      docPath: this.docPath,
+      docKind: "pdf",
+      page: target.pageNum,
+      type,
+      rects: target.rects,
+      pdfGeometry: target.pdfGeometry,
+      pdfCoordinateSpace: target.pdfCoordinateSpace,
+      text,
+      color,
+      createdAt: todayStr(),
+    };
+    if (type === "note") ann.noteText = "";
+    this.pushAnnotation(ann);
+    this.showExcerptMenu(ann);
+  }
+
+  protected resolveVoiceTarget(e: MouseEvent): VoiceTarget | null {
+    let node: Node | null = e.target as Node;
+    let pageEl: HTMLElement | null = null;
+    while (node && node !== document.body) {
+      if (node instanceof HTMLElement && node.classList.contains("ms-page")) {
+        pageEl = node;
+        break;
+      }
+      node = node.parentElement;
+    }
+    if (!pageEl) return null;
+    const pageNum = Number(pageEl.dataset.page);
+    const r = pageEl.getBoundingClientRect();
+    const x = (e.clientX - r.left) / r.width;
+    const y = (e.clientY - r.top) / r.height;
+    return { ...this.reader.projectAnnotationPoint(pageNum, { x, y }, true), page: pageNum };
+  }
+
+  protected async commitVoice(blob: Blob, target: VoiceTarget): Promise<void> {
+    if (!this.docPath) return;
+    const docPath = this.docPath, documentNotebookId = this.getDocumentNotebookId();
+    const path = await saveVoiceBlob(this.plugin.app, docPath, blob);
+    if (this.docPath !== docPath) return;
+    const ann: Annotation = {
+      id: uid("ann"),
+      docPath,
+      documentNotebookId,
+      docKind: "pdf",
+      page: target.page ?? 1,
+      type: "voice",
+      rects: [],
+      text: "",
+      color: this.color,
+      audioPath: path,
+      mediaKind: "audio",
+      mediaName: path.split("/").pop(),
+      pos: { x: target.x, y: target.y },
+      createdAt: todayStr(),
+    };
+    this.pushAnnotation(ann);
+    this.recordMediaEdit(ann, true);
+  }
+
+  // ===== 手写批注（仅平板） =====
+  protected setupPen(): void {
+    for (const num of this.reader.getPageNumbers()) this.setupPenForPage(num);
+  }
+
+  private setupPenForPage(num: number): void {
+    if (this.penControllers.has(num)) return;
+    const rec = this.reader.getPageRecord(num);
+    if (!rec?.viewport || !rec.canvas.width) return;
+    const layerId = this.getInkLayers().active, notebookId = this.getDocumentNotebookId(), crop = this.reader.getPageCrop(), rotation = this.reader.getPdfPageRotation(num);
+    const pc = new PenController(rec.wrapper, {
+      getColor: () => this.getHandwritingPreset().color,
+      getWidth: () => handwritingPresetWidth(this.getHandwritingPreset(), "document"),
+      getOpacity: () => this.getHandwritingPreset().opacity,
+      isVanishPen: () => this.isVanishPen(),
+      onCommit: (strokes, brush, width, opacity) => this.createPenAnnotation(num, strokes, layerId, notebookId, brush, width, opacity),
+      getInk: () => this.getPenRecords(num, layerId).map(record => ({ ...record, strokes: this.reader.projectAnnotationInk(num, record.strokes) })),
+      onChange: (changes) => this.commitPenChanges(changes, { project: strokes => this.reader.projectAnnotationInk(num, strokes), unproject: strokes => this.reader.projectAnnotationInk(num, strokes, true) }),
+      onUndo: () => this.undoPenChange(), onRedo: () => this.redoPenChange(),
+    });
+    pc.color = this.color;
+    pc.setTool(this.penTool);
+    pc.setActive(true);
+    this.penControllers.set(num, pc);
+  }
+
+  protected teardownPen(): void {
+    for (const pc of this.penControllers.values()) {
+      pc.setActive(false);
+      pc.destroy();
+    }
+    this.penControllers.clear();
+  }
+
+  private createPenAnnotation(pageNum: number, strokes: Stroke[][], layerId = this.getInkLayers().active, documentNotebookId = this.getDocumentNotebookId(), inkBrush: "pen" | "highlight" = "pen", inkWidth?: number, inkOpacity?: number, inkPreset?: HandwritingPresetId): void {
+    if (!this.docPath) return;
+    const ann: Annotation = {
+      id: uid("ann"),
+      docPath: this.docPath,
+      docKind: "pdf",
+      page: pageNum,
+      type: "pen",
+      rects: [],
+      text: "",
+      color: this.getHandwritingPreset().color,
+      strokes: this.reader.projectAnnotationInk(pageNum, strokes, true),
+      inkBrush,
+      inkRecallPurpose: inkBrush==="highlight" ? this.getHandwritingPreset().recallPurpose??"mask" : undefined,
+      inkWidth: inkWidth ?? handwritingPresetWidth(this.getHandwritingPreset(), "document"),
+      inkOpacity: inkOpacity ?? this.getHandwritingPreset().opacity,
+      inkPreset: inkPreset ?? this.getActiveHandwritingPreset(),
+      inkLayerId: layerId,
+      documentNotebookId,
+      createdAt: todayStr(),
+    };
+    this.pushAnnotation(ann);
+  }
+
+  // ===== 套索/区域摘录 =====
+  private bindLasso(): void {
+    const sc = this.getScrollContainer();
+    sc.addEventListener("pointerdown", this.onLassoPointerDown);
+  }
+
+  private onLassoPointerDown = (e: PointerEvent): void => {
+    if (!this.isLassoMode() || this.lassoActive || e.button !== 0 || e.isPrimary === false) return;
+    const pageEl = this.findPageEl(e.clientX, e.clientY);
+    if (!pageEl) return;
+    e.preventDefault();
+    e.stopPropagation();
+    this.lassoActive = true;
+    const rect = pageEl.getBoundingClientRect();
+    this.lassoStart = {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+      page: Number(pageEl.dataset.page),
+    };
+    const overlay = el("div", { class: "ms-lasso" });
+    overlay.style.left = `${this.lassoStart.x}px`;
+    overlay.style.top = `${this.lassoStart.y}px`;
+    overlay.style.width = "0px";
+    overlay.style.height = "0px";
+    pageEl.append(overlay);
+    this.lassoOverlay = overlay;
+
+    const pointerId = e.pointerId;
+    const move = (ev: PointerEvent) => { if (ev.pointerId === pointerId) this.onLassoPointerMove(ev, pageEl); };
+    const up = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
+      this.cleanupLasso?.();
+      this.cleanupLasso = null;
+      void this.onLassoPointerUp(ev, pageEl);
+    };
+    this.cleanupLasso?.();
+    this.cleanupLasso = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+    };
+    const cancel = (ev: PointerEvent) => { if (ev.pointerId === pointerId) this.cancelRegionGesture(); };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+  };
+
+  private onLassoPointerMove(e: PointerEvent, pageEl: HTMLElement): void {
+    if (!this.lassoActive || !this.lassoOverlay) return;
+    const rect = pageEl.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const left = Math.min(this.lassoStart.x, x);
+    const top = Math.min(this.lassoStart.y, y);
+    const width = Math.abs(x - this.lassoStart.x);
+    const height = Math.abs(y - this.lassoStart.y);
+    this.lassoOverlay.style.left = `${left}px`;
+    this.lassoOverlay.style.top = `${top}px`;
+    this.lassoOverlay.style.width = `${width}px`;
+    this.lassoOverlay.style.height = `${height}px`;
+  }
+
+  private async onLassoPointerUp(e: PointerEvent, pageEl: HTMLElement): Promise<void> {
+    if (!this.lassoActive) return;
+    const revision = this.documentRevision, regionSession = this.regionSession;
+    const docPath = this.docPath;
+    this.lassoActive = false;
+    const overlay = this.lassoOverlay;
+    this.lassoOverlay = null;
+    if (overlay) overlay.remove();
+
+    const rect = pageEl.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const left = Math.min(this.lassoStart.x, x);
+    const top = Math.min(this.lassoStart.y, y);
+    const width = Math.abs(x - this.lassoStart.x);
+    const height = Math.abs(y - this.lassoStart.y);
+    if (width < 20 || height < 20) return;
+
+    const pageNum = this.lassoStart.page;
+    const rec = this.reader.getPageRecord(pageNum);
+    if (!rec?.viewport || rec.renderedScale !== this.reader.getScale()) return;
+    const canvas = rec.canvas.getBoundingClientRect();
+    const client = { left: rect.left + left, top: rect.top + top, right: rect.left + left + width, bottom: rect.top + top + height, width, height };
+    if(this.plugin.store.settings.excerptAutoExpandRect){
+      const spans=[...rec.wrapper.querySelectorAll<HTMLElement>(".ms-text-layer span")].map(span=>span.getBoundingClientRect()).filter(box=>box.bottom>client.top&&box.top<client.bottom&&box.right>client.left&&box.left<client.right);
+      if(spans.length){client.left=Math.max(canvas.left,Math.min(client.left,...spans.map(box=>box.left)));client.right=Math.min(canvas.right,Math.max(client.right,...spans.map(box=>box.right)));client.width=client.right-client.left;}
+    }
+    const pdfRect = clientRectToPdfRect(client, canvas, rec.viewport);
+    if (!pdfRect) return;
+
+    // 截图
+    const image = this.captureRegion(pageNum, Math.max(client.left, canvas.left) - canvas.left, Math.max(client.top, canvas.top) - canvas.top,
+      Math.min(client.right, canvas.right) - Math.max(client.left, canvas.left), Math.min(client.bottom, canvas.bottom) - Math.max(client.top, canvas.top));
+
+    const target: SelTarget = { kind: "pdf", pageNum, rects: [pdfRect], pdfGeometry: [{ page: pageNum, rects: [pdfRect] }], pdfCoordinateSpace: "pdf" };
+    if (revision !== this.documentRevision || regionSession !== this.regionSession || docPath !== this.docPath) return;
+    this.commitRegion(target, image, "");
+  }
+
+  protected async correctSelectionText(target:SelTarget,text:string):Promise<string> {
+    if(target.kind!=="pdf"||this.plugin.store.settings.appleOcrEngine===false)return text;
+    const revision=this.documentRevision,path=this.docPath;const current=()=>revision===this.documentRevision&&path===this.docPath;
+    const parts=target.pdfGeometry??[{page:target.pageNum,rects:target.rects}],corrected:string[]=[];
+    for(const part of parts)for(const rect of part.rects){
+      const box=this.reader.projectRect(part.page,rect,"pdf");if(!box)return text;
+      const image=this.captureRegion(part.page,box.left,box.top,box.width,box.height);if(!image)return text;
+      const line=mergeOcrWords(await recognizeImage(this.plugin.app,image,true,current));if(!current()||!line.trim())return text;corrected.push(line);
+    }
+    return corrected.join("\n")||text;
+  }
+  private findPageEl(clientX: number, clientY: number): HTMLElement | null {
+    const sc = this.getScrollContainer();
+    const pages = sc.querySelectorAll<HTMLElement>(".ms-page");
+    for (const p of Array.from(pages)) {
+      const r = p.getBoundingClientRect();
+      if (clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom) return p;
+    }
+    return null;
+  }
+
+  private captureRegion(pageNum: number, left: number, top: number, width: number, height: number): string | undefined {
+    const rec = this.reader.getPageRecord(pageNum);
+    if (!rec) return undefined;
+    const source = rec.canvas;
+    // rec.canvas 是设备像素（viewport.width * dpr），而 left/top/width/height 是 CSS 像素，
+    // 必须按 dpr 换算采样坐标，否则只会截到左上角 1/dpr 大小的错误区域（看着像“看不到全景”）。
+    const dprX = source.width / Math.max(1, rec.canvas.clientWidth);
+    const dprY = source.height / Math.max(1, rec.canvas.clientHeight);
+    const tmp = document.createElement("canvas");
+    tmp.width = Math.max(1, Math.floor(width * dprX));
+    tmp.height = Math.max(1, Math.floor(height * dprY));
+    const ctx = tmp.getContext("2d");
+    if (!ctx) return undefined;
+    ctx.drawImage(
+      source,
+      left * dprX,
+      top * dprY,
+      width * dprX,
+      height * dprY,
+      0,
+      0,
+      tmp.width,
+      tmp.height
+    );
+    try {
+      return tmp.toDataURL("image/jpeg", 0.85);
+    } catch {
+      return undefined;
+    }
+  }
+
+  // ===== 渲染（增量，带 elMap） =====
+  protected onReadingPreferencesChanged():void { for(const page of this.reader.getPageNumbers())this.renderMarginNotes(page); }
+  private renderMarginNotes(pageNum:number):void {
+    const rec=this.reader.getPageRecord(pageNum);if(!rec)return;rec.wrapper.querySelector(':scope > .ms-margin-notes')?.remove();
+    if(rec.renderedScale!==this.reader.getScale())return;
+    const settings=this.plugin.store.settings,layer=el('div',{class:'ms-margin-notes'}),all=this.getAnnotationsForDisplay().filter(ann=>ann.type!=='pen'&&ann.type!=='voice'&&!ann.overlay);
+    let bottom=0;
+    for(const [index,ann] of all.entries()){
+      const part=annotationGeometry(ann).find(part=>part.page===pageNum),r=part?.rects[0],box=r&&this.reader.projectRect(pageNum,r,ann.pdfCoordinateSpace);if(!box)continue;
+      if(!settings.hideMarginNumbers){const number=el('button',{class:'ms-margin-number','aria-label':`页边编号 ${index+1}`,text:String(index+1)});number.style.top=`${box.top}px`;number.addEventListener('click',event=>this.onAnnClick(ann,event));layer.append(number);}
+      if(!settings.showFootnotesLinksOnMargin||!this.reader.getMarginCommentArea())continue;
+      const card=ann.cardId?this.plugin.store.getCard(ann.cardId):undefined,note=[ann.noteText,card?.back].filter(Boolean).join('\n'),links=card?.links??[];
+      if(!note&&!links.length)continue;const foot=el('div',{class:'ms-margin-footnote','aria-label':`页边脚注 ${index+1}`});foot.style.top=`${Math.max(box.top,bottom)}px`;foot.append(el('span',{text:`${index+1}. ${note}`}));
+      for(const id of links){const linked=this.plugin.store.getCard(id);if(!linked)continue;const link=el('button',{text:linked.title||linked.front.slice(0,60),'aria-label':`页边链接 ${id}`});link.addEventListener('click',()=>{this.plugin.viewEvents?.onDocumentCardSelect?.(id);void(async()=>{const file=this.plugin.app.vault.getAbstractFileByPath(linked.docPath);if(file instanceof TFile){const reader=await this.plugin.openDocument(file);await(reader as any).selectDocumentNotebook?.(linked.documentNotebookId??'default');if(linked.anchorAnnId)reader.flashAnnotation(linked.anchorAnnId);}})().catch(error=>new Notice(String(error)));});foot.append(link);}
+      layer.append(foot);bottom=Math.max(box.top,bottom)+Math.max(36,Math.ceil(note.length/24)*18+links.length*24)+8;
+    }rec.wrapper.append(layer);
+  }
+  protected assistiveCandidates(): import('../annot/baseController').AssistiveCandidate[] {
+    const result:import('../annot/baseController').AssistiveCandidate[]=[];
+    for(const page of this.reader.getPageNumbers()){
+      const rec=this.reader.getPageRecord(page);if(!rec||rec.renderedScale!==this.reader.getScale())continue;
+      for(const rect of rec.imageRects??[]){
+        const box=this.reader.projectRect(page,rect,'pdf');if(!box||box.width<3||box.height<3)continue;const canvas=rec.canvas.getBoundingClientRect();
+        result.push({box:new DOMRect(canvas.left+box.left,canvas.top+box.top,box.width,box.height),text:'',target:{kind:'pdf',pageNum:page,rects:[rect],pdfGeometry:[{page,rects:[rect]}],pdfCoordinateSpace:'pdf'},image:()=>this.captureRegion(page,box.left,box.top,box.width,box.height)});
+      }
+      for(const span of rec.textLayer.querySelectorAll<HTMLElement>('span')){
+        const range=document.createRange();range.selectNodeContents(span);const target=this.resolveSelection(range),box=range.getBoundingClientRect();
+        if(target&&range.toString().trim()&&box.width>0&&box.height>0)result.push({box,text:range.toString().trim(),target,range});if(result.length>=200)return result;
+      }
+    }return result;
+  }
+  renderPage(pageNum: number): void {
+    const rec = this.reader.getPageRecord(pageNum);
+    if (!rec || rec.renderedScale !== this.reader.getScale()) return;
+    if (this.penMode) this.setupPenForPage(pageNum);
+    const scale = this.reader.getScale();
+    const inCache = this.getAnnotationsForDisplay().filter((a) => (a.type !== "pen" || this.isInkVisible(a)) && annotationGeometry(a).some((geometry) => geometry.page === pageNum));
+    const inCacheIds = new Set(inCache.map((a) => a.id));
+    // 1. 移除本页已不存在的标注元素（增量删除，不再整页 clear——性能优化 D）
+    for (const [id, entry] of this.elMap) {
+      if (entry.page === pageNum && !inCacheIds.has(entry.annId)) {
+        entry.els.forEach((e) => this.detachAnnotationElement(e));
+        this.elMap.delete(id);
+      }
+    }
+    // 2. 新增 / scale 变化需重建的标注：仅处理缺失或过期项，已是最新的跳过
+    for (const a of inCache) {
+      const entry = this.elMap.get(this.pageKey(a.id, pageNum));
+      const live =
+        entry &&
+        entry.scale === scale &&
+        entry.fingerprint === this.annotationFingerprint(a) &&
+        entry.els.length > 0 &&
+        entry.els.every((e) => e.parentElement === rec.annLayer);
+      if (live) continue;
+      if (entry) entry.els.forEach((e) => this.detachAnnotationElement(e));
+      this.renderOnPage(a, pageNum, annotationGeometry(a).find((geometry) => geometry.page === pageNum)?.rects ?? []);
+    }
+    this.syncOcclusionElements();this.refreshAssistiveExcerpt();this.renderTitleLinks();this.renderMarginNotes(pageNum);
+  }
+
+  protected renderOne(ann: Annotation): void {
+    ann=this.mapAnnotationForDisplay(ann);
+    if (!this.isAnnotationVisible(ann) || (ann.overlay && !this.isInkVisible(ann))) return;
+    for (const geometry of annotationGeometry(ann)) this.renderOnPage(ann, geometry.page, geometry.rects);
+    this.onReadingPreferencesChanged();
+    this.syncOcclusionElements();
+  }
+
+  private pageKey(annId: string, page: number): string { return `${page}\u0000${annId}`; }
+
+  private renderOnPage(ann: Annotation, pageNum: number, rects: PdfRect[]): void {
+    const rec = this.reader.getPageRecord(pageNum);
+    if (!rec || rec.renderedScale !== this.reader.getScale()) return;
+    const scale = this.reader.getScale();
+    const key = this.pageKey(ann.id, pageNum);
+    // 幂等：先清理该标注可能残留的旧元素（便于缩放重建/重复渲染）
+    const old = this.elMap.get(key);
+    if (old) old.els.forEach((e) => this.detachAnnotationElement(e));
+
+    const made: HTMLElement[] = [];
+    const finish = () => {
+      made.forEach((element) => element.classList.toggle("ms-document-notebook-reference", this.isNotebookReference(ann)));
+      made.forEach((element) => element.classList.toggle("ms-reference-source", !!(ann as LinkedPageAnnotation).referenceSource));
+      this.elMap.set(key, { annId: ann.id, els: made, scale, page: pageNum, fingerprint: this.annotationFingerprint(ann) });
+    };
+
+    if (ann.overlay && !ann.overlay.deleted) {
+      const surface = this.getOverlaySurface(ann);
+      if (surface) made.push(this.renderFreeOverlay(ann,surface));
+      finish(); return;
+    }
+
+    if (ann.type === "pen" && ann.strokes && ann.strokes.length) {
+      if (!this.isInkVisible(ann)) { finish(); return; }
+      const w = rec.annLayer.clientWidth;
+      const h = rec.annLayer.clientHeight;
+      const holder = el("div", { class: "ms-ann ms-ann-pen" });
+      holder.dataset.annId = ann.id;
+      if(ann.inkBrush==="highlight")holder.dataset.recallInk="";
+      holder.dataset.inkLayerId = ann.inkLayerId ?? "default";
+      holder.classList.toggle("ms-ink-reference", this.isInkReference(ann));
+      const projected=this.reader.projectAnnotationInk(pageNum, ann.strokes);
+      PenController.render(holder, projected, w, h, ann.color, ann.inkBrush, ann.inkWidth, ann.inkOpacity);
+      holder.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        this.onAnnClick(ann, ev);
+      });
+      rec.annLayer.append(holder);
+      made.push(holder);
+      made.push(...this.appendRecallInkMasks(rec.annLayer,ann,projected,w,h));
+      finish();
+      return;
+    }
+
+    if (ann.type === "voice" && ann.audioPath) {
+      const w = rec.annLayer.clientWidth;
+      const h = rec.annLayer.clientHeight;
+      const holder = el("div", { class: "ms-ann ms-ann-voice" });
+      holder.textContent = ann.mediaKind==="video"?"▶":"🎙";
+      holder.dataset.annId = ann.id;
+      const point = this.reader.projectAnnotationPoint(pageNum, ann.pos ?? { x: .5, y: .5 });
+      holder.style.left = `${(point.x * w).toFixed(1)}px`;
+      holder.style.top = `${(point.y * h).toFixed(1)}px`;
+      holder.title = "点击播放语音批注";
+      holder.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        this.onAnnClick(ann, ev);
+      });
+      rec.annLayer.append(holder);
+      made.push(holder);
+      finish();
+      return;
+    }
+
+    if (ann.type === "region") {
+      for (const r of rects) {
+        const projected = this.reader.projectRect(pageNum, r, ann.pdfCoordinateSpace);
+        if (!projected) continue;
+        const { left, top, width, height } = projected;
+        const div = el("div", { class: "ms-ann ms-ann-region", draggable: "true" });
+        div.style.left = `${left}px`;
+        div.style.top = `${top}px`;
+        div.style.width = `${width}px`;
+        div.style.height = `${height}px`;
+        div.style.borderColor = ann.color;
+        div.dataset.annId = ann.id;
+        div.title = ann.text ? ann.text.slice(0, 120) : "区域摘录";
+        div.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          this.onAnnClick(ann, ev);
+        });
+        div.addEventListener("dragstart", (ev) => {
+          ev.dataTransfer?.setData("text/plain", ann.cardId ?? "");
+          ev.dataTransfer?.setData("application/margin-study-ann-id", ann.id);
+        });
+        rec.annLayer.append(div);
+        made.push(div);
+      }
+      finish();
+      return;
+    }
+
+    for (const r of rects) {
+      const projected = this.reader.projectRect(pageNum, r, ann.pdfCoordinateSpace);
+      if (!projected) continue;
+      const { left, top, width, height } = projected;
+      const div = el("div", { class: `ms-ann ms-ann-${ann.type}` });
+      div.style.left = `${left}px`;
+      div.style.top = `${top}px`;
+      div.style.width = `${width}px`;
+      div.style.height = `${height}px`;
+      if (ann.type === "highlight") {
+        div.style.background = ann.color;
+      } else if (ann.type === "underline") {
+        div.style.borderBottomColor = ann.color;
+      } else if (ann.type === "strike") {
+        div.style.background = ann.color;
+        div.style.border = "0";
+        div.style.height = "2px";
+        div.style.top = `${top + height / 2 - 1}px`;
+      } else {
+        div.style.borderColor = ann.color;
+        const dot = el("div", { class: "ms-ann-dot" });
+        dot.style.background = ann.color;
+        div.append(dot);
+      }
+      div.dataset.annId = ann.id;
+      div.title = ann.type === "note" ? ann.noteText || "批注" : ann.text.slice(0, 80);
+      div.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        this.onAnnClick(ann, ev);
+      });
+      rec.annLayer.append(div);
+      made.push(div);
+      if (ann.type === "highlight" || ann.type === "underline" || ann.type === "strike") {
+        // 完整文字矩形上的不透明遮罩，不能只模糊 PDF 下方的独立色块。
+        const mask = el("div", { class: "ms-ann ms-recall-mask", role: "button", tabindex: "0", "aria-label": "揭示摘录" });
+        mask.dataset.annId = ann.id;
+        mask.style.left = `${left}px`;
+        mask.style.top = `${top}px`;
+        mask.style.width = `${width}px`;
+        mask.style.height = `${height}px`;
+        mask.addEventListener("click", (event) => this.onAnnClick(ann, event));
+        mask.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          mask.click();
+        });
+        rec.annLayer.append(mask);
+        made.push(mask);
+      }
+    }
+    finish();
+  }
+
+  protected removeAnnotationEl(ann: Annotation): void {
+    for (const [key, entry] of this.elMap) {
+      if (entry.annId !== ann.id) continue;
+      entry.els.forEach((e) => this.detachAnnotationElement(e));
+      this.elMap.delete(key);
+    }
+    this.onReadingPreferencesChanged();
+  }
+
+  protected afterNoteEdited(ann: Annotation): void { this.renderOne(ann); }
+
+  private annotationFingerprint(ann: Annotation): string {
+    return JSON.stringify([ann.type, ann.rects, ann.pdfGeometry, ann.pdfCoordinateSpace, ann.color, ann.text, ann.noteText, ann.audioPath, ann.pos, ann.strokes, ann.cardId, ann.inkLayerId, ann.inkBrush, ann.inkRecallPurpose, ann.overlay, (ann.type === "pen" || !!ann.overlay) && this.isInkReference(ann)]);
+  }
+
+  refreshAll(): void {
+    if (!this.docPath) return;
+    const pages = new Set([...this.getAnnotationsForDisplay().flatMap((a) => annotationGeometry(a).map((geometry) => geometry.page)), ...[...this.elMap.values()].map((entry) => entry.page)]);
+    for (const p of pages) this.renderPage(p);
+  }
+
+  /** 跳转到某标注并高亮闪烁 */
+  flashAnnotation(annId: string): void {
+    const stored = this.cache.find((a) => a.id === annId);
+    if (stored?.overlay?.deleted) { new Notice("此自由批注已删除；已有卡片与来源身份仍保留"); return; }
+    if (!stored) return; this.revealAnnotationNotebook(stored); const ann = this.mapAnnotationForDisplay(stored);
+    const geometry = annotationGeometry(ann).filter((entry)=>entry.page>0);
+    const first = geometry.find((entry) => entry.rects.length) ?? geometry[0];
+    if (!first) { new Notice("该标注的页面已从重组文档移除；原标注数据仍保留"); return; }
+    const revision = this.documentRevision;
+    void this.reader.navigateToReference(first.page, first.rects, ann.pdfCoordinateSpace).then((navigated) => {
+      if (!navigated || revision !== this.documentRevision) return;
+      this.renderPage(first.page);
+      for (const entry of this.elMap.values()) {
+        if (entry.annId !== annId) continue;
+        entry.els.forEach((element) => element.classList.add("ms-ann-flash"));
+        setTimeout(() => entry.els.forEach((element) => element.classList.remove("ms-ann-flash")), 1600);
+      }
+    });
+  }
+}

@@ -1,0 +1,138 @@
+{
+  "verifiedAt": "2026-10-15T15:42:16.119Z",
+  "environment": "isolated Chromium; in-memory Store; synthetic Obsidian/Markdown renderer",
+  "checks": [
+    {
+      "name": "emphasis masking follows question scope while code and stored text stay intact",
+      "passed": true
+    },
+    {
+      "name": "hiding cloze reveals view text without revealing the back, allowing a grade or writing data",
+      "passed": true
+    },
+    {
+      "name": "showing cloze restores masking with the same question and stored source",
+      "passed": true
+    },
+    {
+      "name": "a temporary emphasis peek keeps explicit cloze and grading concealed",
+      "passed": true
+    },
+    {
+      "name": "show answer remains the independent gate for grading",
+      "passed": true
+    },
+    {
+      "name": "real drawing input and text feedback attach to one completed review and keep raw cloze",
+      "passed": true
+    },
+    {
+      "name": "completed history renders saved feedback and drawing while hiding initialization audits",
+      "passed": true
+    },
+    {
+      "name": "selected saved excerpt text is wrapped through the Store API",
+      "passed": true
+    },
+    {
+      "name": "selecting the inner text cancels a saved plain cloze",
+      "passed": true
+    },
+    {
+      "name": "cloze controls leave both unsaved draft text and saved source untouched",
+      "passed": true
+    },
+    {
+      "name": "saved note text has the same wrap and unwrap control",
+      "passed": true
+    },
+    {
+      "name": "review copy defaults to all content and image masks",
+      "passed": true
+    },
+    {
+      "name": "no-deck enrollment opens a picker and creating a deck binds the learning set without implicit membership",
+      "passed": true
+    },
+    {
+      "name": "selected copy parts and masks enroll with independent identity without changing the source",
+      "passed": true
+    },
+    {
+      "name": "explicitly enrolled cards show persistent deck-name badges",
+      "passed": true
+    },
+    {
+      "name": "editing the copied image mask leaves all source masks intact",
+      "passed": true
+    },
+    {
+      "name": "explicit source refresh applies selected note and masks while keeping omitted title and excerpt",
+      "passed": true
+    },
+    {
+      "name": "deck review first opens a read-only due-card browser before the explicit question-rating mode gate",
+      "passed": true
+    },
+    {
+      "name": "the deck picker starts its isolated due queue and shows the selected deck identity",
+      "passed": true
+    },
+    {
+      "name": "completed future-due cards remain deck members while the due start action becomes unavailable",
+      "passed": true
+    },
+    {
+      "name": "all-card browsing still includes a future-due member without opening grading controls",
+      "passed": true
+    },
+    {
+      "name": "the deck browser favorite action persists on the card without adding a review",
+      "passed": true
+    },
+    {
+      "name": "browser editing returns to the same card and does not create a review",
+      "passed": true
+    },
+    {
+      "name": "previous and next navigate persistent membership including both future and due cards",
+      "passed": true
+    },
+    {
+      "name": "browser filters intersect favorite, tag, color and rating while retaining future members",
+      "passed": true
+    },
+    {
+      "name": "manual review-question editing changes the projected face while leaving source title, excerpt and note intact",
+      "passed": true
+    },
+    {
+      "name": "batch question extraction preserves an existing manual override and sets the other cards",
+      "passed": true
+    },
+    {
+      "name": "native pre-AQ browsing has its separate 1188 by 679 white card, 20px text, Prev/Next footer and no scoring",
+      "passed": true
+    },
+    {
+      "name": "native reference scoring uses the measured full white card, top counter and four equal bottom controls",
+      "passed": true
+    },
+    {
+      "name": "native Note Card editor retains the 520 by 560 floating template and full-width bottom format bar",
+      "passed": true
+    },
+    {
+      "name": "native formatting controls update the selected excerpt and persist card typography through the existing save path",
+      "passed": true
+    },
+    {
+      "name": "Markdown preview renders the saved emphasis without rewriting the excerpt",
+      "passed": true
+    },
+    {
+      "name": "the native pen control inserts a real drawn image into the note and persists it",
+      "passed": true
+    }
+  ]
+}

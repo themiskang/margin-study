@@ -1,0 +1,79 @@
+import { ReaderView } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/readerView';
+import { WordReaderView } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/word/wordReader';
+import { DocumentReaderView } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/documents/documentReader';
+
+function pointer(host:HTMLElement,type:string,x:number,y:number){const overlay=host.querySelector('.ms-pen-overlay')!,rect=host.getBoundingClientRect();overlay.dispatchEvent(new PointerEvent(type,{clientX:rect.left+x*rect.width,clientY:rect.top+y*rect.height,pointerId:11,button:0,isPrimary:true,bubbles:true}));}
+export async function runLayerAcceptance({test,assert,plugin,add,app,htmlController}:any){
+ await test('Handwriting layers preserve legacy ink/non-ink, switch and overlay one read-only layer, hide reference in recall',async()=>{
+  const p=plugin(),a=htmlController(p,'layers.html'),b=htmlController(p,'layers.html');await a.load();await b.load();a.body.style.cssText='position:relative;width:400px;height:300px';
+  a.ann.createPenAnnotation([[{x:.2,y:.2},{x:.4,y:.2}]]);const legacy=(await p.store.loadAnnotations('layers.html'))[0];delete legacy.inkLayerId;
+  a.ann.commitRegion({kind:'html',range:{start:0,end:6,exact:'before'}},undefined,'before');
+  a.ann.createInkLayer('二轮');const second=a.ann.getInkLayers().active;assert(second!=='default'&&!a.body.querySelector('.ms-ann-pen')&&!b.body.querySelector('.ms-ann-pen'),'legacy layer not hidden across views');
+  a.ann.createPenAnnotation([[{x:.2,y:.2},{x:.4,y:.2}]]);const current=(await p.store.loadAnnotations('layers.html')).find((ann:any)=>ann.type==='pen'&&ann.id!==legacy.id);
+  assert(current.inkLayerId===second&&a.body.querySelectorAll('.ms-ann-pen').length===1,'new ink not assigned');
+  a.ann.setInkOverlay('default');const reference=a.body.querySelector('.ms-ink-reference');assert(reference&&getComputedStyle(reference).opacity==='0.35'&&getComputedStyle(reference.querySelector('path')).pointerEvents==='none','reference not read-only');
+  a.ann.setRecallMode(true);assert(getComputedStyle(reference).display==='none','reference leaks into recall');a.ann.setRecallMode(false);
+  a.ann.selectPenTool('erase');pointer(a.body,'pointerdown',.3,.15);pointer(a.body,'pointermove',.3,.25);pointer(a.body,'pointerup',.3,.25);
+  assert(current.strokes.length===0&&legacy.strokes.length===1,'eraser edited reference layer');assert((await p.store.loadAnnotations('layers.html')).some((ann:any)=>ann.type==='region'),'switch erased non-ink annotations');
+  a.ann.setInkOverlay(undefined);assert(!a.body.querySelector('.ms-ink-reference'),'overlay hide failed');a.ann.createInkLayer('默认图层');assert(a.ann.getInkLayers().active==='default','existing name did not switch layer');
+  await a.close();await b.close();
+ });
+ await test('Pending handwriting stays on original layer; rename/merge preserve annotation/source identity and permanent default',async()=>{
+  const p=plugin(),h=htmlController(p,'merge-layers.html');await h.load();h.body.style.cssText='position:relative;width:400px;height:300px';h.ann.selectPenTool('draw');
+  pointer(h.body,'pointerdown',.1,.2);pointer(h.body,'pointermove',.3,.25);h.ann.createInkLayer('练习');
+  const annotations=await p.store.loadAnnotations('merge-layers.html'),old=annotations[0],exercise=h.ann.getInkLayers().active;assert(old.inkLayerId==='default','pending stroke migrated to new layer');
+  pointer(h.body,'pointerdown',.5,.5);pointer(h.body,'pointermove',.6,.55);pointer(h.body,'pointerup',.6,.55);const fresh=annotations[1];assert(fresh.inkLayerId===exercise,'new controller kept old layer');p.store.cards.push({id:'layer-card',anchorAnnId:fresh.id});
+  h.ann.renameInkLayer(exercise,'二轮订正');assert(h.ann.getInkLayers().layers.find((layer:any)=>layer.id===exercise).name==='二轮订正','rename failed');
+  h.ann.mergeInkLayers(exercise,'default');assert(fresh.inkLayerId==='default'&&p.store.cards[0].anchorAnnId===fresh.id&&!h.ann.getInkLayers().layers.some((layer:any)=>layer.id===exercise),'merge changed identity or retained source layer');
+  h.ann.createInkLayer('归档');const archive=h.ann.getInkLayers().active;h.ann.mergeInkLayers('default',archive);assert(h.ann.getInkLayers().layers.some((layer:any)=>layer.id==='default')&&annotations.every((ann:any)=>ann.inkLayerId===archive),'default removed or ink not merged');
+  await h.close();
+ });
+ await test('PDF layers render on the correct pages, persist overlay state, and layer controls survive reopening',async()=>{
+  add('layer-pdf.pdf',{name:'Layers',pages:2});const p=plugin(),v:any=new ReaderView({app} as any,p);await v.onOpen();await v.loadFileByPath('layer-pdf.pdf');await v.renderPage(2);
+  const controller=v.annController;controller.createPenAnnotation(1,[[{x:.2,y:.2},{x:.4,y:.2}]]);controller.createInkLayer('PDF 二轮');const second=controller.getInkLayers().active;
+  controller.createPenAnnotation(1,[[{x:.3,y:.3},{x:.5,y:.3}]]);controller.createPenAnnotation(2,[[{x:.3,y:.3},{x:.5,y:.3}]]);controller.setInkOverlay('default');
+  assert(v.getPageRecord(1).annLayer.querySelectorAll('.ms-ann-pen').length===2&&v.getPageRecord(2).annLayer.querySelectorAll('.ms-ann-pen').length===1,'layer render crossed pages');
+  const select=v.toolbarEl.querySelector('[aria-label="当前手写图层"]');assert(select.value===second,'toolbar state stale');
+  await v.onClose();const reopened:any=new ReaderView({app} as any,p);await reopened.onOpen();await reopened.loadFileByPath('layer-pdf.pdf');
+  assert(reopened.annController.getInkLayers().active===second&&reopened.getPageRecord(1).annLayer.querySelector('.ms-ink-reference'),'layer state lost on reopen');
+  const manage=[...reopened.toolbarEl.querySelectorAll('button')].find((button:any)=>button.textContent==='图层') as HTMLButtonElement;manage.click();assert(document.querySelector('.ms-ink-layer-modal'),'layer manager absent');await reopened.onClose();assert(!document.querySelector('.ms-ink-layer-modal'),'closing reader leaked layer dialog');
+ });
+ await test('Handwriting settings list creates/selects/overlays, same-name merges, deletes non-default ink only after confirmation',async()=>{
+  add('layer-ui.pdf',{name:'Layer UI',pages:1});const p=plugin(),v:any=new ReaderView({app} as any,p);await v.onOpen();await v.loadFileByPath('layer-ui.pdf');const c=v.annController;
+  c.createPenAnnotation(1,[[{x:.1,y:.1},{x:.2,y:.1}]]);v.openHandwritingSettings();
+  const button=(root:ParentNode,text:string)=>[...root.querySelectorAll('button')].find((node)=>node.textContent===text)! as HTMLButtonElement;
+  const create=(name:string)=>{(document.querySelector('.ms-ink-layer-modal [aria-label="新建手写图层"]') as HTMLButtonElement).click();const dialog=document.querySelector('.ms-ink-layer-name-modal')!,input=dialog.querySelector('input')!;input.value=name;input.dispatchEvent(new Event('input'));button(dialog,'确定').click();};
+  create('一刷');const first=c.getInkLayers().active;c.createPenAnnotation(1,[[{x:.3,y:.3},{x:.4,y:.3}]]);const annotations=await p.store.loadAnnotations('layer-ui.pdf'),source=annotations[1].id;p.store.cards.push({id:'ui-source',anchorAnnId:source});
+  const modal=document.querySelector('.ms-ink-layer-modal')!,overlay=modal.querySelector('[aria-label="叠加层"]') as HTMLSelectElement;overlay.value='default';overlay.dispatchEvent(new Event('change'));assert(c.getInkLayers().overlay==='default','UI overlay not selected');
+  (modal.querySelector('[aria-label="编辑手写图层"]') as HTMLButtonElement).click();(modal.querySelector('[aria-label="编辑图层 一刷"]') as HTMLButtonElement).click();button(modal,'重命名或合并').click();
+  const rename=document.querySelector('.ms-ink-layer-name-modal')!,name=rename.querySelector('input')!;name.value='默认图层';name.dispatchEvent(new Event('input'));button(rename,'合并到现有图层').click();
+  assert(!c.getInkLayers().layers.some((layer:any)=>layer.id===first)&&annotations[1].inkLayerId==='default'&&p.store.cards[0].anchorAnnId===source,'same-name UI merge broke identity');
+  create('临时');const temporary=c.getInkLayers().active;c.createPenAnnotation(1,[[{x:.6,y:.6},{x:.7,y:.6}]]);const erased=annotations[2];
+  (modal.querySelector('[aria-label="编辑图层 临时"]') as HTMLButtonElement).click();button(modal,'删除手写图层').click();button(document.querySelector('.ms-ink-layer-delete-modal')!,'取消').click();assert(c.getInkLayers().active===temporary&&erased.strokes.length===1,'cancel deleted ink');
+  button(modal,'删除手写图层').click();button(document.querySelector('.ms-ink-layer-delete-modal')!,'删除').click();
+  assert(c.getInkLayers().active==='default'&&!c.getInkLayers().layers.some((layer:any)=>layer.id===temporary)&&erased.strokes.length===0,'layer delete failed');c.undoPenChange();assert(erased.strokes.length===0,'deleted layer remained undoable');
+  c.deleteInkLayer('default');assert(c.getInkLayers().layers.some((layer:any)=>layer.id==='default')&&annotations[0].strokes.length===1,'permanent default deleted');
+  (modal.querySelector('[aria-label="新建手写图层"]') as HTMLButtonElement).click();assert(document.querySelector('.ms-ink-layer-name-modal'),'nested editor absent');await v.onClose();assert(!document.querySelector('.ms-ink-layer-modal,.ms-ink-layer-name-modal'),'closing reader leaked nested settings');
+ });
+ await test('Handwriting settings anchors to its tool without dimming, keeps native row order, and stores sync intent without claiming unavailable map handwriting',async()=>{
+  add('sync.pdf',{name:'Sync settings',pages:1});const p=plugin(),v:any=new ReaderView({app} as any,p);await v.onOpen();await v.loadFileByPath('sync.pdf');
+  const changes:boolean[]=[],unsubscribe=v.subscribeHandwritingSyncPreference((value:boolean)=>changes.push(value));v.setHandwritingSyncPreference(true);assert(v.getHandwritingSyncPreference()&&changes.join(',')==='false,true','sync preference not observable');v.annController.createPenAnnotation(1,[[{x:.1,y:.2}]]);v.createDocumentNotebook('Other');assert(v.getHandwritingSyncPreference()&&!p.store.getDocMeta('sync.pdf').documentNotebookMeta?.[v.getDocumentNotebookId()]?.handwritingSyncEnabled,'sync intent scoped to notebook');
+  const anchor=document.createElement('button');anchor.style.cssText='position:fixed;left:180px;top:20px;width:30px;height:30px';document.body.append(anchor);v.openHandwritingSettings(anchor);
+  const modal=document.querySelector('.ms-ink-layer-modal') as HTMLElement,bounds=modal.getBoundingClientRect(),toolbarBounds=anchor.getBoundingClientRect();assert(bounds.top===toolbarBounds.bottom+12&&Math.abs(bounds.left+bounds.width/2-(toolbarBounds.left+toolbarBounds.width/2))<1,'popover not anchored');assert(getComputedStyle(modal.parentElement!).backgroundColor==='rgba(0, 0, 0, 0)','settings dimmed workspace');
+  const body=modal.querySelector('.ms-ink-layer-body')!,children=[...body.children];assert(children[0].classList.contains('ms-ink-layer-header')&&children[1].classList.contains('ms-ink-preset-settings')&&children[2].classList.contains('ms-ink-layer-list')&&children[3].classList.contains('ms-ink-layer-new'),'native row order differs');const label=modal.querySelector('.ms-ink-layer-name')!,check=modal.querySelector('.ms-ink-layer-check')!;assert(check.getBoundingClientRect().left>label.getBoundingClientRect().left+label.getBoundingClientRect().width/2,'layer check is not on right');
+  const checkbox=modal.querySelector('input[type="checkbox"]') as HTMLInputElement;assert(checkbox.checked&&checkbox.disabled&&modal.textContent!.includes('当前未连接脑图手写，同步不生效'),'unavailable synchronization presented as working');v.setHandwritingSyncPreference(false);assert(!(modal.querySelector('input[type="checkbox"]') as HTMLInputElement).checked&&changes.join(',')==='false,true,false','settings stale after preference update');unsubscribe();v.setHandwritingSyncPreference(true);assert(changes.length===3,'preference unsubscribe failed');
+  v.setHandwritingSyncAvailable(true);const connected=modal.querySelector('input[type="checkbox"]') as HTMLInputElement;assert(!connected.disabled&&connected.checked,'connected sync control unavailable');connected.checked=false;connected.dispatchEvent(new Event('change'));assert(!v.getHandwritingSyncPreference()&&!(modal.querySelector('input[type="checkbox"]') as HTMLInputElement).checked,'connected checkbox did not save or refresh');v.setHandwritingSyncAvailable(false);assert((modal.querySelector('input[type="checkbox"]') as HTMLInputElement).disabled,'disconnected checkbox remained enabled');
+  document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));assert(!document.querySelector('.ms-ink-layer-modal'),'escape did not close popover');anchor.remove();await v.onClose();assert(p.store.subscriptionCount===0,'preference leaked store listener');
+ });
+ await test('All reader types expose callable labelled tools and hide internal chrome; PDF native search remains visible',async()=>{
+  add('chrome.pdf',{name:'Chrome',pages:1});add('chrome.docx',{content:'<p>Word text</p>'});add('chrome.html',{content:'<p>Static text</p>'});
+  for(const [View,path] of [[ReaderView,'chrome.pdf'],[WordReaderView,'chrome.docx'],[DocumentReaderView,'chrome.html']] as const){
+   const v:any=new View({app} as any,plugin());v.setWorkspaceChrome(true);await v.onOpen();await v.loadFileByPath(path);
+   const toolbar=v.getReaderToolbar();assert(toolbar.getAttribute('role')==='toolbar'&&getComputedStyle(toolbar).display==='none','workspace chrome did not hide internal toolbar');
+   const pen=toolbar.querySelector('[aria-label="手写画笔"]')! as HTMLButtonElement;assert(pen,'public pen control missing');pen.click();assert(pen.getAttribute('aria-pressed')==='true','hidden public action did not run');
+   v.openHandwritingSettings();assert(document.querySelector('.ms-ink-layer-modal'),'public settings action failed');
+   if(v instanceof ReaderView){v.openSearch();const search=v.containerEl.querySelector('.ms-native-reader-search');assert(search&&getComputedStyle(search).display!=='none'&&search.parentElement!==toolbar,'native PDF search hidden with toolbar');const close=search.querySelector('[aria-label="关闭文档搜索"]') as HTMLButtonElement;assert(close.getBoundingClientRect().width>=30,'search close button is not visible');close.click();assert(!v.containerEl.querySelector('.ms-native-reader-search'),'native search did not close');}
+   v.setWorkspaceChrome(false);assert(getComputedStyle(toolbar).display!=='none','standalone toolbar did not restore');await v.onClose();assert(!document.querySelector('.ms-ink-layer-modal'),'reader close leaked settings');
+  }
+ });
+}

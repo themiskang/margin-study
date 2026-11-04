@@ -1,0 +1,20 @@
+export const events: any[] = [];
+export async function loadPdf(data: ArrayBuffer, signal?: AbortSignal) {
+  const config = JSON.parse(new TextDecoder().decode(data));
+  await new Promise(r=>setTimeout(r,config.loadDelay||0));
+  if(signal?.aborted&&!config.ignoreAbort) throw new DOMException('cancelled','AbortError');
+  const doc = {name:config.name,numPages:config.pages||12,outline:config.outline,destroyed:false,async destroy(){this.destroyed=true;events.push(['destroy',config.name]);},
+    async getPage(num:number){await new Promise(r=>setTimeout(r,config.pageDelay||0));return {
+      getViewport({scale}:{scale:number}){
+        const [x0,y0,x1,y1]=config.crop||[0,0,600,800];const rotation=config.rotations?.[num-1]??config.rotation??0;
+        const coefficients:Record<number,number[]>={0:[1,0,0,-1,-x0,y1],90:[0,1,1,0,-y0,-x0],180:[-1,0,0,1,x1,-y0],270:[0,-1,-1,0,y1,x1]};
+        const [a,b,c,d,e,f]=coefficients[rotation].map(value=>value*scale);const transform=(x:number,y:number)=>[a*x+c*y+e,b*x+d*y+f];
+        return {width:(rotation%180?y1-y0:x1-x0)*scale,height:(rotation%180?x1-x0:y1-y0)*scale,scale,rotation,
+          convertToPdfPoint(x:number,y:number){const determinant=a*d-b*c;return[(d*(x-e)-c*(y-f))/determinant,(-b*(x-e)+a*(y-f))/determinant];},
+          convertToViewportRectangle(rect:number[]){return[...transform(rect[0],rect[1]),...transform(rect[2],rect[3])];}};},
+      render({canvasContext,viewport}:any){let done=false;let rejecter:any;const promise=new Promise<void>((resolve,reject)=>{rejecter=reject;setTimeout(()=>{if(done)return;done=true;canvasContext.fillStyle='#fff';canvasContext.fillRect(0,0,viewport.width,viewport.height);canvasContext.fillStyle='#222';canvasContext.fillText(config.name+' page '+num,20,30);events.push(['render',config.name,num,viewport.scale]);resolve();},config.renderDelay||0);});return {promise,cancel(){if(done)return;done=true;const e=new Error('cancelled');e.name='RenderingCancelledException';rejecter(e);}};},
+      async getTextContent(){await new Promise(r=>setTimeout(r,config.textDelay||0));return {items:config.textItems||[{str:config.name+' page '+num,x:80,y:500,w:200,h:18}]};},cleanup(){}
+    };}
+  };events.push(['load',config.name]); return doc;
+}
+export const pdfjsLib={renderTextLayer({textContentSource,container,viewport}:any){for(const item of textContentSource.items){const span=document.createElement('span');span.textContent=item.str;const [x1,y1,x2,y2]=viewport.convertToViewportRectangle([item.x,item.y,item.x+item.w,item.y+item.h]);span.style.cssText=`left:${Math.min(x1,x2)}px;top:${Math.min(y1,y2)}px;font-size:${16*viewport.scale}px;height:${Math.abs(y2-y1)}px;transform:none`;container.append(span);if(item.hasEOL)container.append(document.createElement("br"));}return{promise:Promise.resolve(),cancel(){}};}};

@@ -1,0 +1,114 @@
+{
+  "verifiedAt": "2026-11-04T13:41:53.680Z",
+  "environment": "isolated Chromium; localhost synthetic SSE provider; real AI UI/Store with synthetic Obsidian",
+  "checks": [
+    {
+      "name": "unbound sidebar disables Send and makes no provider request",
+      "passed": true
+    },
+    {
+      "name": "settings performs all four compatibility requests and stores the key outside plugin/local data",
+      "passed": true
+    },
+    {
+      "name": "native sidebar keeps the 440-wide pane, 32-high header, Template row and bottom composer",
+      "passed": true
+    },
+    {
+      "name": "real composer sends only explicit selected text and keeps the library unchanged",
+      "passed": true
+    },
+    {
+      "name": "Chat includes the previous exchange and Ask starts a separate request",
+      "passed": true
+    },
+    {
+      "name": "AI presets follow the observed native None, Guide, Quiz and Explain menu",
+      "passed": true
+    },
+    {
+      "name": "Guide requests one step at a time using only explicitly attached context",
+      "passed": true
+    },
+    {
+      "name": "card tools show an editable preview and only an explicit save creates a card without review enrollment",
+      "passed": true
+    },
+    {
+      "name": "outline preview edits save real hierarchy and undo removes the whole generated outline",
+      "passed": true
+    },
+    {
+      "name": "Markdown previews include an editable source link when selected material has a document",
+      "passed": true
+    },
+    {
+      "name": "real image upload uses multimodal input and user-edited Markdown saves to a new file",
+      "passed": true
+    },
+    {
+      "name": "editing a model immediately unbinds chat and reopening settings never reveals the saved key",
+      "passed": true
+    },
+    {
+      "name": "dragging one source card attaches that card and never uploads other library content",
+      "passed": true
+    },
+    {
+      "name": "Stop cancels a live stream without saving generated content",
+      "passed": true
+    },
+    {
+      "name": "cancel restores the submitted question for an explicit retry",
+      "passed": true
+    },
+    {
+      "name": "hiding the panel aborts the live stream and reopening preserves partial replies without sending another request",
+      "passed": true
+    },
+    {
+      "name": "closing the sidebar disposes its UI and in-memory conversation state",
+      "passed": true
+    },
+    {
+      "name": "an enabled Claudian defaults to direct generation and hides the custom Mini/Normal controls",
+      "passed": true
+    },
+    {
+      "name": "Claudian directly streams selected content back into an editable preview without altering its existing draft",
+      "passed": true
+    },
+    {
+      "name": "direct replies retain their selected source and cannot be saved twice from the same preview",
+      "passed": true
+    },
+    {
+      "name": "Claudian provider failure restores the question and selected source without a new import",
+      "passed": true
+    },
+    {
+      "name": "Claudian image paste is rejected before consuming the draft or making a request",
+      "passed": true
+    },
+    {
+      "name": "opt-in native Claudian replies from the linked session automatically appear in MarginStudy; unrelated sessions and prior history are not read",
+      "passed": true
+    },
+    {
+      "name": "Claudian 2.3.30 image upload sends a real image block and displays the streamed reply in the same panel",
+      "passed": true
+    },
+    {
+      "name": "a pasted Claudian reply is editable and only Save creates a card without review enrollment",
+      "passed": true
+    },
+    {
+      "name": "a manually pasted Markdown outline saves real hierarchy and remains one undoable transaction",
+      "passed": true
+    },
+    {
+      "name": "unknown Claudian versions show an editable manual-copy fallback without appending or sending",
+      "passed": true
+    }
+  ]
+}

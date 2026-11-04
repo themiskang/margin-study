@@ -1,0 +1,114 @@
+{
+  "verifiedAt": "2026-11-04T13:39:56.351Z",
+  "environment": "real Store over synthetic in-memory files and backup hashes",
+  "checks": [
+    {
+      "name": "saving unchanged card content preserves its timestamp, history and persisted data",
+      "passed": true
+    },
+    {
+      "name": "legacy annotations remain accepted without additive fields",
+      "passed": true
+    },
+    {
+      "name": "document fingerprints are additive and refresh without changing stable document identity",
+      "passed": true
+    },
+    {
+      "name": "missing-source recovery candidates require an exact unique content hash match",
+      "passed": true
+    },
+    {
+      "name": "a unique exact-content return restores the existing document identity and every Store path reference",
+      "passed": true
+    },
+    {
+      "name": "offline source moves are detected without a delete event and exact-content recovery migrates references",
+      "passed": true
+    },
+    {
+      "name": "changed-content source stays unresolved until explicit selection, then retains identity and old-version recovery data",
+      "passed": true
+    },
+    {
+      "name": "a target-sidecar migration conflict preserves both copies, original references, and a recovery record",
+      "passed": true
+    },
+    {
+      "name": "a failed main-data write rolls back a moved sidecar and retains a migration recovery snapshot",
+      "passed": true
+    },
+    {
+      "name": "two Store instances serialize disk commits and retain a concurrent edit as a conflict",
+      "passed": true
+    },
+    {
+      "name": "a failed save keeps the latest edit dirty and an explicit retry persists it",
+      "passed": true
+    },
+    {
+      "name": "tampered backup bytes are rejected before source or main data changes",
+      "passed": true
+    },
+    {
+      "name": "a partial backup restore rolls back every file and the live Store when a staged write fails",
+      "passed": true
+    },
+    {
+      "name": "text/image overlays, deleted state, notebook identity and highlighter brush persist and reopen unchanged",
+      "passed": true
+    },
+    {
+      "name": "rich text styles survive Store reopen and invalid runs cannot overwrite the sidecar",
+      "passed": true
+    },
+    {
+      "name": "overlay soft deletion participates in one Store undo/redo while preserving the source annotation/card identity",
+      "passed": true
+    },
+    {
+      "name": "unsafe or malformed overlay edits are rejected before scheduling a sidecar overwrite",
+      "passed": true
+    },
+    {
+      "name": "invalid disk overlays block load and preserve the original bytes",
+      "passed": true
+    },
+    {
+      "name": "a live annotation mutated after scheduling is revalidated immediately before disk write",
+      "passed": true
+    },
+    {
+      "name": "remote conflict adoption refuses unsafe overlays; choosing the valid local copy remains possible",
+      "passed": true
+    },
+    {
+      "name": "a hash-valid backup with unsafe overlay data fails staging before any file or main-data mutation",
+      "passed": true
+    },
+    {
+      "name": "duplicate annotation identities and malformed legacy shapes cannot enter through backups or edits",
+      "passed": true
+    },
+    {
+      "name": "a handwriting-only canvas counts as study content and survives save/reopen",
+      "passed": true
+    },
+    {
+      "name": "handwriting patches do not share mutable arrays and whole-stroke changes support undo/redo",
+      "passed": true
+    },
+    {
+      "name": "erasing the last default-layer stroke removes only the implicit empty container and supports undo/reopen",
+      "passed": true
+    },
+    {
+      "name": "custom empty sketch layers and legacy empty containers survive save/reopen without load-time migration",
+      "passed": true
+    },
+    {
+      "name": "an unsupported handwriting version cannot silently erase existing ink",
+      "passed": true
+    }
+  ]
+}

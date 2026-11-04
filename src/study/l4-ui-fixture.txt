@@ -1,0 +1,175 @@
+import { Store } from '__PROJECT__/src/model/store';
+import { MindmapRenderer } from '__PROJECT__/src/mindmap/mindmapRenderer';
+import { SidebarView } from '__PROJECT__/src/sidebar/sidebarView';
+import { MarkdownRenderer, TFile } from 'obsidian';
+
+// Only synthetic data is used. L4 supports entry/selection/source/badge behavior;
+// the structural action probes below also protect this plugin's existing behavior.
+const target = document.querySelector('#fixtures') as HTMLElement;
+const results: any[] = [];
+const stores: Store[] = [];
+const renderers: MindmapRenderer[] = [];
+(window as any).results = results;
+(HTMLElement.prototype as any).empty = function () { this.replaceChildren(); };
+document.body.style.margin = '0';
+const pause = () => new Promise(done => setTimeout(done, 0));
+function assert(value: any, message: string) { if (!value) throw new Error(message); }
+const encode = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+(MarkdownRenderer as any).render = async (_app: any, text: string, host: HTMLElement) => {
+  host.innerHTML = encode(text).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+};
+function button(root: ParentNode, name: string): HTMLButtonElement {
+  const found = [...root.querySelectorAll<HTMLButtonElement>('button')].find(node => node.getAttribute('aria-label') === name || node.textContent === name);
+  assert(found, `Missing button ${name}`); return found!;
+}
+const action = (root: ParentNode, name: string) => root.querySelector<HTMLButtonElement>(`.ms-selection-actions [data-action="${name}"]`)!;
+const card = (root: ParentNode, id: string) => root.querySelector<HTMLElement>(`.ms-node[data-id="${id}"]`)!;
+async function test(name: string, run: () => any) {
+  try {
+    document.querySelectorAll('.ms-modal-bg,#test-menu').forEach(node => node.remove());
+    target.replaceChildren(); target.style.width = ''; await run(); results.push({ name, passed: true });
+  } catch (error) { results.push({ name, passed: false, error: String(error) }); }
+}
+async function fresh(host?: any) {
+  let disk: any = {};
+  const files = new Map<string, string>();
+  const source = new TFile('synthetic.pdf');
+  const app: any = { vault: { getAbstractFileByPath: (path: string) => path === source.path ? source : null, getFiles: () => [source],
+    adapter: { exists: async (path: string) => files.has(path), mkdir: async (path: string) => files.set(path, ''),
+      write: async (path: string, value: string) => files.set(path, value), read: async (path: string) => files.get(path) } } };
+  host ??= { app, loadData: async () => structuredClone(disk), saveData: async (value: any) => { disk = structuredClone(value); } };
+  const store = new Store(host); await store.load(); stores.push(store);
+  const set = store.studySets[0] ?? store.createStudySet('L4 synthetic set');
+  const canvasId = store.activeCanvasId!;
+  let opens = 0; const jumps: any[] = [];
+  const plugin: any = { store, app: host.app, activeReader: null, refreshSidebar() {}, refreshMindmap() {}, sidebar: null,
+    openDocument: async () => { opens++; return { flashAnnotation: (id: string) => jumps.push(['anchor', id]), gotoPage: (page: number) => jumps.push(['page', page]) }; } };
+  const addCard = (id: string, text: string, patch: any = {}) => store.addCard({ id, docPath: 'synthetic.pdf', page: 1,
+    type: 'excerpt', front: text, color: '#ffffa0', tags: [], links: [], createdAt: '2026-10-15T00:00:00Z', ...patch });
+  const addNode = (id: string, cardId?: string, patch: any = {}) => {
+    store.addNode({ id, cardId, canvasId, parentId: null, title: `local-${id}`, order: store.nodes.length,
+      collapsed: false, x: 90 + store.nodes.length * 290, y: 100, ...patch }); return store.getNode(id)!;
+  };
+  const mount = () => { const wrap = document.createElement('div'); wrap.style.height = '650px'; target.append(wrap);
+    const renderer = new MindmapRenderer(plugin); renderer.mount(wrap); renderers.push(renderer); return { renderer, wrap }; };
+  return { store, plugin, set, canvasId, addCard, addNode, mount, host, jumps, opens: () => opens };
+}
+try {
+  await test('L4: explicit multi-select accumulates ordinary clicks, enables Merge for pairs, and exits', async () => {
+    const p = await fresh(); p.addCard('a', 'Alpha'); p.addCard('b', 'Beta'); p.addNode('one', 'a'); p.addNode('two', 'b'); const { wrap } = p.mount();
+    card(wrap, 'one').click(); card(wrap, 'two').click();
+    assert(wrap.querySelectorAll('.ms-node.is-selected').length === 1 && card(wrap, 'two').classList.contains('is-selected'), 'normal clicks accumulated');
+    assert(action(wrap, 'merge').disabled, 'Merge enabled outside explicit mode');
+    action(wrap, 'close').click(); button(wrap, '多选').click();
+    assert(wrap.querySelector('[data-selection-mode="multiple"]'), 'multi-select mode was not entered');
+    assert(action(wrap, 'merge').disabled, 'empty Merge enabled'); card(wrap, 'one').click();
+    assert(action(wrap, 'merge').disabled, 'single-card Merge enabled'); card(wrap, 'two').click();
+    assert(wrap.querySelectorAll('.ms-node.is-selected').length === 2 && !action(wrap, 'merge').disabled, 'ordinary clicks did not accumulate or enable Merge');
+    card(wrap, 'two').dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); assert(!document.querySelector('.ms-modal'), 'multi-select double click edited content');
+    action(wrap, 'close').click(); assert(!wrap.querySelector('.ms-node.is-selected') && wrap.querySelector('[data-selection-mode="single"]'), 'close did not exit multi-select');
+    button(wrap, '多选').click(); card(wrap, 'one').click(); card(wrap, 'one').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    assert(!wrap.querySelector('.ms-node.is-selected') && wrap.querySelector('[data-selection-mode="single"]'), 'Escape did not exit');
+  });
+  await test('L4: card body only selects; the top-right source arrow opens and hits the anchor', async () => {
+    const p = await fresh(); p.addCard('a', 'Anchored excerpt', { anchorAnnId: 'ann-alpha' }); p.addNode('one', 'a'); const { wrap } = p.mount();
+    card(wrap, 'one').click(); await pause(); assert(p.opens() === 0 && p.jumps.length === 0, 'whole-card click jumped to source');
+    const before = wrap.querySelectorAll('.ms-node.is-selected').length;
+    const arrow = button(card(wrap, 'one'), '跳转到原文'); assert(arrow.closest('.ms-node-header') && arrow.textContent === '›', 'source is not an explicit card-header arrow');
+    arrow.click(); await pause(); assert(p.opens() === 1 && p.jumps[0]?.[1] === 'ann-alpha', 'source arrow missed anchored origin');
+    assert(wrap.querySelectorAll('.ms-node.is-selected').length === before, 'source arrow changed selection');
+    p.addCard('b', 'Unanchored', { docPath: '', page: undefined }); p.addNode('two', 'b'); (renderers.at(-1)!).render();
+    assert(!card(wrap, 'two').querySelector('.ms-node-source'), 'source-less card has a misleading arrow');
+  });
+  await test('L4-aligned: title, excerpt, note, comment and image remain separate without title mutation', async () => {
+    const p = await fresh(); p.addCard('a', 'Excerpt field', { title: 'Heading field', back: 'Note field', image: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="100" height="50"%3E%3Cpath fill="%238ab7a6" d="M0 0h100v50H0z"/%3E%3C/svg%3E' });
+    p.addNode('one', 'a', { comments: ['Comment field'] }); const { wrap } = p.mount(); await pause(); const node = card(wrap, 'one');
+    for (const [field, expected] of [['title', 'Heading field'], ['excerpt', 'Excerpt field'], ['note', 'Note field'], ['comment', 'Comment field']]) {
+      assert(node.querySelector(`[data-field="${field}"]`)?.textContent === expected, `missing distinct ${field}`);
+    }
+    assert(node.querySelectorAll('.ms-node-img').length === 1, 'image missing');
+    assert(p.store.getCard('a')!.title === 'Heading field' && p.store.getNode('one')!.comments?.[0] === 'Comment field', 'presentation concatenated or mutated content fields');
+    assert(getComputedStyle(node).backgroundColor === 'rgb(255, 255, 255)' && getComputedStyle(node.querySelector('.ms-node-header')!).backgroundColor !== 'rgb(255, 255, 255)', 'color was applied to the whole card instead of its header');
+    p.store.setNodeHidden('one', true); (renderers.at(-1)!).render(); button(wrap, '显示隐藏').click();
+    assert(card(wrap, 'one'), 'new card layout blocked hidden recovery');
+  });
+  await test('Action bar routes copy, colors, tags and links through existing model operations', async () => {
+    const p = await fresh(); p.addCard('a', 'Alpha'); p.addCard('b', 'Beta'); p.addNode('one', 'a'); p.addNode('two', 'b'); const { wrap } = p.mount();
+    button(wrap, '多选').click(); card(wrap, 'one').click(); card(wrap, 'two').click();
+    for (const id of ['copy', 'color', 'tag', 'link', 'summary', 'regroup', 'merge', 'delete']) assert(action(wrap, id), `missing action ${id}`);
+    action(wrap, 'copy').click(); assert(p.store.nodes.length === 2, 'copy changed the source');
+    action(wrap, 'color').click(); (document.querySelector('.ms-modal button[style*="width:32px"]') as HTMLButtonElement).click();
+    assert(p.store.getCard('a')!.color === p.store.settings.colors[0] && p.store.getCard('b')!.color === p.store.settings.colors[0], 'color action ignored the selection');
+    action(wrap, 'tag').click(); (document.querySelector('.ms-modal textarea') as HTMLTextAreaElement).value = 'same, selected'; button(document.querySelector('.ms-modal')!, '确定').click();
+    assert(p.store.getCard('a')!.tags.join(',') === 'same,selected' && p.store.getCard('b')!.tags.join(',') === 'same,selected', 'tag action missed a selected card');
+    action(wrap, 'link').click(); assert(p.store.edges.some(edge => edge.from === 'one' && edge.to === 'two'), 'link action did not create relation');
+    action(wrap, 'close').click(); button(wrap, '粘贴克隆').click(); assert(p.store.nodes.length === 4 && p.store.cards.length === 4, 'copy action failed to populate reusable clipboard');
+  });
+  await test('Cut retains the source until a valid paste moves the original subtree under its target in one history step',async()=>{
+    const p=await fresh();p.addCard('cut-card','Source',{anchorAnnId:'source-anchor'});p.addCard('child-card','Child');p.addCard('target-card','Target');p.addNode('cut-root','cut-card');p.addNode('cut-child','child-card',{parentId:'cut-root'});p.addNode('paste-target','target-card');const {wrap}=p.mount();
+    const business=()=>JSON.stringify({cards:p.store.cards,nodes:p.store.nodes,edges:p.store.edges,sets:p.store.studySets,review:p.store.reviewDecks,srs:p.store.srs}),before=business(),cardsBefore=JSON.stringify(p.store.cards);card(wrap,'cut-root').click();action(wrap,'cut').click();assert(business()===before&&card(wrap,'cut-root')&&card(wrap,'cut-child'),'Cut removed or edited the source before paste');
+    card(wrap,'cut-child').click();button(wrap,'粘贴引用').click();assert(business()===before,'pasting into a cut descendant changed the tree: '+JSON.stringify({before:JSON.parse(before),after:JSON.parse(business())}));card(wrap,'paste-target').click();button(wrap,'粘贴引用').click();assert(p.store.nodes.length===3&&p.store.getNode('cut-root')?.parentId==='paste-target'&&p.store.getNode('cut-child')?.parentId==='cut-root','paste duplicated the branch or placed it beside its target');assert(JSON.stringify(p.store.cards)===cardsBefore,'cut/paste changed card IDs, anchors or contents');assert(p.store.undoLibraryChange(),'move has no undo');assert(business()===before,'one undo did not restore the whole cut/paste move');
+  });
+  await test('Cross-map cut moves original node IDs and internal links, preserves cards, and rejects a stale cut',async()=>{
+    const p=await fresh(),destination=p.store.createCanvas(p.set.id,'Cut destination');p.addCard('moving-card','Shared source',{anchorAnnId:'keep-anchor'});p.addNode('moving-root','moving-card');p.addNode('moving-child','moving-card',{parentId:'moving-root'});p.addNode('outside');p.addNode('destination',undefined,{canvasId:destination.id});p.store.addEdge('moving-root','moving-child','internal');p.store.addEdge('moving-root','outside','external');p.store.setActiveCanvas(p.canvasId);const {renderer,wrap}=p.mount();
+    const before=JSON.stringify({nodes:p.store.nodes,edges:p.store.edges}),cardsBefore=JSON.stringify(p.store.cards);card(wrap,'moving-root').click();action(wrap,'cut').click();p.store.setActiveCanvas(destination.id);renderer.render();card(wrap,'destination').click();button(wrap,'粘贴引用').click();assert(p.store.nodes.length===4&&p.store.getNode('moving-root')?.parentId==='destination'&&p.store.getNode('moving-root')?.canvasId===destination.id&&p.store.getNode('moving-child')?.canvasId===destination.id,'cross-map cut copied or lost the original branch');assert(p.store.edges.length===1&&p.store.edges[0].label==='internal','cross-map cut lost internal links or retained a cross-canvas link');assert(JSON.stringify(p.store.cards)===cardsBefore,'cross-map cut rewrote shared cards');p.store.undoLibraryChange();assert(JSON.stringify({nodes:p.store.nodes,edges:p.store.edges})===before,'cross-map cut undo did not restore original graph');
+    p.store.setActiveCanvas(p.canvasId);renderer.render();card(wrap,'moving-root').click();action(wrap,'cut').click();p.store.updateNode('moving-root',{comments:['changed after cut']});const changed=JSON.stringify({cards:p.store.cards,nodes:p.store.nodes,edges:p.store.edges});p.store.setActiveCanvas(destination.id);renderer.render();card(wrap,'destination').click();button(wrap,'粘贴引用').click();assert(JSON.stringify({cards:p.store.cards,nodes:p.store.nodes,edges:p.store.edges})===changed,'stale cut resurrected a captured source snapshot');
+  });
+  await test('Action bar summary and regroup preserve selected branches as children', async () => {
+    for (const kind of ['summary', 'regroup']) {
+      const p = await fresh(); p.addNode('one'); p.addNode('two'); const { wrap } = p.mount();
+      button(wrap, '多选').click(); card(wrap, 'one').click(); card(wrap, 'two').click(); action(wrap, kind).click();
+      const modal = document.querySelector('.ms-modal')!; (modal.querySelector('textarea') as HTMLTextAreaElement).value = `${kind} parent`; button(modal, '确定').click();
+      const parent = p.store.nodes.find(node => node.title === `${kind} parent`)!;
+      assert(parent && p.store.getNode('one')!.parentId === parent.id && p.store.getNode('two')!.parentId === parent.id, `${kind} lost or misparented a branch`);
+    }
+  });
+  await test('L4: Merge acts directly and Unmerge re-exposes members while preserving the head badge', async () => {
+    const p = await fresh(); p.addCard('a', 'Alpha'); p.addCard('b', 'Beta'); p.addNode('one', 'a'); p.addNode('two', 'b');
+    const deck = p.store.createReviewDeck('Memory deck', p.set.id); p.store.enqueueReviewInDeck(['a'], deck.id, p.canvasId);
+    const { wrap } = p.mount(); button(wrap, '多选').click(); card(wrap, 'one').click(); card(wrap, 'two').click(); action(wrap, 'merge').click(); await pause();
+    assert(!document.querySelector('.ms-modal'), 'Merge inserted an extra confirmation step');
+    assert(wrap.querySelectorAll('.ms-node').length === 1 && card(wrap, 'one').querySelector('.ms-node-merged'), 'merged member remained independently visible');
+    assert(card(wrap, 'one').querySelector('.ms-node-review-badge')?.textContent === 'Memory deck', 'merge lost the head deck badge');
+    button(card(wrap, 'one'), '卡片更多操作').click(); button(document.querySelector('#test-menu')!, '解除合并').click(); await pause();
+    assert(wrap.querySelectorAll('.ms-node').length === 2, 'Unmerge did not restore independent members');
+    assert(p.store.getCard('a')!.front === 'Alpha' && p.store.getCard('b')!.front === 'Beta', 'Unmerge lost original excerpt fields');
+    assert(card(wrap, 'one').querySelector('.ms-node-review-badge')?.textContent === 'Memory deck', 'Unmerge lost head badge');
+  });
+  await test('L4: deck badges survive future schedules, navigation and reload; an un-enrolled card has none', async () => {
+    const p = await fresh(); p.addCard('a', 'Enrolled'); p.addCard('b', 'Ordinary'); p.addNode('one', 'a'); p.addNode('two', 'b');
+    const deck = p.store.createReviewDeck('Memory deck', p.set.id); p.store.enqueueReviewInDeck(['a'], deck.id, p.canvasId);
+    for (const row of p.store.reviewPending) { row.due = '2099-01-01T00:00:00Z'; p.store.srs[row.questionId].due = row.due; }
+    p.store.save(); await p.store.flush();
+    const other = p.store.createCanvas(p.set.id, 'Other'); p.store.setActiveCanvas(other.id); p.store.setActiveCanvas(p.canvasId); await p.store.flush();
+    const reloaded = await fresh(p.host); const { wrap } = reloaded.mount();
+    assert(card(wrap, 'one').querySelector('.ms-node-review-badge')?.textContent === 'Memory deck' && !card(wrap, 'two').querySelector('.ms-node-review-badge'), 'badge was due-dependent or leaked to an ordinary card');
+    const view = new SidebarView({ app: reloaded.plugin.app } as any, reloaded.plugin); await view.onOpen(); view.setTab('outline'); await pause();
+    const row = target.querySelector('.ms-ol-node[data-id="one"]')!; assert(row.querySelector('.ms-ol-review-badge')?.textContent === 'Memory deck', 'outline omitted membership badge');
+    row.dispatchEvent(new MouseEvent('click', { bubbles: true })); await pause(); assert(reloaded.opens() === 0, 'outline row jumped to source');
+    button(row, '跳转到原文').click(); await pause(); assert(reloaded.opens() === 1, 'outline source arrow did not jump'); await view.onClose();
+  });
+  await test('Action bar stays within a narrow panel and keeps its exit reachable by scrolling', async () => {
+    const p = await fresh(); p.addNode('one'); p.addNode('two'); target.style.width = '380px'; const { wrap } = p.mount();
+    button(wrap, '多选').click(); card(wrap, 'one').click(); card(wrap, 'two').click();
+    const bar = wrap.querySelector<HTMLElement>('.ms-selection-actions')!; const host = wrap.getBoundingClientRect(); const bounds = bar.getBoundingClientRect();
+    assert(bounds.width <= host.width && bounds.left >= host.left && bounds.right <= host.right, 'action bar overflows narrow panel');
+    assert(bar.scrollWidth > bar.clientWidth && ['auto', 'scroll'].includes(getComputedStyle(bar).overflowX), 'overflow actions are inaccessible');
+    action(wrap, 'close').scrollIntoView({ block: 'nearest', inline: 'end' }); action(wrap, 'close').click();
+    assert(wrap.querySelector('[data-selection-mode="single"]'), 'narrow toolbar cannot exit');
+  });
+  (window as any).acceptanceScenes = ['multiselect', 'card-fields', 'narrow-panel'];
+  (window as any).showAcceptanceScene = async (scene: string) => {
+    renderers.forEach(renderer => renderer.destroy()); target.replaceChildren(); target.style.width = scene === 'narrow-panel' ? '400px' : '';
+    const p = await fresh(); p.addCard('a', 'Unique sentence U2: beta marker. Selection dragging works over these lines.', { title: scene === 'card-fields' ? 'Anchors and study cards' : undefined, back: scene === 'card-fields' ? 'Keep the source next to the idea.' : undefined });
+    p.addCard('b', 'The capital of France is Paris. Water boils at 100 degrees.', { color: '#d7e8fa' });
+    p.addNode('one', 'a', { comments: scene === 'card-fields' ? ['Review the complete argument in the source.'] : [], x: 70, y: 90 });
+    p.addNode('two', 'b', { x: scene === 'narrow-panel' ? 85 : 390, y: scene === 'narrow-panel' ? 330 : 120 });
+    const deck = p.store.createReviewDeck('Memory deck', p.set.id); p.store.enqueueReviewInDeck(['a'], deck.id, p.canvasId);
+    const { wrap } = p.mount();
+    if (scene !== 'card-fields') { button(wrap, '多选').click(); card(wrap, 'one').click(); card(wrap, 'two').click(); }
+    await pause(); await p.store.flush();
+  };
+  await (window as any).showAcceptanceScene('multiselect');
+  await Promise.all(stores.map(store => store.flush()));
+} catch (error) { (window as any).fatal = String(error); }
+finally { (window as any).done = true; }

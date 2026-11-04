@@ -1,0 +1,1 @@
+export async function convertToHtml({arrayBuffer}:{arrayBuffer:ArrayBuffer}) {const c=JSON.parse(new TextDecoder().decode(arrayBuffer));await new Promise(r=>setTimeout(r,c.convertDelay||0));return{value:c.content,messages:[]};}

@@ -1,0 +1,125 @@
+import { ReaderView } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/readerView';
+import { WordReaderView } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/word/wordReader';
+import { DocumentReaderView } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/documents/documentReader';
+
+export async function runRecallAcceptance(context:any){
+  const {test,assert,wait,plugin,add,app,htmlController,selection}=context;
+  const elements=(root:HTMLElement,id:string)=>Array.from(root.querySelectorAll<HTMLElement>('[data-ann-id]')).filter(node=>node.dataset.annId===id);
+  const every=(root:HTMLElement,id:string,name:string,on:boolean)=>elements(root,id).length>0&&elements(root,id).every(node=>node.classList.contains(name)===on);
+  const click=(root:HTMLElement,id:string)=>{const visible=elements(root,id).filter(node=>getComputedStyle(node).display!=='none'&&getComputedStyle(node).pointerEvents!=='none');const found=visible.find(node=>node.classList.contains('ms-recall-mask'))??visible[0];assert(found,'missing interactive annotation element');found.click();};
+
+  await test('continuous PDF excerpts share one card and preserve both source anchors',async()=>{
+    add('continuous-session.pdf',{name:'Continuous session',pages:1});const p=plugin(),view:any=new ReaderView({app} as any,p as any);await view.onOpen();
+    try{await view.loadFileByPath('continuous-session.pdf');view.setContinuousExcerpt(true);
+      const target={kind:'pdf',pageNum:1,rects:[{x:80,y:480,w:180,h:18}],pdfCoordinateSpace:'pdf'};
+      view.annController.commitAnnotation(target,'highlight','#ff0','first excerpt');
+      view.annController.commitRegion({...target,rects:[{x:80,y:360,w:180,h:80}]},undefined,'second excerpt');
+      const anns=await p.store.loadAnnotations('continuous-session.pdf');
+      assert(view.getContinuousExcerpt().count===2,'count must reflect committed excerpts');
+      assert(p.store.cards.length===1,'continuous session produced more than one card');
+      assert(p.store.cards[0].sources?.length===2&&anns.every((ann:any)=>p.store.cards[0].sources.some((source:any)=>source.anchorAnnId===ann.id)),'source anchors not retained');
+      view.setContinuousExcerptPen('other');assert(!view.getContinuousExcerpt().active,'different pen inherited active state');
+      view.setContinuousExcerptPen('text');assert(view.getContinuousExcerpt().count===2,'returning to pen lost state');
+      view.setContinuousExcerpt(false);assert(!view.getContinuousExcerpt().active,'finish did not reset');
+      assert(view.continueExcerptInCard(p.store.cards[0].id),'existing card could not be selected');
+      view.annController.commitAnnotation(target,'highlight','#ff0','continued excerpt');
+      assert(p.store.cards.length===1&&p.store.cards[0].sources?.length===3,'continuing existing card lost its source or created another card');
+    }finally{await view.onClose();}
+  });
+  await test('Recall masks highlighter strokes individually and keeps ordinary pen strokes visible',async()=>{
+    add('recall-ink.pdf',{name:'Recall ink',pages:1});const p=plugin(),view:any=new ReaderView({app} as any,p as any);await view.onOpen();
+    try{await view.loadFileByPath('recall-ink.pdf');await view.renderPage(1);const c=view.annController;
+      c.createPenAnnotation(1,[[{x:.1,y:.2},{x:.25,y:.35},{x:.4,y:.2}],[{x:.1,y:.3},{x:.4,y:.3}]],'default','default','highlight',20,.8);c.createPenAnnotation(1,[[{x:.1,y:.4},{x:.4,y:.4}]],'default','default','pen',3,1);
+      const before=JSON.stringify(await p.store.loadAnnotations('recall-ink.pdf'));view.setRecallMode(true);const root=view.scrollEl as HTMLElement;const masks=()=>root.querySelectorAll<HTMLButtonElement>('[data-recall-ink-mask]');
+      assert(masks().length===2&&[...masks()].every(item=>item.classList.contains('is-occluded')),'highlighter strokes were not independently masked');
+      const path=masks()[0].querySelector('path')!;const svg=path.ownerSVGElement!;const onStroke=path.getPointAtLength(path.getTotalLength()/2);const outside=svg.createSVGPoint();outside.x=1;outside.y=1;assert(path.isPointInStroke(onStroke)&&!path.isPointInStroke(outside),'bent highlighter mask did not follow the stroke');
+      assert(getComputedStyle(masks()[0]).backgroundColor==='rgba(0, 0, 0, 0)'&&getComputedStyle(path).pointerEvents==='stroke','highlighter mask blocks its bounding rectangle');
+      const inkCount=()=>root.closest('.ms-reader-root')?.querySelector('[data-recall-ink-remaining]')?.textContent;assert(inkCount()==='还有 2 处荧光笔遮挡','highlighter count did not include both strokes');
+      assert(!root.querySelector('.ms-ann-pen:not([data-recall-ink])')?.classList.contains('is-occluded'),'ordinary pen was masked');
+      masks()[0].click();assert(masks()[0].classList.contains('is-revealed')&&!masks()[1].classList.contains('is-revealed')&&inkCount()==='还有 1 处荧光笔遮挡','one highlighter reveal changed another');
+      masks()[0].click();assert(!masks()[0].classList.contains('is-revealed'),'highlighter did not re-cover');
+      view.setHandwritingMode('highlight');assert(root.closest('.ms-reader-root')?.hasAttribute('data-recall-drawing'),'drawing did not suspend mask hit targets');view.setHandwritingMode('off');assert(!root.closest('.ms-reader-root')?.hasAttribute('data-recall-drawing'),'leaving drawing did not restore mask hit targets');
+      view.setRecallSetting('maskHighlighter',false);assert([...masks()].every(item=>!item.classList.contains('is-occluded')),'highlighter switch did not uncover strokes');
+      assert(JSON.stringify(await p.store.loadAnnotations('recall-ink.pdf'))===before,'recall altered saved strokes');
+    }finally{await view.onClose();}
+  });
+  await test('Highlighter purpose applies to future strokes and survives settings reload',async()=>{
+    add('recall-purpose.pdf',{name:'Recall purpose',pages:1});const p=plugin(),view:any=new ReaderView({app} as any,p as any);await view.onOpen();
+    try{await view.loadFileByPath('recall-purpose.pdf');await view.renderPage(1);const c=view.annController;c.setActiveHandwritingPreset('highlight-1');
+      c.createPenAnnotation(1,[[{x:.1,y:.1},{x:.3,y:.1}]],'default','default','highlight',20,.8,'highlight-1');
+      c.openHandwritingSettings();const panel=document.querySelector('.ms-ink-layer-modal')!,purpose=panel.querySelector<HTMLSelectElement>('[aria-label="荧光笔用途"]')!;assert(purpose&&purpose.value==='mask','marker purpose control missing');purpose.value='highlight';purpose.dispatchEvent(new Event('change',{bubbles:true}));
+      c.createPenAnnotation(1,[[{x:.1,y:.2},{x:.3,y:.2}]],'default','default','highlight',20,.8,'highlight-1');
+      const anns=await p.store.loadAnnotations('recall-purpose.pdf');assert(anns[0].inkRecallPurpose==='mask'&&anns[1].inkRecallPurpose==='highlight','purpose changed an earlier stroke or missed the new stroke');view.setRecallMode(true);assert(view.scrollEl.querySelectorAll('[data-recall-ink-mask]').length===1,'mark-only stroke was masked');
+      assert(c.getHandwritingPresets().find((item:any)=>item.id==='highlight-1')?.recallPurpose==='highlight','purpose setting not retained');
+      document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+    }finally{await view.onClose();}
+  });
+
+  await test('PDF recall preserves cross-page reveal, single peek and persistent scope without writing reveal state',async()=>{
+    add('recall-session.pdf',{name:'Recall session',pages:2});const p=plugin();const view:any=new ReaderView({app} as any,p as any);await view.onOpen();
+    try{await view.loadFileByPath('recall-session.pdf');await Promise.all([view.renderPage(1),view.renderPage(2)]);
+      const aRect={x:80,y:480,w:180,h:18},bRect={x:80,y:400,w:160,h:18},region={x:300,y:300,w:160,h:100};
+      view.annController.commitAnnotation({kind:'pdf',pageNum:1,rects:[aRect],pdfGeometry:[{page:1,rects:[aRect]},{page:2,rects:[aRect]}],pdfCoordinateSpace:'pdf'},'highlight','#ff0','same excerpt across two pages');
+      view.annController.commitAnnotation({kind:'pdf',pageNum:2,rects:[bRect],pdfCoordinateSpace:'pdf'},'highlight','#ff0','second excerpt');
+      view.annController.commitRegion({kind:'pdf',pageNum:1,rects:[region],pdfCoordinateSpace:'pdf'},undefined,'region excerpt');
+      const [a,b,c]=await p.store.loadAnnotations('recall-session.pdf');const root=view.scrollEl as HTMLElement;
+      assert(p.store.subscriptionCount>=1&&p.store.annotationSubscriptionCount===1,'reader subscriptions missing');
+      const before=JSON.stringify({cards:p.store.cards,nodes:p.store.nodes,annotations:await p.store.loadAnnotations('recall-session.pdf'),metrics:p.metrics});
+      view.toggleRecall();assert(every(root,a.id,'is-occluded',true)&&every(root,b.id,'is-occluded',true)&&every(root,c.id,'is-occluded',true),'default all-excerpts scope did not cover');
+      const remaining=()=>root.closest('.ms-reader-root')?.querySelector('[data-recall-remaining] > span')?.textContent;
+      assert(remaining()==='还有 3 处摘录遮挡','initial remaining count should count excerpts, not page fragments');
+      view.setRecallSetting('maskDocumentExcerpts',false);assert(remaining()==='还有 0 处摘录遮挡'&&every(root,a.id,'is-occluded',false),'turning off document excerpt masks did not uncover them');
+      view.setRecallSetting('maskDocumentExcerpts',true);assert(remaining()==='还有 3 处摘录遮挡'&&every(root,a.id,'is-occluded',true),'turning on document excerpt masks did not restore them');
+      click(root,a.id);assert(remaining()==='还有 2 处摘录遮挡','remaining count did not decrease on reveal');click(root,a.id);assert(remaining()==='还有 3 处摘录遮挡','remaining count did not increase on re-cover');
+      click(root,a.id);assert(every(root,a.id,'is-revealed',true),'cross-page excerpt did not reveal together');click(root,a.id);assert(every(root,a.id,'is-revealed',false),'second click did not re-cover');
+      click(root,a.id);view.annController.releasePage(1);view.annController.renderPage(1);assert(every(root,a.id,'is-revealed',true),'redraw lost session reveal');
+      p.store.canvases[0].singlePeek=true;p.store.notify();view.annController.setRecallMode(true);
+      click(root,a.id);click(root,b.id);assert(every(root,a.id,'is-revealed',false)&&every(root,b.id,'is-revealed',true),'single peek retained another excerpt');
+      click(root,b.id);assert(every(root,b.id,'is-revealed',false),'single peek could not be closed');
+      assert(JSON.stringify({cards:p.store.cards,nodes:p.store.nodes,annotations:await p.store.loadAnnotations('recall-session.pdf'),metrics:p.metrics})===before,'reveal or redraw persisted changes');
+      const scope=view.toolbarEl.querySelector('[aria-label="切换忆模式遮挡范围"]') as HTMLButtonElement;assert(scope,'scope control missing');const scopeWrites=JSON.stringify(p.metrics);scope.click();
+      assert(scope.textContent==='仅标记遮挡'&&every(root,a.id,'is-occluded',false)&&every(root,b.id,'is-occluded',false),'marked-only scope covered unmarked excerpts');
+      assert(remaining()==='还有 0 处摘录遮挡','marked-only count included unmarked excerpts');
+      assert(JSON.stringify(p.metrics)===scopeWrites,'view scope wrote persistent data');
+      p.store.toggleCardOcclusion([a.cardId]);assert(p.store.getCard(a.cardId).occluded===true&&every(root,a.id,'is-occluded',true)&&every(root,b.id,'is-occluded',false),'persistent card boolean did not reach reader');
+      assert(remaining()==='还有 1 处摘录遮挡','marked excerpt did not enter remaining count');
+      const writes=JSON.stringify(p.metrics),cards=JSON.stringify(p.store.cards);click(root,a.id);view.annController.refreshAll();assert(every(root,a.id,'is-revealed',true),'refresh lost marked excerpt reveal');
+      assert(JSON.stringify(p.metrics)===writes&&JSON.stringify(p.store.cards)===cards,'peek wrote card state');
+      p.store.nodes.push({id:'active-node',cardId:a.cardId,canvasId:p.store.activeCanvasId,occluded:false});p.store.notify();assert(every(root,a.id,'is-occluded',false),'explicit node false did not override card true');
+      p.store.toggleNodeOcclusion(['active-node']);assert(every(root,a.id,'is-occluded',true),'active canvas node boolean did not reach reader');
+      p.store.canvases.push({id:'other-canvas',singlePeek:true});p.store.activeCanvasId='other-canvas';p.store.notify();assert(every(root,a.id,'is-revealed',false),'canvas switch retained reveal session');
+      p.store.toggleCardOcclusion([c.cardId]);assert(every(root,c.id,'is-occluded',true),'region persistent cover missing');click(root,c.id);assert(every(root,c.id,'is-revealed',true),'region could not reveal');
+      const persisted=JSON.stringify(p.store.cards),exitWrites=JSON.stringify(p.metrics);view.toggleRecall();assert(every(root,a.id,'is-occluded',false)&&every(root,c.id,'is-revealed',false),'exit kept cover or reveal state');
+      view.toggleRecall();assert(every(root,a.id,'is-occluded',true)&&every(root,a.id,'is-revealed',false),'reenter did not rebuild persistent cover');
+      assert(JSON.stringify(p.store.cards)===persisted&&JSON.stringify(p.metrics)===exitWrites,'recall toggle persisted view state');
+    }finally{await view.onClose();assert(p.store.subscriptionCount===0&&p.store.annotationSubscriptionCount===0,'closed reader leaked subscriptions');p.store.notify();}
+  });
+
+  await test('HTML recall restores all range segments after render and keeps persistent card state separate',async()=>{
+    const p=plugin(),h=htmlController(p,'recall.html','<p>Alpha <b>first</b> answer and beta second answer.</p>');await h.load();
+    try{const start=h.body.querySelector('b').firstChild,end=h.body.querySelector('b').nextSibling;const range=document.createRange();range.setStart(start,0);range.setEnd(end,7);
+      h.ann.commitAnnotation(h.ann.resolveSelection(range),'highlight','#ff0','first answer');h.ann.commitAnnotation(h.ann.resolveSelection(selection(h.body,'second answer')),'highlight','#ff0','second answer');
+      const [a,b]=await p.store.loadAnnotations('recall.html');assert(elements(h.body,a.id).length===2,'range fixture did not cross text nodes');
+      const state=JSON.stringify({cards:p.store.cards,annotations:await p.store.loadAnnotations('recall.html'),metrics:p.metrics});
+      h.ann.setRecallMode(true);click(h.body,a.id);assert(every(h.body,a.id,'is-revealed',true),'HTML range segments revealed separately');h.ann.renderAll();assert(every(h.body,a.id,'is-revealed',true),'HTML render reset reveal');
+      click(h.body,a.id);assert(every(h.body,a.id,'is-revealed',false),'HTML re-cover missing');
+      assert(JSON.stringify({cards:p.store.cards,annotations:await p.store.loadAnnotations('recall.html'),metrics:p.metrics})===state,'HTML reveal/render persisted state');
+      h.ann.setRecallCoverAll(false);assert(every(h.body,a.id,'is-occluded',false),'HTML marked-only covered unmarked excerpt');p.store.toggleCardOcclusion([a.cardId]);
+      assert(every(h.body,a.id,'is-occluded',true)&&every(h.body,b.id,'is-occluded',false),'HTML persistent card flag not reflected');
+      const preserved=JSON.stringify(p.store.cards),writes=JSON.stringify(p.metrics);h.ann.renderAll();click(h.body,a.id);h.ann.renderAll();assert(every(h.body,a.id,'is-revealed',true),'HTML persistent redraw lost reveal');
+      assert(JSON.stringify(p.store.cards)===preserved&&JSON.stringify(p.metrics)===writes,'HTML peek modified persisted boolean');
+      h.ann.setRecallMode(false);h.ann.setRecallMode(true);assert(every(h.body,a.id,'is-revealed',false)&&every(h.body,a.id,'is-occluded',true),'HTML session reset changed persistent cover');
+    }finally{await h.close();assert(p.store.subscriptionCount===0&&p.store.annotationSubscriptionCount===0,'HTML close leaked subscriptions');p.store.notify();}
+  });
+
+  await test('Word and generic document recall buttons update controller state and expose the view-only scope',async()=>{
+    add('recall-word.docx',{content:'<p>word target</p>'});add('recall-document.html',{content:'<p>document target</p>'});
+    for(const [View,path] of [[WordReaderView,'recall-word.docx'],[DocumentReaderView,'recall-document.html']] as const){const p=plugin(),view:any=new View({app} as any,p as any);await view.onOpen();
+      try{await view.loadFileByPath(path);view.ann.commitAnnotation(view.ann.resolveSelection(selection(view.bodyEl,'target')),'highlight','#ff0','target');const ann=(await p.store.loadAnnotations(path))[0];
+        view.toggleRecall();assert(every(view.bodyEl,ann.id,'is-occluded',true),'view button did not update controller');const before=JSON.stringify(p.metrics);
+        (view.toolbarEl.querySelector('[aria-label="切换忆模式遮挡范围"]') as HTMLButtonElement).click();assert(every(view.bodyEl,ann.id,'is-occluded',false),'scope control did not update controller');
+        assert(JSON.stringify(p.metrics)===before,'scope wrote state');
+      }finally{await view.onClose();assert(p.store.subscriptionCount===0&&p.store.annotationSubscriptionCount===0,'view leaked subscriptions');}
+    }
+  });
+}

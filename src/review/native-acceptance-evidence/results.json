@@ -1,0 +1,30 @@
+{
+  "verifiedAt": "2026-10-15T15:41:06.948Z",
+  "environment": "isolated Chromium; in-memory Store; synthetic Obsidian/Markdown renderer",
+  "checks": [
+    {
+      "name": "native pre-AQ browsing has its separate 1188 by 679 white card, 20px text, Prev/Next footer and no scoring",
+      "passed": true
+    },
+    {
+      "name": "native reference scoring uses the measured full white card, top counter and four equal bottom controls",
+      "passed": true
+    },
+    {
+      "name": "native Note Card editor retains the 520 by 560 floating template and full-width bottom format bar",
+      "passed": true
+    },
+    {
+      "name": "native formatting controls update the selected excerpt and persist card typography through the existing save path",
+      "passed": true
+    },
+    {
+      "name": "Markdown preview renders the saved emphasis without rewriting the excerpt",
+      "passed": true
+    },
+    {
+      "name": "the native pen control inserts a real drawn image into the note and persists it",
+      "passed": true
+    }
+  ]
+}

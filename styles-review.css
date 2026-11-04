@@ -1,0 +1,186 @@
+/* Review and deck surfaces. Packaged with styles.css by the main integration. */
+.ms-review-modal { width:min(940px,94vw); }
+.ms-review-head,.ms-review-navigation,.ms-review-tools,.ms-deck-create,.ms-deck-bind,.ms-review-deck-badges { display:flex; align-items:center; gap:8px; }
+.ms-review-head { justify-content:space-between; flex-wrap:wrap; padding-bottom:16px; border-bottom:1px solid var(--background-modifier-border); }
+.ms-review-identity h3 { margin:0 0 4px; }
+.ms-review-navigation,.ms-review-tools,.ms-review-deck-badges { flex-wrap:wrap; }
+.ms-review-card-title { font-size:1.3em; margin:12px 0; }
+.ms-review-question-panel,.ms-review-answer-panel,.ms-review-response { padding:16px; margin:12px 0; border:1px solid var(--background-modifier-border); border-radius:10px; }
+.ms-review-answer-panel { border-color:var(--interactive-accent); background:var(--background-secondary); }
+.ms-review-section-label { display:block; font-size:12px; font-weight:600; color:var(--text-muted); margin-bottom:10px; letter-spacing:.03em; }
+.ms-review-question-text { font-size:1.06em; line-height:1.65; overflow-wrap:anywhere; }
+.ms-review-tools { margin:16px 0; }
+.ms-review-btns { padding-top:14px; border-top:1px solid var(--background-modifier-border); }
+.ms-review-btns .ms-grade { flex:1; min-width:115px; padding:12px; }
+.ms-review-deck-badge { display:inline-flex; align-items:center; padding:2px 7px; border:1px solid color-mix(in srgb,var(--interactive-accent) 40%,transparent); border-radius:5px; font-size:11px; color:var(--interactive-accent); background:var(--background-secondary); }
+.ms-review-deck-badges { margin:5px 0; }
+.ms-deck-modal { width:min(720px,94vw); }
+.ms-review-field { display:flex; flex-direction:column; gap:8px; font-weight:500; }
+.ms-deck-create { margin:14px 0; }
+.ms-deck-create .ms-search { flex:1; margin:0; }
+.ms-deck-summary { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; padding:16px 0; }
+.ms-deck-summary>div { display:flex; flex-direction:column; gap:3px; padding:12px; background:var(--background-secondary); border-radius:8px; }
+.ms-deck-summary strong { font-size:23px; }
+.ms-deck-summary span { font-size:12px; color:var(--text-muted); }
+.ms-deck-bind { padding:8px 0; font-size:13px; }
+.ms-deck-members { margin:18px 0; }
+.ms-deck-members summary { cursor:pointer; }
+.ms-deck-member { display:flex; justify-content:space-between; gap:12px; padding:10px 0; border-bottom:1px solid var(--background-modifier-border); }
+.ms-review-copy-source { margin-top:12px; padding:12px; border:1px solid var(--background-modifier-border); border-radius:8px; }
+.ms-review-copy-source p { margin:0 0 8px; }
+.ms-review-browser-card { min-height:280px; margin:16px 0; padding:24px; border:1px solid var(--background-modifier-border); border-radius:12px; background:var(--background-primary); }
+.ms-review-browser-answer { margin-top:18px; padding-top:16px; border-top:1px solid var(--background-modifier-border); }
+.ms-review-browser-actions { justify-content:space-between; }
+.ms-review-browser .ms-btn:disabled { opacity:.45; cursor:default; }
+.ms-review-filters { margin:12px 0; padding:10px 12px; background:var(--background-secondary); border-radius:8px; }
+.ms-review-filters summary { cursor:pointer; font-size:13px; }
+.ms-review-filter-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); align-items:end; gap:12px; }
+.ms-review-filter-grid .ms-search { margin:0; }
+.ms-review-question-settings { margin:16px 0; padding:12px; border:1px solid var(--background-modifier-border); border-radius:8px; }
+.ms-review-question-settings>select { margin-bottom:10px; }
+.ms-review-question-preview { margin:10px 0; padding:12px; min-height:48px; border-left:3px solid var(--interactive-accent); background:var(--background-secondary); }
+@media(max-width:600px) { .ms-deck-summary { grid-template-columns:repeat(2,1fr); } .ms-review-navigation { gap:4px; } .ms-review-btns .ms-grade { min-width:45%; } }
+
+/* Reference: MarginNote 4 Max, 1512 × 949 logical desktop pixels. */
+.ms-review-visually-hidden { position:absolute!important; width:1px!important; height:1px!important; padding:0!important; margin:-1px!important; overflow:hidden!important; clip:rect(0,0,0,0)!important; white-space:nowrap!important; border:0!important; }
+.ms-native-review-bg { background:rgba(0,0,0,.60)!important; }
+.ms-modal.ms-native-review { --review-edge:10.7vw; --review-gap:clamp(12px,1.32vw,20px); --review-toolbar:#747b85; position:relative; width:100vw!important; height:100vh!important; max-height:none!important; max-width:none!important; padding:0!important; margin:0!important; border:0!important; border-radius:0!important; background:transparent!important; box-shadow:none!important; overflow:hidden!important; color:#111; font:16px/1.45 -apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif; }
+.ms-native-review-counter { position:absolute; top:3.2vh; left:0; width:100%; color:#fff; text-align:center; font-size:14px; line-height:22px; font-weight:500; }
+.ms-native-review-paper { position:absolute; left:var(--review-edge); right:var(--review-edge); top:8.45vh; bottom:10.5vh; margin:0; background:#fff; border-radius:8px; overflow:hidden; box-shadow:0 0 1px rgba(0,0,0,.15); }
+.ms-native-review-paper-tools { position:absolute; inset:12px 16px auto; height:28px; display:grid; grid-template-columns:1fr 1fr 1fr; align-items:center; z-index:1; }
+.ms-native-review .ms-native-review-edit,.ms-native-review .ms-native-review-icon { display:inline-flex; align-items:center; justify-content:center; min-height:0; height:30px; min-width:30px; padding:0; margin:0; border:0; border-radius:4px; background:transparent; color:var(--review-toolbar); box-shadow:none!important; font:inherit; cursor:pointer; }
+.ms-native-review-edit { justify-self:start; font-size:15px; font-weight:400; }
+.ms-native-review-favorite { justify-self:center; }
+.ms-native-review-notes { justify-self:end; }
+.ms-native-review-icon svg { flex:none; }
+.ms-native-review button:hover { filter:brightness(.96); }
+.ms-native-review button:focus-visible { outline:2px solid #007aff; outline-offset:4px; }
+.ms-native-review button:disabled { opacity:.40; cursor:default; }
+.ms-native-review-content { position:absolute; inset:74px 40px 24px; overflow:auto; overflow-wrap:anywhere; color:#111; scrollbar-width:thin; }
+.ms-native-review .ms-review-q,.ms-native-review .ms-review-question-panel,.ms-native-review .ms-review-answer-panel,.ms-native-review .ms-review-browser-card { min-height:0; margin:0; padding:0; border:0; border-radius:0; background:transparent; box-shadow:none; }
+.ms-native-review .ms-review-question-text { margin:0; font-size:inherit; line-height:1.45; color:#111; }
+.ms-native-review .ms-review-question-text>:first-child { margin-top:0; }
+.ms-native-review .ms-review-question-text p { margin:0 0 12px; }
+.ms-native-review .ms-review-browser-card h2 { font-size:18px; margin:0 0 14px; }
+.ms-native-review .ms-review-browser-answer { margin:16px 0 0; padding:0; border:0; }
+.ms-native-review-footer { position:absolute; left:var(--review-edge); right:var(--review-edge); bottom:3.3vh; height:clamp(34px,4.65vh,44px); display:grid; grid-template-columns:30px repeat(4,minmax(0,1fr)) 30px; column-gap:var(--review-gap); align-items:stretch; }
+.ms-native-review-footer .ms-native-review-icon { height:100%; color:#dedfe1; }
+.ms-native-review-mode { grid-column:1; grid-row:1; }
+.ms-native-review-mode.is-active { color:#fff; }
+.ms-native-review-close { grid-column:6; grid-row:1; }
+.ms-native-review-close svg { width:22px; height:22px; }
+.ms-native-review .ms-review-btns { grid-column:2/span 4; grid-row:1; padding:0; margin:0; border:0; grid-template-columns:repeat(4,minmax(0,1fr)); gap:var(--review-gap); }
+.ms-native-review .ms-review-btns .ms-grade,.ms-native-review-reveal { min-width:0; height:100%; margin:0; padding:0 8px; border:0; border-radius:8px; box-shadow:none; color:#fff; font:400 14px/1.2 -apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif; cursor:pointer; }
+.ms-native-review .ms-grade.again { background:#007aff; }
+.ms-native-review .ms-grade.hard { background:#f4696c; }
+.ms-native-review .ms-grade.good { background:#4fc987; }
+.ms-native-review .ms-grade.easy { background:#818181; }
+.ms-native-review-reveal { grid-column:2/span 4; grid-row:1; background:#007aff; }
+.ms-native-review-reveal[hidden] { display:none; }
+.ms-native-review-previous { grid-column:2/span 2; grid-row:1; }
+.ms-native-review-next { grid-column:4/span 2; grid-row:1; }
+/* Browse before AQ is separately measured at 1512 × 859: native 12-review-browse-reference.png. */
+.ms-native-review-browse .ms-native-review-paper { top:80px; bottom:100px; }
+.ms-native-review-browse .ms-native-review-content { inset:74px 38px 24px; font-size:20px; line-height:1.45; }
+.ms-native-review-browse .ms-native-review-counter { top:28px; }
+.ms-native-review-browse .ms-native-review-footer { bottom:34px; height:32px; display:block; }
+.ms-native-review-browse .ms-native-review-footer > button { position:absolute; top:0; }
+.ms-native-review-browse .ms-native-review-mode { left:0; }
+.ms-native-review-browse .ms-native-review-close { right:0; }
+.ms-native-review-browse .ms-native-review-previous,.ms-native-review-browse .ms-native-review-next { width:80px; transform:translateX(-50%); font-size:14px; font-weight:400; }
+.ms-native-review-browse .ms-native-review-previous { left:33.85%; }
+.ms-native-review-browse .ms-native-review-next { left:66.15%; }
+.ms-native-review-browse .ms-native-review-previous:disabled,.ms-native-review-browse .ms-native-review-next:disabled { opacity:.75; }
+.ms-native-review-inspector { position:absolute; top:52px; right:16px; width:min(360px,calc(100% - 32px)); max-height:calc(100% - 72px); overflow:auto; padding:14px; border:1px solid #d9dadd; border-radius:10px; background:#fff; color:#222; box-shadow:0 8px 32px rgba(0,0,0,.18); z-index:2; box-sizing:border-box; font-size:13px; }
+.ms-native-review-inspector[hidden] { display:none; }
+.ms-native-review-inspector .ms-review-response { border:0; padding:0; margin:12px 0; background:none; }
+.ms-native-review-inspector textarea { min-height:72px; width:100%; resize:vertical; }
+.ms-native-review-inspector .ms-review-filter-grid { grid-template-columns:1fr; gap:8px; }
+.ms-native-review-inspector .ms-review-tools { margin:10px 0; gap:6px; }
+.ms-native-review-inspector .ms-btn { padding:5px 7px; border-radius:5px; font-size:12px; }
+.ms-native-review-completion { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:270px; max-width:80%; padding:20px 0 0; text-align:center; border-radius:12px; background:#f0f0f0; box-shadow:0 12px 48px rgba(0,0,0,.20); overflow:hidden; font-size:13px; }
+.ms-native-review-completion h3 { margin:0 16px 22px; font-size:14px; font-weight:600; }
+.ms-native-review-completion p { margin:0 16px 10px; }
+.ms-native-review-completion-actions { display:grid; grid-template-columns:1fr 1fr; border-top:1px solid #c8c8c8; }
+.ms-native-review-completion-actions button { height:42px; padding:0; border:0; border-radius:0; color:#007aff; background:transparent; box-shadow:none; font:14px -apple-system,BlinkMacSystemFont,sans-serif; }
+.ms-native-review-completion-actions button+button { border-left:1px solid #c8c8c8; font-weight:600; }
+@media(max-width:760px) { .ms-modal.ms-native-review { --review-edge:4vw; --review-gap:10px; } .ms-native-review-content { inset:64px 24px 20px; } .ms-native-review .ms-review-btns .ms-grade { min-width:0; font-size:12px; } }
+
+/* Reference: the native floating Note Card editor (520 × 560 at 1512 × 949). */
+.ms-native-card-editor-bg { background:transparent!important; }
+.ms-modal.ms-native-card-editor { position:absolute; left:clamp(16px,22.22vw,calc(100vw - 536px)); top:clamp(32px,18.97vh,calc(100vh - 616px)); width:520px!important; height:560px; min-width:360px; min-height:320px; max-width:calc(100vw - 32px); max-height:calc(100vh - 90px); margin:0!important; padding:0!important; border:0; border-radius:16px!important; overflow:visible; background:#fff!important; color:#111!important; box-shadow:0 1px 12px rgba(0,0,0,.18)!important; font:16px/1.25 Helvetica,-apple-system,sans-serif; }
+.ms-native-card-top { position:absolute; top:9px; left:20px; right:16px; height:26px; display:flex; align-items:center; justify-content:space-between; }
+.ms-native-card-type,.ms-native-card-icon,.ms-native-card-comment { margin:0; padding:0; height:28px; min-height:0; border:0; background:transparent; color:#717a85; border-radius:0; box-shadow:none!important; cursor:pointer; font:400 14px/1.2 -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif; }
+.ms-native-card-type { padding:0; }
+.ms-native-card-handle { position:absolute; width:132px; height:4px; left:50%; top:4px; transform:translateX(-50%); border-radius:3px; background:#838383; cursor:move; }
+.ms-native-card-icon { display:inline-flex; align-items:center; justify-content:center; width:28px; }
+.ms-native-card-icon svg { width:24px; height:24px; }
+.ms-native-card-save { margin-left:auto; }
+.ms-native-card-save svg { width:22px; height:22px; }
+.ms-native-card-sheet,.ms-native-card-rich-preview { position:absolute; inset:56px 40px 46px; overflow:auto; scrollbar-width:thin; }
+.ms-native-card-sheet[hidden],.ms-native-card-rich-preview[hidden],.ms-native-card-advanced[hidden],.ms-native-card-handwriting[hidden] { display:none; }
+.ms-native-card-editor input.ms-native-card-title,.ms-native-card-editor textarea.ms-native-card-excerpt,.ms-native-card-editor textarea.ms-native-card-note { display:block; margin:0; width:100%; padding:4px 0 8px; border:0; border-radius:0; color:#111; background:transparent; resize:none; font:inherit; line-height:1.22; box-shadow:none!important; outline:none; }
+.ms-native-card-editor input.ms-native-card-title { height:44px; padding-top:0; border-bottom:1px solid #c4c4c4; font-size:16px; }
+.ms-native-card-editor input.ms-native-card-title::placeholder { color:#aaa; opacity:1; }
+.ms-native-card-editor textarea.ms-native-card-excerpt { height:54px; border-bottom:1px solid #c4c4c4; padding-top:5px; }
+.ms-native-card-editor textarea.ms-native-card-note { height:calc(100% - 114px); min-height:180px; padding-top:8px; }
+/* The native empty comment label stays small even when card text uses a larger size. */
+.ms-native-card-editor textarea.ms-native-card-note:placeholder-shown { padding-top:10px; }
+.ms-native-card-editor textarea.ms-native-card-note::placeholder { color:#aaa; font-size:13px; line-height:1.22; }
+.ms-native-card-sheet .ms-card-img { margin:8px 0; }
+.ms-card-extend-comment { border-top:1px solid #d0d0d0; margin-top:12px; padding-top:8px; }
+.ms-card-extend-comment .ms-modal-actions[hidden],.ms-card-extend-comment button[hidden] { display:none; }
+.ms-native-card-footer { position:absolute; bottom:6px; left:20px; right:20px; height:28px; display:grid; grid-template-columns:repeat(5,28px) minmax(0,1fr) 28px; gap:27px; align-items:center; }
+.ms-native-card-comment { min-width:0; font-size:11px; color:#888; white-space:nowrap; }
+.ms-native-card-comment:disabled { opacity:.40; cursor:default; }
+.ms-native-card-icon.is-recording { color:#ef5350; }
+.ms-native-card-resize { position:absolute; bottom:4px; right:4px; width:10px; height:10px; border:solid #8b8b8b; border-width:0 2px 2px 0; border-bottom-right-radius:10px; cursor:nwse-resize; }
+.ms-native-card-advanced,.ms-native-card-handwriting { position:absolute; right:12px; bottom:44px; width:400px; max-width:calc(100% - 24px); max-height:calc(100% - 80px); overflow:auto; padding:14px; border:1px solid #d8d8d8; border-radius:10px; box-sizing:border-box; color:var(--text-normal); background:var(--background-primary); box-shadow:0 6px 26px rgba(0,0,0,.18); z-index:4; font:13px/1.5 -apple-system,BlinkMacSystemFont,sans-serif; }
+.ms-native-card-advanced .ms-modal-actions { justify-content:flex-start; }
+.ms-native-card-advanced .ms-btn { padding:5px 8px; font-size:12px; }
+.ms-native-card-formatbar { position:absolute; left:0; right:0; bottom:0; height:40px; padding:0 8px; display:flex; align-items:center; background:#f5f5f5; border-top:1px solid #c8c8c8; color:#111; font:14px Helvetica,-apple-system,sans-serif; box-sizing:border-box; }
+.ms-native-card-formatbar button,.ms-native-card-formatbar select { height:32px; margin:0; padding:0 14px; border:0; border-radius:0; box-shadow:none!important; background:transparent; color:#111; font:inherit; }
+.ms-native-card-formatbar button:first-child { font-weight:600; padding-left:0; padding-right:20px; }
+.ms-native-card-formatbar select { appearance:none; font-size:11px; font-weight:600; border-right:1px solid #aaa; }
+.ms-native-card-formatbar button:focus-visible,.ms-native-card-editor button:focus-visible { outline:2px solid #007aff; outline-offset:2px; }
+@media(max-width:600px) { .ms-modal.ms-native-card-editor { left:16px; right:16px; width:calc(100vw - 32px)!important; min-width:0; top:8vh; } .ms-native-card-footer { gap:12px; } .ms-native-card-sheet,.ms-native-card-rich-preview { left:24px; right:24px; } }
+
+/* Attached media occupy comment rows directly below the excerpt, as observed in MN4. */
+.ms-card-attached-comments > .ms-card-extend-comment { position:relative; padding:8px 24px; min-height:48px; }
+.ms-card-attached-comments .ms-modal-actions { position:absolute; inset:8px 0; display:flex; align-items:center; justify-content:space-between; pointer-events:none; margin:0; }
+.ms-card-attached-comments .ms-modal-actions button { pointer-events:auto; }
+.ms-card-comment-remove,.ms-card-comment-move { padding:0!important; border:0!important; background:transparent!important; box-shadow:none!important; height:22px; min-width:22px; color:#aaa; }
+.ms-card-comment-remove { color:#ff3b30; font-size:20px; }
+.ms-card-comment-order { margin-left:auto; display:flex; flex-direction:column; }
+.ms-card-comment-move { height:14px; font-size:15px; line-height:14px; }
+.ms-card-comment-move:disabled { opacity:.35; }
+.ms-card-extend-comment.is-confirming .ms-modal-actions { position:static; margin-top:8px; pointer-events:auto; }
+.ms-card-extend-comment.is-confirming .ms-card-comment-remove { font-size:14px; }
+.ms-native-card-editor.is-editing-comments .ms-native-card-footer > :not(.ms-native-card-comment) { display:none; }
+.ms-native-card-editor.is-editing-comments .ms-native-card-footer { justify-content:flex-start; }
+.ms-native-card-editor.is-editing-comments .ms-native-card-comment { background:transparent; width:auto; margin:0; }
+.ms-native-card-formatbar[hidden] { display:none; }
+
+.ms-native-card-editor.is-editing-comments input.ms-native-card-title:placeholder-shown,
+.ms-native-card-editor.is-editing-comments textarea.ms-native-card-excerpt:placeholder-shown { display:none; }
+.ms-card-attached-comments button.ms-card-comment-remove { color:#ff3b30!important; }
+.ms-card-text-comment { position:relative; }
+.ms-card-text-comment .ms-modal-actions[hidden],.ms-card-text-comment button[hidden] { display:none; }
+.ms-native-card-editor.is-editing-comments .ms-card-text-comment.has-text { border-top:1px solid #d0d0d0; padding:8px 24px; }
+.ms-card-text-comment .ms-modal-actions { position:absolute; left:0; top:12px; margin:0; }
+.ms-card-text-comment .ms-card-comment-remove { color:#ff3b30!important; }
+.ms-card-text-comment.is-confirming .ms-modal-actions { position:static; }
+.ms-card-comment-drag { padding:0!important; width:24px; height:24px; min-height:0; border:0!important; background:transparent!important; box-shadow:none!important; color:#999; font-size:22px; line-height:1; cursor:grab; touch-action:none; }
+.ms-card-comment-drag:active { cursor:grabbing; }
+.ms-card-extend-comment.is-dragging-comment { opacity:.5; }
+.ms-card-extend-comment.is-drop-before { box-shadow:inset 0 2px #007aff; }
+.ms-card-extend-comment.is-drop-after { box-shadow:inset 0 -2px #007aff; }
+
+/* Native card tools must keep their unfilled grey appearance under host themes. */
+.ms-modal.ms-native-card-editor :is(.ms-native-card-type,.ms-native-card-icon,.ms-native-card-comment) { background:transparent!important; color:#717a85!important; border:0!important; }
+
+.ms-card-attached-comments > [data-comment-key] { position:relative; padding:8px 24px; min-height:48px; }
+.ms-card-attached-comments > [data-comment-key].is-confirming .ms-modal-actions { position:static; margin-top:8px; pointer-events:auto; }
+.ms-card-attached-comments > [data-comment-key].is-dragging-comment { opacity:.5; }
+.ms-card-attached-comments > [data-comment-key].is-drop-before { border-top:2px solid #007aff; }
+.ms-card-attached-comments > [data-comment-key].is-drop-after { border-bottom:2px solid #007aff; }

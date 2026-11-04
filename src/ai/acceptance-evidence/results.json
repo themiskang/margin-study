@@ -1,0 +1,98 @@
+{
+  "verifiedAt": "2026-11-04T13:41:49.422Z",
+  "environment": "synthetic localhost provider; real Node HTTP/SSE and Store; no external account or user vault",
+  "checks": [
+    {
+      "name": "unbound chat is rejected before any request",
+      "passed": true
+    },
+    {
+      "name": "API keys live only in public secret storage and profiles expose only saved-key state",
+      "passed": true
+    },
+    {
+      "name": "Mini and Normal each stream vision/text; Normal streams a function and receives the matching tool result",
+      "passed": true
+    },
+    {
+      "name": "a recreated service retains nonsecret binding without putting the key in profile storage",
+      "passed": true
+    },
+    {
+      "name": "condensation uses the real bound transport once per missing tier and never sends tools",
+      "passed": true
+    },
+    {
+      "name": "condensation sends only the selected image through the bound real transport",
+      "passed": true
+    },
+    {
+      "name": "SSE reconstructs split UTF-8 Chinese/emoji and streams fragments before completion",
+      "passed": true
+    },
+    {
+      "name": "only explicitly supplied context/images are sent and Mini uses the configured Mini model",
+      "passed": true
+    },
+    {
+      "name": "streamed card tools return editable previews and round-trip preview results without writing or enrolling",
+      "passed": true
+    },
+    {
+      "name": "user-edited card preview saves through real Store as one undoable change and persists across reload",
+      "passed": true
+    },
+    {
+      "name": "AI outline streams a hierarchical proposal and explicit save creates real parent/child nodes",
+      "passed": true
+    },
+    {
+      "name": "invalid outline levels and a mid-batch Store failure cannot leave partial content",
+      "passed": true
+    },
+    {
+      "name": "image/text Markdown recognition produces an editable draft and saves only to a new explicit filename",
+      "passed": true
+    },
+    {
+      "name": "endpoint/model/key changes invalidate binding, while an unchanged saved key is retained",
+      "passed": true
+    },
+    {
+      "name": "failed vision, streamed tools or tool-result checks each leave chat unavailable",
+      "passed": true
+    },
+    {
+      "name": "in-flight profile edits cannot bind an obsolete configuration",
+      "passed": true
+    },
+    {
+      "name": "local no-key services work and clearing a key does not serialize it into profile or Store backups",
+      "passed": true
+    },
+    {
+      "name": "HTTP error bodies and redirects cannot expose a key or forward it to another endpoint",
+      "passed": true
+    },
+    {
+      "name": "nonstreaming, malformed SSE and truncated content are rejected instead of reported complete",
+      "passed": true
+    },
+    {
+      "name": "interleaved tool-call indices, names and argument fragments reconstruct in original index order",
+      "passed": true
+    },
+    {
+      "name": "abort stops an in-flight stream and returns a stable cancellation error",
+      "passed": true
+    },
+    {
+      "name": "unsupported tools never execute or write files, and repeated invalid calls stop at the round limit",
+      "passed": true
+    },
+    {
+      "name": "profiles in separate vault-local stores use different secret identifiers",
+      "passed": true
+    }
+  ]
+}

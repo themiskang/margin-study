@@ -1,0 +1,140 @@
+import { ReaderView } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/readerView';
+
+export async function runReaderAcceptance({test,assert,wait,plugin,add,app}:any){
+ await test('Recorded audio can be placed, undone, redone, deleted and restored through reader controls',async()=>{
+  const original=(window as any).MediaRecorder,get=Object.getOwnPropertyDescriptor(navigator.mediaDevices,'getUserMedia'),enumerate=Object.getOwnPropertyDescriptor(navigator.mediaDevices,'enumerateDevices');let requested:any;
+  Object.defineProperty(navigator.mediaDevices,'enumerateDevices',{configurable:true,value:async()=>[{kind:'audioinput',deviceId:'virtual',label:'Virtual input'},{kind:'audioinput',deviceId:'builtin',label:'Built-in microphone'}]});
+  Object.defineProperty(navigator.mediaDevices,'getUserMedia',{configurable:true,value:async(options:any)=>{requested=options;return{getTracks:()=>[{stop(){}}]};}});
+  (window as any).MediaRecorder=class{mimeType='audio/webm';ondataavailable:any;onstop:any;static isTypeSupported(){return true;}start(){}stop(){queueMicrotask(()=>{this.ondataavailable({data:new Blob(['RECORDED-AUDIO'])});this.onstop();});}};
+  add('recorded.docx',{content:'<p>Synthetic recording source.</p>'});const p=plugin(),v:any=new (await import('/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/word/wordReader')).WordReaderView({app} as any,p);await v.onOpen();await v.loadFileByPath('recorded.docx');
+  try{v.getReaderToolbar().querySelector('[aria-label="语音批注"]').click();await wait(15);const input=document.querySelector('[aria-label="录音输入设备"]') as HTMLSelectElement;assert(input,'multiple inputs offered no device choice');input.value='builtin';(document.querySelector('[aria-label="确认输入并开始录音"]') as HTMLButtonElement).click();await wait(15);assert(requested.audio.deviceId.exact==='builtin','recording ignored selected input');const body=v.getBodyEl(),r=body.getBoundingClientRect();body.dispatchEvent(new MouseEvent('click',{bubbles:true,clientX:r.left+20,clientY:r.top+20}));await wait(70);
+   assert(body.querySelector('[data-ann-id]')&&v.getEditHistoryState().canUndo,'recorded annotation has no undo');await v.undoLastEdit();assert(!body.querySelector('[data-ann-id]'),'recording undo left marker');await v.redoLastEdit();assert(body.querySelector('[data-ann-id]'),'recording redo lost marker');
+   body.querySelector('[data-ann-id]').click();[...document.querySelectorAll('.ms-ann-pop button')].find((b:any)=>b.textContent==='删除').click();assert(!body.querySelector('[data-ann-id]'),'recording deletion failed');await v.undoLastEdit();assert(body.querySelector('[data-ann-id]'),'deleted recording not restored');
+   body.querySelector('[data-ann-id]').click();const transcript=[...document.querySelectorAll('.ms-ann-pop button')].find((b:any)=>b.textContent==='转写文字（粘贴/编辑）') as HTMLButtonElement;assert(transcript,'recording has no local transcript return path');transcript.click();const modal=document.querySelector('[aria-label="录音转写文字"]')!;const text=modal.querySelector('textarea') as HTMLTextAreaElement;text.value='Synthetic microphone transcript.';(modal.querySelector('[aria-label="保存转写文字"]') as HTMLButtonElement).click();
+   assert((await p.store.loadAnnotations('recorded.docx'))[0].noteText==='Synthetic microphone transcript.','transcript not saved');await v.undoLastEdit();assert(!(await p.store.loadAnnotations('recorded.docx'))[0].noteText,'transcript undo failed');await v.redoLastEdit();assert((await p.store.loadAnnotations('recorded.docx'))[0].noteText==='Synthetic microphone transcript.','transcript redo failed');
+   body.querySelector('[data-ann-id]').click();const automatic=[...document.querySelectorAll('.ms-ann-pop button')].find((b:any)=>b.textContent==='本地自动转写') as HTMLButtonElement;assert(automatic,'recorded audio cannot be transcribed locally');
+   const oldRequire=(window as any).require,oldDecoder=(window as any).OfflineAudioContext,oldBase=app.vault.adapter.getBasePath;let launched=0,removed=0,killed=0,mode='success';
+   const nativeFs={access:async()=>{if(mode==='missing')throw new Error('component missing');},mkdtemp:async()=>'/tmp/ms-asr-synthetic',writeFile:async()=>{},readFile:async()=> 'Local recognized transcript.',rm:async()=>{removed++;}};
+   (window as any).OfflineAudioContext=class{async decodeAudioData(){return{sampleRate:16000,numberOfChannels:1,length:1600,duration:.1,getChannelData:()=>new Float32Array(1600).fill(.1)};}};
+   app.vault.adapter.getBasePath=()=>'/synthetic-vault';(window as any).require=(name:string)=>name==='fs'?{promises:nativeFs}:name==='path'?{join:(...items:string[])=>items.join('/')}:name==='os'?{tmpdir:()=>'/tmp'}:name==='process'?{platform:'darwin',arch:'arm64'}:name==='child_process'?{execFile(_file:string,args:string[],_options:any,callback:any){assert(args.includes('-m')&&args.includes('-f'),'ASR did not use explicit local model/file');launched++;if(mode!=='pending')setTimeout(()=>callback(mode==='failure'?new Error('synthetic process failure'):null,''),10);return{kill(){killed++;callback(new Error('cancelled'),'');}};}}:oldRequire?.(name);
+   try{automatic.click();await wait(80);const preview=document.querySelector('[aria-label="录音转写内容"]') as HTMLTextAreaElement;assert(preview?.value==='Local recognized transcript.'&&launched===1&&removed===1,'local ASR did not finish an editable preview or clean temp audio');assert((await p.store.loadAnnotations('recorded.docx'))[0].noteText==='Synthetic microphone transcript.','ASR silently overwrote stored transcript');(document.querySelector('[aria-label="保存转写文字"]') as HTMLButtonElement).click();assert((await p.store.loadAnnotations('recorded.docx'))[0].noteText==='Local recognized transcript.','recognized result did not return to source');await v.undoLastEdit();assert((await p.store.loadAnnotations('recorded.docx'))[0].noteText==='Synthetic microphone transcript.','ASR result undo lost previous transcript');
+    for(const nextMode of ['missing','failure','pending']){mode=nextMode;body.querySelector('[data-ann-id]').click();([...document.querySelectorAll('.ms-ann-pop button')].find((b:any)=>b.textContent==='本地自动转写') as HTMLButtonElement).click();await wait(45);const dialog=document.querySelector('[aria-label="录音转写文字"]')!;const input=dialog.querySelector('textarea')!;assert(input.value==='Synthetic microphone transcript.','failed or pending ASR discarded existing text');if(mode!=='pending')assert(dialog.querySelector('[role="status"]')!.textContent!.includes(mode==='missing'?'未安装':'失败'),'ASR failure not actionable');([...dialog.querySelectorAll('button')].find(b=>b.textContent==='取消') as HTMLButtonElement).click();await wait(25);assert((await p.store.loadAnnotations('recorded.docx'))[0].noteText==='Synthetic microphone transcript.','cancelled ASR changed source');}assert(killed===1&&removed===3,'ASR cancellation leaked process or temp audio');}
+   finally{(window as any).require=oldRequire;(window as any).OfflineAudioContext=oldDecoder;app.vault.adapter.getBasePath=oldBase;}
+  }finally{await v.onClose();(window as any).MediaRecorder=original;if(get)Object.defineProperty(navigator.mediaDevices,'getUserMedia',get);if(enumerate)Object.defineProperty(navigator.mediaDevices,'enumerateDevices',enumerate);else delete(navigator.mediaDevices as any).enumerateDevices;}
+ });
+ await test('Word source remains natively selectable when the desktop host disables inherited selection',async()=>{
+  add('selectable.docx',{content:'<p>Selectable source paragraph.</p>'});const p=plugin(),v:any=new (await import('/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/word/wordReader')).WordReaderView({app} as any,p);await v.onOpen();await v.loadFileByPath('selectable.docx');
+  const previous=document.body.style.userSelect;document.body.style.userSelect='none';try{assert(getComputedStyle(v.getBodyEl().querySelector('p')).userSelect==='text','desktop host prevents native source selection');}finally{document.body.style.userSelect=previous;await v.onClose();v.containerEl.remove();}
+ });
+ await test('Reader imports audio at a page location, reopens a controlled player and reports missing media',async()=>{
+  add('media.docx',{name:'Media',content:'<h1>Media attachment</h1><p>Source text remains selectable.</p>'});const p=plugin(),v:any=new (await import('/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/word/wordReader')).WordReaderView({app} as any,p);await v.onOpen();await v.loadFileByPath('media.docx');
+  try{
+   const input=v.getReaderToolbar().querySelector('[aria-label="选择音视频文件"]') as HTMLInputElement;assert(input,'media file input missing');
+   const data=new DataTransfer();data.items.add(new File([new Uint8Array(48)],'sample.wav',{type:'audio/wav'}));input.files=data.files;input.dispatchEvent(new Event('change',{bubbles:true}));
+   const body=v.getBodyEl(),r=body.getBoundingClientRect();body.dispatchEvent(new MouseEvent('click',{bubbles:true,clientX:r.left+30,clientY:r.top+35}));await wait(80);
+   const saved=await p.store.loadAnnotations('media.docx');assert(saved.length===1&&saved[0].mediaKind==='audio'&&saved[0].audioPath,'media was not persisted at source');
+   body.querySelector('[data-ann-id]').click();[...document.querySelectorAll('.ms-ann-pop button')].find((b:any)=>b.textContent==='播放').click();await wait(30);
+   const player=document.querySelector('[aria-label="媒体播放器"]');assert(player?.querySelector('audio[controls]'),'media has no controlled audio player');player.querySelector('[aria-label="关闭媒体播放器"]').click();
+   saved[0].audioPath='missing-media.wav';p.store.saveAnnotationsDebounced('media.docx',saved);body.querySelector('[data-ann-id]').click();[...document.querySelectorAll('.ms-ann-pop button')].find((b:any)=>b.textContent==='播放').click();await wait(30);assert((window as any).notices.some((n:string)=>n.includes('媒体文件不存在')),'missing media feedback absent');
+  }finally{await v.onClose();}
+ });
+ await test('Clearly separated two-column PDF text selects each column in reading order without collecting the other column',async()=>{
+  const textItems=Array.from({length:4},(_,i)=>[{hasEOL:true,str:'Left '+i,x:60,y:650-i*35,w:180,h:18},{hasEOL:true,str:'Right '+i,x:360,y:650-i*35,w:180,h:18}]).flat();add('two-columns.pdf',{name:'Columns',pages:1,textItems});const p=plugin(),v:any=new ReaderView({app} as any,p);await v.onOpen();await v.loadFileByPath('two-columns.pdf');
+  try{await v.renderPage(1);const spans=[...v.getPageRecord(1).textLayer.querySelectorAll('span')];assert(spans.map((node:any)=>node.textContent).join('|')==='Left 0|Left 1|Left 2|Left 3|Right 0|Right 1|Right 2|Right 3','text layer interleaves independent columns');assert(spans.every((span:any)=>span.nextElementSibling?.tagName==='BR'),'text line breaks detached from their glyphs');const range=document.createRange();range.setStart(spans[0].firstChild,0);range.setEnd(spans[3].firstChild,6);assert(!range.toString().includes('Right'),'left column selection included right column');}finally{await v.onClose();}
+ });
+ await test('A fitted PDF retains fit intent after saving and reopening at a changed pane width',async()=>{
+  add('fit-reopen.pdf',{name:'Fitted reopen',pages:3});const p=plugin(),v:any=new ReaderView({app} as any,p);await v.onOpen();await v.loadFileByPath('fit-reopen.pdf');await v.setPageLayout('spread',true);await v.fitWidth();await wait(60);
+  const saved=v.getState();try{assert(saved.pdfFitWidth===true,'saved reader state lost fit intent');const reopen:any=new ReaderView({app} as any,p);reopen.containerEl.style.width='1000px';await reopen.setState(saved);await reopen.onOpen();try{assert(reopen.isFittedToWidth()&&(reopen.getState() as any).pdfFitWidth===true,'reopen lost fitted mode');}finally{await reopen.onClose();reopen.containerEl.remove();}}finally{await v.onClose();v.containerEl.remove();}
+ });
+ await test('PDF user can edit TOC, undo redo and reopen without changing source PDF',async()=>{
+  add('toc-edit.pdf',{name:'Editable TOC',pages:3});const p=plugin(),v:any=new ReaderView({app} as any,p);await v.onOpen();await v.loadFileByPath('toc-edit.pdf');
+  try{
+   const initial=await v.getEditableOutline();
+   await v.setEditableOutline([{id:'intro',title:'Introduction',page:1,level:0},{id:'end',title:'Conclusion 中文',page:3,level:0}]);
+   let items=await v.getEditableOutline();assert(items.map((i:any)=>i.title).join('|')==='Introduction|Conclusion 中文','TOC edit lost');
+   await v.undoLastEdit();assert(JSON.stringify(await v.getEditableOutline())===JSON.stringify(initial),'TOC undo failed');
+   await v.redoLastEdit();assert((await v.getEditableOutline())[1].page===3,'TOC redo failed');
+   const reopened:any=new ReaderView({app} as any,p);await reopened.onOpen();await reopened.loadFileByPath('toc-edit.pdf');
+   assert((await reopened.getEditableOutline())[1].title==='Conclusion 中文','TOC reopen lost');await reopened.onClose();
+  }finally{await v.onClose();}
+ });
+
+ await test('TOC navigation aligns a short final PDF page at the viewport top and preserves it on reopen',async()=>{
+  add('short-last-toc.pdf',{name:'Short final TOC page',pages:6});const p=plugin(),v=new ReaderView({app} as any,p);await v.onOpen();await v.loadFileByPath('short-last-toc.pdf');
+  try{
+   v.setScale(.3);await v.setPageLayout('single',true);await v.setEditableOutline([{id:'first',title:'First chapter',page:1,level:0},{id:'last',title:'Last chapter',page:6,level:0}]);
+   const outline=await v.getEditableOutline();v.navigateToOutline(outline[1]);await wait(100);
+   const scroll=v.getScrollContainer(),last=v.getPageRecord(6)!.wrapper;
+   assert(Math.abs(last.getBoundingClientRect().top-scroll.getBoundingClientRect().top)<2,'last chapter was clamped below viewport top: '+(last.getBoundingClientRect().top-scroll.getBoundingClientRect().top));
+   assert(v.getCurrentDisplayPage()===6,'last chapter navigation selected a preceding visible page');
+   const saved=v.getState(),reopened=new ReaderView({app} as any,p);await reopened.setState(saved);await reopened.onOpen();await wait(70);
+   try{assert(Math.abs(reopened.getPageRecord(6)!.wrapper.getBoundingClientRect().top-reopened.getScrollContainer().getBoundingClientRect().top)<2&&reopened.getCurrentDisplayPage()===6,'short final chapter lost top alignment or page identity on reopen');}finally{await reopened.onClose();reopened.containerEl.remove();}
+   v.navigateToOutline(outline[0]);await wait(50);assert(v.getCurrentDisplayPage()===1,'first chapter navigation regressed');
+  }finally{await v.onClose();v.containerEl.remove();}
+ });
+ await test('TOC chapter start survives host chrome resizing after an instant navigation',async()=>{
+  add('toc-chrome-resize.pdf',{name:'TOC chrome resize',pages:6});const p=plugin(),v=new ReaderView({app} as any,p);await v.onOpen();await v.loadFileByPath('toc-chrome-resize.pdf');
+  try{v.setScale(.3);await v.setPageLayout('single',true);v.navigateToOutline({id:'last',title:'Last chapter',page:6,level:0});await wait(70);
+   v.containerEl.style.height='550px';await wait(100);const top=v.getPageRecord(6)!.wrapper.getBoundingClientRect().top-v.getScrollContainer().getBoundingClientRect().top;
+   assert(Math.abs(top)<2&&v.getCurrentDisplayPage()===6,'chrome resizing restored a pre-navigation offset: '+JSON.stringify({top,state:v.getState()}));
+  }finally{await v.onClose();v.containerEl.remove();}
+ });
+ await test('The selected final PDF page survives returning from flip to scroll when its top cannot align with the viewport',async()=>{
+  add('clamped-layout.pdf',{name:'Clamped layout',pages:3});const p=plugin(),v=new ReaderView({app} as any,p);
+  await v.onOpen();await v.loadFileByPath('clamped-layout.pdf');v.setScale(.3);await v.setPageLayout('single',false);await v.navigateToReference(3,[]);await wait(100);
+  assert((v.getState() as any).position.page===3,'paged final page was not selected');await v.setPageLayout('single',true);await wait(50);
+  const saved=v.getState();assert((saved as any).position.page===3,'returning to scroll saved an earlier visible page: '+JSON.stringify(saved));
+  const reopened=new ReaderView({app} as any,p);await reopened.setState(saved);await reopened.onOpen();await wait(50);
+  try{assert((reopened.getState() as any).position.page===3&&reopened.getScale()===.3&&reopened.getPageLayout().continuous,'reloading lost the selected final page or mode');reopened.getScrollContainer().scrollTo({top:0,behavior:'instant' as ScrollBehavior});await wait(50);assert((reopened.getState() as any).position.page===1,'an explicit final-page anchor ignored later manual scrolling');}finally{await reopened.onClose();await v.onClose();}
+ });
+ await test('PDF four layouts preserve shells, group odd final page, persist modes and restore location',async()=>{
+  add('layout.pdf',{name:'Layout',pages:5});const p=plugin();const v:any=new ReaderView({app} as any,p);
+  await v.onOpen();await v.loadFileByPath('layout.pdf');const shell=v.getPageRecord(2).wrapper;
+  await v.setPageLayout('spread',true);
+  assert(v.scrollEl.querySelectorAll('.ms-page-spread').length===3,'incorrect spread grouping');
+  assert(v.getPageRecord(2).wrapper===shell,'layout recreated annotation shells');
+  const a=v.getPageRecord(1).wrapper.getBoundingClientRect(),b=v.getPageRecord(2).wrapper.getBoundingClientRect();
+  assert(a.top===b.top&&b.left>=a.right,'spread pages are not side by side');
+  await v.navigateToReference(2,[]);v.observer.cb([1,2].map(number=>({target:v.getPageRecord(number).wrapper,isIntersecting:true,intersectionRatio:.5})));assert(v.currentPage===2,'observer replaced selected second page of spread');
+  await v.setPageLayout('spread',false);await v.navigateToReference(4,[]);
+  assert(v.getPageRecord(3).canvas.width>0&&v.getPageRecord(4).canvas.width>0,'companion not rendered');
+  assert(v.scrollEl.querySelectorAll('.ms-page-spread:not([hidden])').length===1,'paged mode shows extra groups');
+  assert(v.getPageRecord(1).canvas.width===0,'hidden group retained canvas');
+  v.scrollEl.scrollTo({top:170,left:0,behavior:'instant'});await wait(40);
+  const state=v.getState();assert(state.position.page===4&&state.pdfLayout==='spread'&&!state.pdfContinuous,'second page or mode lost in state');
+  const reopened:any=new ReaderView({app} as any,p);await reopened.setState(state);await reopened.onOpen();
+  assert(reopened.currentPage===4&&!reopened.pageRows.get(4).hidden,'reopened wrong page group');
+  assert(Math.abs(reopened.scrollEl.scrollTop-v.scrollEl.scrollTop)<3,'reopened page offset lost');
+  await reopened.navigateToReference(5,[]);assert(reopened.scrollEl.querySelector('.ms-page-spread:not([hidden])').children.length===1,'odd final page wrong');
+  await reopened.setPageLayout('single',false);assert(reopened.scrollEl.querySelectorAll('.ms-page-spread').length===5,'single paged rows');
+  await reopened.setPageLayout('single',true);assert(![...reopened.pageRows.values()].some((row:any)=>row.hidden),'single continuous hidden pages');
+  assert(p.store.getDocMeta('layout.pdf').pdfLayout==='single'&&p.store.getDocMeta('layout.pdf').pdfContinuous===true,'mode not saved');
+  await reopened.onClose();await v.onClose();
+ });
+ await test('PDF paged source jumps/history, focused keyboard steps, limits and spread fit width',async()=>{
+  add('paged.pdf',{name:'Paged',pages:5});const p=plugin();const v:any=new ReaderView({app} as any,p);
+  await v.onOpen();await v.loadFileByPath('paged.pdf');await v.setPageLayout('spread',false);
+  assert(v.prevPageEl.disabled&&!v.nextPageEl.disabled,'first group limits');
+  v.scrollEl.focus();v.scrollEl.dispatchEvent(new KeyboardEvent('keydown',{key:'PageDown',bubbles:true,cancelable:true}));
+  await wait(90);assert(v.currentPage===3&&v.pageRows.get(1).hidden,'PageDown did not advance group');
+  v.toggleFold(5);await v.navigateToReference(5,[{x:80,y:500,w:100,h:18}],'pdf');
+  assert(!v.folded.has(5)&&v.currentPage===5&&v.nextPageEl.disabled,'hidden/folded source jump');
+  await v.goBack();await wait(180);assert(v.currentPage===3&&!v.pageRows.get(3).hidden,'history did not restore group');
+  await v.goForward();assert(v.currentPage===5,'history forward failed');
+  await v.navigateToReference(2,[]);v.fitWidth();await wait(100);
+  const width=v.unitPages(2).reduce((sum:number,n:number)=>sum+v.getPageRecord(n).wrapper.getBoundingClientRect().width,0)+16;
+  assert(width<=v.scrollEl.clientWidth-44,'spread fit width still sizes a single page '+JSON.stringify({width,available:v.scrollEl.clientWidth,scale:v.getScale(),page:v.getState().position.page}));
+  const input=v.pageInfoEl;input.dispatchEvent(new KeyboardEvent('keydown',{key:'PageDown',bubbles:true,cancelable:true}));
+  await wait(20);assert(v.currentPage===2,'input keyboard intercepted');
+  await v.onClose();
+ });
+ await test('PDF tab states restore independent explicit scales and ignore absent or invalid legacy scale',async()=>{
+  add('scale-a.pdf',{pages:2});add('scale-b.pdf',{pages:2});const p=plugin(),a:any=new ReaderView({app} as any,p),b:any=new ReaderView({app} as any,p);await a.onOpen();await b.onOpen();let stateA:any,stateB:any;
+  try{await a.loadFileByPath('scale-a.pdf');a.setScale(.65);await a.renderPage(1);stateA=a.getState();await b.loadFileByPath('scale-b.pdf');b.setScale(2.2);await b.renderPage(1);stateB=b.getState();assert(a.getScale()===.65&&stateA.scale===.65&&stateB.scale===2.2,'another tab changed existing scale');}finally{await a.onClose();await b.onClose();}
+  p.store.settings.scale=3.4;const reopenedA:any=new ReaderView({app} as any,p),reopenedB:any=new ReaderView({app} as any,p);await reopenedA.setState(stateA);assert(reopenedA.getState().scale===.65,'unopened state lost explicit scale');await reopenedB.setState(stateB);await reopenedB.onOpen();await reopenedA.onOpen();try{
+   assert(reopenedA.getScale()===.65&&reopenedB.getScale()===2.2,'tab reopening used global last scale');assert(reopenedA.getPageRecord(1).canvas.width===390&&reopenedB.getPageRecord(1).canvas.width===1320,'restored scale not rendered');assert(p.store.settings.scale===3.4,'restoring a tab overwrote the default scale');
+   await reopenedA.setState({...stateB,scale:1.1});assert(reopenedA.getFilePath()==='scale-b.pdf'&&reopenedA.getScale()===1.1,'loaded view did not apply state scale');for(const scale of [undefined,NaN,Infinity,.2,5,'2']){await reopenedA.setState({filePath:'scale-b.pdf',scale});assert(reopenedA.getScale()===1.1,'invalid or absent scale changed legacy behavior');}
+  }finally{await reopenedA.onClose();await reopenedB.onClose();}
+  const legacy:any=new ReaderView({app} as any,p);await legacy.setState({filePath:'scale-a.pdf'});await legacy.onOpen();try{assert(legacy.getScale()===3.4,'old state stopped using existing default');}finally{await legacy.onClose();}
+ });
+}

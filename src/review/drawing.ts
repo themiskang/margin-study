@@ -1,0 +1,82 @@
+import type { Stroke } from "../types";
+import { el } from "../utils/dom";
+
+interface DrawingStyle { color: string; width: number; opacity: number; }
+const DEFAULT_DRAWING_STYLE: DrawingStyle = { color: "#5269dc", width: 3, opacity: 1 };
+
+function paint(canvas: HTMLCanvasElement, strokes: Stroke[][], style: DrawingStyle = DEFAULT_DRAWING_STYLE): void {
+  const context = canvas.getContext("2d");
+  if (!context) return;
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.strokeStyle = style.color; context.fillStyle = style.color; context.globalAlpha = style.opacity;
+  context.lineWidth = style.width; context.lineCap = "round"; context.lineJoin = "round";
+  for (const stroke of strokes) {
+    if (!stroke.length) continue;
+    if (stroke.length === 1) {
+      context.beginPath(); context.arc(stroke[0].x * canvas.width, stroke[0].y * canvas.height, Math.max(1, style.width / 2), 0, Math.PI * 2); context.fill();
+    } else {
+      for (let index = 1; index < stroke.length; index++) {
+        const previous = stroke[index - 1], point = stroke[index], pressure = point.pressure ?? previous.pressure;
+        context.lineWidth = pressure === undefined ? style.width : Math.max(.5, style.width * (.45 + pressure * 1.1));
+        context.beginPath(); context.moveTo(previous.x * canvas.width, previous.y * canvas.height);
+        context.lineTo(point.x * canvas.width, point.y * canvas.height); context.stroke();
+      }
+    }
+  }
+  context.globalAlpha = 1;
+}
+
+function drawingCanvas(): HTMLCanvasElement {
+  const canvas = el("canvas", { style: "display:block;width:100%;height:160px;border:1px solid var(--background-modifier-border);border-radius:8px;background:var(--background-primary)" }) as HTMLCanvasElement;
+  canvas.width = 960; canvas.height = 320;
+  return canvas;
+}
+
+export function appendReviewDrawing(container: HTMLElement, drawing: Stroke[][]): void {
+  if (!drawing.some(stroke => stroke.length)) return;
+  const canvas = drawingCanvas(); canvas.setAttribute("aria-label", "本次复习的手绘批注");
+  container.append(canvas); paint(canvas, drawing);
+}
+
+/** Own-format normalized points; no native app drawing format is used. */
+export function reviewDrawingInput(options: Partial<DrawingStyle> = {}): { element: HTMLElement; value(): Stroke[][] | undefined } {
+  const style: DrawingStyle = {
+    color: options.color ?? DEFAULT_DRAWING_STYLE.color,
+    width: Number.isFinite(options.width) ? Math.max(.5, Math.min(24, Number(options.width))) : DEFAULT_DRAWING_STYLE.width,
+    opacity: Number.isFinite(options.opacity) ? Math.max(0, Math.min(1, Number(options.opacity))) : DEFAULT_DRAWING_STYLE.opacity,
+  };
+  const element = el("details", { style: "margin:8px 0" });
+  element.append(el("summary", { text: "手绘批注（可选）", style: "cursor:pointer;margin-bottom:6px" }));
+  const canvas = drawingCanvas(); canvas.style.touchAction = "none"; canvas.style.cursor = "crosshair";
+  canvas.setAttribute("aria-label", "在此绘制本次复习批注");
+  const strokes: Stroke[][] = [];
+  let current: Stroke[] | undefined, pointerId: number | undefined;
+  const point = (event: PointerEvent): Stroke => {
+    const bounds = canvas.getBoundingClientRect();
+    return { x: Math.max(0, Math.min(1, (event.clientX - bounds.left) / Math.max(1, bounds.width))), y: Math.max(0, Math.min(1, (event.clientY - bounds.top) / Math.max(1, bounds.height))),
+      ...(event.pointerType === "pen" ? { pressure: Math.min(1, Math.max(.05, event.pressure || .5)) } : {}) };
+  };
+  canvas.addEventListener("pointerdown", event => {
+    if (pointerId !== undefined || event.button !== 0) return;
+    pointerId = event.pointerId; current = [point(event)]; strokes.push(current);
+    canvas.setPointerCapture(event.pointerId); event.preventDefault(); paint(canvas, strokes, style);
+  });
+  canvas.addEventListener("pointermove", event => {
+    if (!current || pointerId !== event.pointerId) return;
+    const samples = event.getCoalescedEvents?.();
+    current.push(...(samples?.length ? samples : [event]).map(point)); paint(canvas, strokes, style);
+  });
+  const finish = (event: PointerEvent) => {
+    if (pointerId !== event.pointerId) return;
+    current = undefined; pointerId = undefined;
+    if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+  };
+  canvas.addEventListener("pointerup", finish); canvas.addEventListener("pointercancel", finish); canvas.addEventListener("lostpointercapture", finish);
+  const actions = el("div", { style: "display:flex;gap:8px;margin-top:6px" });
+  const undo = el("button", { class: "ms-btn", text: "撤销一笔" });
+  undo.addEventListener("click", () => { strokes.pop(); current = undefined; pointerId = undefined; paint(canvas, strokes, style); });
+  const clear = el("button", { class: "ms-btn", text: "清空手绘" });
+  clear.addEventListener("click", () => { strokes.length = 0; current = undefined; pointerId = undefined; paint(canvas, strokes, style); });
+  actions.append(undo, clear); element.append(canvas, actions);
+  return { element, value: () => strokes.length ? strokes.map(stroke => stroke.map(item => ({ ...item }))) : undefined };
+}

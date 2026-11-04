@@ -1,0 +1,164 @@
+import { ReaderView as RealReaderView } from 'marginstudy-real-reader';
+import { croppedPdf } from './anchorCases';
+import { DocumentNavigation } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/workspace/documentNavigation';
+
+export async function runCropAcceptance(context:any) {
+  const {test,assert,wait,plugin,add,app,realPdf}=context;
+  const near=(actual:number,expected:number,message:string)=>assert(Math.abs(actual-expected)<1.2,`${message}: ${actual} vs ${expected}`);
+  await test('Real PDF selection folds cropped and rotated source pixels without rewriting source or excerpts',async()=>{
+    await realPdf.initPdfWorker(app);const path='real-region-fold.pdf',source=croppedPdf([0,90,180,270]);add(path,{bytes:source});const p=plugin(),view=new RealReaderView({app} as any,p as any);await view.onOpen();
+    const until=async(check:()=>boolean)=>{const end=Date.now()+3000;while(!check()&&Date.now()<end)await wait(20);assert(check(),'real region fold did not settle');};
+    try{
+      await view.loadFileByPath(path);view.setScale(1);
+      for(let page=1;page<=4;page++){
+        await view.navigateToReference(page,[],undefined,false);await view.renderPage(page);let rec=view.getPageRecord(page)!;const before=rec.canvas.height,span=rec.textLayer.querySelector('span')!,range=document.createRange();range.selectNodeContents(span);window.getSelection()!.removeAllRanges();window.getSelection()!.addRange(range);document.dispatchEvent(new Event('selectionchange'));await until(()=>!!document.querySelector('.ms-ann-pop [data-action-id="fold"]'));(document.querySelector('.ms-ann-pop [data-action-id="fold"]') as HTMLButtonElement).click();try{await until(()=>!!view.getPageRecord(page)!.wrapper.querySelector('[aria-label="展开折叠区域"]'));}catch(error){throw new Error(String(error)+' '+JSON.stringify({page,meta:p.store.getDocMeta(path),pageId:view.getPdfPageId(page),height:view.getPageRecord(page)!.viewport?.height,text:[...view.getPageRecord(page)!.textLayer.querySelectorAll('span')].map(item=>({text:item.textContent,display:getComputedStyle(item).display})),menus:[...document.querySelectorAll('.ms-ann-pop')].map(item=>item.textContent)}));}
+        rec=view.getPageRecord(page)!;assert(rec.canvas.height<before-3,'real PDF pixels were not contracted at rotation '+(page-1)*90);assert([...rec.textLayer.querySelectorAll('span')].every(item=>getComputedStyle(item).display==='none'),'real PDF folded text remains selectable');
+        const pixels=rec.canvas.getContext('2d')!.getImageData(0,0,rec.canvas.width,rec.canvas.height).data;let dark=0;for(let i=0;i<pixels.length;i+=4)if(pixels[i]<150&&pixels[i+1]<150&&pixels[i+2]<150&&pixels[i+3]>0)dark++;assert(dark===0,'fold left source text pixels visible at rotation '+(page-1)*90+': '+dark);
+        await view.undoLastEdit();await until(()=>!view.getPageRecord(page)!.wrapper.querySelector('[aria-label="展开折叠区域"]'));assert(view.getPageRecord(page)!.canvas.height===before,'real PDF fold undo changed page size');
+      }
+      assert(!(await p.store.loadAnnotations(path)).length&&!p.store.cards.length,'real fold created excerpts/cards');const bytes=new Uint8Array(await app.vault.readBinary(app.vault.getAbstractFileByPath(path)));assert(bytes.length===source.byteLength&&bytes.every((value,index)=>value===new Uint8Array(source)[index]),'real fold changed source bytes');assert(!p.store.getDocMeta(path).pdfRegionFolds,'real fold undo left a migration field');
+    }finally{window.getSelection()?.removeAllRanges();await view.onClose();view.containerEl.remove();}
+  });
+  await test('PDF crop applies to every rotated page, preserves text and both anchor formats, and survives reader reopen without rewriting source or annotations',async()=>{
+    await realPdf.initPdfWorker(app);
+    const path='crop-four-directions.pdf',source=croppedPdf([0,90,180,270]);add(path,{bytes:source});
+    const p=plugin();
+    const annotations=[1,2,3,4].flatMap(page=>[
+      {id:'crop-canonical-'+page,docPath:path,docKind:'pdf',page,type:'highlight',rects:[{x:100,y:596,w:145,h:15}],pdfCoordinateSpace:'pdf',text:'source anchor',color:'#ffff00',createdAt:'2026-10-17'},
+      {id:'crop-legacy-'+page,docPath:path,docKind:'pdf',page,type:'region',rects:[{x:100,y:200,w:60,h:35}],text:'legacy anchor',color:'#ff0000',createdAt:'2026-10-17'},
+      {id:'crop-voice-'+page,docPath:path,docKind:'pdf',page,type:'voice',rects:[],pos:{x:.4,y:.4},audioPath:'synthetic-audio.webm',text:'',color:'#ff0000',createdAt:'2026-10-17'}
+    ]);
+    p.store.saveAnnotationsDebounced(path,annotations);await p.store.flush();const saved=JSON.stringify(await p.store.loadAnnotations(path));
+    let view=new RealReaderView({app} as any,p as any);await view.onOpen();
+    const baseline:any[]=[];
+    try {
+      await view.loadFileByPath(path);view.setScale(1);
+      for(let page=1;page<=4;page++){
+        await view.renderPage(page);const rec=view.getPageRecord(page)!;
+        const text=rec.textLayer.querySelector('span')!.getBoundingClientRect(),canvas=rec.canvas.getBoundingClientRect();
+        const highlight=rec.annLayer.querySelector('.ms-ann-highlight')!.getBoundingClientRect(),legacy=rec.annLayer.querySelector('.ms-ann-region')!.getBoundingClientRect();
+        baseline.push({w:canvas.width,h:canvas.height,tx:text.left-canvas.left,ty:text.top-canvas.top,hx:highlight.left-canvas.left,hy:highlight.top-canvas.top,lx:legacy.left-canvas.left,ly:legacy.top-canvas.top});
+      }
+      await view.setPageCrop({left:.05,top:.05,right:.95,bottom:.95});
+      for(let page=1;page<=4;page++){
+        await view.renderPage(page);const rec=view.getPageRecord(page)!,before=baseline[page-1],canvas=rec.canvas.getBoundingClientRect();
+        near(canvas.width,page%2===1?450:630,'cropped paper width');near(canvas.height,page%2===1?630:450,'cropped paper height');
+        const text=rec.textLayer.querySelector('span')!.getBoundingClientRect(),highlight=rec.annLayer.querySelector('.ms-ann-highlight')!.getBoundingClientRect(),legacy=rec.annLayer.querySelector('.ms-ann-region')!.getBoundingClientRect();
+        near(text.left-canvas.left,before.tx-before.w*.05,'text X page '+page+' '+JSON.stringify(before));near(text.top-canvas.top,before.ty-before.h*.05,'text Y page '+page);
+        near(highlight.left-canvas.left,before.hx-before.w*.05,'canonical X');near(highlight.top-canvas.top,before.hy-before.h*.05,'canonical Y');
+        near(legacy.left-canvas.left,before.lx-before.w*.05,'legacy X');near(legacy.top-canvas.top,before.ly-before.h*.05,'legacy Y');
+        const voice=rec.annLayer.querySelector('.ms-ann-voice') as HTMLElement;
+        near(parseFloat(voice.style.left),before.w*.35,'voice X');near(parseFloat(voice.style.top),before.h*.35,'voice Y');
+      }
+      assert(JSON.stringify(await p.store.loadAnnotations(path))===saved,'crop rewrote annotation sidecar');
+      assert(Array.from(new Uint8Array(await app.vault.readBinary(app.vault.getAbstractFileByPath(path)))).join(',')===Array.from(new Uint8Array(source)).join(','),'source bytes changed');
+      await view.onClose();view.containerEl.remove();view=new RealReaderView({app} as any,p as any);await view.onOpen();await view.loadFileByPath(path);view.setScale(1);await view.renderPage(1);
+      assert(JSON.stringify(view.getPageCrop())===JSON.stringify({left:.05,top:.05,right:.95,bottom:.95}),'crop lost on reopen');
+      near(view.getPageRecord(1)!.canvas.clientWidth,450,'reopened cropped width');
+      assert(JSON.stringify(await p.store.loadAnnotations(path))===saved,'reopen rewrote annotations');
+    } finally {await view.onClose();view.containerEl.remove();}
+  });
+  await test('PDF crop keeps ink in its original page basis while erasing, undoing and drawing in an extended margin',async()=>{
+    const path='crop-ink.pdf';add(path,{bytes:croppedPdf()});const p=plugin();
+    const oldInk={id:'old-crop-ink',docPath:path,docKind:'pdf',page:1,type:'pen',rects:[],text:'',color:'#ff0000',createdAt:'2026-10-17',strokes:[[{x:.25,y:.3,pressure:.2},{x:.45,y:.3,pressure:.8}],[{x:.6,y:.6},{x:.8,y:.6}]]};
+    const before=JSON.stringify(oldInk);p.store.saveAnnotationsDebounced(path,[oldInk]);await p.store.flush();
+    const view=new RealReaderView({app} as any,p as any);await view.onOpen();
+    const draw=(points:number[][])=>{
+      const host=view.getPageRecord(1)!.wrapper,overlay=host.querySelector('.ms-pen-overlay')!,bounds=host.getBoundingClientRect();
+      const event=(type:string,x:number,y:number)=>overlay.dispatchEvent(new PointerEvent(type,{clientX:bounds.left+x*bounds.width,clientY:bounds.top+y*bounds.height,pointerId:1,button:0,isPrimary:true,bubbles:true}));
+      event('pointerdown',points[0][0],points[0][1]);for(const [x,y] of points.slice(1))event('pointermove',x,y);event('pointerup',points.at(-1)![0],points.at(-1)![1]);
+    };
+    try {
+      await view.loadFileByPath(path);await view.setPageCrop({left:.1,top:.1,right:.9,bottom:.9});await view.renderPage(1);
+      const pathData=view.getPageRecord(1)!.annLayer.querySelector('path')!.getAttribute('d')!.match(/-?\d+(?:\.\d+)?/g)!.map(Number);
+      near(pathData[0],75,'old ink X after crop');near(pathData[1],140,'old ink Y after crop');
+      assert(JSON.stringify((await p.store.loadAnnotations(path))[0])===before,'crop rewrote old ink');
+      view.setHandwritingMode('eraser');draw([[.3,.2],[.3,.3]]);
+      assert(oldInk.strokes.length===1&&JSON.stringify(oldInk.strokes[0])===JSON.stringify([{x:.6,y:.6},{x:.8,y:.6}]),'erase missed projected ink or rewrote untouched stroke');
+      view.undoLastEdit();assert(JSON.stringify(oldInk)===before,'ink undo lost original pressure/coordinates');view.redoLastEdit();assert(oldInk.strokes.length===1,'projected ink redo');view.undoLastEdit();
+      await view.setPageCrop({left:-.2,top:-.1,right:1.2,bottom:1.1});view.setHandwritingMode('pen');draw([[.05,.2],[.1,.25]]);view.setHandwritingMode('off');
+      const added=(await p.store.loadAnnotations(path)).find((ann:any)=>ann.id!==oldInk.id);assert(added,'extended margin ink was not saved');
+      assert(Math.abs(added.strokes[0][0].x+.13)<.000001&&Math.abs(added.strokes[0][0].y-.14)<.000001,'extended ink original coordinates');
+      assert(added.strokes[0][0].x<0,'margin point clamped into original paper');
+      const addedBefore=JSON.stringify(added);await view.setPageCrop({left:0,top:0,right:1,bottom:1});view.undoLastEdit();
+      assert((await p.store.loadAnnotations(path)).length===1,'crop change destroyed ink undo history');view.redoLastEdit();
+      assert(JSON.stringify((await p.store.loadAnnotations(path)).find((ann:any)=>ann.id===added.id))===addedBefore,'redo changed extended stroke identity');
+    }finally{await view.onClose();view.containerEl.remove();}
+  });
+  await test('Crop editor has eight handles, commits only on Done, reopens the saved bounds and cancels uncommitted movement',async()=>{
+    const path='crop-editor.pdf';add(path,{bytes:croppedPdf()});const p=plugin(),view=new RealReaderView({app} as any,p as any);await view.onOpen();
+    const moved=(dialog:HTMLElement)=>{
+      const handle=dialog.querySelector('[aria-label="调整左边界"]')!,paper=dialog.querySelector('canvas')!.getBoundingClientRect(),bounds=handle.getBoundingClientRect();
+      handle.dispatchEvent(new PointerEvent('pointerdown',{clientX:bounds.left+bounds.width/2,clientY:bounds.top+bounds.height/2,pointerId:12,button:0,bubbles:true,cancelable:true}));
+      window.dispatchEvent(new PointerEvent('pointermove',{clientX:bounds.left+bounds.width/2+paper.width*.1,clientY:bounds.top+bounds.height/2,pointerId:12,bubbles:true}));
+      window.dispatchEvent(new PointerEvent('pointerup',{pointerId:12,bubbles:true}));
+    };
+    try {
+      await view.loadFileByPath(path);await view.openCrop();
+      let dialog=document.querySelector('.ms-crop-modal') as HTMLElement;assert(dialog&&dialog.querySelectorAll('.ms-crop-handle').length===8,'native crop shape/handles missing');
+      moved(dialog);assert(view.getPageCrop().left===0,'uncommitted crop changed document');
+      (dialog.querySelector('[aria-label="Done"]') as HTMLButtonElement).click();
+      for(let i=0;i<100&&document.querySelector('.ms-crop-modal');i++)await wait(10);
+      assert(!document.querySelector('.ms-crop-modal')&&Math.abs(view.getPageCrop().left-.1)<.00001,'Done did not save drag');
+      await view.openCrop();dialog=document.querySelector('.ms-crop-modal') as HTMLElement;
+      const paper=dialog.querySelector('canvas')!.getBoundingClientRect(),selection=dialog.querySelector('.ms-crop-selection')!.getBoundingClientRect();
+      near(selection.left-paper.left,paper.width*.1,'reopened crop handle');moved(dialog);
+      document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
+      assert(!document.querySelector('.ms-crop-modal')&&Math.abs(view.getPageCrop().left-.1)<.00001,'cancel changed saved crop');
+    }finally{await view.onClose();view.containerEl.remove();}
+  });
+  await test('Collapsing a crop corner to a point restores the full page without saving a sliver (MN4 recovery outcome)',async()=>{
+    const path='crop-point.pdf';add(path,{bytes:croppedPdf()});const view=new RealReaderView({app} as any,plugin() as any);await view.onOpen();
+    try {
+      await view.loadFileByPath(path);await view.setPageCrop({left:.1,top:0,right:1,bottom:1});await view.renderPage(1);
+      const croppedWidth=view.getPageRecord(1)!.canvas.clientWidth;
+      await view.openCrop();const dialog=document.querySelector('.ms-crop-modal') as HTMLElement;
+      assert(dialog,'crop editor did not open');
+      const paper=dialog.querySelector('canvas')!.getBoundingClientRect(),handle=dialog.querySelector('[aria-label="调整右下边界"]')!,bounds=handle.getBoundingClientRect();
+      handle.dispatchEvent(new PointerEvent('pointerdown',{clientX:bounds.left+bounds.width/2,clientY:bounds.top+bounds.height/2,pointerId:21,button:0,bubbles:true,cancelable:true}));
+      window.dispatchEvent(new PointerEvent('pointermove',{clientX:paper.left,clientY:paper.top,pointerId:21,bubbles:true}));
+      window.dispatchEvent(new PointerEvent('pointerup',{pointerId:21,bubbles:true}));
+      const selection=dialog.querySelector('.ms-crop-selection')!.getBoundingClientRect();
+      assert(selection.width<1&&selection.height<1,'corner did not collapse to a point: '+JSON.stringify({w:selection.width,h:selection.height}));
+      (dialog.querySelector('[aria-label="Done"]') as HTMLButtonElement).click();
+      for(let i=0;i<100&&document.querySelector('.ms-crop-modal');i++)await wait(10);
+      assert(!document.querySelector('.ms-crop-modal'),'collapsed crop did not close');
+      assert(JSON.stringify(view.getPageCrop())===JSON.stringify({left:0,top:0,right:1,bottom:1}),'collapsed crop was not restored to the full page: '+JSON.stringify(view.getPageCrop()));
+      await view.renderPage(1);const fullWidth=view.getPageRecord(1)!.canvas.clientWidth;
+      assert(fullWidth>croppedWidth*1.05,'page was not re-expanded after the point crop ('+croppedWidth+' -> '+fullWidth+')');
+    }finally{await view.onClose();view.containerEl.remove();}
+  });
+  await test('Cropped-page lasso does not pull hidden stroke ends into view, and stale eraser gestures cannot overwrite another edit',async()=>{
+    const path='crop-lasso.pdf';add(path,{bytes:croppedPdf()});const p=plugin();
+    const ink={id:'cropped-lasso-ink',docPath:path,docKind:'pdf',page:1,type:'pen',rects:[],text:'',color:'#ff0000',createdAt:'2026-10-17',strokes:[[{x:.1,y:.3,pressure:.2},{x:.4,y:.3,pressure:.8}]]};
+    p.store.saveAnnotationsDebounced(path,[ink]);const view=new RealReaderView({app} as any,p as any);await view.onOpen();
+    const pointer=(type:string,x:number,y:number)=>{const host=view.getPageRecord(1)!.wrapper,bounds=host.getBoundingClientRect();host.querySelector('.ms-pen-overlay')!.dispatchEvent(new PointerEvent(type,{clientX:bounds.left+x*bounds.width,clientY:bounds.top+y*bounds.height,pointerId:1,button:0,isPrimary:true,bubbles:true}));};
+    const drag=(points:number[][])=>{pointer('pointerdown',points[0][0],points[0][1]);for(const [x,y] of points.slice(1))pointer('pointermove',x,y);pointer('pointerup',points.at(-1)![0],points.at(-1)![1]);};
+    try {
+      await view.loadFileByPath(path);await view.setPageCrop({left:.2,top:0,right:1,bottom:1});view.setHandwritingMode('lasso');
+      drag([[0,.2],[.3,.2],[.3,.4],[0,.4],[0,.2]]);assert(view.getPageRecord(1)!.wrapper.querySelector('.ms-pen-selection'),'visible ink not selected');drag([[.15,.3],[.15,.35]]);
+      assert(Math.abs(ink.strokes[0][0].x-.1)<.000001&&Math.abs(ink.strokes[0][1].x-.4)<.000001&&Math.abs(ink.strokes[0][0].y-.35)<.000001,'lasso snapped hidden endpoints instead of translating ink');
+      view.undoLastEdit();assert(ink.strokes[0][0].x===.1&&ink.strokes[0][0].y===.3&&ink.strokes[0][0].pressure===.2,'cropped lasso undo changed the source');view.redoLastEdit();
+      view.setHandwritingMode('eraser');pointer('pointerdown',.15,.3);
+      const external=structuredClone(ink);external.strokes[0][0].x=.16;p.store.saveAnnotationsDebounced(path,[external]);await wait(5);const expected=JSON.stringify(external);
+      pointer('pointermove',.15,.4);pointer('pointerup',.15,.4);view.undoLastEdit();
+      assert(JSON.stringify((await p.store.loadAnnotations(path))[0])===expected,'stale cropped eraser/undo overwrote external ink');
+    }finally{await view.onClose();view.containerEl.remove();}
+  });
+  await test('Crop updates another open reader and refreshes thumbnail paper dimensions when changed again',async()=>{
+    const path='crop-shared.pdf';add(path,{bytes:croppedPdf()});const p=plugin(),a=new RealReaderView({app} as any,p as any),b=new RealReaderView({app} as any,p as any);
+    await a.onOpen();await b.onOpen();let navigation:any=null;const NativeObserver=window.IntersectionObserver;
+    const waitFor=async(condition:()=>boolean)=>{for(let i=0;i<150&&!condition();i++)await wait(10);const canvas=navigation?.element.querySelector('canvas');assert(condition(),'shared crop/thumbnail update timed out '+JSON.stringify({crop:b.getPageCrop(),width:canvas?.width,height:canvas?.height,html:navigation?.element.textContent}));};
+    try {
+      await a.loadFileByPath(path);await b.loadFileByPath(path);await a.setPageCrop({left:.2,top:0,right:1,bottom:1});
+      await waitFor(()=>b.getPageCrop().left===.2&&b.getPageRecord(1)!.canvas.clientWidth===400);
+      (window as any).IntersectionObserver=class {constructor(private callback:any){}observe(target:Element){queueMicrotask(()=>this.callback([{target,isIntersecting:true}]));}unobserve(){}disconnect(){}};
+      navigation=new DocumentNavigation(p as any,a,'thumbnails',()=>{});document.querySelector('#fixtures')!.append(navigation.element);
+      const thumbnail=()=>navigation.element.querySelector('canvas') as HTMLCanvasElement;
+      await waitFor(()=>thumbnail()?.width===220&&thumbnail()?.height===385);
+      await a.setPageCrop({left:-.2,top:0,right:1,bottom:1});
+      await waitFor(()=>b.getPageCrop().left===-.2&&thumbnail()?.width===220&&thumbnail()?.height===257);
+      assert(p.store.getDocMeta(path).pdfCrop.left===-.2,'crop was not stored at document scope');
+    }finally{window.IntersectionObserver=NativeObserver;navigation?.dispose();await a.onClose();await b.onClose();a.containerEl.remove();b.containerEl.remove();}
+  });
+}

@@ -1,0 +1,38 @@
+.ms-web-import {
+  box-sizing: border-box;
+  width: min(580px, 90vw);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  background: var(--background-primary, #fff);
+  color: var(--text-normal, #252525);
+  font-family: var(--font-interface, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+  font-size: 13px;
+}
+.ms-web-import-field { display: flex; flex-direction: column; gap: 5px; margin: 12px 0; color: var(--text-normal); }
+.ms-web-import-field input,
+.ms-web-import-field select,
+.ms-web-import-field textarea { box-sizing: border-box; width: 100%; }
+.ms-web-import-field input,
+.ms-web-import-field select,
+.ms-web-import-field textarea {
+  padding: 7px 9px;
+  border: 1px solid var(--background-modifier-border, #dedede);
+  border-radius: 5px;
+  background: var(--background-primary, #fff);
+  color: var(--text-normal, #252525);
+  font-family: inherit;
+}
+.ms-web-import-field textarea { min-height: 120px; resize: vertical; }
+.ms-web-import-check { display: flex; align-items: center; gap: 7px; margin: 12px 0; }
+.ms-web-import-fallback { margin: 14px 0; }
+.ms-web-import-fallback summary { cursor: pointer; color: var(--text-muted); }
+.ms-web-import-status { margin: 12px 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-muted); }
+.ms-web-import-status.is-error { color: var(--text-error, #b52828); }
+.ms-web-import .ms-modal-actions {
+  position: sticky;
+  bottom: 0;
+  margin-bottom: 0;
+  padding: 9px 0 0;
+  background: var(--background-primary, #fff);
+}
+.ms-web-import button:disabled { opacity: .6; cursor: wait; }

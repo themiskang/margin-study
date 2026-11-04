@@ -1,0 +1,102 @@
+{
+  "verifiedAt": "2026-11-04T13:41:49.639Z",
+  "environment": "synthetic Claudian views and commands; no native app, credentials or model request",
+  "checks": [
+    {
+      "name": "missing plugin has no available bridge and opens no command",
+      "passed": true
+    },
+    {
+      "name": "2.3.21 metadata enables the observed compatibility adapter without touching settings, sessions or secrets",
+      "passed": true
+    },
+    {
+      "name": "prefill invokes only the open-view command, appends once and focuses without a submit",
+      "passed": true
+    },
+    {
+      "name": "unknown versions open the existing chat and use manual fallback without invoking its input method",
+      "passed": true
+    },
+    {
+      "name": "explicit false readiness is retried but only a successful append changes the input",
+      "passed": true
+    },
+    {
+      "name": "ambiguous append results and exceptions never retry a possibly completed append",
+      "passed": true
+    },
+    {
+      "name": "readiness has a bounded timeout and absence of the observed method uses manual fallback",
+      "passed": true
+    },
+    {
+      "name": "abort prevents opening or a later input append",
+      "passed": true
+    },
+    {
+      "name": "a version change during readiness cancels the compatibility adapter",
+      "passed": true
+    },
+    {
+      "name": "the prompt carries only explicit text/context, requests chat output and supplies task schemas",
+      "passed": true
+    },
+    {
+      "name": "pasted JSON and fenced JSON become validated card/outline drafts without saving",
+      "passed": true
+    },
+    {
+      "name": "plain replies preserve content as one editable card or Markdown document",
+      "passed": true
+    },
+    {
+      "name": "Markdown outline preserves nested headings and notes while normalizing skipped levels",
+      "passed": true
+    },
+    {
+      "name": "invalid, empty, oversized or ambiguous imports cannot create a draft",
+      "passed": true
+    },
+    {
+      "name": "direct Claudian request streams only its ephemeral run without reading history or consuming the composer",
+      "passed": true
+    },
+    {
+      "name": "2.3.24 direct request uses an isolated passive run while prefill stays unverified",
+      "passed": true
+    },
+    {
+      "name": "2.3.30 direct request uses an isolated passive run while prefill stays unverified",
+      "passed": true
+    },
+    {
+      "name": "2.3.30 forwards only explicitly attached images with text through the isolated passive session",
+      "passed": true
+    },
+    {
+      "name": "image requests stop if Claudian changes to an unverified image adapter while initializing",
+      "passed": true
+    },
+    {
+      "name": "unsupported image versions, remote URLs, malformed data and oversized attachments never start execution",
+      "passed": true
+    },
+    {
+      "name": "Claudian reply sync reads the next newly completed turn and pins that conversation",
+      "passed": true
+    },
+    {
+      "name": "unavailable models and unsupported versions fail before opening an execution session",
+      "passed": true
+    },
+    {
+      "name": "cancel, timeout and provider invalidation stop a blocked stream and release its session",
+      "passed": true
+    },
+    {
+      "name": "unfinished and provider-error streams cannot return a successful reply or expose backend errors",
+      "passed": true
+    }
+  ]
+}

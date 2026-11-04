@@ -1,0 +1,1312 @@
+/* ============================================================
+   MarginStudy — 全部样式使用 .ms- 命名空间，避免与其它插件冲突
+   颜色随 Obsidian 主题自适应（使用官方 CSS 变量）
+   ============================================================ */
+
+.ms-reader-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  background: var(--background-primary);
+  color: var(--text-normal);
+}
+
+/* ---------- Word / HTML 阅读 ---------- */
+.ms-word-scroll {
+  padding: 24px;
+  overflow: auto;
+}
+.ms-word-body {
+  position: relative;
+  user-select: text;
+  -webkit-user-select: text;
+  /* Keep the annotation surface as tall as the source in the flex scroller. */
+  flex: none;
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 32px 40px;
+  background: var(--background-primary);
+  border: 1px solid var(--divider-color);
+  border-radius: 10px;
+  line-height: 1.7;
+  font-size: 16px;
+}
+.ms-word-body img {
+  max-width: 100%;
+}
+.ms-hl {
+  border-radius: 2px;
+  cursor: pointer;
+  transition: filter 0.12s ease;
+}
+.ms-hl:hover {
+  filter: brightness(0.94);
+}
+.ms-hl-highlight {
+  opacity: 0.38;
+  mix-blend-mode: multiply;
+}
+.ms-hl-underline {
+  background: transparent;
+}
+.ms-hl-strike {
+  background: transparent;
+}
+.ms-hl-note {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+/* ---------- 工具栏 ---------- */
+.ms-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--divider-color);
+  background: var(--background-secondary);
+  flex-wrap: wrap;
+}
+.ms-tb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-normal);
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+.ms-tb-btn:hover {
+  background: var(--background-modifier-hover);
+}
+.ms-tb-btn:active {
+  transform: scale(0.92);
+}
+.ms-tb-btn.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+.ms-tb-page {
+  width: 52px;
+  height: 28px;
+  text-align: center;
+  border: 1px solid var(--divider-color);
+  border-radius: 6px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+}
+.ms-tb-scale {
+  min-width: 46px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+.ms-tb-sep {
+  width: 1px;
+  height: 22px;
+  background: var(--divider-color);
+  margin: 0 2px;
+}
+.ms-tb-spacer {
+  flex: 1;
+}
+.ms-tb-ann {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.ms-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.1s ease;
+}
+.ms-swatch:hover {
+  transform: scale(1.12);
+}
+.ms-swatch.is-active {
+  border-color: var(--text-normal);
+}
+
+/* ---------- 滚动区与页面 ---------- */
+.ms-scroll {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--ms-page-gap, 24px);
+  padding: 24px;
+}
+.ms-page {
+  position: relative;
+  margin: 0 auto;
+  background: #fff;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
+  flex: none;
+}
+.ms-page-canvas {
+  display: block;
+}
+.ms-text-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: hidden;
+  opacity: 1;
+  line-height: 1;
+  text-align: initial;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: CanvasText;
+  pointer-events: auto;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.ms-text-layer > span {
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  color: transparent;
+  transform-origin: 0% 0%;
+}
+.ms-text-layer ::selection {
+  background: rgba(80, 140, 255, 0.35);
+}
+
+/* ---------- 标注层 ---------- */
+.ms-ann-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+.ms-ann {
+  position: absolute;
+  pointer-events: auto;
+  cursor: pointer;
+  border-radius: 2px;
+  transition: filter 0.12s ease;
+}
+.ms-ann:hover {
+  filter: brightness(0.92);
+}
+.ms-ann-highlight {
+  opacity: 0.38;
+  mix-blend-mode: multiply;
+}
+.ms-ann-underline {
+  border-bottom: 2px solid;
+  background: transparent;
+}
+.ms-ann-strike {
+  border-top: 2px solid;
+  background: transparent;
+}
+.ms-ann-note {
+  background: rgba(0, 0, 0, 0.05);
+  border: 1px dashed;
+  opacity: 0.85;
+}
+.ms-ann-dot {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  right: -4px;
+  top: -4px;
+  box-shadow: 0 0 0 2px #fff;
+}
+.ms-ann-region {
+  box-sizing: border-box;
+  background: rgba(255, 213, 79, 0.18);
+  border: 2px dashed;
+  border-radius: 4px;
+  cursor: grab;
+}
+.ms-ann-region:active {
+  cursor: grabbing;
+}
+.ms-ann-flash {
+  animation: ms-flash 0.5s ease 3;
+  outline: 2px solid var(--interactive-accent);
+  z-index: 5;
+}
+@keyframes ms-flash {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.6);
+  }
+}
+
+/* 语音批注标记 */
+.ms-ann-voice {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  margin-left: -13px;
+  margin-top: -13px;
+  border-radius: 50%;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  z-index: 3;
+}
+
+/* 手写批注容器 */
+.ms-ann-pen {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.ms-pen-render,
+.ms-pen-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.ms-pen-path {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ms-pen-overlay {
+  touch-action: none;
+  z-index: 4;
+}
+.ms-pen-mode {
+  cursor: crosshair;
+}
+.ms-lasso {
+  position: absolute;
+  border: 2px dashed var(--interactive-accent);
+  background: rgba(var(--interactive-accent-rgb, 100, 120, 255), 0.12);
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* 工具栏语音/手写按钮 */
+.ms-tb-mic,
+.ms-tb-pen {
+  font-size: 14px;
+  line-height: 1;
+}
+.ms-tb-mic.is-recording {
+  background: var(--background-modifier-error);
+  color: #fff;
+  animation: ms-pulse 1s ease-in-out infinite;
+}
+@keyframes ms-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+.ms-tb-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: 4px;
+}
+
+/* ---------- 标注浮动工具条 ---------- */
+.ms-ann-pop {
+  position: fixed;
+  z-index: 9999;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--background-primary);
+  border: 1px solid var(--divider-color);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+.ms-ann-pop button {
+  border: none;
+  background: transparent;
+  color: var(--text-normal);
+  border-radius: 6px;
+  padding: 4px 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.ms-ann-pop button:hover {
+  background: var(--background-modifier-hover);
+}
+.ms-ann-pop button.ms-context-color {
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  align-self: center;
+}
+
+/* ---------- 通用面板/模态 ---------- */
+.ms-modal-bg {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.ms-modal {
+  background: var(--background-primary);
+  color: var(--text-normal);
+  border-radius: 12px;
+  padding: 18px;
+  width: min(520px, 92vw);
+  max-height: 86vh;
+  overflow: auto;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+}
+.ms-modal textarea,
+.ms-modal input[type="text"] {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  border: 1px solid var(--divider-color);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+.ms-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+.ms-btn {
+  border: 1px solid var(--divider-color);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+.ms-btn.primary {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
+}
+
+/* ---------- 侧边栏 ---------- */
+.ms-sidebar {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--background-primary);
+  color: var(--text-normal);
+}
+.ms-sidebar-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--divider-color);
+}
+.ms-sidebar-tab {
+  flex: 1;
+  padding: 8px 4px;
+  text-align: center;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-bottom: 2px solid transparent;
+}
+.ms-sidebar-tab.is-active {
+  color: var(--text-normal);
+  border-bottom-color: var(--interactive-accent);
+}
+.ms-sidebar-body {
+  flex: 1;
+  overflow: auto;
+  padding: 8px;
+}
+
+/* 大纲 */
+.ms-outline-item {
+  padding: 4px 6px;
+  cursor: pointer;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ms-outline-item:hover {
+  background: var(--background-modifier-hover);
+}
+
+/* 卡片列表 */
+.ms-card {
+  border: 1px solid var(--divider-color);
+  border-radius: 8px;
+  padding: 8px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.ms-card:hover {
+  background: var(--background-modifier-hover);
+}
+.ms-card .ms-card-type {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ms-card .ms-card-front {
+  margin-top: 2px;
+  font-size: 13px;
+}
+.ms-card .ms-card-back {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.ms-card .ms-card-links {
+  margin-top: 4px;
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.ms-chip {
+  font-size: 11px;
+  background: var(--background-secondary);
+  border-radius: 10px;
+  padding: 1px 8px;
+  color: var(--text-muted);
+}
+.ms-search {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--divider-color);
+  border-radius: 6px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+}
+
+/* PDF 文档内搜索（体验增强 N） */
+.ms-search-box {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.ms-search-input {
+  width: 160px;
+  padding: 2px 6px;
+}
+.ms-search-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  min-width: 38px;
+  text-align: center;
+}
+.ms-search-hit {
+  background: var(--text-highlight-bg, #ffe082);
+  color: var(--text-normal);
+  border-radius: 2px;
+}
+
+/* 复习（遮罩自测） */
+.ms-review-q {
+  font-size: 16px;
+  margin-bottom: 12px;
+}
+.ms-review-a {
+  font-size: 14px;
+  color: var(--text-muted);
+  padding: 10px;
+  background: var(--background-secondary);
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+.ms-review-a.hidden {
+  filter: blur(6px);
+  user-select: none;
+}
+.ms-review-btns {
+  display: flex;
+  gap: 8px;
+}
+.ms-grade {
+  flex: 1;
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid var(--divider-color);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  cursor: pointer;
+}
+.ms-grade.again {
+  border-color: var(--background-modifier-error, #e57373);
+}
+.ms-grade.good {
+  border-color: var(--interactive-accent);
+}
+.ms-grade.easy {
+  border-color: #66bb6a;
+}
+
+/* ---------- 思维导图 ---------- */
+.ms-mindmap-view { height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+.ms-mindmap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  background-color: var(--background-secondary);
+  background-image: radial-gradient(circle, rgba(0,0,0,0.10) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+body.ms-theme-dark .ms-mindmap {
+  background-image: radial-gradient(circle, rgba(255,255,255,0.10) 1px, transparent 1px);
+}
+.ms-mindmap-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.ms-node {
+  position: absolute;
+  min-width: 90px;
+  max-width: 220px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--divider-color);
+  background: var(--background-primary);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+  cursor: grab;
+  user-select: none;
+  font-size: 13px;
+  line-height: 1.35;
+}
+.ms-node.is-root {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
+}
+.ms-node.is-selected {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+.ms-node.is-collapsed::after {
+  content: " ▸";
+}
+.ms-node .ms-node-del {
+  float: right;
+  margin-left: 6px;
+  cursor: pointer;
+  opacity: 0.5;
+}
+.ms-node .ms-node-del:hover {
+  opacity: 1;
+}
+.ms-mindmap-toolbar {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 5;
+  display: flex;
+  gap: 4px;
+}
+.ms-edge-label {
+  font-size: 11px;
+  fill: var(--text-muted);
+}
+
+/* 节点内容 */
+.ms-node-title {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ms-node-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.ms-node-tag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  border: 1px solid var(--divider-color);
+}
+.ms-node-comment-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* 节点浮动操作工具栏 */
+.ms-node-toolbar {
+  flex: none;
+  z-index: 10;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--background-primary);
+  border-top: 1px solid var(--divider-color);
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.12);
+  flex-wrap: wrap;
+}
+.ms-node-tb-item {
+  border: 1px solid var(--divider-color);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.12s ease, transform 0.1s ease;
+}
+.ms-node-tb-item:hover {
+  background: var(--background-modifier-hover);
+}
+.ms-node-tb-item:active {
+  transform: scale(0.96);
+}
+.ms-stat {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--divider-color);
+  font-size: 13px;
+}
+
+/* ---------- Canvas 导入列表 ---------- */
+.ms-canvas-item {
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  border: 1px solid transparent;
+}
+.ms-canvas-item:hover {
+  background: var(--background-modifier-hover);
+  border-color: var(--divider-color);
+}
+
+/* ---------- 标签 / 卡片盒筛选 ---------- */
+.ms-tagbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 0;
+  align-items: center;
+}
+.ms-toggle {
+  font-size: 12px;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-right: 6px;
+  cursor: pointer;
+}
+.ms-tag {
+  display: inline-block;
+  font-size: 11px;
+  line-height: 1.6;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+  border: 1px solid var(--divider-color);
+  cursor: pointer;
+  user-select: none;
+}
+.ms-tag:hover { filter: brightness(0.96); }
+.ms-tag.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
+}
+.ms-card-tags { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; }
+.ms-muted { color: var(--text-muted); font-size: 11px; }
+
+/* ---------- Markdown 预览 ---------- */
+.ms-md-preview {
+  margin: 4px 0 8px;
+  padding: 6px 8px;
+  border: 1px dashed var(--divider-color);
+  border-radius: 6px;
+  font-size: 13px;
+  background: var(--background-secondary);
+  max-height: 220px;
+  overflow: auto;
+}
+.ms-md-preview p { margin: 0 0 6px; }
+.ms-md-preview p:last-child { margin-bottom: 0; }
+.ms-md-preview code {
+  background: var(--background-modifier-hover);
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.node-title-md p { margin: 0; }
+
+/* ---------- 节点标题 Markdown ---------- */
+.ms-node-title { font-size: 13px; line-height: 1.4; }
+.ms-node-title p { margin: 0; }
+
+/* ---------- 大纲（可编辑脑图树） ---------- */
+.ms-outline-top { padding: 6px 0; }
+.ms-seg {
+  display: inline-flex;
+  border: 1px solid var(--divider-color);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.ms-seg-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ms-seg-btn.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+.ms-outline-tree { margin-top: 4px; }
+.ms-ol-node {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  border-radius: 5px;
+  cursor: default;
+  font-size: 13px;
+  border: 1px solid transparent;
+}
+.ms-ol-node:hover { background: var(--background-modifier-hover); }
+.ms-ol-node.is-sel {
+  background: var(--background-modifier-hover);
+  border-color: var(--interactive-accent);
+}
+.ms-ol-node.is-drop {
+  border-color: var(--interactive-accent);
+  background: var(--background-modifier-hover);
+}
+.ms-ol-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ms-ol-tags { display: flex; gap: 3px; }
+.ms-ol-tools { display: none; gap: 2px; }
+.ms-ol-node:hover .ms-ol-tools { display: flex; }
+.ms-ol-btn {
+  border: 1px solid var(--divider-color);
+  background: var(--background-primary);
+  color: var(--text-muted);
+  border-radius: 4px;
+  font-size: 11px;
+  padding: 1px 5px;
+  cursor: pointer;
+}
+.ms-ol-btn:hover { color: var(--text-normal); }
+
+/* ---------- 节点操作工具栏选中计数 ---------- */
+.ms-node-toolbar[data-selection="1"]::before { content: "1 个节点"; }
+.ms-node-toolbar[data-selection]:not([data-selection="1"])::before {
+  content: attr(data-selection) " 个节点";
+}
+
+/* =======================================================================
+   主题与配色（v1.1）：accent 提升到 :root，由 body.ms-accent-* 切换；
+   暗色模式由 body.ms-theme-dark 控制插件面板配色
+   ======================================================================= */
+:root {
+  --ms-accent: #5b6cff;
+  --ms-accent-soft: rgba(91, 108, 255, 0.12);
+}
+body.ms-accent-indigo { --ms-accent: #5b6cff; --ms-accent-soft: rgba(91, 108, 255, 0.12); }
+body.ms-accent-blue   { --ms-accent: #2f9bff; --ms-accent-soft: rgba(47, 155, 255, 0.12); }
+body.ms-accent-green  { --ms-accent: #1fb98c; --ms-accent-soft: rgba(31, 185, 140, 0.12); }
+body.ms-accent-purple { --ms-accent: #9b5bff; --ms-accent-soft: rgba(155, 91, 255, 0.12); }
+body.ms-accent-amber  { --ms-accent: #ff9f43; --ms-accent-soft: rgba(255, 159, 67, 0.12); }
+body.ms-accent-rose   { --ms-accent: #ff5b8a; --ms-accent-soft: rgba(255, 91, 138, 0.12); }
+
+body.ms-theme-dark .ms-sidebar,
+body.ms-theme-dark .ms-mindmap-root,
+body.ms-theme-dark .ms-reader-root,
+body.ms-theme-dark .ms-modal {
+  --ms-card-bg: #20232e;
+  --ms-line: #353a4d;
+}
+body.ms-theme-dark .ms-scroll { background: #15171f; }
+body.ms-theme-dark .ms-modal-bg { background: rgba(0, 0, 0, 0.62); }
+body.ms-theme-dark .ms-page { background: #2a2d39; box-shadow: 0 2px 10px rgba(0,0,0,0.4); }
+body.ms-theme-dark .ms-word-body { background: #20232e; color: #e6e8ef; }
+
+/* =======================================================================
+   MN4 风格视觉 overhaul（v1.0）：浅色通透、圆角、柔和阴影、蓝紫主色
+   ======================================================================= */
+.ms-sidebar,
+.ms-mindmap-root {
+  --ms-card-bg: var(--background-primary);
+  --ms-line: var(--divider-color);
+}
+.ms-sidebar { font-family: var(--font-interface); }
+
+/* 侧栏标签页：下划线式激活，贴近 MN4 */
+.ms-sidebar-tabs {
+  display: flex; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--ms-line);
+}
+.ms-sidebar-tab {
+  border: none; background: transparent; color: var(--text-muted);
+  padding: 6px 12px; font-size: 13px; cursor: pointer; border-radius: 8px 8px 0 0; position: relative;
+}
+.ms-sidebar-tab:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.ms-sidebar-tab.is-active { color: var(--ms-accent); font-weight: 600; }
+.ms-sidebar-tab.is-active::after {
+  content: ""; position: absolute; left: 8px; right: 8px; bottom: -1px; height: 2px;
+  background: var(--ms-accent); border-radius: 2px;
+}
+.ms-sidebar-body { padding: 8px; flex: 1; overflow: auto; }
+
+/* 工具栏：药丸按钮 */
+.ms-toolbar { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; border-bottom: 1px solid var(--ms-line); background: var(--background-secondary); align-items: center; }
+.ms-tb-btn {
+  border: 1px solid var(--ms-line); background: var(--ms-card-bg); color: var(--text-normal);
+  border-radius: 999px; font-size: 12px; padding: 4px 10px; cursor: pointer; transition: all 0.15s ease;
+}
+.ms-tb-btn:hover { border-color: var(--ms-accent); color: var(--ms-accent); }
+.ms-tb-btn.is-active { background: var(--ms-accent); color: #fff; border-color: var(--ms-accent); }
+
+/* 选择框 / 下拉 */
+.ms-select { border: 1px solid var(--ms-line); background: var(--ms-card-bg); color: var(--text-normal); border-radius: 8px; font-size: 12px; padding: 3px 6px; }
+.ms-row { display: flex; align-items: center; gap: 6px; margin: 6px 0; flex-wrap: wrap; }
+.ms-muted { color: var(--text-muted); font-size: 12px; }
+
+/* 卡片盒：圆角卡片 */
+.ms-card {
+  border: 1px solid var(--ms-line); border-radius: 12px; background: var(--ms-card-bg);
+  padding: 8px 10px; margin-bottom: 8px; cursor: pointer; position: relative;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04); transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.ms-card:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0,0,0,0.10); border-color: var(--ms-accent); }
+.ms-card-type { font-size: 11px; color: var(--ms-accent); font-weight: 600; margin-bottom: 3px; }
+.ms-card-front { font-size: 13px; line-height: 1.45; }
+.ms-card-back { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+.ms-card-chk { position: absolute; top: 8px; right: 8px; }
+.ms-group-head { font-size: 12px; font-weight: 600; color: var(--text-muted); margin: 10px 0 4px; padding-bottom: 2px; border-bottom: 1px dashed var(--ms-line); }
+.ms-batchbar { display: flex; gap: 6px; align-items: center; margin: 6px 0; flex-wrap: wrap; padding: 6px; background: var(--ms-accent-soft); border-radius: 10px; }
+
+/* 颜色块 */
+.ms-colorchip { width: 22px; height: 22px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; display: inline-block; box-shadow: 0 0 0 1px var(--ms-line); }
+.ms-colorchip.is-active { border-color: var(--ms-accent); transform: scale(1.12); }
+.ms-colorrow { display: flex; gap: 6px; align-items: center; margin: 4px 0; flex-wrap: wrap; }
+
+/* 大纲 */
+.ms-ol-node { border-radius: 8px; border: 1px solid transparent; border-left: 3px solid transparent; }
+.ms-ol-node.is-compact { padding-top: 2px; padding-bottom: 2px; }
+
+/* 脑图节点：MN4 卡片式，彩色背景、圆角、轻阴影 */
+.ms-node {
+  border-radius: 20px;
+  border: 1px solid rgba(0,0,0,0.08);
+  background: var(--ms-card-bg);
+  box-shadow: 0 6px 22px rgba(0,0,0,0.10), 0 0 0 1px rgba(0,0,0,0.03);
+  padding: 14px 16px;
+  min-width: 120px;
+  max-width: 320px;
+  font-size: 14px;
+  line-height: 1.5;
+  transition: box-shadow 0.15s ease, transform 0.1s ease;
+}
+.ms-node:hover { transform: translateY(-1px); box-shadow: 0 10px 28px rgba(0,0,0,0.13), 0 0 0 1px rgba(0,0,0,0.04); }
+.ms-node.is-dragging { transition: none !important; }
+.ms-node.is-root { border-color: var(--ms-accent); box-shadow: 0 6px 22px var(--ms-accent-soft); }
+.ms-node.is-selected { outline: 2px solid var(--ms-accent); outline-offset: 3px; }
+.ms-node .ms-node-reveal-overlay { position: absolute; right: 8px; bottom: 8px; z-index: 2; }
+/* 带背景色的卡片强制深色文字，避免 pastel 底色配白字看不清 */
+.ms-node[style*="background-color"] { color: rgba(0, 0, 0, 0.88); border-color: rgba(0,0,0,0.06); }
+.ms-node[style*="background-color"] .ms-node-title,
+.ms-node[style*="background-color"] .ms-node-comment-hint,
+.ms-node[style*="background-color"] .ms-node-kind { color: rgba(0, 0, 0, 0.68); }
+.ms-node-title p { margin: 0; }
+.ms-node-kind { font-size: 11px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; letter-spacing: 0.3px; }
+.ms-node-tag { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; background: rgba(0,0,0,0.06); color: rgba(0,0,0,0.7); border: 1px solid rgba(0,0,0,0.08); margin: 3px 3px 0 0; }
+.ms-node-comment-hint { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+.ms-node-img {
+  display: block;
+  max-width: 280px;
+  max-height: 340px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 12px;
+  margin-top: 8px;
+  cursor: zoom-in;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+.ms-node-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 10px;
+}
+.ms-node-actions .ms-node-del {
+  float: none;
+  margin: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  border: 1px solid rgba(0,0,0,0.10);
+  background: rgba(255,255,255,0.55);
+  color: rgba(0,0,0,0.55);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0.85;
+  transition: all 0.12s ease;
+}
+.ms-node-actions .ms-node-del:hover { background: rgba(255,255,255,0.95); color: rgba(0,0,0,0.9); border-color: rgba(0,0,0,0.18); opacity: 1; }
+
+/* 节点浮动工具栏 */
+.ms-node-toolbar { background: var(--background-primary); border: 1px solid var(--ms-line); border-radius: 12px; box-shadow: 0 6px 20px rgba(0,0,0,0.16); padding: 6px; gap: 4px; flex-wrap: wrap; }
+.ms-node-tb-item { border: 1px solid var(--ms-line); background: var(--ms-card-bg); color: var(--text-normal); border-radius: 8px; font-size: 12px; padding: 4px 8px; cursor: pointer; }
+.ms-node-tb-item:hover { border-color: var(--ms-accent); color: var(--ms-accent); }
+
+/* 填空遮挡 */
+.ms-cloze { color: var(--ms-accent); font-weight: 600; cursor: pointer; background: var(--ms-accent-soft); border-radius: 4px; padding: 0 4px; }
+.ms-review-q, .ms-review-a { border: 1px solid var(--ms-line); border-radius: 12px; padding: 10px 12px; background: var(--ms-card-bg); margin-bottom: 10px; line-height: 1.6; }
+.ms-review-btns { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.ms-grade { border: none; border-radius: 999px; padding: 8px 16px; cursor: pointer; font-weight: 600; color: #fff; }
+.ms-grade.again { background: #ef5350; }
+.ms-grade.hard { background: #9b6500; }
+.ms-grade.good { background: #66bb6a; }
+.ms-grade.easy { background: #42a5f5; }
+
+/* 沉浸模式 */
+.ms-mindmap-root.is-immersive .ms-node-toolbar { display: none !important; }
+
+/* 弹窗圆角 */
+.ms-modal { border-radius: 16px !important; padding: 16px !important; box-shadow: 0 12px 40px rgba(0,0,0,0.22) !important; }
+.ms-modal-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.ms-btn { border: 1px solid var(--ms-line); background: var(--ms-card-bg); color: var(--text-normal); border-radius: 10px; padding: 6px 14px; cursor: pointer; font-size: 13px; }
+.ms-btn:hover { border-color: var(--ms-accent); color: var(--ms-accent); }
+.ms-btn.primary { background: var(--ms-accent); color: #fff; border-color: var(--ms-accent); }
+.ms-btn.is-active { background: var(--ms-accent-soft); color: var(--ms-accent); }
+
+.ms-search { width: 100%; box-sizing: border-box; border: 1px solid var(--ms-line); border-radius: 10px; padding: 6px 10px; background: var(--ms-card-bg); color: var(--text-normal); font-size: 13px; margin-bottom: 6px; }
+
+/* ===== 阅读器：缩略图 + 折叠 + 书签（MN4 风格） ===== */
+.ms-reader-root { display: grid; grid-template-columns: 0 1fr; grid-template-rows: auto 1fr; }
+.ms-reader-root.is-thumb { grid-template-columns: 132px 1fr; }
+.ms-reader-root > .ms-toolbar { grid-row: 1; grid-column: 1 / span 2; }
+.ms-reader-root > .ms-thumb-panel { grid-row: 2; grid-column: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; border-right: 1px solid var(--ms-line); background: var(--background-secondary); transition: width .2s ease; }
+.ms-reader-root > .ms-scroll { grid-row: 2; grid-column: 2; min-height: 0; }
+
+.ms-page-bar {
+  position: absolute; top: 0; left: 0; right: 0;
+  display: flex; align-items: center; gap: 8px;
+  height: 30px; padding: 0 10px;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--ms-line);
+  font-size: 12px; color: var(--text-muted);
+  opacity: 0; transition: opacity .15s; z-index: 6;
+}
+.ms-page:hover > .ms-page-bar, .ms-page-folded > .ms-page-bar { opacity: 1; }
+.ms-page-num { font-weight: 600; }
+.ms-page-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border: none; background: transparent;
+  color: var(--text-muted); cursor: pointer; border-radius: 6px;
+}
+.ms-page-btn:hover { background: var(--ms-accent-soft); color: var(--ms-accent); }
+.ms-page-btn.is-on { color: var(--ms-accent); }
+
+/* 书页折叠：仅保留页眉控制条 */
+.ms-page-folded { height: 34px !important; overflow: hidden; }
+.ms-page-folded .ms-page-canvas,
+.ms-page-folded .ms-text-layer,
+.ms-page-folded .ms-ann-layer { display: none !important; }
+
+/* 缩略图面板条目 */
+.ms-thumb-list { display: flex; flex-direction: column; gap: 8px; padding: 8px; }
+.ms-thumb-item {
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  cursor: pointer; border: 1px solid transparent; border-radius: 8px; padding: 4px;
+}
+.ms-thumb-item:hover { border-color: var(--ms-accent); background: var(--ms-accent-soft); }
+.ms-thumb-canvas { display: block; border-radius: 4px; box-shadow: 0 1px 4px rgba(0,0,0,.15); background: #fff; }
+.ms-thumb-num { font-size: 10px; color: var(--text-muted); }
+.ms-thumb-item.is-bookmarked { box-shadow: inset 3px 0 0 var(--ms-accent); }
+.ms-thumb-item.is-folded { opacity: .5; }
+.ms-thumb-item.is-folded .ms-thumb-canvas { filter: grayscale(1); }
+
+/* 文档内搜索 / 关键词链接：蓝色虚线下划（模拟 MN4 关键词链接） */
+.ms-search-hit {
+  background: var(--ms-accent-soft, rgba(91,108,255,.18));
+  color: var(--ms-accent);
+  border-radius: 3px;
+  box-shadow: inset 0 -2px 0 var(--ms-accent);
+}
+
+/* 卡片关键词 chips（蓝虚线，可点击触发文档搜索） */
+.ms-kwchips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.ms-kwchip {
+  font-size: 12px; color: var(--ms-accent); cursor: pointer;
+  border-bottom: 2px dashed var(--ms-accent); padding-bottom: 1px;
+}
+.ms-kwchip:hover { background: var(--ms-accent-soft); }
+
+/* ===== v1.1 组件样式 ===== */
+/* 错题徽章 */
+.ms-card-wrong {
+  display: inline-block; font-size: 10px; font-weight: 600; color: #fff;
+  background: #e5484d; border-radius: 6px; padding: 1px 6px; margin-left: 6px;
+}
+/* 填空模板行 */
+.ms-cloze-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
+.ms-cloze-tpl { font-size: 12px; padding: 4px 10px; }
+.ms-field-label { font-size: 11px; color: var(--text-muted); margin-top: 8px; }
+
+/* 复习日历热力图 */
+.ms-heatmap { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 12px); gap: 3px; margin: 8px 0; overflow-x: auto; padding-bottom: 4px; }
+.ms-heat-cell { width: 12px; height: 12px; border-radius: 3px; background: var(--ms-line); }
+.ms-heat-cell[data-lvl="1"] { background: var(--ms-accent-soft); }
+.ms-heat-cell[data-lvl="2"] { background: rgba(91,108,255,0.45); }
+.ms-heat-cell[data-lvl="3"] { background: rgba(91,108,255,0.7); }
+body.ms-theme-dark .ms-heat-cell[data-lvl="2"] { background: rgba(140,150,255,0.5); }
+body.ms-theme-dark .ms-heat-cell[data-lvl="3"] { background: rgba(140,150,255,0.8); }
+.ms-heat-cell[data-lvl="4"] { background: var(--ms-accent); }
+.ms-heat-legend { font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 4px; }
+
+/* 复习间隔分布直方图 */
+.ms-hist { display: flex; align-items: flex-end; gap: 4px; height: 70px; margin: 8px 0; }
+.ms-hist-bar { flex: 1; background: var(--ms-accent-soft); border-radius: 4px 4px 0 0; min-height: 2px; position: relative; }
+.ms-hist-bar > span { position: absolute; bottom: -16px; left: 0; right: 0; text-align: center; font-size: 9px; color: var(--text-muted); }
+
+/* 标签配色 chip */
+.ms-tag[data-color] { color: #fff; background: var(--tagc); border-color: transparent; }
+.ms-tag[data-color]::before { content: ""; }
+
+/* 脑图节点搜索淡化（不匹配时） */
+.ms-node.ms-dim { opacity: 0.18; }
+.ms-mm-search { width: 130px; }
+
+/* 脑图导出按钮（复用 ms-tb-btn） */
+.ms-mm-export { margin-left: 6px; }
+
+/* Recall consumes stored flags and geometry; reveal remains view state. */
+.ms-recall .ms-hl.is-occluded:not(.is-revealed) {
+  color: transparent !important;
+  background: var(--background-primary, #fff) !important;
+  text-shadow: none !important;
+  user-select: none;
+  cursor: pointer;
+}
+.ms-reader-root.ms-recall[data-recall-blur] .ms-hl.is-occluded:not(.is-revealed) {filter:blur(4px);color:inherit!important;background:transparent!important;text-shadow:none!important;}
+.ms-recall .ms-ann-region.is-occluded:not(.is-revealed) {
+  background: #fff;
+  z-index: 5;
+}
+
+.ms-reader-pdf .ms-recall-mask { position: absolute; display: none; border: 0; opacity: 1; background: #fff; }
+.ms-reader-pdf.ms-recall .ms-recall-mask.is-occluded:not(.is-revealed) { display: block; filter: none; z-index: 5; cursor: pointer; }
+.ms-reader-pdf.ms-recall[data-recall-blur] .ms-recall-mask.is-occluded:not(.is-revealed) {background:#fff8;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);}
+.ms-recall-mask.is-revealed { display: none; }
+
+/* AI hint mode: hint first, reveal only by an explicit user action. */
+.ms-recall-hint {
+  position: fixed;
+  z-index: 10000;
+  box-sizing: border-box;
+  width: min(300px, calc(100vw - 16px));
+  padding: 10px 12px;
+  border: 1px solid #7d7d82;
+  border-radius: 11px;
+  background: #eeeef0f2;
+  box-shadow: 0 8px 24px #0003;
+  color: #1c1c1e;
+  font: 13px/1.45 -apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+.ms-recall-hint strong { display: block; margin-bottom: 5px; font-size: 13px; font-weight: 650; }
+.ms-recall-hint p { margin: 0; white-space: pre-line; color: #3b3b3f; }
+.ms-recall-hint-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 9px; }
+.ms-recall-hint-actions button { min-height: 25px; padding: 2px 9px; border: 0; border-radius: 7px; background: #d7d7da; color: #202024; font: inherit; }
+.ms-recall-hint-actions button:disabled { opacity: .4; }
+
+/* MN4 keyword title links: inline text, blue dotted underline, no extra box. */
+.ms-title-link {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  text-align: inherit;
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: #2f78d2;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  box-shadow: none;
+  cursor: pointer;
+}
+.ms-title-link:hover,
+.ms-title-link:focus-visible {
+  background: transparent;
+  box-shadow: none;
+  color: inherit;
+}
+.ms-title-link:focus-visible {
+  outline: 2px solid #2f78d2;
+  outline-offset: 2px;
+}
+.ms-study-controls { padding: 8px 10px; border-bottom: 1px solid var(--ms-line); flex-shrink: 0; }
+.ms-study-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.ms-study-row select { flex: 1; min-width: 110px; }
+.ms-study-summary { font-size: 11px; margin-top: 5px; color: var(--text-muted); }
+.ms-node-reference { font-size: 10px; margin-bottom: 4px; color: var(--text-muted); }
+.ms-node-images { display: flex; flex-direction: column; gap: 6px; }
+.ms-node-sources button { max-width: 100%; overflow-wrap: anywhere; }
+.ms-document-body img { max-width: 100%; height: auto; }
+.ms-document-section + .ms-document-section { margin-top: 2.5em; padding-top: 1.5em; border-top: 1px solid var(--ms-line); }
+.ms-document-toc-entry { text-align: left; white-space: normal; }
+.ms-conflict-options { padding: 8px 0; border-top: 1px solid var(--ms-line); display: flex; flex-wrap: wrap; gap: 8px; }
+.ms-conflict-options h4 { width: 100%; margin: 4px 0; }
+
+/* ===== 子脑图徽章（折叠为子脑图后，点击在浮动视图打开子树） ===== */
+.ms-node.is-submap { border-style: dashed; border-color: var(--interactive-accent); }
+.ms-node-submap-badge {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: var(--interactive-accent);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+}
+
+/* ===== 复习面板全屏 ===== */
+.ms-modal-bg.is-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ms-modal-bg.is-fullscreen .ms-modal {
+  width: min(900px, 92vw);
+  max-height: 92vh;
+  overflow: auto;
+}
+.ms-review-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+/* ===== 图片灯箱（套索区域截图全景查看 / 缩放） ===== */
+.ms-lightbox-bg {
+  background: rgba(0, 0, 0, 0.86);
+}
+.ms-lightbox-modal {
+  background: transparent;
+  box-shadow: none;
+  border: none;
+  max-width: 96vw;
+  width: 96vw;
+  height: 96vh;
+  padding: 0;
+  overflow: auto;
+  text-align: center;
+}
+.ms-lightbox-img {
+  display: inline-block;
+  margin: auto;
+  max-width: none;
+  max-height: none;
+  width: auto;
+  height: auto;
+  border-radius: 8px;
+  cursor: zoom-in;
+  background: #fff;
+}
+
+/* ===== 卡片中的区域（套索）截图 ===== */
+.ms-card-img {
+  margin: 6px 0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--background-secondary);
+}
+.ms-card-img.is-thumb {
+  max-width: 160px;
+  margin: 4px 0 2px;
+}
+.ms-card-img-el {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  max-height: 320px;
+  object-fit: contain;
+  cursor: zoom-in;
+  background: #fff;
+}
+.ms-card-img.is-thumb .ms-card-img-el {
+  max-height: 110px;
+}
+
+/* One selection-owned surface; secondary choices never create another main menu. */
+.ms-ann-pop.ms-context-selection {flex-direction:column;background:#3c3c3e;border-color:#555;color:#fff;gap:0;}
+.ms-context-primary {display:flex;align-items:center;gap:4px;flex-wrap:wrap;}
+.ms-context-primary .has-icon .ms-context-label {display:none;}
+.ms-context-glyph {display:inline-flex;width:20px;height:20px;align-items:center;justify-content:center;}
+.ms-context-glyph svg {width:20px;height:20px;}
+.ms-context-selection button {color:#fff;display:inline-flex;align-items:center;gap:6px;}
+.ms-context-selection button:hover {background:#ffffff25;}
+.ms-context-secondary {display:flex;flex-direction:column;max-height:240px;overflow:auto;border-top:1px solid #ffffff35;margin-top:4px;padding-top:4px;}
+.ms-context-secondary button {text-align:left;min-height:30px;}
+.ms-context-pin {display:flex;align-items:center;justify-content:space-between;gap:16px;padding:6px 8px;}
+
+.ms-region-fold{position:absolute;left:0;right:0;border-top:1px dashed var(--text-muted);z-index:6;pointer-events:none;box-sizing:border-box}
+.ms-region-fold button{position:absolute;right:4px;top:-10px;min-height:20px;padding:0 5px;font-size:10px;pointer-events:auto}

@@ -1,0 +1,31 @@
+export const notices: string[] = [];
+export class Notice { constructor(message: string) { notices.push(message); } hide() {} }
+export class App {}
+export class TFile {}
+export class Setting {
+  item: HTMLElement; nameEl: HTMLElement; controlEl: HTMLElement;
+  constructor(public containerEl?: HTMLElement) {
+    this.item = document.createElement("div"); this.item.className = "setting-item";
+    const info = document.createElement("div"); info.className = "setting-item-info";
+    this.nameEl = document.createElement("div"); this.nameEl.className = "setting-item-name";
+    info.append(this.nameEl);
+    this.controlEl = document.createElement("div"); this.controlEl.className = "setting-item-control";
+    this.item.append(info, this.controlEl);
+    containerEl?.append(this.item);
+  }
+  setName(value: string) { this.nameEl.textContent = value; return this; }
+  setDesc(value: string) { const d = document.createElement("div"); d.className = "setting-item-description"; d.textContent = value; this.item.querySelector(".setting-item-info")!.append(d); return this; }
+  addText(cb: (c: any) => any) { const input = document.createElement("input"); input.type = "text"; const c = { inputEl: input, setValue: (v: string) => { input.value = v; return c; }, onChange: (f: (v: string) => void) => { input.addEventListener("change", () => f(input.value)); return c; } }; cb(c); this.controlEl.append(input); return this; }
+  addTextArea(cb: (c: any) => any) { const ta = document.createElement("textarea"); const c = { inputEl: ta, setValue: (v: string) => { ta.value = v; return c; }, onChange: (f: (v: string) => void) => { ta.addEventListener("change", () => f(ta.value)); return c; } }; cb(c); this.controlEl.append(ta); return this; }
+  addDropdown(cb: (c: any) => any) { const sel = document.createElement("select"); const c = { selectEl: sel, addOption: (v: string, label: string) => { const o = document.createElement("option"); o.value = v; o.textContent = label; sel.append(o); return c; }, setValue: (v: string) => { sel.value = v; return c; }, onChange: (f: (v: string) => void) => { sel.addEventListener("change", () => f(sel.value)); return c; } }; cb(c); this.controlEl.append(sel); return this; }
+  addSlider(cb: (c: any) => any) { const input = document.createElement("input"); input.type = "range"; const c = { setLimits: (min: number, max: number, step: number) => { input.min = String(min); input.max = String(max); input.step = String(step); return c; }, setValue: (v: number) => { input.value = String(v); return c; }, onChange: (f: (v: number) => void) => { input.addEventListener("change", () => f(Number(input.value))); return c; } }; cb(c); this.controlEl.append(input); return this; }
+  addToggle(cb: (c: any) => any) { const input = document.createElement("input"); input.type = "checkbox"; const c = { setValue: (v: boolean) => { input.checked = v; return c; }, onChange: (f: (v: boolean) => void) => { input.addEventListener("change", () => f(input.checked)); return c; } }; cb(c); this.controlEl.append(input); return this; }
+}
+export class PluginSettingTab {
+  containerEl: HTMLElement;
+  constructor(public app: any, public plugin: any) {
+    this.containerEl = document.createElement("div");
+    (this.containerEl as any).empty = () => this.containerEl.replaceChildren();
+  }
+  display() {}
+}
