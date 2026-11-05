@@ -21,3 +21,4 @@ handoff-to-edict/verify-final.log
 handoff-to-edict/*.bundle
 *.tsbuildinfo
 .eslintcache
+.ctx-brief.md
