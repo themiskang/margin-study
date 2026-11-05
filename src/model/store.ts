@@ -17,6 +17,8 @@ import { validateAnnotationCollection } from "./annotationValidation";
 import { mindmapHasHandwriting, normalizeMindmapHandwriting } from "../mindmap/handwritingContracts";
 import { clampHandwritingWidth } from "../annot/handwritingPresets";
 import { builtinSceneTemplates, defaultStudyScene, isSupportedSceneTemplate } from "../workspace/scenes";
+import { syncCardColor } from "./cardColors";
+import { editedExcerptBlocks } from "../cards/excerptBlocks";
 
 interface StoreHost {
   app: App;
@@ -643,10 +645,17 @@ export class Store {
 
   getCard(id: string): Card | undefined { return this.cards.find(c => c.id === id); }
   addCard(c: Card): void {
+    if (c.colorIndex !== undefined && (!Number.isInteger(c.colorIndex) || c.colorIndex < 0 || c.colorIndex > 15)) throw new Error("卡片颜色序号无效");
+    Object.assign(c, syncCardColor(c.color !== undefined ? { color: c.color } : { colorIndex: c.colorIndex }));
     this.mutate("添加卡片", () => { if (this.getCard(c.id)) throw new Error("卡片 id 已存在"); this.cards.push(c); this.registerDocument(c.docPath); const set = this.studySets.find(s => s.id === this.activeStudySetId); if (set) set.cardIds = [...new Set([...(set.cardIds ?? []), c.id])]; });
   }
   updateCard(id: string, patch: Partial<Card>): void {
+    if (patch.colorIndex !== undefined && (!Number.isInteger(patch.colorIndex) || patch.colorIndex < 0 || patch.colorIndex > 15)) throw new Error("卡片颜色序号无效");
+    patch = syncCardColor(patch);
     const card = this.getCard(id);
+    if (card && patch.front !== undefined && !("excerptBlocks" in patch) && card.excerptBlocks?.length) {
+      patch = { ...patch, excerptBlocks: editedExcerptBlocks(card, patch.front) };
+    }
     if (!card || Object.entries({ ...patch, id }).every(([key, value]) => same(card[key as keyof Card], value))) return;
     this.mutate("编辑卡片", () => { const c = this.getCard(id); if (c) { const before = clone(c); Object.assign(c, patch, { id, updatedAt: new Date().toISOString() }); this.reconcileReviewQuestions(before,c); } });
   }
@@ -771,7 +780,9 @@ export class Store {
       const card = this.getCard(id); if (!card || card.groupId) throw new Error("请先选择独立卡片或合并组头");
       const before = clone(card);
       const field = part === "note" ? "back" : "front";
-      card[field] = togglePlainCloze(card[field] ?? "",start,end); card.updatedAt = new Date().toISOString();
+      const text = togglePlainCloze(card[field] ?? "",start,end);
+      if (field === "front" && card.excerptBlocks?.length) card.excerptBlocks = editedExcerptBlocks(card, text);
+      card[field] = text; card.updatedAt = new Date().toISOString();
       this.reconcileReviewQuestions(before,card);
     });
   }
@@ -800,15 +811,26 @@ export class Store {
   private groupPresentation(cards: Card[]): Partial<Card> {
     const images = [...new Set(cards.flatMap(c => [c.image, ...(c.images ?? [])].filter((v): v is string => !!v)))];
     const ids = new Set(cards.map(c => c.id));
-    return {
-      front: [...new Set(cards.map(c => c.front).filter(Boolean))].join("\n\n---\n\n"),
+    const hasBlocks = cards.some(c => c.excerptBlocks?.length);
+    const excerptBlocks = hasBlocks ? cards.flatMap((card, cardIndex) => {
+      const source = { docPath: card.docPath, anchorAnnId: card.anchorAnnId, documentNotebookId: card.documentNotebookId, page: card.page };
+      const blocks: import("../types").ExcerptBlock[] = card.excerptBlocks?.length ? card.excerptBlocks.map(block => ({ ...block, source: block.source ?? source })) :
+        (card.front ? [{ id: `merged-${card.id}`, text: card.front, source }] : []);
+      if (card.front && !blocks.some(block => block.text)) blocks.unshift({ id: `merged-${card.id}`, text: card.front, source });
+      if (card.front && cards.slice(0, cardIndex).some(previous => previous.front)) blocks.unshift({ id: `separator-${card.id}`, text: "\n\n---\n\n", source });
+      return blocks;
+    }) : undefined;
+    const blockImages = excerptBlocks?.flatMap(block => block.image ? [block.image] : []) ?? [];
+    const orderedImages = [...blockImages, ...images.filter(image => !blockImages.includes(image))];
+    return syncCardColor({
+      front: cards.map(c => c.front).filter(Boolean).join("\n\n---\n\n"),
       back: [...new Set(cards.map(c => c.back ?? "").filter(Boolean))].join("\n\n---\n\n") || undefined,
       title: [...new Set(cards.map(c => c.title).filter(Boolean))].join("; ") || undefined,
-      sources: uniqueSources(cards.flatMap(c => this.sources(c))), images, image: images[0],
+      sources: uniqueSources(cards.flatMap(c => this.sources(c))), images: orderedImages.slice(1), image: orderedImages[0], excerptBlocks,
       tags: [...new Set(cards.flatMap(c => c.tags))], keywords: [...new Set(cards.flatMap(c => c.keywords ?? []))],
       links: [...new Set(cards.flatMap(c => c.links).filter(id => !ids.has(id)))],
       color: cards.find(c => c.color)?.color,
-    };
+    });
   }
   private materializeGroupHead(card: Card): Card {
     const copy = clone(card), original = card.mergedCards?.find(c => c.id === card.id);
@@ -820,6 +842,7 @@ export class Store {
         if (same(copy[key], presentation[key])) (copy as any)[key] = clone(original[key]);
       }
     }
+    Object.assign(copy, syncCardColor({ color: copy.color }));
     delete copy.groupId; delete copy.mergedCards; delete copy.mergedReviewStates; delete copy.mergeArchive;
     return copy;
   }
@@ -1660,4 +1683,3 @@ export class Store {
 }
 
 function uniqueSources(sources: CardSource[]): CardSource[] { const seen = new Set<string>(); return sources.filter(s => { const key = [s.docPath,s.anchorAnnId ?? "",s.page ?? "",s.text ?? "",s.image ?? ""].join("\u0000"); if (seen.has(key)) return false; seen.add(key); return true; }); }
-

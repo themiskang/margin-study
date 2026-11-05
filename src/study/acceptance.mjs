@@ -123,7 +123,8 @@ try {
     s.addCard(card("a", "a.pdf", "Original A", "image-a")); s.addCard(card("b", "b.pdf", "Original B", "image-b"));
     s.addCard({ ...card("c", "c.pdf", "C"), links: ["b"] });
     s.mergeCards("a", ["b"]); const merged = s.getCard("a");
-    assert.deepEqual([...merged.images].sort(), ["image-a", "image-b"]);
+    assert.equal(merged.image, "image-a");
+    assert.deepEqual(merged.images, ["image-b"]);
     assert.ok(merged.front.includes("Original A") && merged.front.includes("Original B"));
     assert.deepEqual(s.getCard("c").links, ["a"]);
     assert.ok(merged.sources.some((source) => source.docPath === "a.pdf" && source.text === "Original A"));

@@ -56,6 +56,7 @@ export class DocumentReaderView extends ItemView implements HtmlReader {
   getBodyEl(): HTMLElement { return this.bodyEl; }
   getScrollContainer(): HTMLElement { return this.scrollEl; }
   flashAnnotation(id: string): void { this.ann.flashAnnotation(id); }
+  flashExcerptBlock(id: string, block: import("../types").ExcerptBlock): void { this.ann.flashAnnotation(id, block); }
   getReaderToolbar(): HTMLElement { return this.toolbarEl; }
   setWorkspaceChrome(enabled: boolean): void {
     this.workspaceChrome = enabled;

@@ -279,6 +279,10 @@ export class WordReaderView extends ItemView implements HtmlReader {
     this.ann.flashAnnotation(annId);
   }
 
+  flashExcerptBlock(annId: string, block: import("../types").ExcerptBlock): void {
+    this.ann.flashAnnotation(annId, block);
+  }
+
   /** 关键词定位：在文档正文中查找首个匹配并平滑滚动到该处 */
   searchInDoc(term: string): void {
     if (!term) return;

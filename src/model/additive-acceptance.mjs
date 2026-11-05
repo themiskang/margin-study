@@ -21,7 +21,7 @@ const annotations = [
 const ink = { version: 1, layers: [{ id: "default", name: "Default", strokes: [{ id: "stroke", tool: "highlight", color: "#ffd54f", width: 16, points: [{ x: 50, y: 60, pressure: .4 }, { x: 100, y: 90 }] }] }], activeLayerId: "default" };
 let failure;
 try {
-  const built = await build({ stdin: { contents: 'export {Store} from "./store.ts"; export * from "./annotationValidation.ts";', resolveDir: here }, platform: "node", format: "cjs", bundle: true, write: false,
+  const built = await build({ stdin: { contents: 'export {Store} from "./store.ts"; export * from "./annotationValidation.ts"; export {displayedExcerptBlocks} from "../cards/excerptBlocks.ts";', resolveDir: here }, platform: "node", format: "cjs", bundle: true, write: false,
     plugins: [{ name: "memory-host", setup(builder) { builder.onResolve({ filter: /^obsidian$/ }, () => ({ path: "obsidian", namespace: "memory" })); builder.onLoad({ filter: /.*/, namespace: "memory" }, () => ({ contents: "export class App {} export class TFile {} export class Notice {} export class Component {} export const MarkdownRenderer={render:async()=>{}};", loader: "js" })); } }] });
   const bundle = join(temporary, "store.cjs"); await writeFile(bundle, built.outputFiles[0].contents); const api = createRequire(import.meta.url)(bundle);
   const fresh = async () => {
@@ -34,6 +34,71 @@ try {
     const host = { app: { vault: { adapter, getFiles: () => [...files.keys()].map(path => ({ path })) } }, loadData: async () => structuredClone(disk), saveData: async value => { disk = structuredClone(value); } };
     const store = new api.Store(host); await store.load(); stores.push(store); return { store, host, files, writes, disk: () => structuredClone(disk), reopen: async () => { const reopened = new api.Store(host); await reopened.load(); stores.push(reopened); return reopened; } };
   };
+  await check("card color updates and merging preserve matching palette values", async () => {
+    const f = await fresh();
+    f.store.updateCard("source", { colorIndex: 15 });
+    assert.equal(f.store.getCard("source").color, "#C39DE0");
+    f.store.updateCard("source", { color: undefined });
+    f.store.addCard({ id: "other", type: "excerpt", docPath: "doc.pdf", front: "Other", tags: [], links: [], createdAt: stamp, color: "#FFFFAA" });
+    const merged = f.store.mergeCards("source", ["other"]);
+    assert.equal(merged.color, "#FFFFAA");
+    assert.equal(merged.colorIndex, 0);
+    f.store.updateCard("source", { color: "#ffffaa" });
+    f.store.unmergeCard("source");
+    assert.equal(f.store.getCard("source").colorIndex, 0);
+    assert.equal(f.store.getCard("source").color, "#ffffaa");
+  });
+  await check("edited mixed excerpts preserve order and source identities or discard stale blocks", async () => {
+    const blocks = [{ id: "a", text: "Old", target: { kind: "html", range: { start: 0, end: 3 } } }, { id: "b", image: png, target: { kind: "html", range: { start: 0, end: 0, imageIndex: 1 } } }, { id: "c", text: "Text", target: { kind: "html", range: { start: 4, end: 8 } } }];
+    const f = await fresh();
+    f.store.updateCard("source", { front: "Old\nText", excerptBlocks: blocks, image: png });
+    f.store.updateCard("source", { front: "OldText" });
+    let card = f.store.getCard("source");
+    assert.deepEqual(card.excerptBlocks.map(block => block.text || block.image), ["Old", png, "Text"]);
+    assert.deepEqual(card.excerptBlocks.map(block => block.target), blocks.map(block => block.target));
+    f.store.updateCard("source", { front: "Old\nText", excerptBlocks: blocks });
+    f.store.updateCard("source", { front: "OlXext" });
+    card = f.store.getCard("source");
+    assert.deepEqual(card.excerptBlocks.map(block => block.text || block.image), ["OlX", png, "ext"]);
+    assert.deepEqual(card.excerptBlocks.map(block => block.target), blocks.map(block => block.target));
+    f.store.updateCard("source", { front: "Old\nText", excerptBlocks: blocks });
+    f.store.updateCard("source", { front: "Older\nText" });
+    card = f.store.getCard("source");
+    assert.deepEqual(card.excerptBlocks.map(block => block.text || block.image), ["Older", png, "Text"]);
+    assert.deepEqual(card.excerptBlocks.map(block => block.target), blocks.map(block => block.target));
+    f.store.updateCard("source", { front: "Oldest\nText revised" });
+    card = f.store.getCard("source");
+    assert.deepEqual(card.excerptBlocks.map(block => block.text || block.image), ["Oldest", png, "Text revised"]);
+    f.store.addCard({ id: "other", type: "excerpt", docPath: "other.html", anchorAnnId: "other-ann", front: "Other", excerptBlocks: [{ id: "other-block", text: "Other", target: blocks[0].target }], tags: [], links: [], createdAt: stamp });
+    card = f.store.mergeCards("source", ["other"]);
+    assert.equal(card.front, "Oldest\nText revised\n\n---\n\nOther");
+    assert.deepEqual(card.excerptBlocks.filter(block => block.target).map(block => [block.id, block.source.docPath, block.source.anchorAnnId]), [
+      ["a", "doc.pdf", "overlay-text"], ["b", "doc.pdf", "overlay-text"], ["c", "doc.pdf", "overlay-text"], ["other-block", "other.html", "other-ann"],
+    ]);
+    assert.equal(card.image, png);
+    assert.deepEqual(card.images, []);
+    f.store.unmergeCard("source");
+    f.store.updateCard("source", { front: "Completely rewritten" });
+    assert.deepEqual(f.store.getCard("source").excerptBlocks.map(block => block.text || block.image), ["Completely rewritten", png]);
+    assert.equal(f.store.getCard("source").excerptBlocks[0].target, undefined);
+  });
+  await check("cross-block cloze masks the complete body while retaining mixed images", async () => {
+    const f = await fresh();
+    for (const front of ["{{alpha\nbeta}}", "{{alpha {{nested}}\nbeta}}"]) {
+      const [first, second] = front.split("\n");
+      const blocks = [{ id: "a", text: first }, { id: "image", image: png }, { id: "b", text: second }];
+      f.store.updateCard("source", { front, excerptBlocks: blocks });
+      const rendered = api.displayedExcerptBlocks(f.store.getCard("source"));
+      assert.deepEqual(rendered.map(block => block.id), ["a", "image", "b"]);
+      assert.equal(rendered[1].image, png);
+      assert.doesNotMatch(rendered.map(block => block.text || "").join(""), /alpha|beta|nested|\{\{|\}\}/);
+      assert.match(rendered[0].text, /••/);
+    }
+    const fallback = api.displayedExcerptBlocks({ front: "{{hidden}}", excerptBlocks: [{ id: "a", text: "unmatched" }, { id: "b", image: png }, { id: "c", text: "also unmatched" }, { id: "d", image: png }] });
+    assert.deepEqual(fallback.map(block => block.id), ["a", "b", "c", "d"]);
+    assert.deepEqual(fallback.filter(block => block.image).map(block => block.image), [png, png]);
+    assert.doesNotMatch(fallback.map(block => block.text || "").join(""), /hidden/);
+  });
   await check("saving unchanged card content preserves its timestamp, history and persisted data", async () => {
     const f = await fresh();
     f.store.updateCard("source", { back: "Saved note", updatedAt: stamp });

@@ -780,9 +780,10 @@ export class HtmlAnnotationController extends BaseAnnotationController {
     this.renderAll();
   }
 
-  flashAnnotation(annId: string): void {
+  flashAnnotation(annId: string, block?: import("../types").ExcerptBlock): void {
     const body = this.reader.getBodyEl();
-    const ann = this.cache.find((entry) => entry.id === annId);
+    const stored = this.cache.find((entry) => entry.id === annId);
+    const ann = stored && block?.target?.kind === "html" ? { ...stored, range: block.target.range, text: block.sourceText ?? block.text ?? "" } : stored;
     if (!ann) return;
     if (ann.overlay?.deleted) { new Notice("此自由批注已删除；已有卡片与来源身份仍保留"); return; }
     this.revealAnnotationNotebook(ann);

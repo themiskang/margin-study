@@ -763,10 +763,12 @@ export class AnnotationController extends BaseAnnotationController {
   }
 
   /** 跳转到某标注并高亮闪烁 */
-  flashAnnotation(annId: string): void {
+  flashAnnotation(annId: string, block?: import("../types").ExcerptBlock): void {
     const stored = this.cache.find((a) => a.id === annId);
     if (stored?.overlay?.deleted) { new Notice("此自由批注已删除；已有卡片与来源身份仍保留"); return; }
-    if (!stored) return; this.revealAnnotationNotebook(stored); const ann = this.mapAnnotationForDisplay(stored);
+    if (!stored) return; this.revealAnnotationNotebook(stored);
+    const target = block?.target;
+    const ann = this.mapAnnotationForDisplay(target?.kind === "pdf" ? { ...stored, page: target.pageNum, rects: target.rects, pdfGeometry: target.pdfGeometry, pdfCoordinateSpace: target.pdfCoordinateSpace } : stored);
     const geometry = annotationGeometry(ann).filter((entry)=>entry.page>0);
     const first = geometry.find((entry) => entry.rects.length) ?? geometry[0];
     if (!first) { new Notice("该标注的页面已从重组文档移除；原标注数据仍保留"); return; }

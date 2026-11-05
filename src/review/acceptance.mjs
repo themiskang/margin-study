@@ -148,6 +148,7 @@ try {
   });
   test("multi-source images are retained and deduplicated", () => {
     assert.deepEqual(review.cardImages({ ...card, image: "one", images: ["one", "two"], sources: [{ docPath: "another.pdf", image: "three" }] }), ["one", "two", "three"]);
+    assert.deepEqual(review.cardImages({ ...card, image: "one", images: ["one"], excerptBlocks: [{id:"a",image:"one"},{id:"b",image:"one"}] }), ["one", "one"]);
   });
   test("saved text templates expand fields and keep cloze syntax intact", () => {
     assert.deepEqual(review.applyTemplate({ id: "t", name: "test", front: "{{source}}: {{front}} {{c1::答案}}", back: "{{back}}" }, { front: "题干", back: "答案", docPath: "book.pdf" }, now), { front: "book.pdf: 题干 {{c1::答案}}", back: "答案" });
@@ -158,6 +159,15 @@ try {
   const host = { loadData: async () => structuredClone(disk), saveData: async (data) => { disk = structuredClone(data); },
     app: { vault: { adapter: { exists: async (name) => files.has(name), mkdir: async (name) => files.set(name, ""), write: async (name, data) => files.set(name, data), read: async (name) => files.get(name) }, getFiles: () => [] } } };
   const store = new review.Store(host); await store.load();
+  test("card color updates preserve or map the palette index", () => {
+    store.updateCard(card.id, { color: "#C39DE0", colorIndex: 15 });
+    store.updateCard(card.id, { color: "#c39de0" });
+    assert.equal(store.getCard(card.id).colorIndex, 15);
+    store.updateCard(card.id, { color: "#ffffaa" });
+    assert.equal(store.getCard(card.id).colorIndex, 0);
+    store.updateCard(card.id, { color: "#123456" });
+    assert.equal(store.getCard(card.id).colorIndex, undefined);
+  });
   store.gradeCard(card.id, 1, { questionId: questions[0].id, elapsedMs: 1200, now });
   store.gradeCard(card.id, 4, { questionId: questions[1].id, elapsedMs: 800, now });
   test("Store grading isolates cN states, appends complete logs and retains sibling wrong flag", () => {

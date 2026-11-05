@@ -8,7 +8,7 @@ type Pending = { controller: AbortController; promise: Promise<CondenseResult>; 
 const instructions: Record<CondenseLevel,string> = {
   sentence: "用一句话概括。",
   points: "用简洁的要点概括。",
-  outline: "按主题和层次整理脉络。",
+  outline: "按主题和层次详细叙述内容，保留重要细节。",
 };
 const canceled = () => new AiError("aborted", "已取消浓缩。");
 function serviceName(endpoint:string):string { try{return new URL(endpoint).host||"自定义服务";}catch{return "自定义服务";} }
@@ -25,6 +25,7 @@ export class CondenseService {
     if (input.signal?.aborted) throw canceled();
     const text=input.text.trim(),language=input.language.trim(),images=[...(input.images??[])];
     if ((!text&&!images.length) || !language || !Object.prototype.hasOwnProperty.call(instructions,input.level)) throw new AiError("empty","请选择文字或图片、浓缩档位和语言。");
+    if(text.length>200000)throw new AiError("size","输入过长，最多支持 20 万字符，请缩小选区。");
     if(images.length>4||images.some(image=>!/^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(image))||images.reduce((sum,image)=>sum+image.length,0)>12*1024*1024)throw new AiError("image","最多附加 4 张图片，总大小不超过约 9 MB。");
     const profile=this.ai.configuration();
     if (!this.ai.isBound()) throw new AiError("unbound","请先在 AI 设置中测试并绑定自定义服务。");

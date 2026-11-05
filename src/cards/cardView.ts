@@ -18,6 +18,8 @@ import { notebookMeta } from "../annot/documentNotebooks";
 import { VIEW_TYPE_WORD } from "../word/wordReader";
 import { reviewQuestionEditor } from "../review/questionEditor";
 import { mountNativeCardEditor } from "./nativeEditor";
+import { displayedExcerptBlocks } from "./excerptBlocks";
+import type { ExcerptBlock } from "../types";
 
 registerReviewCardEditor((plugin, card, onChanged) => openDetail(plugin, card, onChanged));
 
@@ -51,8 +53,8 @@ function appendDeckBadges(container: HTMLElement, plugin: MarginStudyPlugin, car
 }
 
 /** Wait for the matching reader to finish opening before navigating. */
-export function jumpToCardSource(plugin: MarginStudyPlugin, card: Card): void {
-  const source = card.sources?.[0] ?? card;
+export function jumpToCardSource(plugin: MarginStudyPlugin, card: Card, block?: ExcerptBlock): void {
+  const source = block?.source ?? (block ? card : card.sources?.[0] ?? card);
   if (!source.docPath) { new Notice("这张卡片没有来源文档"); return; }
   void (async () => {
     const file = plugin.app.vault.getAbstractFileByPath(source.docPath);
@@ -60,9 +62,16 @@ export function jumpToCardSource(plugin: MarginStudyPlugin, card: Card): void {
     const reader = await plugin.openDocument(file);
     const notebook = source.documentNotebookId ?? "default";
     if ((reader as any).getDocumentNotebookId?.() !== notebook) await (reader as any).selectDocumentNotebook?.(notebook);
-    if (source.anchorAnnId) reader.flashAnnotation(source.anchorAnnId);
+    if (source.anchorAnnId && block?.target && typeof (reader as any).flashExcerptBlock === "function") (reader as any).flashExcerptBlock(source.anchorAnnId, block);
+    else if (source.anchorAnnId) reader.flashAnnotation(source.anchorAnnId);
     else if (source.page) { if (reader.gotoSourcePage) reader.gotoSourcePage(source.page); else reader.gotoPage?.(source.page); }
   })().catch((error) => new Notice(`无法跳转原文：${String(error)}`));
+}
+
+export function excerptSourceButton(plugin: MarginStudyPlugin, card: Card, block: ExcerptBlock): HTMLElement {
+  const button = el("button", { type: "button", text: "定位原文", "aria-label": "定位块原文", "data-excerpt-source": block.id });
+  button.addEventListener("click", event => { event.stopPropagation(); jumpToCardSource(plugin, card, block); });
+  return button;
 }
 
 /** 关键词标题链接：在正在阅读该文档的阅读器中高亮定位关键词 */
@@ -248,11 +257,21 @@ export function renderCardList(container: HTMLElement, plugin: MarginStudyPlugin
     appendDeckBadges(item, plugin, c.id);
     if (c.wrong)
       item.append(el("div", { class: "ms-card-wrong", text: "错题" }));
-    for (const image of cardImages(c)) item.append(buildRegionImage(imageUrl(plugin, image), true));
-    const front = el("div", { class: "ms-card-front" });applyCardTypography(front,plugin.store.settings,c);
-    item.append(front);
-    const preview = hasCloze(c.front) ? clozeHint(c.front) : c.front.slice(0, 160);
-    void renderMarkdown(plugin.app, preview, front, c.docPath);
+    if(c.excerptBlocks?.length){
+      if(c.front && !c.excerptBlocks.some(block=>block.text)){const front=el("div",{class:"ms-card-front"});applyCardTypography(front,plugin.store.settings,c);item.append(front);void renderMarkdown(plugin.app,hasCloze(c.front)?clozeHint(c.front):c.front,front,c.docPath);}
+      for(const block of displayedExcerptBlocks(c)){
+        if(block.image){const image=buildRegionImage(imageUrl(plugin,block.image),true);image.dataset.excerptBlock=block.id;item.append(image);}
+        if(block.text){const front=el("div",{class:"ms-card-front","data-excerpt-block":block.id});applyCardTypography(front,plugin.store.settings,c);item.append(front);void renderMarkdown(plugin.app,hasCloze(block.text)?clozeHint(block.text):block.text,front,c.docPath);}
+        if(block.target)item.append(excerptSourceButton(plugin,c,block));
+      }
+      for(const image of cardImages(c).slice(c.excerptBlocks.filter(block=>block.image).length))item.append(buildRegionImage(imageUrl(plugin,image),true));
+    }else{
+      for (const image of cardImages(c)) item.append(buildRegionImage(imageUrl(plugin, image), true));
+      const front = el("div", { class: "ms-card-front" });applyCardTypography(front,plugin.store.settings,c);
+      item.append(front);
+      const preview = hasCloze(c.front) ? clozeHint(c.front) : c.front.slice(0, 160);
+      void renderMarkdown(plugin.app, preview, front, c.docPath);
+    }
     if (c.type === "flashcard" && c.back)
       item.append(el("div", { class: "ms-card-back", text: "答案：" + clozeHint(c.back).slice(0, 80) }));
     if (c.tags.length) {
@@ -799,4 +818,3 @@ function openLinkPicker(plugin: MarginStudyPlugin, card: Card): void {
   modal.append(search, list);
   draw();
 }
-

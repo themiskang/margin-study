@@ -1806,6 +1806,10 @@ export class ReaderView extends ItemView {
     this.annController?.flashAnnotation(annId);
   }
 
+  flashExcerptBlock(annId: string, block: import("../types").ExcerptBlock): void {
+    this.annController?.flashAnnotation(annId, block);
+  }
+
   applyDocumentNotebookView(): void {
     void this.finishExtendEditing().then(() => this.extendNotes.sync());
     if (!this.doc || !this.loadedPath) return; const meta = notebookMeta(this.plugin.store.getDocMeta(this.loadedPath));

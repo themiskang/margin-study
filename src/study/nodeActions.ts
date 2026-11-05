@@ -10,12 +10,11 @@ import { openExtendSpeech } from "../pdf/extendSpeech";
 import { copySingleCard } from "./cardClipboard";
 import { cardUrl } from "./cardLink";
 import { extendTextFromCard } from "../pdf/extendCardText";
+import { CARD_COLORS } from "../model/cardColors";
 
 export type NodeContentPart = "title" | "excerpt" | "note";
 
 // MN5 outline color-strip measurements; rendered samples can vary slightly by card.
-const CARD_COLORS = ["#FEFEAA", "#BFFEBE", "#ADD2FE", "#FEAABE", "#FEFE03", "#06FE03", "#03BEFE", "#FE0403", "#FE8205", "#038243", "#0341B3", "#CF1F15", "#FEFEFE", "#DADADA", "#B4B4B4", "#C3A0E0"];
-
 let activeCardMenu: Menu | null = null;
 let closeCardSpeech: (() => void) | null = null;
 export function stopCardActionSpeech(): void { closeCardSpeech?.(); closeCardSpeech = null; }
@@ -76,7 +75,7 @@ export function addCommonCardActions(menu: Menu, plugin: MarginStudyPlugin, node
     for (const [index, color] of CARD_COLORS.entries()) {
       const option = el("button", { type: "button", "aria-label": `卡片颜色 ${index + 1}`, title: color, style: `width:32px;height:32px;margin:4px;border-radius:50%;background:${color}` });
       option.addEventListener("click", () => {
-        if (plugin.store.getCard(card.id)) { plugin.store.updateCard(card.id, { color }); onChange(); }
+        if (plugin.store.getCard(card.id)) { plugin.store.updateCard(card.id, { color, colorIndex: index }); onChange(); }
         close();
       });
       modal.append(option);

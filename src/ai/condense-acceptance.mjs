@@ -20,7 +20,9 @@ try {
   }};
   const service=new CondenseService(ai),base={text:"合成材料",language:"中文",level:"sentence"};
   const first=await service.request(base);assert.equal(first.cached,false);assert.equal((await service.request(base)).cached,true);assert.equal(calls,1);
-  await service.request({...base,level:"points"});await service.request({...base,level:"outline"});assert.equal(calls,3);
+  await service.request({...base,level:"points"});const detailed=await service.request({...base,level:"outline"});assert.match(detailed.text,/详细叙述/);assert.equal(calls,3);
+  await assert.rejects(service.request({...base,text:"字".repeat(200001)}),/输入过长/);
+  await assert.rejects(service.request({...base,images:Array(5).fill("data:image/png;base64,YQ==")}),/最多附加 4 张/);
   await service.request({...base,language:"English"});revision++;await service.request(base);assert.equal(calls,5);
   fail=true;await assert.rejects(service.request({...base,text:"失败后重试"}));await service.request({...base,text:"失败后重试"});assert.equal(calls,7);
   waiting=true;const a=new AbortController(),b=new AbortController(),one=service.request({...base,text:"并发",signal:a.signal}),two=service.request({...base,text:"并发",signal:b.signal});

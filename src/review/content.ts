@@ -12,8 +12,11 @@ import { reviewMaterial } from "./presentation";
 
 export function cardImages(card: Card): string[] {
   const composed=card.extendMedia?.some(media=>media.noteId===card.anchorAnnId&&media.composed);
-  return [...new Set([card.image, ...(!composed?card.images ?? []:[]), ...(card.sources ?? []).map((source) => source.image), ...(card.extendMedia ?? []).map(item => item.image), ...(card.commentMedia ?? []).map(item => item.image)]
-    .filter((image): image is string => !!image))];
+  const images = !composed ? card.images ?? [] : [];
+  const sourceImages = [card.image, ...images].filter((image): image is string => !!image);
+  const primary = card.excerptBlocks?.length ? sourceImages : [...new Set(sourceImages)];
+  const extra = [...new Set([...(card.sources ?? []).map((source) => source.image), ...(card.extendMedia ?? []).map(item => item.image), ...(card.commentMedia ?? []).map(item => item.image)].filter((image): image is string => !!image))].filter(image => !primary.includes(image));
+  return [...primary, ...extra];
 }
 
 export function imageUrl(plugin: MarginStudyPlugin, path: string): string {

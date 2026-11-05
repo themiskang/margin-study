@@ -7,8 +7,9 @@ import { handwritingPresetWidth, handwritingPresets } from "../annot/handwriting
 import { el, clear } from "../utils/dom";
 import { openTextModal, openConfirm, createModal, openImageLightbox } from "../utils/modal";
 import { uid } from "../utils/id";
-import { jumpToCardSource } from "../cards/cardView";
-import { renderMarkdown } from "../utils/markdown";
+import { excerptSourceButton, jumpToCardSource } from "../cards/cardView";
+import { displayedExcerptBlocks } from "../cards/excerptBlocks";
+import { renderMarkdown, hasCloze, clozeHint } from "../utils/markdown";
 import { exportMindmapPng } from "../export/mindmapExport";
 import { nodeContent } from "../study/nodeContent";
 import { cardCommentItems } from "../cards/commentOrder";
@@ -1051,18 +1052,21 @@ export class MindmapRenderer {
 
     // L4: an ink/image-only source Extend precedes text added independently to its card.
     const notes = card ? notebookMeta(this.plugin.store.getDocMeta(card.docPath), card.documentNotebookId ?? "default").pdfExtendNotes : undefined;
-    const mediaBeforeNote = !!card?.extendMedia?.some(media=>media.noteId===card.anchorAnnId&&media.composed) || !!card?.extendMedia?.some(media => media.noteId !== card.anchorAnnId && notes?.some(note => note.id === media.noteId && note.sourceAnnId === card.anchorAnnId && !note.text.trim() && (note.ink?.length || note.images?.length)));
+    const composed = !!card?.extendMedia?.some(media=>media.noteId===card.anchorAnnId&&media.composed);
+    const excerptBlocks = !composed ? card?.excerptBlocks : undefined;
+    const mediaBeforeNote = composed || !!card?.extendMedia?.some(media => media.noteId !== card.anchorAnnId && notes?.some(note => note.id === media.noteId && note.sourceAnnId === card.anchorAnnId && !note.text.trim() && (note.ink?.length || note.images?.length)));
     const orderedComments=card?.commentOrder ? cardCommentItems(card) : undefined;
     const orderedImages=new Set(orderedComments?.flatMap(item=>item.image?[item.image]:[])??[]);
     const attachedImages = new Set(card?.commentMedia?.map(media => media.image) ?? []);
     const leadingImages = mediaBeforeNote ? content.images.filter(image => !attachedImages.has(image)) : [];
     let imageIndex = 0;
-    const appendImages = (values: string[]) => {
+    const appendImages = (values: string[], blockId?: string) => {
       if (!values.length) return;
       const images = el("div", { class: "ms-node-images" });
       for (const image of values) {
         const source = imageUrl(this.plugin, image);
         const img = el("img", { src: source, class: "ms-node-img", alt: "卡片图片" }) as HTMLImageElement;
+        if(blockId)img.dataset.excerptBlock=blockId;
         img.title = "点击查看全景 / 放大";
         img.addEventListener("click", (event) => { event.stopPropagation(); openImageLightbox(source); });
         const firstImage = imageIndex++ === 0;
@@ -1098,12 +1102,19 @@ export class MindmapRenderer {
         if (!text) return;
         const body = el("div", { class: classes, "data-field": field });
         body.dataset.recallSection=String(sectionIndex++);
-        applyCardTypography(body,this.plugin.store.settings,card,field==="title");this.renderNodeText(body, text, n, showQuestion && field === "excerpt"); div.append(body);
+        applyCardTypography(body,this.plugin.store.settings,card,field==="title");this.renderNodeText(body, field==="excerpt" && hasCloze(text) ? clozeHint(text) : text, n, showQuestion && field === "excerpt"); div.append(body);
       };
       section("title", content.heading, "ms-node-title ms-node-heading");
-      section("excerpt", content.excerpt, "ms-node-excerpt" + (!content.heading ? " ms-node-title" : ""));
+      if(card && excerptBlocks?.length){
+        if(!excerptBlocks.some(block=>block.text))section("excerpt",content.excerpt,"ms-node-excerpt" + (!content.heading ? " ms-node-title" : ""));
+        for(const block of displayedExcerptBlocks(card)){
+          if(block.text)section("excerpt",block.text,"ms-node-excerpt" + (!content.heading ? " ms-node-title" : ""));
+          if(block.image)appendImages([block.image],block.id);
+          if(block.target)div.append(excerptSourceButton(this.plugin,card,block));
+        }
+      }else section("excerpt", content.excerpt, "ms-node-excerpt" + (!content.heading ? " ms-node-title" : ""));
       if(orderedComments){
-        appendImages(content.images.filter(image=>!orderedImages.has(image)));
+        appendImages((excerptBlocks?.length ? content.images.slice(excerptBlocks.filter(block=>block.image).length) : content.images).filter(image=>!orderedImages.has(image)));
         for(const item of orderedComments){if(item.image)appendImages([item.image]);if(item.text)section(item.key==="back"?"note":"comment",item.text,item.key==="back"?"ms-node-body ms-node-note":"ms-node-body ms-node-comment");}
         for(const comment of n.comments??[])section("comment",comment,"ms-node-body ms-node-comment");
       }else{
@@ -1130,7 +1141,7 @@ export class MindmapRenderer {
       div.append(tags);
     }
 
-    if (!orderedComments) appendImages(content.images.filter(image => !leadingImages.includes(image)));
+    if (!orderedComments) appendImages((excerptBlocks?.length ? content.images.slice(excerptBlocks.filter(block=>block.image).length) : content.images).filter(image => !leadingImages.includes(image)));
     if ((card?.sources?.length ?? 0) > 1) {
       const sources = el("div", { class: "ms-node-sources" });
       sources.addEventListener("click", (event) => event.stopPropagation());

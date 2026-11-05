@@ -87,6 +87,15 @@ export interface AnnotationTextStyle {
 }
 export interface AnnotationTextRun { text: string; style: AnnotationTextStyle; }
 
+export interface ExcerptBlock {
+  id: string;
+  target?: import("./annot/baseController").SelTarget;
+  source?: CardSource;
+  sourceText?: string;
+  text?: string;
+  image?: string;
+}
+
 export interface Annotation {
   id: string;
   docPath: string;
@@ -117,6 +126,8 @@ export interface Annotation {
   noteText?: string; // 文字批注 / 备注
   cardId?: string; // 关联卡片
   image?: string; // 区域摘录截图（base64 data URL）
+  images?: string[]; // 同一摘录中的其他图片
+  excerptBlocks?: ExcerptBlock[];
   createdAt: string;
 }
 
@@ -133,6 +144,7 @@ export interface Card {
   links: string[]; // 关联卡片 id
   tags: string[]; // 标签
   color?: string; // 卡片颜色 hex（用于卡片盒/看板筛选与展示）
+  colorIndex?: number; // 卡片色板序号 0–15
   keywords?: string[]; // 关键词标题链接：在文档/卡片中触发解释卡
   wrong?: boolean; // 错题标记（复习点「重来」置真，点「良好/简单」清除）
   favorite?: boolean;
@@ -141,6 +153,7 @@ export interface Card {
   page?: number;
   image?: string; // 区域摘录截图（base64 data URL）
   images?: string[];
+  excerptBlocks?: ExcerptBlock[];
   /** Derived Extend comment previews, separate from source excerpts and manually added images. */
   extendMedia?: { noteId: string; image: string; composed?: boolean }[];
   /** Reader text kept separate when the source card already has an independent note. */

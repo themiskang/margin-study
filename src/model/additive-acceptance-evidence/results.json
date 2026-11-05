@@ -1,7 +1,19 @@
 {
-  "verifiedAt": "2026-11-04T15:54:49.245Z",
+  "verifiedAt": "2026-11-05T13:39:45.984Z",
   "environment": "real Store over synthetic in-memory files and backup hashes",
   "checks": [
+    {
+      "name": "card color updates and merging preserve matching palette values",
+      "passed": true
+    },
+    {
+      "name": "edited mixed excerpts preserve order and source identities or discard stale blocks",
+      "passed": true
+    },
+    {
+      "name": "cross-block cloze masks the complete body while retaining mixed images",
+      "passed": true
+    },
     {
       "name": "saving unchanged card content preserves its timestamp, history and persisted data",
       "passed": true

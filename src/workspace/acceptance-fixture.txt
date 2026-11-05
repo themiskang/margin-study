@@ -10,6 +10,8 @@ import { cardUrl, openCardLink } from '__PROJECT__/src/study/cardLink';
 import { aiServiceFor } from '__PROJECT__/src/ai/panel';
 import { condenseServiceFor } from '__PROJECT__/src/ai/condense';
 import { AiError } from '__PROJECT__/src/ai/contracts';
+import { cardImages } from '__PROJECT__/src/review/content';
+import { renderCardList } from '__PROJECT__/src/cards/cardView';
 import { TFile, notices, markdownTiming } from 'obsidian';
 
 const target=document.querySelector('#fixtures') as HTMLElement,results:any[]=[],errors:string[]=[],active:any[]=[];
@@ -439,7 +441,7 @@ try{
   });
   await test('Card menu edits title, opens editor and adds only the selected card to review',async()=>{
     const p=await fresh(),deck=p.store.createReviewDeck('A11 review',p.set.id);p.store.updateNode('parent',{collapsed:false});p.view.refresh(true);await frame();const node=()=>mapCard(p,'anchor-node'),open=()=>{button(node(),'卡片更多操作').click();return document.querySelector('#test-menu')!;};
-    let menu=open();button(menu,'颜色').click();const palette=document.querySelector('.ms-modal')!;assert(palette.querySelectorAll('[aria-label^="卡片颜色 "]').length===16,'card palette must offer 16 measured colors');button(palette,'卡片颜色 16').click();assert(p.store.getCard('anchor-card')?.color==='#C3A0E0'&&p.store.getCard('beta-card')?.color==='#d7e8fa','color action changed wrong card or color');
+    let menu=open();button(menu,'颜色').click();const palette=document.querySelector('.ms-modal')!;assert(palette.querySelectorAll('[aria-label^="卡片颜色 "]').length===16,'card palette must offer 16 measured colors');button(palette,'卡片颜色 16').click();assert(p.store.getCard('anchor-card')?.color==='#C39DE0'&&p.store.getCard('anchor-card')?.colorIndex===15&&p.store.getCard('beta-card')?.color==='#d7e8fa','color action changed wrong card or color');
     menu=open();button(menu,'标签').click();const tags=document.querySelector<HTMLTextAreaElement>('[aria-label="卡片标签"]')!;tags.value='alpha, beta, alpha';button(document.querySelector('.ms-modal')!,'保存标签').click();assert(p.store.getCard('anchor-card')?.tags.join('|')==='alpha|beta'&&!p.store.getCard('beta-card')?.tags.length,'tag action changed wrong card');
     menu=open();button(menu,'编辑标题').click();let title=document.querySelector<HTMLInputElement>('[aria-label="编辑卡片标题"]')!;assert(title,'title editor missing');title.value='Cancelled title';button(document.querySelector('.ms-modal')!,'取消').click();assert(!p.store.getCard('anchor-card')?.title,'cancel changed title');
     menu=open();button(menu,'编辑标题').click();title=document.querySelector<HTMLInputElement>('[aria-label="编辑卡片标题"]')!;title.value='A11 title';button(document.querySelector('.ms-modal')!,'保存标题').click();assert(p.store.getCard('anchor-card')?.title==='A11 title'&&!p.store.getCard('beta-card')?.title,'title save changed wrong card');
@@ -502,7 +504,7 @@ try{
     const blocks=[...p.root.querySelectorAll<HTMLButtonElement>('[aria-label^="辅助摘录文字"]')];blocks[0].click();blocks[2].click();
     assert(blocks.every(block=>block.getAttribute('aria-pressed')==='true'),'blocks between endpoints were not selected');
     assert(p.root.querySelector('[aria-label="块选择操作"]')?.textContent?.includes('已选 3 块'),'range count does not include middle block');
-    button(p.root,'块选择：更多').click();assert(!button(p.root,'块选择：折页').checkVisibility()&&!button(p.root,'块选择：浓缩').checkVisibility(),'text block exposed image actions');button(p.root,'块选择：清空重选').click();assert(blocks.every(block=>block.getAttribute('aria-pressed')==='false'),'clear left blocks selected');button(p.root,'块选择：撤销').click();assert(blocks.every(block=>block.getAttribute('aria-pressed')==='true'),'undo did not restore the range');
+    button(p.root,'块选择：更多').click();assert(!button(p.root,'块选择：折页').checkVisibility()&&button(p.root,'块选择：浓缩').checkVisibility(),'text block actions incorrect');button(p.root,'块选择：清空重选').click();assert(blocks.every(block=>block.getAttribute('aria-pressed')==='false'),'clear left blocks selected');button(p.root,'块选择：撤销').click();assert(blocks.every(block=>block.getAttribute('aria-pressed')==='true'),'undo did not restore the range');
     const descriptor=Object.getOwnPropertyDescriptor(navigator,'clipboard'),copied:string[]=[];
     Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async(text:string)=>{copied.push(text);}}});
     try {
@@ -534,6 +536,81 @@ try{
     const added=(await p.store.loadAnnotations(p.alpha.path)).slice(oldAnns),cards=p.store.cards.slice(oldCards);
     assert(added.length===1&&cards.length===1&&cards[0].anchorAnnId===added[0].id&&cards[0].docPath===p.alpha.path,'block text lost source or duplicated submission');
     assert(cards[0].front.includes('Source block one.')&&cards[0].front.includes('Source block two.')&&p.store.nodes.some(node=>node.cardId===cards[0].id),'block text lost range or mindmap node');
+    assert(cards[0].excerptBlocks?.length===2&&cards[0].excerptBlocks.every((block:any)=>block.target)&&JSON.stringify(cards[0].excerptBlocks)===JSON.stringify(added[0].excerptBlocks),'text-only blocks lost their ordered targets');
+    assert(cards[0].front===cards[0].excerptBlocks.map((block:any)=>block.text).join('\n'),'text-only card body differs from its blocks');
+  });
+  await test('Mixed blocks create one card with every image and condense through A24',async()=>{
+    const p=await fresh(),dock=p.root.querySelector<HTMLElement>('[aria-label="MN4 阅读工具栏"]')!;
+    const canvas=document.createElement('canvas');canvas.width=20;canvas.height=20;const a=canvas.toDataURL();canvas.getContext('2d')!.fillRect(0,0,10,10);const b=canvas.toDataURL();
+    p.sources.get(p.alpha.path)!.content='<p>Mixed source text.</p><img width="50" height="50" src="'+a+'"><img width="50" height="50" src="'+b+'">';await p.view.openFile(p.gamma);await p.view.openFile(p.alpha);
+    const cards=p.store.cards.length,anns=(await p.store.loadAnnotations(p.alpha.path)).length;
+    button(dock,'块选择').click();await until(()=>p.root.querySelectorAll('[aria-label^="辅助摘录图片"]').length===2,'images missing');
+    const text=p.root.querySelector<HTMLButtonElement>('[aria-label^="辅助摘录文字"]')!,images=[...p.root.querySelectorAll<HTMLButtonElement>('[aria-label^="辅助摘录图片"]')];text.click();images[1].click();button(p.root,'块选择：更多').click();button(p.root,'块选择：浓缩').click();
+    const modal=document.querySelector<HTMLElement>('.ms-modal')!,level=modal.querySelector<HTMLSelectElement>('[aria-label="浓缩档位"]')!;assert([...level.options].map(o=>o.textContent).join(',')==='一句话,要点清单,详述','tier labels incorrect');button(modal,'关闭').click();
+    const action=button(p.root,'块选择：文本');action.click();action.click();await p.store.flush();const added=p.store.cards.slice(cards),source=(await p.store.loadAnnotations(p.alpha.path)).slice(anns);
+    assert(added.length===1&&source.length===1&&source[0].type==='region'&&added[0].anchorAnnId===source[0].id,'mixed submission did not create one linked card');
+    assert(added[0].front.includes('Mixed source text.')&&added[0].image===a&&added[0].images?.length===1&&added[0].images[0]===b,'mixed submission lost text or images');
+    assert(p.store.nodes.filter(n=>n.cardId===added[0].id).length===1,'mixed card node missing or duplicated');
+  });
+  await test('Mixed blocks preserve repeated images, identities, order and source positions',async()=>{
+    const p=await fresh(),dock=p.root.querySelector<HTMLElement>('[aria-label="MN4 阅读工具栏"]')!,canvas=document.createElement('canvas');canvas.width=20;canvas.height=20;const image=canvas.toDataURL();
+    p.sources.get(p.alpha.path)!.content='<p>Before image.</p><img width="50" height="50" src="'+image+'"><p>Between images.</p><img width="50" height="50" src="'+image+'"><p>After image.</p>';await p.view.openFile(p.gamma);await p.view.openFile(p.alpha);
+    const before=p.store.cards.length;button(dock,'块选择').click();await until(()=>p.root.querySelectorAll('[aria-label^="辅助摘录图片"]').length===2,'duplicate images missing');
+    const frames=[...p.root.querySelectorAll<HTMLButtonElement>('.ms-assistive-frame')];frames[0].click();frames[frames.length-1].click();button(p.root,'块选择：更多').click();button(p.root,'块选择：文本').click();await p.store.flush();
+    const card=p.store.cards[before],blocks=card.excerptBlocks,ann=(await p.store.loadAnnotations(p.alpha.path)).find((item:any)=>item.id===card.anchorAnnId);
+    assert(blocks?.length===5&&blocks.map((block:any)=>block.image?'image':'text').join(',')==='text,image,text,image,text','mixed source order lost');
+    assert(new Set(blocks.map((block:any)=>block.id)).size===5&&blocks.every((block:any)=>block.target)&&JSON.stringify(ann.excerptBlocks)===JSON.stringify(blocks),'block identities or source positions lost');
+    assert(blocks[1].target.range.imageIndex!==blocks[3].target.range.imageIndex&&cardImages(card).filter((value:string)=>value===image).length===2,'duplicate images collapsed');
+    const node=p.store.nodes.find((item:any)=>item.cardId===card.id);await until(()=>p.root.querySelector(`.ms-node[data-id="${node.id}"] [data-excerpt-block="${blocks[3].id}"]`),'duplicate image not displayed');const rendered=p.root.querySelector(`.ms-node[data-id="${node.id}"]`)!;
+    assert(rendered.querySelectorAll('img[data-excerpt-block]').length===2,'duplicate image display collapsed');
+    p.store.updateCard(card.id,{front:card.front.replace('Before image.','Before {{c1::secret}} image.')});p.view.refresh(true);await frame();
+    const updated=p.root.querySelector(`.ms-node[data-id="${node.id}"]`)!;
+    assert(updated.querySelectorAll('img[data-excerpt-block]').length===2&&!updated.textContent?.includes('secret')&&!updated.textContent?.includes('{{c1::'),'map lost images or exposed cloze');
+    const list=document.createElement('div');document.body.append(list);try{renderCardList(list,p.plugin);await wait();
+    const item=list.querySelector(`[data-card-id="${card.id}"]`)!;
+    assert(!item.textContent?.includes('secret')&&!item.textContent?.includes('{{c1::')&&item.querySelectorAll('img').length===2,'card list exposed cloze or lost images');
+    const firstText=item.querySelector(`[data-excerpt-block="${blocks[0].id}"]`)!,firstImage=item.querySelector(`[data-excerpt-block="${blocks[1].id}"]`)!,secondText=item.querySelector(`[data-excerpt-block="${blocks[2].id}"]`)!;
+    assert(!!(firstText.compareDocumentPosition(firstImage)&Node.DOCUMENT_POSITION_FOLLOWING)&&!!(firstImage.compareDocumentPosition(secondText)&Node.DOCUMENT_POSITION_FOLLOWING)&&secondText.textContent?.includes('Between images.'),'edit changed text/image order');
+    const savedFront=card.front,savedBlocks=card.excerptBlocks;
+    p.store.updateCard(card.id,{front:savedFront.replace('\n','')});p.view.refresh(true);list.replaceChildren();renderCardList(list,p.plugin);await wait();await frame();
+    assert(card.excerptBlocks.map((block:any)=>block.id).join(',')===savedBlocks.map((block:any)=>block.id).join(',')&&card.excerptBlocks.every((block:any,index:number)=>JSON.stringify(block.target)===JSON.stringify(savedBlocks[index].target)),'deleting a block separator lost order or source targets');
+    assert(list.querySelectorAll(`[data-card-id="${card.id}"] .ms-card-img[data-excerpt-block] img`).length===2&&p.root.querySelectorAll(`.ms-node[data-id="${node.id}"] img[data-excerpt-block]`).length===2,'deleting a block separator lost images');
+    p.store.updateCard(card.id,{front:savedFront,excerptBlocks:savedBlocks});
+    for(const marker of ['{{Before image.\nBetween images.}}','{{Before {{nested}} image.\nBetween images.}}']){
+      p.store.updateCard(card.id,{front:marker+'\nAfter image.',excerptBlocks:[{...blocks[0],text:marker.split('\n')[0]},blocks[1],{...blocks[2],text:marker.split('\n')[1]},blocks[3],blocks[4]]});
+      p.view.refresh(true);list.replaceChildren();renderCardList(list,p.plugin);await wait();await frame();
+      const mapText=p.root.querySelector(`.ms-node[data-id="${node.id}"]`)!.textContent||'',listText=list.querySelector(`[data-card-id="${card.id}"]`)!.textContent||'';
+      assert(!mapText.includes('Before')&&!mapText.includes('Between')&&!mapText.includes('nested')&&!listText.includes('Before')&&!listText.includes('Between')&&!listText.includes('nested'),'cross-block cloze exposed an answer');
+      assert(p.root.querySelectorAll(`.ms-node[data-id="${node.id}"] img[data-excerpt-block]`).length===2&&list.querySelectorAll(`[data-card-id="${card.id}"] .ms-card-img[data-excerpt-block] img`).length===2,'cross-block cloze lost images');
+    }
+    p.store.updateCard(card.id,{front:savedFront,excerptBlocks:savedBlocks});p.view.refresh(true);list.replaceChildren();renderCardList(list,p.plugin);await wait();await frame();
+    const calls:any[]=[];const originalOpen=p.plugin.openDocument;p.plugin.openDocument=async()=>({getDocumentNotebookId:()=>card.documentNotebookId??'default',flashExcerptBlock:(id:string,block:any)=>calls.push([id,block.target])});
+    (item.querySelector(`[data-excerpt-source="${blocks[3].id}"]`) as HTMLButtonElement).click();await wait();
+    (updated.querySelector(`[data-excerpt-source="${blocks[0].id}"]`) as HTMLButtonElement).click();await wait();
+    assert(calls.length===2&&calls[0][0]===card.anchorAnnId&&JSON.stringify(calls[0][1])===JSON.stringify(blocks[3].target)&&JSON.stringify(calls[1][1])===JSON.stringify(blocks[0].target),'block controls did not navigate to their own targets');
+    let fallback='';p.plugin.openDocument=async()=>({getDocumentNotebookId:()=>card.documentNotebookId??'default',flashAnnotation:(id:string)=>{fallback=id;}});
+    (item.querySelector(`[data-excerpt-source="${blocks[0].id}"]`) as HTMLButtonElement).click();await wait();
+    assert(fallback===card.anchorAnnId,'reader without block navigation did not fall back to annotation');
+    p.plugin.openDocument=async()=>p.view.getReader();
+    (item.querySelector(`[data-excerpt-source="${blocks[3].id}"]`) as HTMLButtonElement).click();await wait(100);
+    assert((p.view.getReader() as DocumentReaderView).getBodyEl().dataset.msAnchorNavigation==='exact','real DocumentReader did not navigate to image block');
+    p.store.addCard({id:'a11-other',type:'excerpt',docPath:p.gamma.path,anchorAnnId:'a11-other-ann',front:'Other source',tags:[],links:[],createdAt:new Date().toISOString(),excerptBlocks:[{...blocks[0],id:'a11-other-block',text:'Other source'}]});
+    p.store.mergeCards(card.id,['a11-other']);list.replaceChildren();renderCardList(list,p.plugin);await wait();
+    let mergedPath='',mergedId='',mergedTarget:any;p.plugin.openDocument=async(file:any)=>{mergedPath=file.path;return{getDocumentNotebookId:()=> 'default',flashExcerptBlock:(id:string,block:any)=>{mergedId=id;mergedTarget=block.target;}};};
+    (list.querySelector(`[data-card-id="${card.id}"] [data-excerpt-source="a11-other-block"]`) as HTMLButtonElement).click();await wait();
+    assert(mergedPath===p.gamma.path&&mergedId==='a11-other-ann'&&JSON.stringify(mergedTarget)===JSON.stringify(blocks[0].target),'merged block opened the wrong source');
+    p.store.unmergeCard(card.id);
+    p.plugin.openDocument=originalOpen;
+    p.store.updateCard(card.id,{front:'Edited excerpt text'});p.view.refresh(true);await frame();
+    assert(card.excerptBlocks?.filter((block:any)=>block.image).length===2&&!card.excerptBlocks.find((block:any)=>block.text)?.target&&p.root.querySelector(`.ms-node[data-id="${node.id}"]`)?.textContent?.includes('Edited excerpt text'),'structural rewrite lost images or retained a stale text target');
+    }finally{list.remove();document.documentElement.scrollTop=0;document.body.scrollTop=0;window.scrollTo(0,0);}
+  });
+  await test('Card color index updates and merges stay synchronized',async()=>{
+    const p=await fresh();p.store.updateCard('anchor-card',{colorIndex:15});
+    assert(p.store.getCard('anchor-card')?.color==='#C39DE0'&&p.store.getCard('anchor-card')?.colorIndex===15,'index-only update did not synchronize hex');
+    p.store.updateCard('anchor-card',{color:undefined});p.store.updateCard('beta-card',{color:'#FFFFAA'});
+    const merged=p.store.mergeCards('anchor-card',['beta-card']);
+    assert(merged?.color==='#FFFFAA'&&merged.colorIndex===0,'merge did not synchronize color index');
   });
   await test('Block condensation opens without sending and reports an unbound service',async()=>{
     const p=await fresh(),dock=p.root.querySelector<HTMLElement>('[aria-label="MN4 阅读工具栏"]')!;
@@ -549,7 +626,7 @@ try{
     const p=await fresh(),dock=p.root.querySelector<HTMLElement>('[aria-label="MN4 阅读工具栏"]')!,service=aiServiceFor(p.plugin) as any;let calls=0;
     const canvas=document.createElement('canvas');canvas.width=20;canvas.height=20;p.sources.get(p.alpha.path)!.content='<img width="50" height="50" src="'+canvas.toDataURL()+'">';await p.view.openFile(p.gamma);await p.view.openFile(p.alpha);
     service.configuration=()=>({id:'synthetic-profile',revision:1,endpoint:'synthetic',normalModel:'synthetic-model'});service.isBound=()=>true;
-    service.request=async()=>{calls++;return {text:'synthetic summary',messages:[],drafts:[]};};
+    let failNext=false,waitForAbort=false;service.request=async(input:any)=>{calls++;if(failNext)throw new AiError('synthetic','模拟失败');if(waitForAbort)await new Promise((resolve,reject)=>input.signal.addEventListener('abort',()=>reject(new AiError('aborted','已取消浓缩。')),{once:true}));return {text:'synthetic summary',messages:[],drafts:[]};};
     const before=JSON.stringify({cards:p.store.cards,nodes:p.store.nodes,annotations:await p.store.loadAnnotations(p.alpha.path)});
     button(dock,'块选择').click();await until(()=>p.root.querySelector('[aria-label^="辅助摘录图片"]'),'block missing');p.root.querySelector<HTMLButtonElement>('[aria-label^="辅助摘录图片"]')!.click();
     button(p.root,'块选择：更多').click();button(p.root,'块选择：浓缩').click();const modal=document.querySelector<HTMLElement>('.ms-modal')!,output=modal.querySelector<HTMLTextAreaElement>('[aria-label="浓缩结果"]')!,level=modal.querySelector<HTMLSelectElement>('[aria-label="浓缩档位"]')!,style=modal.querySelector<HTMLSelectElement>('[aria-label="浓缩显示样式"]')!;assert(modal.textContent?.includes('synthetic-model')&&modal.textContent?.includes('已绑定')&&calls===0,'service state missing before generation');
@@ -557,6 +634,8 @@ try{
     style.value='quote';style.dispatchEvent(new Event('change'));assert(output.value==='> synthetic summary'&&calls===1,'display style made a request');
     button(modal,'生成浓缩').click();await until(()=>modal.textContent?.includes('缓存命中'),'cache status missing');assert(calls===1,'cached tier requested provider');
     level.value='points';level.dispatchEvent(new Event('change'));button(modal,'生成浓缩').click();await until(()=>calls===2&&modal.textContent?.includes('生成完成'),'new tier was not requested once');
+    failNext=true;level.value='outline';level.dispatchEvent(new Event('change'));button(modal,'生成浓缩').click();await until(()=>modal.textContent?.includes('模拟失败'),'failure missing');assert(output.value==='','failed tier retained stale result');style.dispatchEvent(new Event('change'));assert(output.value===''||output.value==='> ','failed tier restored stale result');
+    failNext=false;waitForAbort=true;button(modal,'生成浓缩').click();await until(()=>calls===4,'cancel request missing');button(modal,'取消浓缩').click();await until(()=>modal.textContent?.includes('已取消浓缩'),'cancellation missing');assert(output.value==='','cancellation retained stale result');
     button(modal,'关闭').click();assert(JSON.stringify({cards:p.store.cards,nodes:p.store.nodes,annotations:await p.store.loadAnnotations(p.alpha.path)})===before,'condensation changed learning data');
   });
   await test('A single image block can be condensed without creating learning objects',async()=>{
@@ -922,6 +1001,10 @@ try{
   });
   await test('An ordinary image/text composition stays before independent comments in the map and card editor',async()=>{
     const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;await reader.renderPage(1);const id=await reader.createExtend(1,{x:.5,y:.45});await reader.finishExtendEditing();const canvas=document.createElement('canvas');canvas.width=100;canvas.height=50;canvas.getContext('2d')!.fillStyle='#0000ff';canvas.getContext('2d')!.fillRect(0,0,100,50);await reader.updateExtend(id,{images:[{id:'photo',src:canvas.toDataURL(),x:.1,y:.1,w:.2,h:.4}],textBoxes:[{id:'positioned',text:'Main positioned text',x:.4,y:.1,w:.5,h:.4}]});await reader.addExtendToMindmap(id);const card=p.store.cards.find(card=>card.anchorAnnId===id)!;p.store.updateCard(card.id,{back:'Independent comment'});const node=p.store.nodes.find(node=>node.cardId===card.id)!;await until(()=>p.root.querySelector(`.ms-node[data-id="${node.id}"] .ms-node-note`),'map comment missing');const map=p.root.querySelector(`.ms-node[data-id="${node.id}"]`)!,image=map.querySelector('.ms-node-images')!,comment=map.querySelector('.ms-node-note')!;assert(image&&!!(image.compareDocumentPosition(comment)&Node.DOCUMENT_POSITION_FOLLOWING),'map placed independent comment before its composed main content');assert(map.querySelectorAll('img').length===1,'map repeats individual images alongside the composition');
+    const composition=card.extendMedia!.find((media:any)=>media.composed)!.image;
+    p.store.updateCard(card.id,{excerptBlocks:[{id:'composed-text',text:'Original excerpt'},{id:'composed-image-a',image:'data:image/png;base64,original-a'},{id:'composed-image-b',image:'data:image/png;base64,original-b'}]});p.view.refresh(true);await frame();
+    const composedMap=p.root.querySelector(`.ms-node[data-id="${node.id}"]`)!;
+    assert(!composedMap.textContent?.includes('Original excerpt')&&!composedMap.querySelector('[data-excerpt-block]')&&[...composedMap.querySelectorAll('img')].filter((img:any)=>img.getAttribute('src')===composition).length===1&&composedMap.querySelectorAll('img').length===1,'composed map repeated original blocks or lost its composed image');
     button(p.root,'留白菜单').click();button(p.root,'编辑卡片').click();await until(()=>document.querySelector('[aria-label="卡片正面或摘录"]'),'card did not open');const front=document.querySelector<HTMLTextAreaElement>('[aria-label="卡片正面或摘录"]')!;assert(getComputedStyle(front).display==='none','composed card has an empty excerpt field above its main content');assert(document.querySelectorAll('.ms-native-card-sheet > .ms-card-img').length===1,'editor lost or duplicated composition');button(document,'保存').click();assert(reader.getExtendNotes()[0].textBoxes?.[0].text==='Main positioned text','saving independent comment changed Reader text');
   });
   await test('An otherwise empty card can save its first attached photo',async()=>{

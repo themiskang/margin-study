@@ -1,4 +1,5 @@
 import { Menu, Notice, setIcon } from "obsidian";
+import { cardColorIndex } from "../model/cardColors";
 import { foldCoordinates, regionFoldBands, type FoldBand } from "./regionFolds";
 import type { Card, PdfExtendMode, PdfExtendNote, Stroke } from "../types";
 import type { ReaderView } from "./readerView";
@@ -163,7 +164,7 @@ export class ExtendNotes {
     const store=this.reader.plugin.store, card=this.ownCard(id); if(!card)return;
     await this.syncCardMedia(card,id,next,expected);
     if(!next)card.hidden=true;else if(!expected)card.hidden=visibility.card;
-    if(next){card.front=extendCardText(next);card.color=next.color;card.tags=next.tags??[];card.images=next.images?.map(image=>image.src);card.updatedAt=new Date().toISOString();}
+    if(next){card.front=extendCardText(next);card.color=next.color;card.colorIndex=cardColorIndex(next.color);card.tags=next.tags??[];card.images=next.images?.map(image=>image.src);card.updatedAt=new Date().toISOString();}
     for(const node of store.nodes.filter(node=>node.cardId===card.id)){if(!next)node.hidden=true;else if(!expected)node.hidden=visibility.nodes.get(node.id);if(next){node.title=next.text.slice(0,60)||"留白";node.color=next.color;node.tags=next.tags;}}
   }
   private syncSourceText(card: Card, id: string, next?: PdfExtendNote, expected?: PdfExtendNote): void {
