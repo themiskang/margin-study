@@ -1,4 +1,5 @@
 import MarginStudyPlugin from '__PROJECT__/src/main';
+import { applyTheme } from '__PROJECT__/src/theme';
 import { mountNativeCardEditor } from '__PROJECT__/src/cards/nativeEditor';
 import { Store } from '__PROJECT__/src/model/store';
 import { StudyWorkspaceView } from '__PROJECT__/src/workspace/studyWorkspace';
@@ -125,6 +126,22 @@ function morePane(p:any,name:string){button(p.root,'学习集更多设置').clic
 function mapInk(p:any){return p.root.querySelector('[aria-label="脑图手写画布"]') as SVGSVGElement;}
 
 try{
+  await test('Dark theme renders home and workspace surfaces darker than light',async()=>{
+    const p=await fresh();
+    const color=(node:Element|null)=>{assert(node,'missing theme surface');return getComputedStyle(node!).backgroundColor;};
+    const dark=(value:string)=>{const channels=value.match(/\d+/g)?.slice(0,3).map(Number);return !!channels&&channels.length===3&&channels.every(channel=>channel<100);};
+    try {
+      p.store.settings.theme='light';applyTheme(p.plugin);p.view.showStudyHome();await frame();
+      const home=p.root.querySelector('.ms-study-home-screen'),workspace=p.root,lightHome=color(home),lightWorkspace=color(workspace);
+      p.store.settings.theme='dark';applyTheme(p.plugin);await frame();
+      const darkHome=color(home),darkWorkspace=color(workspace);
+      assert(dark(darkHome)&&dark(darkWorkspace)&&darkHome!==lightHome&&darkWorkspace!==lightWorkspace,`theme colors: ${lightHome}, ${darkHome}, ${lightWorkspace}, ${darkWorkspace}`);
+      for(const selector of ['.ms-study-home-navigation','.ms-study-home-card','.ms-study-home-cover'])assert(dark(color(home!.querySelector(selector))),`not dark: ${selector}`);
+      button(home! as ParentNode,p.set.name).click();await frame();
+      for(const selector of ['.ms-workspace-map','.ms-mindmap','.ms-node','.ms-workspace-reader-host','.ms-bottom-primary'])assert(dark(color(p.root.querySelector(selector))),`not dark: ${selector}`);
+      button(p.root,'大纲').click();await frame();assert(dark(color(p.root.querySelector('.ms-map-floating-header'))),'outline header is not dark');
+    } finally {document.body.classList.remove('ms-theme-dark','ms-theme-light');}
+  });
   await test('Tablet host button padding does not collapse scene or mind-map icons',async()=>{
     const style=document.createElement('style');style.textContent='.is-tablet button:not(.clickable-icon){padding:4px 20px}';document.head.prepend(style);document.body.classList.add('is-tablet');
     try{const p=await fresh();p.store.selectStudyScene(p.set.id,'standard','excerpt');p.view.refresh(true);await frame();
