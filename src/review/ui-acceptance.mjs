@@ -55,7 +55,14 @@ const clickButton = async name => {
   await evaluate(`(()=>{const modals=[...document.querySelectorAll('.ms-modal')];const root=modals[modals.length-1]||document;const target=[...root.querySelectorAll('button')].find(button=>(button.getAttribute('aria-label')===${JSON.stringify(name)}||button.textContent===${JSON.stringify(name)})&&button.offsetParent!==null);target?.scrollIntoView({block:'nearest'});return true})()`);
   return browser("find", "role", "button", "click", "--name", name, "--exact");
 };
-const checkInput = async (selector, checked) => { await browser("scrollintoview",selector); return browser(checked ? "check" : "uncheck",selector); };
+const checkInput = async (selector, checked) => {
+  await evaluate(`(()=>{document.querySelector(${JSON.stringify(selector)}).scrollIntoView({block:'center',inline:'nearest'});return true})()`);
+  if (selector.startsWith('[data-copy-')) {
+    const hit = await evaluate(`(()=>{const input=document.querySelector(${JSON.stringify(selector)}),panel=input.closest('.ms-native-card-advanced'),rect=input.getBoundingClientRect(),bounds=panel.getBoundingClientRect(),x=rect.left+rect.width/2,y=rect.top+rect.height/2;return {inPanel:x>=bounds.left&&x<=bounds.right&&y>=bounds.top&&y<=bounds.bottom,inViewport:x>=0&&x<innerWidth&&y>=0&&y<innerHeight,uncovered:document.elementFromPoint(x,y)===input}})()`);
+    assert.deepEqual(hit, { inPanel: true, inViewport: true, uncovered: true }, `${selector} is clipped or covered`);
+  }
+  return browser(checked ? "check" : "uncheck",selector);
+};
 const clickSelector = async selector => { await browser("scrollintoview",selector); return browser("click",selector); };
 const draw = async () => {
   await browser("scrollintoview", ".ms-modal canvas");
@@ -146,9 +153,26 @@ try {
   await select("note", 2, 8); await browser("click", '[data-cloze-part="note"]');
   const noteRestored = await savedSource();
   check("saved note text has the same wrap and unwrap control", () => { assert.equal(noteRestored.back, "复制笔记"); });
-  await browser("click", ".ms-review-copy-options summary");
+  const palette = await evaluate("(()=>{const chips=[...document.querySelectorAll('.ms-native-card-advanced .ms-colorrow .ms-colorchip')];return chips.map(chip=>({x:chip.offsetLeft,y:chip.offsetTop,width:chip.offsetWidth,height:chip.offsetHeight}))})()");
+  check("the card editor retains 16 colors in two compact eight-color rows", () => {
+    assert.equal(palette.length, 16);
+    assert.ok(palette.every(chip => chip.width === 24 && chip.height === 24));
+    assert.ok(palette.slice(0,8).every(chip => chip.y === palette[0].y));
+    assert.ok(palette.slice(8).every(chip => chip.y === palette[8].y));
+    assert.ok(palette[8].y > palette[0].y);
+    assert.ok(palette.slice(0,8).every((chip,index) => chip.x === palette[index+8].x));
+  });
+  await clickSelector(".ms-review-copy-options summary");
+  await browser("wait", "--fn", "(()=>{const input=document.querySelector('[data-copy-part=title]'),r=input.getBoundingClientRect(),panel=input.closest('.ms-native-card-advanced').getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;return y>=panel.top&&y<=panel.bottom&&document.elementFromPoint(x,y)===input})()");
   const defaults = await evaluate("[...document.querySelectorAll('[data-copy-part],[data-copy-mask]')].every(input=>input.checked)");
   check("review copy defaults to all content and image masks", () => { assert.equal(defaults, true); });
+  await browser("set", "viewport", "800", "600");
+  await checkInput('[data-copy-part="note"]',false); await checkInput('[data-copy-part="note"]',true);
+  await checkInput('[data-copy-part="images"]',false); await checkInput('[data-copy-part="images"]',true);
+  await checkInput('[data-copy-mask="left"]',false); await checkInput('[data-copy-mask="left"]',true);
+  const smallViewportChoices = await evaluate("[...document.querySelectorAll('[data-copy-part],[data-copy-mask]')].every(input=>input.checked)");
+  check("review copy choices and masks remain scrollable and clickable in a smaller viewport", () => { assert.equal(smallViewportChoices, true); });
+  await browser("set", "viewport", "1512", "949");
   await checkInput('[data-copy-part="title"]',false); await checkInput('[data-copy-part="excerpt"]',false); await checkInput('[data-copy-mask="right"]',false);
   const beforeCopy = await savedSource();
   await browser("screenshot", join(evidence, "copy-selection.png"));

@@ -220,7 +220,13 @@ export function mountNativeCardEditor(plugin: MarginStudyPlugin, options: {
   more.setAttribute("aria-expanded", "false");
   more.addEventListener("mousedown", event => event.preventDefault());
   more.addEventListener("click", () => { advanced.hidden = !advanced.hidden; more.setAttribute("aria-expanded", String(!advanced.hidden)); });
-  for (const details of advanced.querySelectorAll("details")) details.addEventListener("toggle", () => { if (details.open && !advanced.hidden) details.scrollIntoView({block:"nearest"}); });
+  for (const details of advanced.querySelectorAll("details")) details.addEventListener("toggle", () => {
+    if (!details.open || advanced.hidden) return;
+    if (!details.classList.contains("ms-review-copy-options")) { details.scrollIntoView({block:"nearest"}); return; }
+    const target = details.querySelector<HTMLElement>("input") ?? details;
+    const panelBounds = advanced.getBoundingClientRect(), targetBounds = target.getBoundingClientRect();
+    advanced.scrollTop += targetBounds.top - panelBounds.top - (advanced.clientHeight - targetBounds.height) / 2;
+  });
   type.addEventListener("click", () => { openAdvanced(advanced.querySelector<HTMLElement>(".ms-template-controls select") ?? undefined); });
   tag.addEventListener("click", () => openAdvanced(tags));
   const file = el("input", { type: "file", accept: "image/*", "aria-label": "选择卡片图片", style: "display:none" });

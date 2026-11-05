@@ -1,4 +1,5 @@
-import { openDetail } from '__PROJECT__/src/cards/cardView';
+import { openDetail, renderCardList } from '__PROJECT__/src/cards/cardView';
+import { CARD_COLORS } from '__PROJECT__/src/model/cardColors';
 import { mountTemplateControls } from '__PROJECT__/src/review/templates';
 import { Store } from '__PROJECT__/src/model/store';
 import { MindmapRenderer } from '__PROJECT__/src/mindmap/mindmapRenderer';
@@ -71,6 +72,24 @@ function selectAndLink(host: HTMLElement, ids: string[]) {
 }
 
 try {
+  await test('Card editor and list batch palette expose all 16 colors and persist their indices', async () => {
+    const p=await fresh();p.addCard('a','Alpha');p.addCard('b','Beta');p.store.settings.colors=['#123456'];
+    openDetail(p.plugin,p.store.getCard('a')!);const modal=document.querySelector('.ms-modal')!;
+    for (const [index,color] of CARD_COLORS.entries()) {
+      const chips=modal.querySelectorAll<HTMLButtonElement>('.ms-colorrow .ms-colorchip');
+      assert(chips.length===16&&chips[index].title===color,'editor palette count or order incorrect');chips[index].click();
+      assert(p.store.getCard('a')!.color===color&&p.store.getCard('a')!.colorIndex===index,'editor failed to save color index '+index);
+      assert(modal.querySelectorAll('.ms-colorrow .ms-colorchip.is-active').length===1&&modal.querySelectorAll('.ms-colorrow .ms-colorchip')[index].classList.contains('is-active'),'editor selection incorrect');
+    }
+    document.querySelector('.ms-modal-bg')!.remove();const host=document.createElement('div');target.append(host);renderCardList(host,p.plugin);
+    for (const [index,color] of CARD_COLORS.entries()) {
+      button(host,'批量').click();for(const checkbox of host.querySelectorAll<HTMLInputElement>('.ms-card-chk')){checkbox.checked=true;checkbox.dispatchEvent(new Event('change',{bubbles:true}));}
+      button(host,'设颜色').click();const palette=document.querySelector('.ms-modal')!;const chips=palette.querySelectorAll<HTMLButtonElement>('button[aria-label^="卡片颜色 "]');
+      assert(chips.length===16&&chips[index].getAttribute('aria-label')===`卡片颜色 ${index+1}`,'batch palette count or order incorrect');chips[index].click();
+      for(const id of ['a','b'])assert(p.store.getCard(id)!.color===color&&p.store.getCard(id)!.colorIndex===index,'batch failed to save color index '+index);
+    }
+    assert(p.store.settings.colors.join() === '#123456','card colors changed excerpt shortcuts');
+  });
   await test('Review enrollment derives editor type across shared decks without rewriting excerpt cards', async () => {
     const p=await fresh();p.addCard('a','France?',{back:'Paris',keywords:[]});const before=JSON.stringify(p.store.getCard('a'));
     openDetail(p.plugin,p.store.getCard('a')!);let modal=document.querySelector('.ms-native-card-editor')!;
@@ -156,7 +175,7 @@ try {
   });
   await test('Board tag overlaps do not duplicate selection; batch colors/tags affect only selected cards and undo atomically', async () => {
     const p=await fresh();p.addCard('a','Alpha',{tags:['one','two']});p.addCard('b','Beta',{tags:['one']});p.addCard('c','Gamma');const {host}=p.board();change(host.querySelector('[aria-label="一级分组"]') as HTMLSelectElement,'tag');change(host.querySelector('[aria-label="二级分组"]') as HTMLSelectElement,'none');
-    button(host,'多选看板卡片').click();boardCard(host,'a').click();boardCard(host,'b').click();button(host,'颜色').click();button(document.querySelector('.ms-modal')!,`使用颜色 ${p.store.settings.colors[2]}`).click();assert(p.store.getCard('a')!.color===p.store.settings.colors[2]&&p.store.getCard('b')!.color===p.store.settings.colors[2]&&p.store.getCard('c')!.color==='#ffd54f','batch color selection leaked');
+    button(host,'多选看板卡片').click();boardCard(host,'a').click();boardCard(host,'b').click();button(host,'颜色').click();assert(document.querySelectorAll('.ms-board-palette button').length===16,'board palette count incorrect');button(document.querySelector('.ms-modal')!,`使用颜色 ${CARD_COLORS[2]}`).click();assert(p.store.getCard('a')!.color===CARD_COLORS[2]&&p.store.getCard('a')!.colorIndex===2&&p.store.getCard('b')!.color===CARD_COLORS[2]&&p.store.getCard('c')!.color==='#ffd54f','batch color selection leaked');
     assert(p.store.undoLibraryChange()&&p.store.getCard('a')!.color==='#ffd54f'&&p.store.getCard('b')!.color==='#ffd54f','batch color did not undo together');
     button(host,'标签').click();const modal=document.querySelector('.ms-modal')!;(modal.querySelector('textarea') as HTMLTextAreaElement).value='new';button(modal,'确定').click();assert(p.store.getCard('a')!.tags.includes('two')&&p.store.getCard('a')!.tags.includes('new')&&p.store.getCard('b')!.tags.includes('new')&&!p.store.getCard('c')!.tags.includes('new'),'batch tag append lost old tags/leaked');
   });
@@ -181,7 +200,7 @@ try {
   });
   await test('Board displays local nodes without writes; editing materializes once and undo restores the local node', async () => {
     const p=await fresh();p.addNode('local',undefined,{title:'Local topic',comments:['Comment only']});const before=p.store.cards.length;const {host,view}=p.board();assert(boardCard(host,'board-node:local')&&p.store.cards.length===before&&!p.store.getNode('local')!.cardId,'viewing changed canonical data');
-    boardCard(host,'board-node:local').click();button(host,'颜色').click();button(document.querySelector('.ms-modal')!,`使用颜色 ${p.store.settings.colors[1]}`).click();assert(p.store.getNode('local')!.cardId&&p.store.cards.length===before+1,'local node did not materialize');assert(p.store.getCard(p.store.getNode('local')!.cardId!)!.front==='Local topic','local content changed');
+    boardCard(host,'board-node:local').click();button(host,'颜色').click();button(document.querySelector('.ms-modal')!,`使用颜色 ${CARD_COLORS[1]}`).click();assert(p.store.getNode('local')!.cardId&&p.store.cards.length===before+1,'local node did not materialize');assert(p.store.getCard(p.store.getNode('local')!.cardId!)!.front==='Local topic','local content changed');
     assert(p.store.undoLibraryChange()&&!p.store.getNode('local')!.cardId&&p.store.cards.length===before,'materialization+color are not one undo');view.render();assert(boardCard(host,'board-node:local'),'undo failed to restore visible local node');
   });
   await test('Board source study/canvas scopes are independent; occluded cards support single-peek without content mutation', async () => {

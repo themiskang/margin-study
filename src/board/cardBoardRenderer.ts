@@ -8,6 +8,7 @@ import { jumpToCardSource, openDetail } from "../cards/cardView";
 import { imageUrl, cardImages } from "../review/content";
 import { getOutline } from "../pdf/outline";
 import { revealAt } from "../study/reveal";
+import { CARD_COLORS } from "../model/cardColors";
 import { BOARD_DRAG_TYPE, BOARD_GROUPINGS, boardGroupValues, boardMatchesQuery, cardsFromBoardSource, copyBoardCards, groupBoardCards, materializeBoardCards, resolveBoardCard,
   type BoardBucket, type BoardContext, type BoardGrouping, type BoardSource } from "./boardModel";
 
@@ -286,9 +287,9 @@ export class CardBoardRenderer {
     const ids = this.selectionIds(); if (!ids.length) return;
     const { modal, close } = createModal(`修改 ${ids.length} 张卡片的颜色`);
     const palette = el("div", { class: "ms-board-palette" });
-    const apply = (color?: string) => { this.mutate("看板批量修改颜色", () => { const real = materializeBoardCards(this.plugin.store, ids); real.forEach((id) => this.plugin.store.updateCard(id, { color })); this.selected = new Set(real); }); close(); };
-    for (const color of this.plugin.store.settings.colors) { const button = this.button("", `使用颜色 ${color}`, () => apply(color)); button.style.backgroundColor = color; palette.append(button); }
-    const custom = el("input", { type: "color", "aria-label": "自选卡片颜色", value: this.plugin.store.settings.defaultColor });
+    const apply = (color?: string, colorIndex?: number) => { this.mutate("看板批量修改颜色", () => { const real = materializeBoardCards(this.plugin.store, ids); real.forEach((id) => this.plugin.store.updateCard(id, { color, colorIndex })); this.selected = new Set(real); }); close(); };
+    for (const [index, color] of CARD_COLORS.entries()) { const button = this.button("", `使用颜色 ${color}`, () => apply(color, index)); button.style.backgroundColor = color; palette.append(button); }
+    const custom = el("input", { type: "color", "aria-label": "自选卡片颜色", value: CARD_COLORS[0] });
     modal.append(palette, custom, this.button("使用自选颜色", "使用自选颜色", () => apply(custom.value)), this.button("清除颜色", "清除颜色", () => apply(undefined)), this.button("取消", "取消", close));
   }
 

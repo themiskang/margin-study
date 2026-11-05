@@ -20,6 +20,7 @@ import { reviewQuestionEditor } from "../review/questionEditor";
 import { mountNativeCardEditor } from "./nativeEditor";
 import { displayedExcerptBlocks } from "./excerptBlocks";
 import type { ExcerptBlock } from "../types";
+import { CARD_COLORS } from "../model/cardColors";
 
 registerReviewCardEditor((plugin, card, onChanged) => openDetail(plugin, card, onChanged));
 
@@ -360,10 +361,10 @@ export function renderCardList(container: HTMLElement, plugin: MarginStudyPlugin
       if (!selected.size) return;
       const row = el("div", { style: "display:flex;gap:6px;flex-wrap:wrap" });
       const modal = createModal("批量设颜色");
-      for (const col of plugin.store.settings.colors) {
-        const b = el("button", { style: `width:28px;height:28px;border-radius:50%;background:${col};border:1px solid var(--divider-color)` });
+      for (const [index, col] of CARD_COLORS.entries()) {
+        const b = el("button", { "aria-label": `卡片颜色 ${index + 1}`, style: `width:28px;height:28px;border-radius:50%;background:${col};border:1px solid var(--divider-color)` });
         b.addEventListener("click", () => {
-          for (const id of selected) plugin.store.updateCard(id, { color: col });
+          for (const id of selected) plugin.store.updateCard(id, { color: col, colorIndex: index });
           modal.close();
           batchMode = false;
           draw();
@@ -539,26 +540,30 @@ export function openDetail(plugin: MarginStudyPlugin, card: Card, onChanged?: ()
   const colorRow = el("div", { class: "ms-colorrow" });
   const renderColors = () => {
     clear(colorRow);
-    for (const col of plugin.store.settings.colors) {
+    const colorGrid = el("div", { class: "ms-card-color-grid" });
+    for (const [index, col] of CARD_COLORS.entries()) {
       const b = el("button", {
-        class: "ms-colorchip" + (card.color === col ? " is-active" : ""),
+        class: "ms-colorchip" + (card.colorIndex === index || card.color?.toLowerCase() === col.toLowerCase() ? " is-active" : ""),
+        "aria-label": `卡片颜色 ${index + 1}`,
         style: `background:${col}`,
         title: col,
       });
       b.addEventListener("click", () => {
-        plugin.store.updateCard(card.id, { color: col });
+        plugin.store.updateCard(card.id, { color: col, colorIndex: index });
         card.color = col;
+        card.colorIndex = index;
         renderColors();
       });
-      colorRow.append(b);
+      colorGrid.append(b);
     }
     const clr = el("button", { class: "ms-btn", text: "清除" });
     clr.addEventListener("click", () => {
       plugin.store.updateCard(card.id, { color: undefined });
       card.color = undefined;
+      card.colorIndex = undefined;
       renderColors();
     });
-    colorRow.append(clr);
+    colorRow.append(colorGrid, clr);
   };
   renderColors();
   modal.append(colorRow);

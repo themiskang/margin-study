@@ -2,6 +2,7 @@ import { Store } from '__PROJECT__/src/model/store';
 import { MindmapRenderer } from '__PROJECT__/src/mindmap/mindmapRenderer';
 import { SidebarView } from '__PROJECT__/src/sidebar/sidebarView';
 import { MarkdownRenderer, TFile } from 'obsidian';
+import { CARD_COLORS } from '__PROJECT__/src/model/cardColors';
 
 // Only synthetic data is used. L4 supports entry/selection/source/badge behavior;
 // the structural action probes below also protect this plugin's existing behavior.
@@ -98,7 +99,7 @@ try {
     for (const id of ['copy', 'color', 'tag', 'link', 'summary', 'regroup', 'merge', 'delete']) assert(action(wrap, id), `missing action ${id}`);
     action(wrap, 'copy').click(); assert(p.store.nodes.length === 2, 'copy changed the source');
     action(wrap, 'color').click(); (document.querySelector('.ms-modal button[style*="width:32px"]') as HTMLButtonElement).click();
-    assert(p.store.getCard('a')!.color === p.store.settings.colors[0] && p.store.getCard('b')!.color === p.store.settings.colors[0], 'color action ignored the selection');
+    assert(p.store.getCard('a')!.color === CARD_COLORS[0] && p.store.getCard('a')!.colorIndex === 0 && p.store.getCard('b')!.color === CARD_COLORS[0], 'color action ignored the selection');
     action(wrap, 'tag').click(); (document.querySelector('.ms-modal textarea') as HTMLTextAreaElement).value = 'same, selected'; button(document.querySelector('.ms-modal')!, '确定').click();
     assert(p.store.getCard('a')!.tags.join(',') === 'same,selected' && p.store.getCard('b')!.tags.join(',') === 'same,selected', 'tag action missed a selected card');
     action(wrap, 'link').click(); assert(p.store.edges.some(edge => edge.from === 'one' && edge.to === 'two'), 'link action did not create relation');

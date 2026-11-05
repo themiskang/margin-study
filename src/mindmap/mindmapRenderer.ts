@@ -26,6 +26,7 @@ import { reviewDrawingInput } from "../review/drawing";
 import { MindmapHandwritingController } from "./handwriting";
 import type { HandwritingMode } from "./handwritingContracts";
 import { cardClipboard } from "../study/cardClipboard";
+import { CARD_COLORS } from "../model/cardColors";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const PINCH_WHEEL_EXPONENT = 0.01346909075675091;
@@ -1874,16 +1875,15 @@ export class MindmapRenderer {
     const nodes = this.selectedOrWarn();
     if (!nodes.length) return;
     const { bg, modal, close } = createModal("选择节点颜色");
-    const colors = this.plugin.store.settings.colors;
     const row = el("div", { style: "display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px" });
-    for (const c of colors) {
+    for (const [index, c] of CARD_COLORS.entries()) {
       const b = el("button", {
         style: `width:32px;height:32px;border-radius:50%;background:${c};border:2px solid var(--background-modifier-border)`,
         title: c,
       });
       b.addEventListener("click", () => {
         for (const n of nodes) {
-          if (n.cardId && this.plugin.store.getCard(n.cardId)) this.plugin.store.updateCard(n.cardId, { color: c });
+          if (n.cardId && this.plugin.store.getCard(n.cardId)) this.plugin.store.updateCard(n.cardId, { color: c, colorIndex: index });
           else this.plugin.store.updateNode(n.id, { color: c });
         }
         this.plugin.refreshMindmap();
