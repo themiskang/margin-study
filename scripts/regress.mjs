@@ -42,6 +42,19 @@ const gitHead = await run("git", ["rev-parse", "HEAD"]);
 const gitBranch = await run("git", ["rev-parse", "--abbrev-ref", "HEAD"]);
 const gitStatus = await run("git", ["status", "--porcelain"]);
 const dirty = gitStatus.stdout.trim().length > 0;
+const preDirty = new Set(gitStatus.stdout.split("\n").filter(Boolean).map(line => line.slice(3).trim()));
+
+// 部分套件会把 verifiedAt 时间戳写回各自 acceptance-evidence/results.json（属运行产物）。
+// 只复原「运行前干净」的这一类文件，不碰用户任何未提交改动。
+const GENERATED = /(^|\/)([^/]*-)?acceptance-evidence\/results\.json$/;
+async function restoreGenerated() {
+  const post = await run("git", ["status", "--porcelain"]);
+  const touched = post.stdout.split("\n").filter(Boolean).map(line => line.slice(3).trim())
+    .filter(p => !preDirty.has(p) && GENERATED.test(p));
+  if (!touched.length) return [];
+  await run("git", ["checkout", "--", ...touched]);
+  return touched;
+}
 
 const startedAt = new Date().toISOString();
 console.log(`\n[regress] ${startedAt}  ${gitBranch.stdout.trim() || "?"}@${(gitHead.stdout.trim() || "?").slice(0, 7)}  ${dirty ? "工作区有未提交改动" : "工作区干净"}${suites.length ? `  子集=${suites.join(",")}` : "  全集"}\n`);
@@ -49,6 +62,9 @@ console.log(`\n[regress] ${startedAt}  ${gitBranch.stdout.trim() || "?"}@${(gitH
 const verify = await run(process.execPath, ["scripts/verify.mjs", ...suites]);
 process.stdout.write(verify.stdout);
 if (verify.stderr.trim()) process.stderr.write(verify.stderr);
+
+const restored = await restoreGenerated();
+if (restored.length) console.log(`[regress] 已复原 ${restored.length} 个套件写回的证据时间戳，工作区保持干净：${restored.join(", ")}`);
 
 // 断言行：verify 各套件打印的 "N/M" 计数行，逐行保留以做严格比对
 const pairs = [];
@@ -86,6 +102,8 @@ if (verify.code !== 0) {
 if (freeze) {
   if (suites.length) { console.log("[regress] 拒绝冻结：--freeze 必须跑全集，不能带 --suites。"); process.exit(3); }
   if (dirty) { console.log("[regress] 拒绝冻结：工作区有未提交改动，先提交再冻结（基线必须对应一个可复现的 HEAD）。"); process.exit(3); }
+  const residual = (await run("git", ["status", "--porcelain"])).stdout.trim();
+  if (residual) { console.log("[regress] 拒绝冻结：跑完后工作区仍有非时间戳类改动，先提交或纳入忽略："); console.log(residual); process.exit(3); }
   await mkdir(resolve(root, "baseline"), {recursive: true});
   await writeFile(resolve(root, BASELINE), JSON.stringify(record, null, 2) + "\n");
   console.log(`[regress] 已冻结基线 ${BASELINE}（head ${record.git.head.slice(0, 7)}，断言行 ${pairs.length} 条）。请连同基线一起提交。`);
