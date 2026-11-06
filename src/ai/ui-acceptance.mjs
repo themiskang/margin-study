@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { build } from "esbuild";
 const exec = promisify(execFile), here = dirname(fileURLToPath(import.meta.url)), project = resolve(here,"../.."), temporary = await mkdtemp(join(tmpdir(),"marginstudy-ai-ui-"));
-const evidence=join(here,"ui-acceptance-evidence");await mkdir(evidence,{recursive:true});
+const evidence=join(process.env.MARGINSTUDY_VERIFY_DIR||tmpdir(),"ai-ui-acceptance-evidence");await mkdir(evidence,{recursive:true});
 const red="iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR4nO3NsQ0AAAzCMP5/un0CNkuZ41wybXsHAAAAAAAAAAAAxR4yw/wuPL6QkAAAAABJRU5ErkJggg==";
 await writeFile(join(temporary,"fixture.ts"),(await readFile(join(here,"ui-fixture.txt"),"utf8")).replaceAll("__PROJECT__",project));
 await writeFile(join(temporary,"red.png"),Buffer.from(red,"base64"));

@@ -9,7 +9,7 @@ import { createRequire } from "node:module";
 import { build } from "esbuild";
 
 const here = dirname(fileURLToPath(import.meta.url)), project = resolve(here, "../.."), temporary = await mkdtemp(join(tmpdir(), "marginstudy-ai-"));
-const evidence = join(here, "acceptance-evidence"); await mkdir(evidence, { recursive: true });
+const evidence = join(process.env.MARGINSTUDY_VERIFY_DIR || tmpdir(), "ai-acceptance-evidence"); await mkdir(evidence, { recursive: true });
 const checks = [], requests = [], stores = [];
 const check = async (name, run) => { await run(); checks.push({ name, passed: true }); console.log("✓ " + name); };
 const SYNTHETIC_KEY = "synthetic-local-test-key-never-save-to-profile";

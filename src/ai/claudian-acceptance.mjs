@@ -8,7 +8,7 @@ import { createRequire } from "node:module";
 import { build } from "esbuild";
 
 const here = dirname(fileURLToPath(import.meta.url)), temporary = await mkdtemp(join(tmpdir(), "marginstudy-claudian-"));
-const evidence = join(here, "claudian-acceptance-evidence"); await mkdir(evidence, { recursive: true });
+const evidence = join(process.env.MARGINSTUDY_VERIFY_DIR || tmpdir(), "claudian-acceptance-evidence"); await mkdir(evidence, { recursive: true });
 const checks = [], check = async (name, run) => { await run(); checks.push({ name, passed: true }); console.log("✓ " + name); };
 let failure;
 try {

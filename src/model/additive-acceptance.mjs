@@ -9,7 +9,7 @@ import { createRequire } from "node:module";
 import { build } from "esbuild";
 
 const here = dirname(fileURLToPath(import.meta.url)), temporary = await mkdtemp(join(tmpdir(), "marginstudy-additive-"));
-const evidence = join(here, "additive-acceptance-evidence"); await mkdir(evidence, { recursive: true });
+const evidence = process.env.MARGINSTUDY_VERIFY_DIR || await mkdtemp(join(tmpdir(), "marginstudy-additive-results-")); await mkdir(evidence, { recursive: true });
 const checks = [], stores = [], check = async (name, run) => { await run(); checks.push({ name, passed: true }); console.log("✓ " + name); };
 const hash = value => createHash("sha256").update(value).digest("hex"), stamp = "2020-01-01T00:00:00.000Z";
 const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR4nO3NsQ0AAAzCMP5/un0CNkuZ41wybXsHAAAAAAAAAAAAxR4yw/wuPL6QkAAAAABJRU5ErkJggg==";
@@ -290,4 +290,4 @@ try {
   });
   await check("an unsupported handwriting version cannot silently erase existing ink", async () => { const f = await fresh(); f.store.updateCanvas("canvas", { handwriting: structuredClone(ink) }); const before = structuredClone(f.store.canvases[0].handwriting); assert.throws(() => f.store.updateCanvas("canvas", { handwriting: { version: 2, layers: [] } })); assert.deepEqual(f.store.canvases[0].handwriting, before); await f.store.flush(); });
 } catch (error) { failure = error; process.exitCode = 1; console.error(error.stack || error); }
-finally { await Promise.all(stores.map(store => store.flush().catch(() => {}))); await writeFile(join(evidence, "results.json"), JSON.stringify({ verifiedAt: new Date().toISOString(), environment: "real Store over synthetic in-memory files and backup hashes", checks, ...failure ? { error: String(failure.stack || failure) } : {} }, null, 2)); await rm(temporary, { recursive: true, force: true }); console.log(`${checks.length} additive-model checks passed.`); }
+finally { await Promise.all(stores.map(store => store.flush().catch(() => {}))); await writeFile(join(evidence, "model-additive-results.json"), JSON.stringify({ verifiedAt: new Date().toISOString(), environment: "real Store over synthetic in-memory files and backup hashes", checks, ...failure ? { error: String(failure.stack || failure) } : {} }, null, 2)); await rm(temporary, { recursive: true, force: true }); console.log(`${checks.length} additive-model checks passed.`); }

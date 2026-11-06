@@ -755,6 +755,7 @@ export class MindmapRenderer {
     }
     if (this.touchPoints.size === 2) {
       this.finishNodeDrag?.(); this.finishCanvasPan?.();
+      this.world?.classList.add("is-pinching");
       const [a,b] = [...this.touchPoints.values()]; this.pinchDistance = Math.hypot(a.x-b.x,a.y-b.y);
       event.preventDefault(); event.stopPropagation();
     }
@@ -783,12 +784,14 @@ export class MindmapRenderer {
       if (event.type !== "pointercancel" && pending) this.zoomAt(pending.x, pending.y, pending.factor);
     }
     this.touchPoints.delete(event.pointerId); this.pinchDistance = 0;
+    this.world?.classList.remove("is-pinching");
     if (!this.touchPoints.size) this.clearTouchPointers();
   };
   private clearTouchPointers = (): void => {
     if (this.pinchFrame) cancelAnimationFrame(this.pinchFrame);
     this.pinchFrame = 0; this.pinchPending = null;
     this.touchPoints.clear(); this.pinchDistance = 0;
+    this.world?.classList.remove("is-pinching");
     window.removeEventListener("pointermove", this.onTouchPointerMove, true);
     window.removeEventListener("pointerup", this.onTouchPointerEnd, true);
     window.removeEventListener("pointercancel", this.onTouchPointerEnd, true);
@@ -1772,30 +1775,67 @@ export class MindmapRenderer {
   }
 
   private autoLayout(): void {
-    const nodes = this.visibleNodes().map((node) => ({ ...node }));
-    const childrenOf = (id: string) => nodes.filter((n) => n.parentId === id);
-    const recallHierarchyActive = this.isRecallHierarchyActive();
+    const visible = this.visibleNodes();
+    const scoped = this.scopedNodes().filter((node) => !this.isGroupedMember(node));
+    const included = new Set(visible.map((node) => node.id));
+    let count = -1;
+    while (count !== included.size) {
+      count = included.size;
+      for (const node of scoped) if (node.parentId && included.has(node.parentId)) included.add(node.id);
+    }
+    const nodes = scoped.filter((node) => included.has(node.id)).map((node) => ({ ...node }));
+    const children = new Map<string, MindNode[]>();
+    for (const node of nodes) if (node.parentId && included.has(node.parentId)) {
+      const siblings = children.get(node.parentId) ?? [];
+      siblings.push(node);
+      children.set(node.parentId, siblings);
+    }
     const vertical = ["down", "timeline", "org"].includes(this.plugin.store.settings.layout);
-    let cursor = 40;
-    const layout = (node: MindNode, depth: number): void => {
-      const kids = node.id !== this.options.subtreeRoot && node.collapsed && !recallHierarchyActive ? [] : childrenOf(node.id);
-      if (!kids.length) {
-        if (vertical) node.y = cursor;
-        else node.x = cursor;
-        cursor += 130;
-      } else {
-        kids.forEach((k) => layout(k, depth + 1));
-        const first = kids[0];
-        const last = kids[kids.length - 1];
-        if (vertical) node.y = (first.y + last.y) / 2;
-        else node.x = (first.x + last.x) / 2;
+    const gap = 40;
+    const sizes = new Map<string, { width: number; height: number }>();
+    for (const node of nodes) {
+      let element = this.nodeEls.get(node.id);
+      const temporary = !element;
+      if (!element && this.world) {
+        element = this.makeNodeDiv(node);
+        element.style.visibility = "hidden";
+        this.world.append(element);
       }
-      if (vertical) node.x = 40 + depth * 280;
-      else node.y = 40 + depth * 120;
-    };
+      const width = element?.offsetWidth ?? 0, height = element?.offsetHeight ?? 0;
+      if (temporary) element?.remove();
+      if (!width || !height) { new Notice("无法测量节点尺寸，请显示脑图后重试自动布局"); return; }
+      sizes.set(node.id, { width, height });
+    }
     const ids = new Set(nodes.map((node) => node.id));
     const roots = nodes.filter((n) => n.parentId === null || !ids.has(n.parentId));
-    for (const r of roots) layout(r, 0);
+    let rootY = 40;
+    for (const root of roots) {
+      const levels: number[] = [];
+      const spans = new Map<string, number>();
+      const measure = (node: MindNode, depth: number): number => {
+        const size = sizes.get(node.id)!;
+        levels[depth] = Math.max(levels[depth] ?? 0, vertical ? size.width : size.height);
+        const kids = children.get(node.id) ?? [];
+        const total = kids.reduce((sum, child) => sum + measure(child, depth + 1), 0) + Math.max(0, kids.length - 1) * gap;
+        const span = Math.max(vertical ? size.height : size.width, total);
+        spans.set(node.id, span);
+        return span;
+      };
+      const span = measure(root, 0);
+      const offsets = levels.map((_, depth) => 40 + levels.slice(0, depth).reduce((sum, level) => sum + level + gap, 0));
+      const place = (node: MindNode, depth: number, start: number): void => {
+        const size = sizes.get(node.id)!;
+        const nodeSpan = spans.get(node.id)!;
+        if (vertical) { node.x = offsets[depth]; node.y = rootY + start + (nodeSpan - size.height) / 2; }
+        else { node.x = 40 + start + (nodeSpan - size.width) / 2; node.y = rootY + offsets[depth] - 40; }
+        const kids = children.get(node.id) ?? [];
+        const total = kids.reduce((sum, child) => sum + spans.get(child.id)!, 0) + Math.max(0, kids.length - 1) * gap;
+        let cursor = start + (nodeSpan - total) / 2;
+        for (const child of kids) { place(child, depth + 1, cursor); cursor += spans.get(child.id)! + gap; }
+      };
+      place(root, 0, 0);
+      rootY += (vertical ? span : levels.reduce((sum, level) => sum + level, 0) + (levels.length - 1) * gap) + gap;
+    }
     this.plugin.store.updateNodes(nodes.map((node) => ({ id: node.id, patch: { x: node.x, y: node.y } })));
   }
 

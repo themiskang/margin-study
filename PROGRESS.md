@@ -1176,3 +1176,36 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - [ ] [ ] Pad 六项（需真机）
 - [ ] [ ] A05 剩余：JSON 文件选择器、笔盒与摘录颜色、导入导出闭环
 - [ ] [ ] 路线 B 步骤 1（A01/A02/A03）与 A04 转正
+
+## 2026-11-06（PAD-LAYOUT-01 自动布局）
+- 完成：自动布局按节点 DOM 实测宽高与固定 40px 间距排布，多根按子树高度纵向堆叠，折叠后代纳入布局；保持原方向分支和单次 `updateNodes` 事务。无法测量节点时提示并不写入坐标。
+- 复算：合成节点宽 230px、高 76/94/183px，`right` 下双根、混合高节点、折叠后代、深层三根的改前重叠分别为 3 对/22800、2 对/22090、1 对/7600、8 对/60800 世界 px²；改后均 0 对/0。`down` 改前分别为 0/0、1/12190、0/0、0/0，折叠后代未移动；改后均 0/0 且后代移动。两方向均通过坐标确定性、根节点基线、方向和真实 Store 一次撤销断言。改前记录 `/tmp/marginstudy-pad-layout-before.log`，改后记录 `/tmp/marginstudy-pad-layout-20261106-release/mindmap-layout.log`。这是合成尺寸复算，未对安装后的 Pad 实际画面验收。
+- 验证：`MARGINSTUDY_VERIFY_DIR=/tmp/marginstudy-pad-layout-20261106-release npm run verify` 28/28 套通过，Reader 214/214、Workspace 295/295；修正四套旧验收脚本的结果输出位置，避免覆盖仓库已有验收记录。
+- 安装：桌面与 Pad 隔离库 `main.js` SHA-256 均为 `6e27f7ad5b211a18e9a2ea08547dae10bd1b892c4b350f25131e159497274e67`，`styles.css` 均为 `5d1a64e887a47505c9f09aad562b2692a94061297290f6316d34a5d1bf68a3fd`。未重启 ADB server、未改卡片数据、未提交。
+
+## 2026-11-06（PAD-PINCH 根因定位 · Hermes 实机）
+- 完成：四问定位。50Hz 非 app/插件造成，而是设备"内容静止即降频"的面板策略：静止 50Hz（rAF 19.97ms/50.07fps，Obsidian 脑图、Obsidian 主页、Chrome 三个场景逐位相同）→ 真实触摸后 144Hz（rAF 6.95ms/143.98fps，1296 帧）；触摸到 144Hz 需 130ms，松手 0.6–0.9s 回 50Hz，手指按着但画面不动约 6s 也回 50Hz，按住且每帧改像素则 26 次采样保持 144Hz。
+- 帧率决策点：DisplayModeDirector 全部票权 0–144、activeMode=7，SF `FrameRateOverrides=none`/`Override: off`、md.obsidian 层 `requestedFrameRate 0.00 Hz NoPreference`、`refreshRateOverride 0.0`，但 SF 实际 `activeMode id=3 / renderRate=50.00Hz`；`cmd display set-user-preferred-display-mode 2400 3392 144.00002` 被 DM 接受仍降 50 → 决策在 DM 之下（DPPS/自刷新 + `persist.sys.hans.skipframe.*`）。
+- 每帧开销：trace 3.89s/171 帧，主线程 BeginMainFrame mean 3.46ms、p90 8.30、max 16.08（19.3% 超 144Hz 预算）；Recalculate Style 53 次/21.7ms、Layout 47 次/31.8ms、Paint 215 次/57.7ms；`.ms-mindmap` 单帧重绘 49.5M px²（视口 6.08 倍）；RasterTask 260 个按 tile 增量 0.82ms/帧（非瓶颈）；zoomAt 0.49ms/帧，144Hz 下逐帧 zoomAt 140 帧 6.94ms、0 帧 >8ms。
+- 代码：双指路径 rAF 合帧（mindmapRenderer.ts:762-777），无 render()、无时间节流；但每帧 `getBoundingClientRect`+`offsetWidth` 强制回流（:842/897-898），`positionNodeToolbar` write→read(offsetWidth)→write（:636-638/652-653）。
+- 证据：`evidence/acceptance-20261106/HERMES-PINCH-ROOT-RESULT.md` + `pinch-root-*`（trace gz 1.49MB、6 组 rAF、SF/display 提取、ramp、144Hz zoomloop、设置快照、安装件 md5 8efef8d7…）。
+- 未完成/阻塞：收尾时设备 adb 掉线（`adb devices` 空、无 USB 条目），按铁律未重启 adb；`forward tcp:9333/tcp:9334` 仍注册在本地 adb server，设备回连后需 `adb forward --remove`；脑图缩放未复位到 1.0；未做真实双指捏合（无 root/`input` 不支持多指，CDP 合成触摸在真实触摸流中被丢弃）的显示模式直测。
+
+## 2026-11-06（PAD-PINCH 帧开销优化 · 未完成）
+- 已加入双指开始时的 `is-pinching` 类和 `will-change: transform`，在结束及清理时移除。尚未验证是否实际减少绘制面积。
+- 尚未完成：手势几何缓存、工具栏 transform 定位、画布尺寸延迟落定、120 帧读取和写入计数、固定输入零容差等价回放、两端安装及 SHA-256。现有代码仍逐帧读取几何并写入世界尺寸，不能视作完成优化。
+- 验证：首次沙箱内运行在 study-ui 因本机监听 `EPERM` 中止；沙箱外以 `MARGINSTUDY_VERIFY_DIR=/tmp/marginstudy-pinch-20261106-full` 重跑通过全部套件，Workspace 295/295，Reader 214/214。未覆盖本卡新增的三项专项断言。
+- 设备：沙箱外 `adb devices` 和 `adb devices -l` 均无设备，`system_profiler SPUSBDataType` 无输出；未执行 `adb kill-server`。Pad 安装需要设备重新连接。
+- 下一步第一动作：在 `src/workspace/acceptance-fixture.txt` 增加固定触摸回放及几何读写计数，先记录原路径结果，再实现缓存并逐项验证；最后构建并安装两端。
+
+## 2026-11-06（PAD-PINCH 续做 · 链路掉线）
+- 链路掉线：沙箱内 `adb devices` 因本机监听权限失败；按现有授权在沙箱外重试一次，返回设备列表为空。未执行 `kill-server` 或 `start-server`。
+- 本轮仅检查现有实现和设备状态；四项优化、改前改后断言、构建及两端安装均未完成，未修改卡片数据或 `evidence/`。
+- 恢复后第一动作：确认设备 `9885dd6f` 在线，随后按上一节的固定输入回放方案记录改前数据，再实施优化、验证并安装。
+
+## 2026-11-06（PAD-PINCH 第三轮 · 本机基线未完成）
+- 本轮遵守不调用 adb、不安装、不修改 `evidence/**` 和卡片数据。`src/workspace/acceptance-fixture.txt` 加入 120 帧触摸回放，改前记录 `/tmp/marginstudy-pinch-baseline4/workspace.log`：读取 rect 603、offsetWidth 249、offsetHeight 9，共 861；最终 scale 1.45031、scrollLeft 695、scrollTop 633。
+- 基线局限：测试中的点击未选中卡片，工具栏 rect 全为 0，不能用于工具栏等价验收；样式计数目前只比较每帧属性值变化，不能检测重复写入相同值，不能作为 world 写入断言。测试目前故意失败，工作区验收 295/296。
+- 完整命令 `MARGINSTUDY_VERIFY_DIR=/tmp/marginstudy-pinch-full-baseline npm run verify` 运行至工作区时因上述专项失败停止，先前执行的套件通过；不是全绿。构建 SHA-256：main.js `b8a58f86c06048be1280424098d940b7db017307dcab05b3940d9dde7c5cb576`，styles.css `f0278a70fa8e93705514e59c473cdaec23468bbd8513423c6889e223818fe79d`。
+- 尚未实施几何缓存、仅 transform 写入、contain 或零漂移，也未获得改后数据或 Paint 面积；不得视为完成。`npm run build` 成功，本轮无设备测量。
+- 下一步第一动作：修正回放，使选中节点和工具栏可见，使用可记录同值写入的方式统计每个 world 样式写入，并固定多组包含边界夹取的逐帧输入；先保存完整基线，再实施优化与零容差比对。

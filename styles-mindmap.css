@@ -14,6 +14,8 @@
   background: var(--ms-map-canvas);
   background-image: none;
 }
+.ms-mindmap-world.is-pinching { will-change: transform; }
+
 .ms-mindmap-root .ms-node {
   box-sizing: border-box;
   width: 230px;
