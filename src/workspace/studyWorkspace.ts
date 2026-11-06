@@ -25,6 +25,7 @@ import type { AiPanelHandle, AiContext } from "../ai";
 import { openWebImport } from "../import/webImport";
 import { openGlobalSearch } from "../search/globalSearch";
 import { openSettingAndReveal } from "../search/featureSearch";
+import { toggleStudyInterface } from "./scenes";
 import { createModal, openConfirm, openTextModal } from "../utils/modal";
 import { el } from "../utils/dom";
 import { hasDeviceRecallHintProvider, requestDeviceRecallHint } from "../recall/deviceProvider";
@@ -1071,6 +1072,13 @@ export class StudyWorkspaceView extends ItemView {
     if(recent)return{text:recent.text,label:"选中文字",docPath:this.state.activePath};
     return this.noteAiContext?.docPath===this.state.activePath?this.noteAiContext:undefined;
   }
+  public toggleInterfaceMode(): void {
+    if (!toggleStudyInterface(this.plugin.store)) { new Notice("请先选择学习集"); return; }
+    const scene = this.plugin.store.getStudyScene(this.plugin.store.activeStudySetId ?? "");
+    this.reader?.setAutomaticTextExcerpt(scene?.interfaceMode === "scenes" && (scene.sceneId === "excerpt" || scene.sceneId === "writing") && this.readerTool === "text");
+    this.reader?.refreshSceneSettings?.();
+    this.refresh(true);
+  }
   private openStudyMore():void {
     const pane=this.popover("StudySet - More");pane.classList.add("ms-native-study-more");
     const action=(text:string,icon:string,callback:()=>void)=>{const row=el("button",{class:"ms-native-menu-row",text});const glyph=el("span",{class:"ms-native-menu-icon"});setIcon(glyph,icon);row.prepend(glyph);row.addEventListener("click",()=>{this.dismissPopup();callback();});pane.append(row);};
@@ -1084,6 +1092,7 @@ export class StudyWorkspaceView extends ItemView {
     action("管理复习卡组…","clipboard-list",()=>openReviewDecks(this.plugin));
     action("导入网页 / 微信文章…","download",()=>openWebImport(this.plugin));
     const studySetId=this.plugin.store.activeStudySetId;
+    action("切换界面模式","layout-template",()=>this.toggleInterfaceMode());
     if(studySetId)for(const template of this.plugin.store.getSceneTemplates())action(`场景模板：${template.name}`,"layout-template",()=>{this.plugin.store.selectStudyScene(studySetId,template.id,template.scenes[0].id);this.reader?.refreshSceneSettings?.();this.drawToolbar();this.saveLayout();});
     action("管理场景模板…","layout-template",()=>this.openSceneTemplateManager());
     action("工作区设置…","settings-2",()=>this.openWorkspaceSettings());

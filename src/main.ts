@@ -14,6 +14,7 @@ import { exportCanvas, importCanvas } from "./canvas/canvasIo";
 import { MarginStudySettingTab } from "./settings";
 import { openGlobalSearch } from "./search/globalSearch";
 import { openFeatureSearch, installFeatureSearchHotkey } from "./search/featureSearch";
+import { toggleStudyInterface } from "./workspace/scenes";
 import { ReaderLike } from "./types";
 import { initPdfWorker } from "./pdf/pdfjs";
 import { applyTheme } from "./theme";
@@ -167,6 +168,10 @@ export default class MarginStudyPlugin extends Plugin {
     });
     this.addCommand({ id: "open-document-reader", name: "在 MarginStudy 中打开当前文档（PDF / Word / EPUB / HTML / Markdown）", callback: () => this.openCurrentDocument() });
     this.addCommand({ id: "open-study-workspace", name: "打开 MarginStudy 学习工作区", callback: () => { void this.openStudyWorkspace().catch(error => new Notice("打开学习工作区失败：" + String(error))); } });
+    this.addCommand({ id: "toggle-interface-mode", name: "切换界面模式", hotkeys: [{ modifiers: ["Mod", "Alt"], key: "I" }], callback: () => {
+      if (this.studyWorkspace) this.studyWorkspace.toggleInterfaceMode();
+      else if (!toggleStudyInterface(this.store)) new Notice("请先选择学习集");
+    } });
     this.addCommand({ id: "recover-document-sources", name: "处理待恢复的原文档来源", callback: () => this.recoveryPrompts.openPending() });
     this.addCommand({ id: "import-web-article", name: "导入网页 / 微信文章", callback: () => openWebImport(this) });
     this.addCommand({id:"open-research-browser",name:"打开研究浏览器",callback:()=>{void this.openResearchBrowser();}});

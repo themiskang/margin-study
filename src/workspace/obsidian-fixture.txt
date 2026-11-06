@@ -48,9 +48,10 @@ export class PluginSettingTab { containerEl=document.createElement('div'); const
 export class Setting { constructor(_container:any){} }
 export class Plugin extends Component {
   views=new Map<string,any>(); disk:any={settings:{backupEnabled:false}};
+  commands=new Map<string,any>();
   constructor(public app:any){super();}
   async loadData(){return structuredClone(this.disk);}
   async saveData(data:any){this.disk=structuredClone(data);}
   registerView(type:string,factory:any){this.views.set(type,factory);}
-  registerExtensions(){} registerObsidianProtocolHandler(){} addCommand(){} addRibbonIcon(){} addSettingTab(){}
+  registerExtensions(){} registerObsidianProtocolHandler(){} addCommand(command:any){this.commands.set(command.id,command);} addRibbonIcon(){} addSettingTab(){}
 }

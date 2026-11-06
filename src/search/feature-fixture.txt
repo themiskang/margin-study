@@ -17,7 +17,7 @@ const assert = (ok: boolean, message: string) => { if (!ok) throw new Error(mess
 // main.ts 当前注册的全部命令 id（fixture 固化清单：索引必须与命令注册表双向一致）
 const MAIN_COMMAND_IDS = [
   "feature-search", "open-reader", "pdf-search", "open-word-reader", "open-document-reader",
-  "open-study-workspace", "import-web-article", "open-research-browser", "manage-review-decks",
+  "open-study-workspace", "toggle-interface-mode", "import-web-article", "open-research-browser", "manage-review-decks",
   "open-cards", "start-review", "open-sidebar", "open-mindmap", "export-markdown", "export-edited-pdf",
   "export-html", "export-canvas", "import-canvas", "show-stats", "global-search", "export-anki-tsv", "export-anki-apkg",
   "review-wrong", "backup-data", "export-all-html", "export-mindmap-png", "dedup-cards",

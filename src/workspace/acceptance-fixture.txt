@@ -14,6 +14,7 @@ import { AiError } from '__PROJECT__/src/ai/contracts';
 import { cardImages } from '__PROJECT__/src/review/content';
 import { renderCardList } from '__PROJECT__/src/cards/cardView';
 import { CARD_COLORS } from '__PROJECT__/src/model/cardColors';
+import { queryFeatures } from '__PROJECT__/src/search/featureSearch';
 import { TFile, notices, markdownTiming } from 'obsidian';
 
 const target=document.querySelector('#fixtures') as HTMLElement,results:any[]=[],errors:string[]=[],active:any[]=[];
@@ -77,7 +78,7 @@ async function fresh(saved?:any,hostOptions:{leftCollapsed?:boolean;rightCollaps
   view.containerEl.firstElementChild!.classList.add('view-header-title');
   leaf.view=view;app.workspace.activeLeaf=app.workspace.centerLeaf=hostOptions.background?{getRoot:()=>app.workspace.rootSplit}:leaf;
   await view.setState(saved??{tabs:[{path:alpha.path}],activePath:alpha.path});
-  const p={app,store,set,canvasId,plugin,leaf,view,root:view.contentEl,alpha,beta,gamma,delta,slow,sources,writes,events,workspaceEvents,activate,metrics};active.push(p);
+  const p={app,store,set,canvasId,plugin,leaf,view,root:view.contentEl,alpha,beta,gamma,delta,slow,sources,writes,events,workspaceEvents,activate,metrics,reloadStore:async()=>{let restoredDisk=structuredClone(disk);const restored=new Store({app,loadData:async()=>structuredClone(restoredDisk),saveData:async(value:any)=>{restoredDisk=structuredClone(value);}} as any);await restored.load();return restored;}};active.push(p);
   await view.onOpen();await frame();return p;
 }
 
@@ -206,6 +207,35 @@ try{
     const setButton=[...home.querySelectorAll('button')].find(item=>item.textContent===p.set.name) as HTMLButtonElement;assert(setButton,'study set unavailable');setButton.click();await frame();assert(!p.root.querySelector('.ms-study-home-screen'),'selecting a set did not enter workspace');
     (p.root.querySelector('[aria-label="打开学习集与文档"]') as HTMLButtonElement).click();await frame();assert(p.root.querySelector('.ms-study-home-screen'),'home return did not reopen home');
     p.view.showStudyHome();await frame();home=p.root.querySelector('.ms-study-home-screen') as HTMLElement;assert(home.querySelectorAll('.ms-study-home-navigation').length===1&&home.querySelectorAll('.ms-study-home-header-tools').length===1,'reopening the home duplicated navigation or header controls');
+  });
+  await test('Interface mode command, hotkey, menu and workspace survive reload',async()=>{
+    const p=await fresh(),plugin=new MarginStudyPlugin(p.app as any) as any;
+    p.app.workspace.onLayoutReady=()=>{};
+    plugin.load();await until(()=>plugin.commands.has('save-now'),'plugin commands did not load');
+    try {
+      plugin.store=p.store;plugin.studyWorkspace=p.view;
+      const command=plugin.commands.get('toggle-interface-mode');
+      assert(command&&typeof command.callback==='function','interface mode command is not registered');
+      assert(command.hotkeys?.some((key:any)=>key.key==='I'&&key.modifiers.includes('Mod')&&key.modifiers.includes('Alt')),'Cmd+Alt+I hotkey missing');
+      assert(queryFeatures('切换界面模式').some(entry=>entry.id==='toggle-interface-mode'),'feature search entry missing');
+      p.store.setStudyInterface(p.set.id,'scenes');p.view.refresh(true);
+      command.callback();await frame();
+      assert(p.store.getStudyScene(p.set.id)?.interfaceMode==='traditional','command did not switch to traditional');
+      assert(!p.root.querySelector('.ms-workspace-toolbar.has-scene-header'),'traditional mode retained scene header');
+      await p.store.flush();
+      const restored=await p.reloadStore();
+      assert(restored.getStudyScene(p.set.id)?.interfaceMode==='traditional','mode did not survive store reload');
+      const restoredPlugin={...p.plugin,store:restored},restoredView=new StudyWorkspaceView(p.leaf,restoredPlugin);
+      restoredView.load();await restoredView.setState(state(p));await restoredView.onOpen();await frame();
+      assert(!restoredView.contentEl.querySelector('.ms-workspace-toolbar.has-scene-header'),'reopened workspace did not restore traditional layout');
+      await restoredView.onClose();restoredView.unload();restoredView.containerEl.remove();
+      command.callback();await frame();
+      assert(p.store.getStudyScene(p.set.id)?.interfaceMode==='scenes','second command did not restore scenes');
+      assert(p.root.querySelector('.ms-workspace-toolbar.has-scene-header'),'scene header did not return');
+      button(p.root,'学习集更多设置').click();
+      button(p.root.querySelector('[aria-label="StudySet - More"]')!,'切换界面模式').click();await frame();
+      assert(p.store.getStudyScene(p.set.id)?.interfaceMode==='traditional','menu did not switch mode');
+    } finally {plugin.unload();}
   });
   await test('Opening a PDF through the host keeps the same tab and reaches the MarginStudy reader after the native file-open lifecycle settles',async()=>{
     const p=await fresh(),plugin=new MarginStudyPlugin(p.app as any) as any;

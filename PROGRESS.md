@@ -1123,3 +1123,8 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - 结论：第 2–6 项 pass（传统界面整栏替换、Sepia/Green 暗色外壳与纸面、节点白字 5.05:1、亮色同点无回退）。第 1 项 fail：沉浸式大纲宽 450.43=718.59×472/753、两栏与关闭恢复均通过，但右缘距窗口 **9px**，不满足卡面 ≤4px（CSS 明写 `right:9px`，需规划席确认口径）。
 - 限制：大纲入口为脑图右侧工具栏「大纲」按钮（脑图下拉无此项）；传统界面无 UI 入口/快捷键，用 store.setStudyInterface 临时切换并已恢复 `scenes`；界面主题经设置窗口 select 的 change 事件切换。
 - 现场恢复：`light` + `white`、大纲关闭、interfaceMode=`scenes`；未改产品代码、未改旧 evidence、未提交。
+
+## 2026-11-06（A30-TRAD-ENTRY-01）
+- 完成：注册「切换界面模式」命令及 `Cmd+Alt+I` 默认快捷键，加入功能搜索和学习集更多设置；切换当前学习集的场景/传统界面，刷新工作区并持久化。
+- 改前：新增工作区行为断言 291/292，因命令未注册失败；记录 `/private/tmp/marginstudy-trad-before/workspace.log`。改后：工作区 292/292，覆盖命令、快捷键映射、搜索、菜单、往返与重建；完整 `npm run verify` 27/27，Reader 214/214、功能搜索 10/10；记录 `/private/tmp/marginstudy-trad-complete/`。验收为合成宿主和 Chromium，未对安装后的真实 Obsidian 执行快捷键复验。
+- 安装：隔离库 `main.js` SHA-256 `826086f7a50b34955b18f1d0f0331a1e6ddc2003b309a093daac922b08840dd0`，`styles.css` SHA-256 `c0d0f85f3d7cb9bc95efbb39160e7e72c091febfb80ec4da6b5029935311b0a4`；与构建文件一致。未提交，未修改 `evidence/**`，未操作 Pad 双指。

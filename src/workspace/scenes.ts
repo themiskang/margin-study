@@ -1,4 +1,13 @@
 import type { StudySceneSelection, StudySceneTemplate } from "../types";
+import type { Store } from "../model/store";
+
+export function toggleStudyInterface(store: Store): boolean {
+  const id = store.activeStudySetId;
+  const current = id && store.getStudyScene(id);
+  if (!id || !current) return false;
+  store.setStudyInterface(id, current.interfaceMode === "scenes" ? "traditional" : "scenes");
+  return true;
+}
 
 /** Mac MN5 5.0.0 evidence: evidence/mn5-alignment-20261029/step1-desktop/A01-desktop-contract.json.
  * These semantic tool keys identify our adapters; they are not MN proprietary serialization IDs.
