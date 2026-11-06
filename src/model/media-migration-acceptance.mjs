@@ -99,3 +99,37 @@ const recoveryBytes = recoveries.reduce((sum, [, value]) => sum + Buffer.byteLen
 assert.ok(recoveries.length <= 3 && recoveryBytes < 1_000_000, `${recoveries.length} files, ${recoveryBytes} bytes`);
 assert.equal(files.get(foreign), "do not delete");
 console.log(`PASS 10 sessions: ${recoveries.length} recovery files, ${recoveryBytes} bytes; unrelated file retained`);
+const pictures = [1, 2, 3].map(value => "data:image/jpeg;base64," + Buffer.alloc(2 * 1024 * 1024, value).toString("base64"));
+const annotations = pictures.map((image, index) => ({ id: `ann-${index}`, docPath: "sample.pdf", type: "region", rects: [], image }));
+const sidecarBefore = Buffer.byteLength(JSON.stringify({ annotations }));
+const annotationStore = new Store(host);
+await annotationStore.load();
+await annotationStore.loadAnnotations("sample.pdf");
+await annotationStore.saveAnnotationsNow("sample.pdf", annotations);
+const sidecarPath = "sample.pdf.mstudy.json", firstSidecar = files.get(sidecarPath);
+assert.ok(Buffer.byteLength(firstSidecar) < 200_000);
+const savedAnnotations = JSON.parse(firstSidecar).annotations;
+const reloadedStore = new Store(host);
+await reloadedStore.load();
+assert.deepEqual(await reloadedStore.loadAnnotations("sample.pdf"), savedAnnotations);
+for (let index = 0; index < pictures.length; index++) {
+  assert.match(savedAnnotations[index].image, /^_marginstudy-media\/[a-f0-9]{64}\.jpg$/);
+  assert.deepEqual(load(imageUrl(plugin, savedAnnotations[index].image)), Buffer.alloc(2 * 1024 * 1024, index + 1));
+}
+await annotationStore.saveAnnotationsNow("sample.pdf", savedAnnotations);
+assert.equal(files.get(sidecarPath), firstSidecar);
+failWrite = true;
+const failedAnnotation = { id: "failed", type: "region", rects: [], image: "data:image/png;base64," + Buffer.alloc(70002, 4).toString("base64") };
+await annotationStore.saveAnnotationsNow("sample.pdf", [failedAnnotation]);
+assert.equal(JSON.parse(files.get(sidecarPath)).annotations[0].image, failedAnnotation.image);
+failWrite = false;
+for (let index = 0; index < 10; index++) {
+  const session = new Store(host), path = `document-${index}.pdf`;
+  await session.load();
+  await session.loadAnnotations(path);
+  await session.saveAnnotationsNow(path, [{ id: `ann-${index}`, type: "region", rects: [], image: pictures[index % 3] }]);
+}
+const annRecoveries = [...files.entries()].filter(([path]) => path.startsWith("_marginstudy-recovery/pending-annotations-"));
+const annBytes = annRecoveries.reduce((sum, [, value]) => sum + Buffer.byteLength(value), 0);
+assert.ok(annRecoveries.length <= 3 && annBytes < 2 * 1024 * 1024, `${annRecoveries.length} files, ${annBytes} bytes`);
+console.log(`PASS annotations ${sidecarBefore} -> ${Buffer.byteLength(firstSidecar)} bytes; 10 sessions: ${annRecoveries.length} files, ${annBytes} bytes; idempotence, failure fallback, rendering`);

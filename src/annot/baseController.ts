@@ -28,6 +28,7 @@ import { createFreeOverlay, loadOverlayImage } from "./overlay";
 import { openInlineTextEditor } from "./inlineTextEditor";
 import { annotationTextRuns } from "./textRuns";
 import type { OverlayBox, OverlaySurface } from "./overlay";
+import { imageUrl } from "../review/content";
 
 /** 选区经子类解析后的标注定位信息（PDF 用坐标矩形，Word 用字符偏移） */
 export type SelTarget =
@@ -982,7 +983,7 @@ export abstract class BaseAnnotationController {
   };
   protected renderFreeOverlay(ann: Annotation, surface: OverlaySurface): HTMLElement {
     const readonly = this.isNotebookReference(ann) || this.isInkReference(ann);
-    const rendered = createFreeOverlay(ann, surface, { readonly,
+    const rendered = createFreeOverlay(ann, surface, { readonly, imageSource: ann.image ? imageUrl(this.plugin, ann.image) : undefined,
       rotate:angle=>{const current=this.editableOverlay(ann.id);if(current)this.commitOverlayUpdate(ann.id,{overlay:{...current.overlay!,rotation:angle}});},
       commit: box => {
         const geometry = surface.geometry(box); if (!geometry) return;
@@ -1018,7 +1019,7 @@ export abstract class BaseAnnotationController {
     const surface=this.getOverlaySurface(ann);if(!surface)return;
     this.closeOverlayEditor?.();const baseline=this.cloneAnnotation(ann),revision=this.documentRevision;
     const parent=surface.parent,width=parent.clientWidth,height=parent.clientHeight,box=surface.box;
-    this.closeOverlayEditor=openExtendImageCrop({id,src:ann.image,x:box.left/width,y:box.top/height,w:box.width/width,h:box.height/height},parent,async patch=>{
+    this.closeOverlayEditor=openExtendImageCrop({id,src:imageUrl(this.plugin,ann.image),x:box.left/width,y:box.top/height,w:box.width/width,h:box.height/height},parent,async patch=>{
       const current=this.editableOverlay(id);
       if(revision!==this.documentRevision||!current||this.overlayFingerprint(current)!==this.overlayFingerprint(baseline))throw new Error("图片已在其他视图修改或文档已切换");
       const geometry=surface.geometry({...box,width:(patch.w??box.width/width)*width,height:(patch.h??box.height/height)*height});if(!geometry)throw new Error("图片目标位置无效");

@@ -44,7 +44,13 @@ export async function buildEditedPdf(reader: ReaderView, edits: PdfPageEdits, op
     page.setMediaBox(box[0],box[1],box[2]-box[0],box[3]-box[1]);
     page.setCropBox(box[0],box[1],box[2]-box[0],box[3]-box[1]);
     page.setRotation(degrees(viewport.rotation));
-    if (annotations.length) await flattenPdfAnnotations(output,page,number,original,viewport,crop,annotations,current);
+    if (annotations.length) await flattenPdfAnnotations(output,page,number,original,viewport,crop,annotations,current,async path => {
+      if (!path.startsWith("_marginstudy-media/")) return path;
+      const bytes = new Uint8Array(await reader.app.vault.adapter.readBinary(path));
+      const mime = path.endsWith(".jpg") ? "jpeg" : path.slice(path.lastIndexOf(".") + 1);
+      let binary = ""; for (let offset = 0; offset < bytes.length; offset += 0x8000) binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+      return `data:image/${mime};base64,${btoa(binary)}`;
+    });
     if(options.includeAnnotations!==false){const notes=reader.getExtendNotes().filter(note=>note.pageId===entry.id);if(notes.length)await exportExtendPage(output,page,reader,number,viewport,notes,current);}
   }
   current();preservePdfInteractions(output,exportedSources);

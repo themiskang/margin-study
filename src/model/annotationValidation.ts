@@ -23,7 +23,7 @@ export function validateAnnotationExtras(annotation: unknown): void {
   }
   if (overlay.background !== undefined && (typeof overlay.background !== "string" || !/^(?:#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})|transparent)$/i.test(overlay.background))) throw new Error("自由批注背景无效");
   if (overlay.kind === "text" && typeof ann.text !== "string") throw new Error("自由文字内容无效");
-  if (overlay.kind === "image" && (typeof ann.image !== "string" || !/^data:image\/(?:png|jpeg|gif|webp|avif);base64,[A-Za-z0-9+/=]+$/i.test(ann.image))) throw new Error("自由图片须为安全的图片 data URI");
+  if (overlay.kind === "image" && (typeof ann.image !== "string" || !/^(?:data:image\/(?:png|jpeg|gif|webp|avif);base64,[A-Za-z0-9+/=]+|_marginstudy-media\/[a-f0-9]{64}\.(?:png|jpg|gif|webp|avif))$/i.test(ann.image))) throw new Error("自由图片须为安全的本地图片");
   if (overlay.box !== undefined) {
     const box = overlay.box;
     if (!box || [box.x, box.y, box.w, box.h].some(value => !Number.isFinite(value)) || box.x < 0 || box.y < 0 || box.w <= 0 || box.h <= 0 || box.x + box.w > 1.000001 || box.y + box.h > 1.000001) throw new Error("自由批注位置无效");

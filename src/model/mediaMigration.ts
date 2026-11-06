@@ -19,6 +19,10 @@ function slots(data: any): Slot[] {
   };
   for (const card of data.cards ?? []) visitCard(card);
   for (const node of data.nodes ?? []) add(node, "image");
+  for (const ann of data.annotations ?? []) {
+    visitCard(ann);
+    add(ann.overlay, "image");
+  }
   return result;
 }
 

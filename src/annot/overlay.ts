@@ -28,6 +28,7 @@ export function positionOverlay(element: HTMLElement, box: OverlayBox): void {
 }
 export function createFreeOverlay(ann: Annotation, surface: OverlaySurface, options: {
   readonly: boolean;
+  imageSource?: string;
   commit: (box: OverlayBox) => void;
   edit: () => void;
   crop?: () => void;
@@ -44,7 +45,7 @@ export function createFreeOverlay(ann: Annotation, surface: OverlaySurface, opti
   element.style.color = ann.color; element.style.background = ann.overlay?.background ?? "transparent";
   if (ann.overlay?.background && ann.overlay.background !== "transparent") element.style.setProperty("--ms-reading-neutral-ink", "initial");
   if (ann.overlay?.kind === "image") {
-    const image = el("img", { class: "ms-free-overlay-image", src: ann.image!, alt: ann.text || "图片批注", draggable: "false" }); element.append(image);
+    const image = el("img", { class: "ms-free-overlay-image", src: options.imageSource ?? ann.image!, alt: ann.text || "图片批注", draggable: "false" }); element.append(image);
   } else {
     const text = el("div", { class: "ms-free-overlay-text" });
     applyTextStyle(text, annotationTextStyle(ann), surface.fontScale ?? 1);

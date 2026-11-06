@@ -43,7 +43,7 @@ export async function overlayPng(ann: Annotation, width: number, height: number,
   } finally {root.remove();}
 }
 
-export async function flattenPdfAnnotations(output: PDFDocument, page: PDFPage, number: number, original: any, viewport: any, crop: PdfCrop, annotations: PdfExportAnnotation[], current: () => void): Promise<void> {
+export async function flattenPdfAnnotations(output: PDFDocument, page: PDFPage, number: number, original: any, viewport: any, crop: PdfCrop, annotations: PdfExportAnnotation[], current: () => void, resolveImage: (path: string) => Promise<string>): Promise<void> {
   const source = original.marginStudySourcePage ?? original, base = source.getViewport({scale:1}), rotation = original.marginStudyRotation ?? 0;
   const rawRect = (rect: PdfRect, space?: Annotation["pdfCoordinateSpace"]): PdfRect => {
     if (space === "pdf") return rect;
@@ -55,7 +55,8 @@ export async function flattenPdfAnnotations(output: PDFDocument, page: PDFPage, 
     if (ann.page!==number&&!rects.length) continue;
     if (ann.overlay && !ann.overlay.deleted && rects[0]) {
       const box=pdfRectToCssRect(rawRect(rects[0],ann.pdfCoordinateSpace),viewport);if(!box)continue;
-      const png=await overlayPng(ann,box.width,box.height);current();const image=await output.embedPng(png);current();
+      const exportAnn = ann.overlay.kind === "image" && ann.image ? { ...ann, image: await resolveImage(ann.image) } : ann;
+      const png=await overlayPng(exportAnn,box.width,box.height);current();const image=await output.embedPng(png);current();
       const radians=(ann.overlay.rotation??0)*Math.PI/180,cos=Math.cos(radians),sin=Math.sin(radians),cx=box.left+box.width/2,cy=box.top+box.height/2;
       const point=(x:number,y:number)=>viewport.convertToPdfPoint(cx+x*cos-y*sin,cy+x*sin+y*cos);
       const left=point(-box.width/2,box.height/2),right=point(box.width/2,box.height/2),top=point(-box.width/2,-box.height/2);
