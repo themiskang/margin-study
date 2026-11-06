@@ -1223,3 +1223,11 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - 固定输入回放最终值保持 scale `1.45031`、scrollLeft `695`、scrollTop `633`。完整验证 `MARGINSTUDY_VERIFY_DIR=/tmp/marginstudy-pinch-round5-full npm run verify` 全部通过，workspace 296/296，reader 214/214；日志保存在该目录。
 - 构建 SHA-256：main.js `49ab19f1b99de6f721c14924d8e652ff9d710995050a26b899576bcac42fc063`，styles.css `f0278a70fa8e93705514e59c473cdaec23468bbd8513423c6889e223818fe79d`。
 - 本轮未改善或重新实测 50Hz 静止和 130ms 起手现象；未触碰 adb、安装、卡片数据及 `evidence/**`。
+
+## 2026-11-06 21:45 捏合性能优化生效（实机对比）
+- 完成：捏合帧内去强制回流后，实机 trace 对比完成
+- 结论：结论：超 6.94ms 帧 19.3%(33/171) → 1.7%(3/174)/1.1%(2/174)，真实 144Hz 捏合 0/220 超预算（约 4ms 余量）；Layout 47→3；Paint 每帧耗时 0.269→0.168ms、RasterTask 139.9→10.0ms。副作用：prepareGestureSurface 使每帧重绘面积 4.90×→6.09× 视口（+24.2%），但净收益为正；「12× 画布⇒12× 重绘」被证伪
+- 证据：evidence/acceptance-20261106/HERMES-PINCH-RETEST.md、RESULT.md §19
+- 下一步第一动作：请用户在 Pad 上真实双指复测手感；若仍卡，下一步测「起手 130ms 期间」的帧序列与是否需要减少首帧工作量
+- [ ] [ ] PAD-PINCH-01 物理手感（用户复测）
+- [ ] [ ] 可选：把 prepareGestureSurface 的 *6 预撑改小后重测，验证每帧重绘是否回落
