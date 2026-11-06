@@ -2581,6 +2581,21 @@ try{
     assert(p.store.settings.colors.join('|')!==applied.colors.join('|'),'template settings overwrote global preferences');
     await p.store.flush();const reopened=new Store(p.store.host);await reopened.load();assert(JSON.stringify(reopened.getSceneTemplates().find((item:any)=>item.id===saved.id))===JSON.stringify(saved),'edited template did not survive reopen');
   });
+  await test('A05 template manager confirms deletion and refreshes active selection',async()=>{
+    const p=await fresh();const template=p.store.copySceneTemplate('standard');p.store.selectStudyScene(p.set.id,template.id,'handwriting');p.view.refresh(true);await frame();
+    button(p.root,'场景模板：'+template.name).click();button(p.root,'管理场景模板…').click();
+    const manager=()=>p.root.querySelector<HTMLElement>('[aria-label="场景模板管理"]')!;
+    assert(![...manager().querySelectorAll('button')].some(item=>item.textContent==='删除标准'),'built-in delete is visible');
+    button(manager(),'删除'+template.name).click();
+    let dialog=document.querySelector<HTMLElement>('.ms-modal')!;
+    assert(dialog.textContent?.includes('学习集数据会保留')&&dialog.textContent?.includes('先切回标准'),'confirmation omitted deletion consequences');
+    button(dialog,'取消').click();assert(p.store.getSceneTemplates().some((item:any)=>item.id===template.id),'cancel deleted template');
+    button(manager(),'删除'+template.name).click();dialog=document.querySelector<HTMLElement>('.ms-modal')!;button(dialog,'删除模板').click();await frame();
+    assert(!p.store.getSceneTemplates().some((item:any)=>item.id===template.id)&&p.store.getStudyScene(p.set.id)?.templateId==='standard','active template was not deleted and reset');
+    assert(!manager().textContent?.includes(template.name),'manager still shows deleted template');
+    button(p.root,'场景模板：标准').click();
+    assert(!p.root.querySelector('[aria-label="StudySet - More"]')?.textContent?.includes('场景模板：'+template.name),'template remains in chooser');
+  });
   await test('MN5 scene shell renders one standard four-scene bar and restores the selected scene without business side effects',async()=>{
     const p=await fresh();p.store.setStudyInterface(p.set.id,'scenes');p.view.refresh(true);await frame();
     const dock=()=>p.root.querySelector<HTMLElement>('[aria-label="学习场景工具栏"]');assert(dock(),'scene interface did not render its named bottom bar');

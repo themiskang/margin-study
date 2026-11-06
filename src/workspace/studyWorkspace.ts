@@ -1103,7 +1103,16 @@ export class StudyWorkspaceView extends ItemView {
     for(const template of store.getSceneTemplates()){
       const row=el("div",{class:"ms-scene-template-row"});row.append(el("span",{text:template.name}));
       const copy=el("button",{text:"复制"+template.name});copy.addEventListener("click",()=>this.editSceneTemplate(store.copySceneTemplate(template.id)));row.append(copy);
-      if(!["standard","read-write-recall"].includes(template.id)){const edit=el("button",{text:"编辑"+template.name});edit.addEventListener("click",()=>this.editSceneTemplate(template));row.append(edit);}
+      if(!builtinSceneTemplates().some(item=>item.id===template.id)){
+        const edit=el("button",{text:"编辑"+template.name});edit.addEventListener("click",()=>this.editSceneTemplate(template));row.append(edit);
+        const remove=el("button",{text:"删除"+template.name});remove.addEventListener("click",()=>{
+          const active=setId&&store.getStudyScene(setId)?.templateId===template.id;
+          openConfirm("删除场景模板",`删除「${template.name}」？仅删除模板，已使用该模板的学习集数据会保留。${active?"当前活动模板将先切回标准（standard）。":""}其他使用此模板的学习集也将切回标准。`,()=>{
+            try{store.removeSceneTemplate(template.id);this.reader?.refreshSceneSettings?.();this.drawToolbar();this.openSceneTemplateManager();new Notice("模板已删除");}
+            catch(error){new Notice("删除失败："+String(error));}
+          },"删除模板");
+        });row.append(remove);
+      }
       const download=el("button",{text:"导出"+template.name});download.addEventListener("click",()=>{const url=URL.createObjectURL(new Blob([store.exportSceneTemplate(template.id)],{type:"application/json"}));const a=document.createElement("a");a.href=url;a.download="margin-study-scene-template.json";a.click();window.setTimeout(()=>URL.revokeObjectURL(url),1000);});row.append(download);pane.append(row);
     }
     const input=el("input",{type:"file",accept:"application/json,.json","aria-label":"导入模板文件"}) as HTMLInputElement;

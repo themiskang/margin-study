@@ -261,6 +261,18 @@ export class Store {
     if (index < 0) throw new Error("场景模板不存在");
     this.mutate("编辑场景模板", () => { this.sceneTemplates![index] = clone(template); });
   }
+  removeSceneTemplate(id: string): void {
+    if (builtinSceneTemplates().some(item => item.id === id)) throw new Error("内置模板不可删除");
+    if (!(this.sceneTemplates ?? []).some(item => item.id === id)) throw new Error("场景模板不存在");
+    this.mutate("删除场景模板", () => {
+      const standard = builtinSceneTemplates().find(item => item.id === "standard")!;
+      for (const set of this.studySets) if (set.scene?.templateId === id) {
+        const sceneId = standard.scenes.some(scene => scene.id === set.scene!.sceneId) ? set.scene.sceneId : standard.scenes[0].id;
+        set.scene = { ...set.scene, templateId: "standard", sceneId };
+      }
+      this.sceneTemplates = this.sceneTemplates!.filter(item => item.id !== id);
+    });
+  }
   getEffectiveSceneSettings(): MarginStudySettings {
     const selected = this.activeStudySetId ? this.getStudyScene(this.activeStudySetId) : undefined;
     const template = selected?.interfaceMode === "scenes" ? this.getSceneTemplates().find(item => item.id === selected.templateId) : undefined;

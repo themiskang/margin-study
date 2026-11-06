@@ -1,3 +1,8 @@
+## 2026-11-07（CC-A05 宿主侧模板编辑器 + JSON 真实往返验收）
+- 隔离库实机 6 项：①编辑器可达/编辑 PASS（名称、工具删 `continuous-excerpt`、首色 `#123456`、浮窗 false、选区菜单加 `speech`、笔名 `验收红笔`；笔颜色 color well 未改成功）；②真实保存对话框导出 PASS（`~/Downloads/CC-A05-template-20261107.json`，2639 B，`version:1`，6 色均合法）；③导入 FAIL/部分：仅改 `template.name` 不改 id 时被 `模板 ID 已存在` 拒绝（rev 2440 不变），删除源模板后同文件导入成功且与文件 deep-equal（rev 2442），再次导入被拒且 rev 不变；④非法 version 999 / `#12345` 均未写入且 rev 2442（颜色用例 toast 未捕获）；⑤启用后工具栏 10 项（标准 13 项，隐藏留白/套索/连续摘录）、选区菜单含“朗读”、新摘录卡颜色 `#123456`、无摘录浮窗、笔盒显示 `验收红笔`；切回标准后 13 项与默认设置恢复（rev 2448）；⑥界面无删除模板入口（实装与源码均无删除 API），删除需求判 FAIL，已用 Store API 清理自建模板/摘录卡/标注/节点至 22 卡/18 节点/4 标注，rev 2450，回到学习集主页。
+- 构建：实装 `main.js` `b7a99bf8ce77a938ebd73c725e489697d02b61692fcb893550b654c3d16429b4`，与任务卡 `c6ff1a92…` 及仓库 `76d56e18…` 均不一致，结论只对实装构建成立。
+- 证据：`evidence/acceptance-20261106/CC-A05-RESULT.md` + `CC-A05-01…05` 截图；未改产品代码、未提交、未改既有 evidence。
+
 ## 2026-11-07（注释图片外置与恢复目录治理）
 
 - 注释保存前复用媒体外置，写后读回校验；失败保留原值。sidecar 与新恢复快照共享外置结果；自由图片显示、裁剪与 PDF 导出兼容媒体路径。
@@ -1285,3 +1290,8 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - 专项 workspace 验证 `/tmp/marginstudy-media-closeout-ui` 为 300/300；完整验证 `/tmp/marginstudy-media-closeout-20261107-final2` 全绿，workspace 300/300、reader 214/214、APKG 9/9。
 - 构建 SHA-256：main.js `c6ff1a92508555335eb057561a5f41c58cfc1d1db6706404880b27becff726a9`；styles.css `f0278a70fa8e93705514e59c473cdaec23468bbd8513423c6889e223818fe79d`。清理旧大文件需读取及解析其内容，未在设备上测量这一步的耗时。
 - 可选 W5 单帧优化本轮未修改；未触碰 adb、安装、真实库、`evidence/**` 或提交。
+## 2026-11-07（A05 场景模板删除）
+- 个人模板管理增加删除及二次确认；内置模板无删除入口，Store 拒绝内置或不存在的 ID。删除在一次事务中先将所有引用该模板的学习集切回 `standard`，再移除模板；学习集数据保留，界面立即刷新。
+- 合成 Store 验收通过：拒绝操作 revision 不变；个人模板删除 revision +1，重开后不存在；活动模板及其他引用模板的学习集切回 `standard`，重开后保持。界面验收覆盖确认、取消、删除和下拉刷新。
+- 完整验证 `MARGINSTUDY_VERIFY_DIR=/tmp/marginstudy-a05-delete-20261107-full npm run verify` 全绿，workspace 301/301、reader 214/214；补充重开断言后 Store 专项再次通过。
+- 构建 SHA-256：main.js `394a908996b837fca7d29d72a35b7852d94d5204b55e071fb67166bd9855709b`；styles.css `f0278a70fa8e93705514e59c473cdaec23468bbd8513423c6889e223818fe79d`。未触碰 adb、安装、真实库、`evidence/**` 或提交。
