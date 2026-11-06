@@ -13,6 +13,7 @@ import { condenseServiceFor } from '__PROJECT__/src/ai/condense';
 import { AiError } from '__PROJECT__/src/ai/contracts';
 import { cardImages } from '__PROJECT__/src/review/content';
 import { renderCardList } from '__PROJECT__/src/cards/cardView';
+import { CARD_COLORS } from '__PROJECT__/src/model/cardColors';
 import { TFile, notices, markdownTiming } from 'obsidian';
 
 const target=document.querySelector('#fixtures') as HTMLElement,results:any[]=[],errors:string[]=[],active:any[]=[];
@@ -126,6 +127,28 @@ function morePane(p:any,name:string){button(p.root,'学习集更多设置').clic
 function mapInk(p:any){return p.root.querySelector('[aria-label="脑图手写画布"]') as SVGSVGElement;}
 
 try{
+  await test('Colored mind map node text and menu meet contrast requirements',async()=>{
+    const p=await fresh(),originalTheme=p.store.settings.theme,failures:string[]=[];
+    const luminance=(value:string)=>{const channels=value.match(/[\d.]+/g)!.slice(0,3).map(Number).map(channel=>{const part=channel/255;return part<=.04045?part/12.92:((part+.055)/1.055)**2.4;});return .2126*channels[0]+.7152*channels[1]+.0722*channels[2];};
+    const contrast=(foreground:string,background:string)=>{const values=[luminance(foreground),luminance(background)].sort((left,right)=>right-left);return (values[0]+.05)/(values[1]+.05);};
+    try{
+      p.store.updateNode('parent',{collapsed:false});
+      for(const theme of ['light','dark']){
+        p.store.settings.theme=theme;applyTheme(p.plugin);
+        for(const color of [...CARD_COLORS,'#777777','#000000','#123456','#ffffff']){
+          p.store.updateCard('anchor-card',{color,title:'Contrast title',back:'Contrast body'});p.view.refresh(true);await frame();
+          const node=mapCard(p),heading=node.querySelector<HTMLElement>('.ms-node-heading')!,menu=node.querySelector<HTMLElement>('.ms-node-menu')!,body=node.querySelector<HTMLElement>('.ms-node-body')!;
+          assert(heading&&menu&&body,`missing colored node content ${theme} ${color}`);
+          const headingStyle=getComputedStyle(heading),menuStyle=getComputedStyle(menu),bodyStyle=getComputedStyle(body),background=getComputedStyle(menu.parentElement!).backgroundColor;
+          const alpha=Number(menuStyle.opacity),fg=menuStyle.color.match(/[\d.]+/g)!.slice(0,3).map(Number),bg=background.match(/[\d.]+/g)!.slice(0,3).map(Number);
+          const effectiveMenu=`rgb(${fg.map((channel,index)=>channel*alpha+bg[index]*(1-alpha)).join(',')})`;
+          const titleRatio=contrast(headingStyle.color,headingStyle.backgroundColor),menuRatio=contrast(effectiveMenu,background),bodyRatio=contrast(bodyStyle.color,getComputedStyle(node).backgroundColor);
+          if(titleRatio<4.5||menuRatio<3||bodyRatio<4.5)failures.push(`${theme} ${color}: title ${titleRatio.toFixed(2)}, body ${bodyRatio.toFixed(2)}, menu ${menuRatio.toFixed(2)}`);
+        }
+      }
+      assert(!failures.length,failures.join('; '));
+    }finally{p.store.settings.theme=originalTheme;applyTheme(p.plugin);}
+  });
   await test('Dark theme renders home and workspace surfaces darker than light',async()=>{
     const p=await fresh(),originalTheme=p.store.settings.theme;
     const color=(node:Element|null)=>{assert(node,'missing theme surface');return getComputedStyle(node!).backgroundColor;};
@@ -150,8 +173,24 @@ try{
       assert(ratio>=4.5,`bottom action contrast ${ratio.toFixed(2)} < 4.5`);
       button(p.root,'大纲').click();await frame();assert(dark(color(p.root.querySelector('.ms-map-floating-header'))),'outline header is not dark');
       const surface=p.root.querySelector<HTMLElement>('.ms-study-workspace')??p.root;
-      for(const [theme,paper,border] of [['sepia','rgb(245, 239, 223)','#dcd6c6'],['green','rgb(237, 250, 204)','#cedeb3']]){surface.dataset.readingTheme=theme;await frame();const style=getComputedStyle(surface);assert(color(surface.querySelector('.ms-workspace-toolbar'))===paper&&style.getPropertyValue('--ms-workspace-border').trim()===border,`${theme} reading colors not preserved`);}
+      await p.view.openFile(p.delta);await until(()=>!!surface.querySelector('.ms-page'),'PDF paper missing');
+      for(const [theme,paper] of [['sepia','rgb(245, 239, 223)'],['green','rgb(237, 250, 204)']]){surface.dataset.readingTheme=theme;await frame();for(const selector of ['.ms-workspace-toolbar','.ms-workspace-tabs','.ms-workspace-map','.ms-mindmap','.ms-native-map-rail','.ms-workspace-context','.ms-bottom-primary'])assert(dark(color(surface.querySelector(selector))),`${theme} shell not dark: ${selector} ${color(surface.querySelector(selector))}`);assert(color(surface.querySelector('.ms-page'))===paper,`${theme} paper ${color(surface.querySelector('.ms-page'))} differs from ${paper}`);}
     } finally {p.store.settings.theme=originalTheme;applyTheme(p.plugin);}
+  });
+  await test('MN5 outline stays inside map and matches both interface geometries',async()=>{
+    const p=await fresh();
+    await p.view.setState({...state(p),library:false,auxiliary:'none'});await frame();
+    for(const mode of ['scenes','traditional'] as const){
+      p.store.setStudyInterface(p.set.id,mode);p.view.refresh(true);await frame();
+      const map=p.root.querySelector<HTMLElement>('.ms-workspace-map')!,graph=map.querySelector<HTMLElement>('.ms-mindmap-root')!,before=map.getBoundingClientRect(),reader=p.root.querySelector<HTMLElement>('.ms-workspace-reader')!.getBoundingClientRect();
+      const columns=()=>[...p.root.querySelectorAll<HTMLElement>('.ms-workspace-body > :is(.ms-workspace-library,.ms-workspace-reader,.ms-workspace-map,.ms-workspace-auxiliary)')].filter(node=>node.getBoundingClientRect().width>0).length;
+      const initialColumns=columns(),sidebar=p.plugin.sidebar;assert(initialColumns===2,`expected document and map, got ${initialColumns} columns`);
+      button(graph,'大纲').click();await frame();
+      const panel=graph.querySelector<HTMLElement>('.ms-map-floating-panel')!,opened=map.getBoundingClientRect(),box=panel?.getBoundingClientRect();
+      assert(panel&&columns()===initialColumns&&p.plugin.sidebar===sidebar&&Math.abs(opened.width-before.width)<1&&Math.abs(p.root.querySelector<HTMLElement>('.ms-workspace-reader')!.getBoundingClientRect().width-reader.width)<1,'opening outline changed workspace columns');
+      assert(mode==='scenes'?Math.abs(box.width-before.width*472/753)<=4&&Math.abs(box.right-before.right+9)<=4:Math.abs(box.width-before.width)<=4&&Math.abs(box.left-before.left)<=4,`${mode} outline geometry ${JSON.stringify({box:box.toJSON(),map:before.toJSON()})}`);
+      button(panel,'关闭面板').click();await frame();const after=map.getBoundingClientRect();assert(!graph.querySelector('.ms-map-floating-panel')&&columns()===initialColumns&&Math.abs(after.width-before.width)<1&&Math.abs(after.left-before.left)<1,'closing outline did not restore geometry');
+    }
   });
   await test('Tablet host button padding does not collapse scene or mind-map icons',async()=>{
     const style=document.createElement('style');style.textContent='.is-tablet button:not(.clickable-icon){padding:4px 20px}';document.head.prepend(style);document.body.classList.add('is-tablet');

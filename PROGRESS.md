@@ -1105,3 +1105,21 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - 完成：补深色交互态、主色和低对比度文字；白色阅读主题转换深色纸面，sepia/green 保留自身纸面、画布和边框。收紧透明度、按下态、工具栏、资料库和文字对比度断言，结束时恢复主题设置。
 - 验证：隔离副本使用原样式和最终断言，等待动画结束后按下态以 `rgb(201, 201, 203)` 失败；修后完整 `npm run verify` 27/27 套件通过，Workspace 289/289、Reader 214/214。记录与各项对比度见 `evidence/p4-dark-rework-20261106/RESULT.md`；阅读配色组合为合成 Chromium 检查，未逐项真实宿主复验。
 - 安装：隔离库 `styles.css` SHA-256 `28530c1aaf3eb43515acd71922a26b5cfa0836472c5577a0a4bfb27516dc23cc`；`main.js` 未变。回退样式位于 `/private/tmp/marginstudy-p4-rollback-20261106/styles.css`。
+
+## 2026-11-06（P4-DARK-03 节点对比度）
+- 完成：彩色脑图标题和菜单根据颜色计算前景色；正文按实际纸面配色，保留卡片外观和 16 色值。修复工作区对彩色标题的覆盖。
+- 验证：新增真实渲染节点的浅色、暗色和自选色对比度断言，修前 289/290、修后 290/290；修前失败记录 `/private/tmp/p4-contrast-before/workspace.log`，完整修后记录 `/private/tmp/p4-contrast-final/`。`npm run verify` 27/27 套件通过，Reader 214/214。
+- 安装：隔离库 `main.js` SHA-256 `2b51e886cb3047393a1a2417053e70d310004ee93ae266bd6d3857ff1c804302`，`styles.css` SHA-256 `5f1559568d38bb20fa8f350436a39f293201b98ce61e3adc7f6871e095f033bd`，与构建文件一致。
+- 下一步第一动作：验收端重载隔离宿主复验 P4-DARK-03；本次未做真实宿主视觉复验，未提交。
+
+## 2026-11-06（MN5 大纲与暗色外壳）
+- 完成：脑图菜单增加大纲入口；沉浸式大纲在脑图区右侧按 472/753 比例覆盖，传统界面覆盖整块脑图区，关闭恢复原布局。暗色外壳与 Sepia/Green 纸面分离，保留阅读纸面颜色。
+- 改前：工作区验收 289/291，Sepia 顶栏为 `rgb(245, 239, 223)`，沉浸式大纲宽 342、距右 67，均不符合新断言；记录 `/private/tmp/marginstudy-outline-dark-before.log`。此前 Green 实机结果见 `evidence/acceptance-20261106/RESULT.md` §14。
+- 改后：首轮工作区 291/291；完整验收 27 套件、Reader 214/214、Workspace 291/291。末轮补充两栏数量断言后复验结果保存在 `/private/tmp/marginstudy-outline-dark-final/`。验收使用合成宿主和 Chromium，未对最终安装版本进行真实 Obsidian 像素复验。
+- 安装：隔离库 `main.js` SHA-256 `3026fea5917c4bd444863ebd74f9d142594eb471b9ed9fe644e0ac50008e53dc`；`styles.css` SHA-256 `c0d0f85f3d7cb9bc95efbb39160e7e72c091febfb80ec4da6b5029935311b0a4`。隔离库设置为 `light` + `white`。
+
+## 2026-11-06（CC 终验 · MN5 对齐后）
+- 完成：只读实机复验 6 项；安装构建 hashes 与卡面一致（main.js `3026fea5…`、styles.css `c0d0f85f…`）。报告 `evidence/acceptance-20261106/CC-FINAL-RESULT.md`，截图 `CC-FINAL-01…06` 共 6 张。
+- 结论：第 2–6 项 pass（传统界面整栏替换、Sepia/Green 暗色外壳与纸面、节点白字 5.05:1、亮色同点无回退）。第 1 项 fail：沉浸式大纲宽 450.43=718.59×472/753、两栏与关闭恢复均通过，但右缘距窗口 **9px**，不满足卡面 ≤4px（CSS 明写 `right:9px`，需规划席确认口径）。
+- 限制：大纲入口为脑图右侧工具栏「大纲」按钮（脑图下拉无此项）；传统界面无 UI 入口/快捷键，用 store.setStudyInterface 临时切换并已恢复 `scenes`；界面主题经设置窗口 select 的 change 事件切换。
+- 现场恢复：`light` + `white`、大纲关闭、interfaceMode=`scenes`；未改产品代码、未改旧 evidence、未提交。

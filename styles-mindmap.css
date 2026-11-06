@@ -91,6 +91,8 @@
 .ms-study-workspace.ms-recall-title-only .ms-workspace-map .ms-node:not(.is-root) .ms-node-tags,
 .ms-study-workspace.ms-recall-title-only .ms-workspace-map .ms-node:not(.is-root) .ms-node-sources {visibility:hidden;pointer-events:none;user-select:none;}
 .ms-mindmap-root .ms-node-heading { background: var(--ms-node-color, #f5f5f5); }
+.ms-mindmap-root .ms-node.has-color .ms-node-heading { color: var(--ms-node-heading-text, #252525); }
+.ms-mindmap-root .ms-node.has-color .ms-node-header .ms-node-menu { color: var(--ms-node-heading-text, #252525); opacity: 1; }
 .ms-mindmap-root .ms-node [data-field] p { margin: 0; }
 .ms-mindmap-root .ms-node-note,
 .ms-mindmap-root .ms-node-comment { border-top: 1px solid #0000000d; }
@@ -230,7 +232,6 @@ body.ms-theme-dark .ms-mindmap-root {
   --ms-map-paper: #303030;
   --ms-map-text: #eee;
 }
-body.ms-theme-dark .ms-mindmap-root .ms-node.has-color .ms-node-heading { color: #252525; }
 body.ms-theme-dark .ms-mindmap-root .ms-node-note,
 body.ms-theme-dark .ms-mindmap-root .ms-node-comment { border-top-color: #ffffff1a; }
 .ms-mindmap-root.is-native-chrome { --ms-map-canvas: #f2f2f2; }
@@ -271,6 +272,8 @@ body.ms-theme-dark .ms-mindmap-root .ms-node-comment { border-top-color: #ffffff
   width: min(340px, calc(100% - 90px)); min-width: 180px; overflow: hidden;
   border: 1px solid #e2e2e2; border-radius: 10px; background: #fff; box-shadow: 0 5px 20px #00000012;
 }
+.ms-map-floating-panel.is-outline-overlay {box-sizing:border-box;right:9px;width:calc(100% * 472 / 753);min-width:0;}
+.ms-map-floating-panel.is-outline-replacement {box-sizing:border-box;inset:0;width:100%;min-width:0;border-radius:0;}
 .ms-map-floating-header { display: flex; align-items: center; justify-content: space-between; min-height: 36px; padding: 0 6px 0 14px; border-bottom: 1px solid #eee; color: #6c737d; font-size: 13px; }
 .ms-map-floating-header .ms-native-map-icon { width: 28px; height: 28px; padding: 6px; }
 .ms-map-floating-body { flex: 1; min-height: 0; overflow: hidden; }

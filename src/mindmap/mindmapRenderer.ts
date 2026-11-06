@@ -370,6 +370,7 @@ export class MindmapRenderer {
         } });
       }));
       menu.addItem((item) => item.setTitle("脑图工具与设置…").onClick(() => this.openNativeTools()));
+      menu.addItem((item) => item.setTitle("大纲").onClick(() => this.toggleNativePanel("outline")));
       menu.addItem((item) => item.setTitle("新建手绘卡片…").onClick(() => this.options.onHandwrite ? this.options.onHandwrite() : this.openDrawingCard()));
       menu.showAtMouseEvent(event);
     });
@@ -402,7 +403,8 @@ export class MindmapRenderer {
     this.nativePanel?.remove(); this.nativePanel = null; this.nativePanelKind = null;
     if (closeOnly) return;
     this.nativePanelKind = kind;
-    this.nativePanel = el("aside", { class: "ms-map-floating-panel", "aria-label": kind === "outline" ? "大纲面板" : "卡片分组看板面板" });
+    const mode = this.plugin.store.getStudyScene(this.plugin.store.activeStudySetId ?? "")?.interfaceMode;
+    this.nativePanel = el("aside", { class: "ms-map-floating-panel" + (kind === "outline" ? mode === "traditional" ? " is-outline-replacement" : " is-outline-overlay" : ""), "aria-label": kind === "outline" ? "大纲面板" : "卡片分组看板面板" });
     const header = el("div", { class: "ms-map-floating-header" });
     header.append(el("span", { text: kind === "outline" ? "Outline" : "Cards" }), this.nativeIcon("关闭面板", "x", () => this.toggleNativePanel(kind)));
     const body = el("div", { class: "ms-map-floating-body" }); this.nativePanel.append(header, body); this.root!.append(this.nativePanel);
@@ -1031,7 +1033,25 @@ export class MindmapRenderer {
     if (this.selectedIds.has(n.id)) cls += " is-selected";
     const div = el("div", { class: cls, "data-id": n.id, tabindex: "0", role: "group", "aria-label": "脑图卡片" });
     div.setAttribute("data-selected", String(this.selectedIds.has(n.id)));
-    if (content.color) { div.style.setProperty("--ms-node-color", content.color); div.classList.add("has-color"); }
+    if (content.color) {
+      div.style.setProperty("--ms-node-color", content.color);
+      div.classList.add("has-color");
+      const probe = document.createElement("canvas").getContext("2d");
+      if (probe) {
+        probe.fillStyle = content.color;
+        const normalized = probe.fillStyle;
+        const match = /^#([0-9a-f]{6})$/i.exec(normalized);
+        if (match) {
+          const channels = [0, 2, 4].map(index => parseInt(match[1].slice(index, index + 2), 16) / 255)
+            .map(channel => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+          const luminance = 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+          const darkLuminance = 0.018500220128379697;
+          const darkContrast = (luminance + 0.05) / (darkLuminance + 0.05);
+          const blackContrast = (luminance + 0.05) / 0.05;
+          div.style.setProperty("--ms-node-heading-text", darkContrast >= 4.5 ? "#252525" : blackContrast >= 4.5 ? "#000000" : "#ffffff");
+        }
+      }
+    }
     if (n.hidden) { div.style.opacity = "0.55"; div.style.borderStyle = "dashed"; }
     if (n.hidden) div.append(el("div", { class: "ms-muted", text: "此处已隐藏" }));
 
