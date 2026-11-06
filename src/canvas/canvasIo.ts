@@ -29,6 +29,7 @@ interface CanvasFile {
 
 /** Export the same independent canvas or unfiled scope shown in the mind map. */
 export async function exportCanvas(plugin: MarginStudyPlugin): Promise<void> {
+  await plugin.store.flush();
   const nodes = plugin.store.getScopedNodes();
   if (!nodes.length) {
     new Notice("导图为空，无可导出节点");

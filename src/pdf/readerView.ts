@@ -329,6 +329,7 @@ export class ReaderView extends ItemView {
   }
   async exportEditedPdf(options: EditedPdfExportOptions = {}): Promise<Uint8Array> {
     await this.finishExtendEditing();
+    await this.plugin.store.flush();
     const edits = this.getPdfPageEdits(), document = this.doc, path = this.loadedPath, revision = this.loadRevision;
     if (!edits || !path || this.destroyed || this.pendingLoad || this.applyingPageEdits) throw new Error("请等待 PDF 加载完成");
     if (this.exportingPdf) throw new Error("PDF 正在导出，请稍后重试");
@@ -343,6 +344,7 @@ export class ReaderView extends ItemView {
   }
   async exportEditedPdfLongImage(options: LongImageOptions = {}): Promise<LongImageResult> {
     await this.finishExtendEditing();
+    await this.plugin.store.flush();
     const edits = this.getPdfPageEdits(), document = this.doc, path = this.loadedPath, revision = this.loadRevision;
     if (!edits || !path || this.destroyed || this.pendingLoad || this.applyingPageEdits) throw new Error("请等待 PDF 加载完成");
     if (this.exportingPdf) throw new Error("PDF 正在导出，请稍后重试");

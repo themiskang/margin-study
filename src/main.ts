@@ -127,7 +127,8 @@ export default class MarginStudyPlugin extends Plugin {
     this.registerEvent(this.app.vault.on("delete", (file) => {
       if (file instanceof TFile && this.isReaderFile(file)) this.store.markDocumentMissing(file.path);
     }));
-    this.register(this.store.subscribe(() => {
+    this.register(this.store.subscribe(change => {
+      if (change) { this.mindmapView?.updateMovedNodes(change.movedNodeIds); return; }
       if (this.refreshTimer !== null) return;
       this.refreshTimer = window.setTimeout(() => {
         this.refreshTimer = null;
@@ -146,6 +147,8 @@ export default class MarginStudyPlugin extends Plugin {
       }
     }));
     this.registerDomEvent(window, "beforeunload", () => { void this.store.flush().catch(() => {}); });
+    this.registerDomEvent(window, "blur", () => { void this.store.flush().catch(() => {}); });
+    this.registerDomEvent(document, "visibilitychange", () => { if (document.visibilityState === "hidden") void this.store.flush().catch(() => {}); });
 
     this.addCommand({
       id: "open-reader",

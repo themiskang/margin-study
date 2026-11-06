@@ -42,6 +42,7 @@ export async function getOutline(doc: any): Promise<OutlineItem[]> {
 
 /** 导出当前 PDF 的目录为 Markdown 笔记 */
 export async function exportPdfOutline(plugin: MarginStudyPlugin): Promise<void> {
+  await plugin.store.flush();
   const reader = plugin.activeReader;
   const doc = reader?.getDoc?.();
   if (!reader || !doc) {

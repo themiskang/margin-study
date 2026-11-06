@@ -20,6 +20,8 @@ const allSuites=[
   ["pending","src/review/pending-acceptance.mjs"],
   ["decks","src/review/deck-acceptance.mjs"],
   ["model-l3","src/model/l3-acceptance.mjs"],
+  ["drag-save","src/model/drag-save-acceptance.mjs"],
+  ["media-migration","src/model/media-migration-acceptance.mjs"],
   ["model-additive","src/model/additive-acceptance.mjs"],
   ["mobile-sha256","src/model/sha256-acceptance.mjs"],
   ["study","src/study/acceptance.mjs"],

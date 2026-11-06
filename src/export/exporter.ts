@@ -93,6 +93,7 @@ function layoutTree(roots: MindNode[], nodes: MindNode[]): Map<string, { x: numb
 
 // ===== Markdown 导出 =====
 export async function exportMarkdown(plugin: MarginStudyPlugin, ad?: string): Promise<void> {
+  await plugin.store.flush();
   const docPath = ad ?? plugin.activeReader?.getFilePath();
   if (!docPath) {
     new Notice("请先在 MarginStudy 中打开文档再导出");
@@ -167,6 +168,7 @@ export async function exportMarkdown(plugin: MarginStudyPlugin, ad?: string): Pr
 
 // ===== HTML 导出（自包含） =====
 export async function exportHtml(plugin: MarginStudyPlugin, ad?: string): Promise<void> {
+  await plugin.store.flush();
   const docPath = ad ?? plugin.activeReader?.getFilePath();
   if (!docPath) {
     new Notice("请先在 MarginStudy 中打开文档再导出");
@@ -385,6 +387,7 @@ export async function openStats(plugin: MarginStudyPlugin): Promise<void> {
 // ===== Anki 兼容 TSV 导出 =====
 // 格式：每行 `正面<TAB>答案<TAB>标签`，Anki 导入时选择「制表符」分隔即可。
 export async function exportAnkiTsv(plugin: MarginStudyPlugin, ad?: string): Promise<void> {
+  await plugin.store.flush();
   const docPath = ad ?? plugin.activeReader?.getFilePath();
   if (!docPath) {
     new Notice("请先在 MarginStudy 中打开文档再导出");
@@ -411,6 +414,7 @@ export async function exportAnkiTsv(plugin: MarginStudyPlugin, ad?: string): Pro
 
 // ===== 全库汇总导出（单 HTML） =====
 export async function exportAllHtml(plugin: MarginStudyPlugin): Promise<void> {
+  await plugin.store.flush();
   const cards = plugin.store.cardsForStudySet("*");
   if (!cards.length) {
     new Notice("还没有任何卡片可导出");
@@ -496,6 +500,12 @@ async function resolveApkgMedia(plugin: MarginStudyPlugin, cardId: string, src: 
     const ext = (file.extension || "png").toLowerCase();
     return { filename: `ms-${sha1Hex(bytes).slice(0, 16)}.${ext}`, data: bytes };
   }
+  if (src?.startsWith("_marginstudy-media/") && await plugin.app.vault.adapter.exists(src)) {
+    const bytes = new Uint8Array(await plugin.app.vault.adapter.readBinary(src));
+    if (!bytes.length) throw new Error(`媒体缺失：${cardId}（${src} 内容为空）`);
+    const ext = src.split(".").pop()!.toLowerCase();
+    return { filename: `ms-${sha1Hex(bytes).slice(0, 16)}.${ext}`, data: bytes };
+  }
   throw new Error(`媒体缺失：${cardId}（${src || "空引用"}）`);
 }
 
@@ -548,6 +558,7 @@ function stampText(): string {
  * 任一媒体缺失时抛错，不写任何文件。
  */
 export async function exportAnkiApkg(plugin: MarginStudyPlugin, ad?: string): Promise<void> {
+  await plugin.store.flush();
   const docPath = ad ?? plugin.activeReader?.getFilePath();
   const cards = (docPath ? plugin.store.cardsOfDoc(docPath) : plugin.store.cardsForStudySet("*"))
     .filter(card => !card.hidden && !card.groupId);

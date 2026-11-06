@@ -1993,6 +1993,26 @@ try{
       tracker.restore();
     }
   });
+  await test('node moves update incrementally without rebuilding',async()=>{
+    const p=await fresh();await wait(200);await p.store.flush();await wait(100);
+    const renderer=(p.view as any).renderer,original=renderer.render.bind(renderer);let renders=0,incremental=0;
+    renderer.render=()=>{renders++;return original();};
+    const update=renderer.updateMovedNodes?.bind(renderer);if(update)renderer.updateMovedNodes=(ids:string[])=>{incremental++;return update(ids);};
+    const node=mapCard(p,'beta-node'),before=p.store.getNode('beta-node')!;
+    p.store.moveNode(before.id,before.x+30,before.y+20);await wait(120);
+    assert(renders===0&&incremental>0&&mapCard(p,'beta-node')===node,'node move rebuilt the graph or skipped incremental update');
+  });
+  await test('general changes defer graph rebuilding during a gesture',async()=>{
+    const p=await fresh();await wait(200);await p.store.flush();await wait(100);
+    const renderer=(p.view as any).renderer,original=renderer.render.bind(renderer);let renders=0;
+    renderer.render=()=>{renders++;return original();};
+    const node=mapCard(p,'beta-node');
+    const rect=node.getBoundingClientRect();pointer(node,'pointerdown',rect.left+20,rect.top+20,73);pointer(window,'pointermove',rect.left+50,rect.top+40,73);
+    p.store.updateCard('beta-card',{front:'Changed during drag'});await wait(120);
+    assert(renders===0&&node.isConnected,'store change rebuilt graph during drag');
+    pointer(window,'pointerup',rect.left+50,rect.top+40,73);await wait(100);
+    assert(renders===1,'deferred graph refresh did not run after drag');
+  });
   await test('Pad touch drags a card, cancels safely, and pinches without moving it',async()=>{
     const p=await fresh(),scroll=p.root.querySelector('.ms-mindmap') as HTMLElement,world=p.root.querySelector('.ms-mindmap-world') as HTMLElement,node=mapCard(p,'beta-node');
     assert(getComputedStyle(scroll).touchAction==='none','touch gestures are not owned by the map');

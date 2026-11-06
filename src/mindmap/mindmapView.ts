@@ -46,8 +46,10 @@ export class MindmapView extends ItemView {
       this.plugin.refreshSidebar();
       this.plugin.refreshMindmap();
     });
-    this.renderer?.render();
+    this.renderer?.requestRender();
   }
+
+  updateMovedNodes(ids: readonly string[]): void { this.renderer?.updateMovedNodes(ids); }
 
   async onClose(): Promise<void> {
     if (this.plugin.mindmapView === this) this.plugin.mindmapView = null;

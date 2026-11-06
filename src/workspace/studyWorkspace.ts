@@ -286,10 +286,11 @@ export class StudyWorkspaceView extends ItemView {
     this.plugin.viewEvents.onDocumentCardSelect = this.documentHook;
     this.plugin.viewEvents.onMindmapCardSelect = this.mindmapHook;
     this.libraryHistorySignature=JSON.stringify(this.plugin.store.getLibraryHistoryState());
-    this.register(this.plugin.store.subscribe(() => {
+    this.register(this.plugin.store.subscribe(change => {
       const signature=JSON.stringify(this.plugin.store.getLibraryHistoryState());
       if(signature!==this.libraryHistorySignature){this.libraryHistorySignature=signature;this.historyScope="library";}
-      this.syncHistoryButtons();this.scheduleRefresh();
+      this.syncHistoryButtons();
+      if (change) this.renderer?.updateMovedNodes(change.movedNodeIds); else this.scheduleRefresh();
     }));
     this.registerEvent(this.app.vault.on("create", () => this.scheduleRefresh()));
     this.registerEvent(this.app.vault.on("delete", () => this.scheduleRefresh()));
@@ -494,7 +495,7 @@ export class StudyWorkspaceView extends ItemView {
     if ((force || toolbarKey !== this.toolbarSignature) && (!editing || !this.toolbar.contains(focused))) { this.drawToolbar(); this.toolbarSignature = toolbarKey; }
     const libraryKey = JSON.stringify([store.activeStudySetId, store.activeCanvasId, store.studySets.find(set => set.id === store.activeStudySetId), store.canvases, store.documents, this.state.activePath]);
     if (force || libraryKey !== this.librarySignature) { this.drawLibrary(); this.librarySignature = libraryKey; }
-    if (!editing || force) this.renderer?.render();
+    if (!editing || force) this.renderer?.requestRender();
     const auxiliaryKey = JSON.stringify([this.state.auxiliary,store.activeStudySetId,store.activeReviewDeckId,store.reviewDecks,store.cards,store.srs]);
     if ((force || auxiliaryKey !== this.auxiliarySignature) && (this.auxiliaryKind !== this.state.auxiliary || !this.auxiliary.contains(focused))) { this.drawAuxiliary(); this.auxiliarySignature = auxiliaryKey; }
     this.drawTabs(); this.syncDocumentNavigation();
@@ -884,7 +885,7 @@ export class StudyWorkspaceView extends ItemView {
   private setRecallActive(on:boolean):void {
     if(!this.reader||this.isRecallActive()===on)return;
     this.reader.setRecallMode(on);
-    this.renderer?.render();
+    this.renderer?.requestRender();
   }
   private resetRecall():void {
     if(!this.isRecallActive())return;
@@ -951,7 +952,7 @@ export class StudyWorkspaceView extends ItemView {
     menu.addItem(item=>item.setTitle("遮挡全部摘录").setChecked(all).onClick(()=>{if(!all)this.reader?.setRecallCoverAll(true);}));
     menu.addItem(item=>item.setTitle("仅标记遮挡").setChecked(!all).onClick(()=>{if(all)this.reader?.setRecallCoverAll(false);}));
     const setting=(key:import("../types").RecallOptionKey,title:string)=>menu.addItem(item=>item.setTitle(title).setChecked(this.reader?.getRecallSetting?.(key)??false).onClick(()=>{
-      if(this.reader)this.reader.setRecallSetting?.(key,!this.reader.getRecallSetting?.(key));this.renderer?.render();
+      if(this.reader)this.reader.setRecallSetting?.(key,!this.reader.getRecallSetting?.(key));this.renderer?.requestRender();
     }));
     setting("maskCardBody","遮挡卡片正文");
     setting("maskEmphasisImages","遮挡划重点与图片");

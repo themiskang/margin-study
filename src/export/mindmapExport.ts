@@ -10,7 +10,8 @@ const NODE_W = 240;
 const NODE_H = 84;
 
 /** 导出当前思维导图（含连线 + 节点）为自包含 SVG（节点是 HTML div，不在 svg 内，故需按数据重建） */
-export function exportMindmapPng(plugin: MarginStudyPlugin): void {
+export async function exportMindmapPng(plugin: MarginStudyPlugin): Promise<void> {
+  await plugin.store.flush();
   const built = buildExportSvg(plugin);
   if (!built) {
     new Notice("脑图为空，没有可导出的内容");

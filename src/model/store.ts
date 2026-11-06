@@ -19,6 +19,7 @@ import { clampHandwritingWidth } from "../annot/handwritingPresets";
 import { builtinSceneTemplates, defaultStudyScene, isSupportedSceneTemplate } from "../workspace/scenes";
 import { syncCardColor } from "./cardColors";
 import { editedExcerptBlocks } from "../cards/excerptBlocks";
+import { applyMediaReplacements, externalizeMedia, hasInlineMedia } from "./mediaMigration";
 
 interface StoreHost {
   app: App;
@@ -31,6 +32,7 @@ type BackupFile = { path: string; storedPath: string; sha256: string; bytes: num
 type BackupManifest = { format: "margin-study-backup"; version: 2; createdAt: string; dataSha256: string; files: BackupFile[]; missingFiles?: string[] };
 const clone = <T>(value: T): T => value == null ? value : JSON.parse(JSON.stringify(value));
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+const SAVE_DEBOUNCE_MS = 800;
 const sha = (data: string | ArrayBuffer): string => sha256Hex(data);
 function normalizeHandwritingPresets(value: unknown): HandwritingPresetSpec[] {
   if (!Array.isArray(value)) return DEFAULT_HANDWRITING_PRESETS.map(preset => ({ ...preset }));
@@ -109,7 +111,9 @@ export class Store {
   private annBlocked = new Set<string>();
   private jobs = new Set<Promise<unknown>>();
   private loadBlocked = false;
-  private listeners = new Set<() => void>();
+  private listeners = new Set<(change?: { movedNodeIds: string[] }) => void>();
+  private pendingMoves = new Set<string>();
+  private pendingGeneralChange = false;
   private navigationListeners = new Set<(event: { canvasId: string; documentPath?: string }) => void>();
   private documentRenameListeners = new Set<(oldPath: string, newPath: string) => void>();
   private annListeners = new Map<string, Set<() => void>>();
@@ -135,6 +139,7 @@ export class Store {
     }
     this.baseline = clone(data);
     this.applyData(data ?? {});
+    if (hasInlineMedia(this)) this.save();
   }
 
   private validateData(data: any): asserts data is PluginData {
@@ -342,7 +347,7 @@ export class Store {
     this.workspaceState = clone(state); this.save();
   }
 
-  subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
+  subscribe(listener: (change?: { movedNodeIds: string[] }) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   subscribeNavigation(listener: (event: { canvasId: string; documentPath?: string }) => void): () => void { this.navigationListeners.add(listener); return () => this.navigationListeners.delete(listener); }
   subscribeDocumentRename(listener: (oldPath: string, newPath: string) => void): () => void {
     this.documentRenameListeners.add(listener); return () => this.documentRenameListeners.delete(listener);
@@ -352,10 +357,11 @@ export class Store {
     listeners.add(listener); this.annListeners.set(path, listeners);
     return () => { listeners.delete(listener); if (!listeners.size) this.annListeners.delete(path); };
   }
-  private changed(): void {
+  private changed(nodeId?: string): void {
+    if (nodeId) this.pendingMoves.add(nodeId); else this.pendingGeneralChange = true;
     if (this.notificationPending) return;
     this.notificationPending = true;
-    queueMicrotask(() => { this.notificationPending = false; for (const f of this.listeners) { try { f(); } catch (e) { console.error(e); } } });
+    queueMicrotask(() => { this.notificationPending = false; const change = this.pendingGeneralChange ? undefined : { movedNodeIds: [...this.pendingMoves] }; this.pendingGeneralChange = false; this.pendingMoves.clear(); for (const f of this.listeners) { try { f(change); } catch (e) { console.error(e); } } });
   }
   private annotationsChanged(path: string): void {
     for (const f of this.annListeners.get(path) ?? []) { try { f(); } catch (e) { console.error(e); } }
@@ -374,7 +380,7 @@ export class Store {
   private scheduleFlush(): void {
     if (this.restoring) return;
     if (this.saveTimer !== null) clearTimeout(this.saveTimer);
-    this.saveTimer = setTimeout(() => { this.saveTimer = null; void this.flush().catch(() => {}); }, 150);
+    this.saveTimer = setTimeout(() => { this.saveTimer = null; void this.flush().catch(() => {}); }, SAVE_DEBOUNCE_MS);
   }
   save(): void { this.mainDirty = true; this.mainVersion++; this.changed(); this.scheduleFlush(); }
 
@@ -408,10 +414,13 @@ export class Store {
       this.conflictPath = path;
       throw new Error("发现外部修改。两份版本已保存到 " + path + "；请运行「处理保存冲突」。");
     }
+    const media = await externalizeMedia(local, this.host.app.vault.adapter);
     local.revision = this.revision + 1;
     local.savedAt = new Date().toISOString();
     await this.writeRecovery("pending-main", local, true);
     await this.host.saveData(local);
+    applyMediaReplacements(this, media.replacements);
+    if (media.count) console.info(`MarginStudy: 图片外置 ${media.count} 项，${media.bytes} 字节，耗时 ${media.elapsedMs} ms`);
     this.baseline = clone(local);
     this.revision = local.revision;
     if (this.mainVersion === version) this.mainDirty = false;
@@ -990,7 +999,7 @@ export class Store {
     const node = this.getNode(id); if (!node || !Number.isFinite(x) || !Number.isFinite(y) || (node.x === x && node.y === y)) return;
     const before = { x: node.x, y: node.y }; node.x = x; node.y = y;
     this.history.push({ label: "移动节点", nodeMove: { id, before, after: { x, y } } });
-    if (this.history.length > 20) this.history.shift(); this.future = []; this.libraryHistoryRevision++; this.save();
+    if (this.history.length > 20) this.history.shift(); this.future = []; this.libraryHistoryRevision++; this.mainDirty = true; this.mainVersion++; this.changed(id); this.scheduleFlush();
   }
   addNode(n: MindNode): void { this.mutate("添加节点", () => {
     if (this.getNode(n.id)) throw new Error("节点 id 已存在");
@@ -1604,7 +1613,7 @@ export class Store {
       for (const c of this.cards) for (const s of this.sources(c)) paths.add(s.docPath);
       for (const set of this.studySets) for (const p of set.docPaths) paths.add(p);
       for (const d of this.documents) if (!d.missing) paths.add(d.path);
-      for (const f of this.host.app.vault.getFiles()) if (!f.path.startsWith("MarginStudyBackups/") && !f.path.startsWith("_marginstudy-recovery/") && (f.path.endsWith(".mstudy.json") || f.path.startsWith("_marginstudy-audio/") || f.path.startsWith("_marginstudy-imports/"))) paths.add(f.path);
+      for (const f of this.host.app.vault.getFiles()) if (!f.path.startsWith("MarginStudyBackups/") && !f.path.startsWith("_marginstudy-recovery/") && (f.path.endsWith(".mstudy.json") || f.path.startsWith("_marginstudy-audio/") || f.path.startsWith("_marginstudy-imports/") || f.path.startsWith("_marginstudy-media/"))) paths.add(f.path);
       if (includePending) for (const path of this.annCache.keys()) paths.add(this.sidecarPath(path));
       for (const p of [...paths]) if (!p.endsWith(".mstudy.json") && await adapter.exists(this.sidecarPath(p))) paths.add(this.sidecarPath(p));
       const files: BackupFile[] = [], missingFiles: string[] = [];

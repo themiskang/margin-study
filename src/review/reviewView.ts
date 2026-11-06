@@ -43,7 +43,8 @@ export function openReviewHistory(plugin: MarginStudyPlugin, cardId?: string, de
   more.addEventListener("click", append); modal.append(list, more); append();
 }
 
-export function startReview(plugin: MarginStudyPlugin, options: ReviewOptions = {}): void {
+export async function startReview(plugin: MarginStudyPlugin, options: ReviewOptions = {}): Promise<void> {
+  await plugin.store.flush();
   if (options.order === "random" && !options.shuffleSeed) options = { ...options, shuffleSeed: uid("shuffle") };
   if (!options.scopeId && !options.deckId && !options.wrong && plugin.store.reviewDeckForStudySet && !plugin.store.reviewDeckForStudySet(options.studySetId) && (plugin.store.activeStudySetId || !plugin.store.activeReviewDeckId)) {
     openReviewDecks(plugin, { studySetId: options.studySetId, cardIds: options.cardIds }); return;

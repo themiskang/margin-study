@@ -124,7 +124,8 @@ export function enrollCardsForReview(plugin: MarginStudyPlugin, cardIds: string[
 }
 
 /** Browsing membership never grades, re-enrolls or hides future-due cards. */
-export function openReviewDeckBrowser(plugin: MarginStudyPlugin, deckId: string, options: ReviewOptions = {}): void {
+export async function openReviewDeckBrowser(plugin: MarginStudyPlugin, deckId: string, options: ReviewOptions = {}): Promise<void> {
+  await plugin.store.flush();
   const store = plugin.store, deck = store.getReviewDeck(deckId); if (!deck) return;
   const speech = createSpeechSession("review-browser");
   let unsubscribe = () => {}, index = 0, generation = 0, closed = false, dueOnly = options.presentation === "browse";

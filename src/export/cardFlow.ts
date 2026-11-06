@@ -26,6 +26,7 @@ function linesFor(ctx:CanvasRenderingContext2D,text:string,maxWidth:number):stri
 }
 /** Render pages at two pixels per PDF point so Chinese and mixed-script content use the host's fonts. */
 export async function buildCardFlowPdf(plugin:MarginStudyPlugin,options:CardFlowOptions):Promise<CardFlowResult>{
+  await plugin.store.flush();
   const scoped=plugin.store.getScopedNodes(),nodes=orderedFlowNodes(scoped);if(!nodes.length)throw new Error('脑图为空，没有可导出的内容');
   const pdf=await PDFDocument.create(),cardIds:string[]=[];const colWidth=(PAGE_W-2*MARGIN-GAP*(options.columns-1))/options.columns;
   let canvas!:HTMLCanvasElement,ctx!:CanvasRenderingContext2D;let column=0,y=TOP,pageCount=0;

@@ -903,6 +903,7 @@ export class MindmapRenderer {
     if (!this.pinchGeom) return;
     this.pinchGeom = null;
     this.applyView();
+    if (this.renderAfterDrag) { this.renderAfterDrag = false; this.render(); }
   }
 
   private applyView(): void {
@@ -1032,8 +1033,13 @@ export class MindmapRenderer {
   }
 
   // ===== 渲染 =====
+  requestRender(): void {
+    if (this.finishNodeDrag || this.pinchGeom) { this.renderAfterDrag = true; return; }
+    this.render();
+  }
+
   render(): void {
-    if (this.finishNodeDrag) { this.renderAfterDrag = true; return; }
+    if (this.finishNodeDrag || this.pinchGeom) { this.renderAfterDrag = true; return; }
     if (!this.world || !this.svg) return;
     const canvasId = this.currentCanvasId();
     const recallActive=this.isRecallHierarchyActive();if(this.wasRecallActive&&!recallActive){this.revealedIds.clear();this.layeredOpenIds.clear();}this.wasRecallActive=recallActive;
@@ -1366,7 +1372,7 @@ export class MindmapRenderer {
       div.classList.remove("is-dragging");
       if (commit && this.dragged) { div.style.left = `${nextX}px`; div.style.top = `${nextY}px`; }
       div.style.transform = "";
-      if (commit && this.dragged) this.plugin.store.moveNode(n.id, nextX, nextY);
+      if (commit && this.dragged) { this.plugin.store.moveNode(n.id, nextX, nextY); this.drawEdgesFor(n.id); }
       else { div.style.left = `${ox}px`; div.style.top = `${oy}px`; this.drawEdgesFor(n.id); this.dragged = false; }
       if (toolbarDisplay !== null && this.nodeToolbarEl) { this.nodeToolbarEl.style.display = toolbarDisplay; this.positionNodeToolbar(); }
       if (this.renderAfterDrag) { this.renderAfterDrag = false; this.render(); }
@@ -1635,6 +1641,16 @@ export class MindmapRenderer {
         entry.label.setAttribute("y", label.getAttribute("y")!);
       }
     }
+  }
+
+  updateMovedNodes(ids: readonly string[]): void {
+    for (const id of ids) {
+      const node = this.plugin.store.getNode(id), element = this.nodeEls.get(id);
+      if (!node || !element) continue;
+      element.style.left = `${node.x}px`; element.style.top = `${node.y}px`;
+      this.drawEdgesFor(id);
+    }
+    this.positionNodeToolbar();
   }
 
   // ===== 操作 =====

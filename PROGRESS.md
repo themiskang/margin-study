@@ -1231,3 +1231,29 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - 下一步第一动作：请用户在 Pad 上真实双指复测手感；若仍卡，下一步测「起手 130ms 期间」的帧序列与是否需要减少首帧工作量
 - [ ] [ ] PAD-PINCH-01 物理手感（用户复测）
 - [ ] [ ] 可选：把 prepareGestureSurface 的 *6 预撑改小后重测，验证每帧重绘是否回落
+
+## 2026-11-06（二次拖动提交链）
+- 落盘窗口从 150ms 改为 800ms trailing；节点移动通知走增量更新；拖动和捏合期间推迟整图重建。hidden、blur、beforeunload、卸载及复习、导出路径触发 flush。
+- 合成 Store：100 次移动后 300ms，改前写入 1 次、改后 0 次；改后强制 flush 写入 1 次，重载坐标一致。原要求的「≤2 次」改前也通过；附加的「空闲未满 800ms 不写」断言改前失败、改后通过。
+- 同一工作区测试在 HEAD 临时副本中，移动后无重建和手势中不调用 render 两项均失败；改后均通过，手势结束后排队刷新执行。基线 `/tmp/marginstudy-drag2-ui-baseline2/workspace.log`；最终完整验证 `/tmp/marginstudy-drag2-20261106-final5` 全绿，workspace 298/298、reader 214/214。
+- 19,201,541 字节合成内存 saveData：改前 15.451ms、改后 16.466ms；不是安卓原生桥或真实库落盘耗时。原报告的 0.1ms 是 save 调度调用，不是落盘耗时；本轮按要求未触碰 adb，未实测改后安卓长任务。
+- 构建 SHA-256：main.js `b7a99bf8ce77a938ebd73c725e489697d02b61692fcb893550b654c3d16429b4`；styles.css `f0278a70fa8e93705514e59c473cdaec23468bbd8513423c6889e223818fe79d`。未安装、修改 evidence 或卡片数据、提交。
+- 生命周期事件只能启动异步 flush；宿主进程被立即终止或设备断电时无法保证异步写入完成，不能宣称绝对零丢失。
+
+## 2026-11-06（二次拖动卡顿修复复测 · Hermes 实机）
+- 完成：同配方 8 组（7×gap350 + 1×gap90，144 Hz 顶帧 6944444 ns）+ 2 组隔离探针，覆盖 `HERMES-DRAG2-RESULT.md` 的同一 5 步配方、同一 5 窗切窗、同一分析器。
+- 结论①：P2 的 94 ms 延迟刷新彻底消失——8 组 P2 的 `ws.refresh`=0、`render()`=0、长任务 0；store 监听回调 32→2，`scheduleRefresh` 24→0，拖动内 `render()` 0 次（基线每次 2 次）。
+- 结论②：W5 的 60–65 ms 桥接长任务**没有消失**（6/7 组 53.5–62.1 ms，另有多数 122–136 ms；第 7 组单次 186 ms）。隔离探针定性：空闲 0 个长任务 vs 强制一次 `flush()` 出现 6 个（+0.2 128.9、+598 204.5、+803 210.2、+1407 66.4、+1474 137.8、+1971 62.8），与基线 rA 相对其自身 flush 的 +549/+726/+1291/+1349/+1836 同族。即落盘后的原生桥级联；去抖 150→800 ms 把它整体后移 650 ms，从 W3/W4 搬进了 W5。
+- 结论③：无退化。W2 mean 1.96–3.11 / p90 2.50–7.30 / 超预算 1–3（基线 3.31–3.47 / 6.67–6.74 / 2）；W5 mean 1.20–1.56 / p90 1.63–4.13 / 0–1（基线 1.18–1.41 / 2.13–2.15 / 0）；P5 mean 0.21–1.11（基线 0.79–0.96）。
+- 落盘时序：`moveNode → flush` 800–802 ms（8/8 确定），flush JS 0–0.4 ms 但当刻主线程任务 80.8–150.2 ms；`await flush()` 实测 2034 ms（19.2 MB `data.json`），即 `moveNode →` 磁盘完整落地 ≈2.8 s。
+- 附带缺陷：`store.writeRecovery()` 把 `pending-main-*.json` 写进 vault，首次触发 `vault.on("create") → scheduleRefresh()`，实测在 n1 造成拖动中一次整图 render（35.5 + 7.8 ms，`UpdateLayoutTree` 23→29）。建议把 recovery 目录移出 vault 监听或忽略该目录 create。
+- 丢数据核查：切后台会调用 `blur`/`visibilitychange` 的 `flush()`（同一毫秒记录）；重开 3 次坐标逐位一致（341.5/342.25 → 复位 211.991/210.073，rev 502→505，`dirty=false`，无冲突）。限制：adb `input keyevent` 送达 ≈0.9 s > 800 ms 去抖，**未能构造「切后台是唯一触发」**的场景；硬杀进程在 move 后 1.85 s 内会丢最后一次移动。
+- 证据：`evidence/acceptance-20261106/HERMES-DRAG2-RETEST.md` + `drag2-trace-n1|n2|n3|n4|n5|n6|s1|w0.json`、`drag2-summary-*.json`、`drag2-retest-metrics.json`、`flushprobe-trace-f0|f1.json`、`drag2-harness/` 新增脚本、`drag2-retest-99-final-home.png`。
+- 现场：卡片回到基线坐标、`selectedIds=[]`、`viewScale=1`、A30-OPPO 主页、trace 已关闭、无未 flush 编辑；`adb forward` 已移除 `tcp:9333`，原有 `54779/37395` 未动，未 kill/start adb server。
+
+## 2026-11-06（卡片内联图片外置 · 完成）
+- 加载检测到大图片后安排保存；每次主数据保存前将超过 64 KiB 的受支持图片 data URL 写入 `_marginstudy-media/`，按 SHA-256 去重并读回校验。保存成功后才同步内存引用；写入或校验失败保留原值，残缺媒体文件可在重试时修复。新图片仍先内联，保存时外置。日志记录迁移引用数、去重后的图片字节数和耗时；备份包含媒体目录。
+- 合成样本主数据由 19,573,595 字节降至 1,691 字节；大图 14,680,064 字节，外置耗时 851 ms（本机内存测试）。连续保存文件数和引用不变；模拟写失败保留原 data URL；模拟中断文件可修复；测试桩验证迁移前后图片字节一致，APKG 验证外置图片导出。
+- 完整验证 `MARGINSTUDY_VERIFY_DIR=/tmp/marginstudy-media-20261106-final2 npm run verify` 全绿，reader 214/214、workspace 298/298、APKG 9/9。未触碰 adb、安装、真实库或 `evidence/**`。
+- 构建 SHA-256：main.js `f1aa1c0187883aee550ea675cc17871a79455e8d00547137158a6d0f5bf5de8d`；styles.css `f0278a70fa8e93705514e59c473cdaec23468bbd8513423c6889e223818fe79d`。
+- 实测库 18.33 MB 中单字段 14.1 MB；仅移除此字段预计约 4.23 MB，其余大图片继续外置可再降低。未对真实库测量迁移后大小或安卓性能；其他数据占用可能使实际结果高于 1 MB。无法识别图片类型或无法解码时保留原值。

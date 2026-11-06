@@ -155,6 +155,7 @@ check("builder rejects notes referencing missing media", () => {
     activeReader: null,
     app: { vault },
     store: {
+      flush: async () => {},
       cardsOfDoc: () => [],
       cardsForStudySet: () => ([
         { id: "c1", docPath: "d.pdf", type: "flashcard", front: "正", back: "反", tags: ["t"], links: [] },
@@ -187,6 +188,7 @@ check("builder rejects notes referencing missing media", () => {
     activeReader: { getFilePath: () => "deck.pdf" },
     app: { vault },
     store: {
+      flush: async () => {},
       cardsOfDoc: () => ([
         { id: "k1", docPath: "deck.pdf", page: 2, type: "flashcard", front: "正反面", back: "背面", tags: ["标签A"], links: [] },
         { id: "k2", docPath: "deck.pdf", page: 2, type: "flashcard", front: "挖空 {{c1::甲}} 与 {{c2::乙}}", back: "扩展", tags: [], links: [] },
@@ -215,6 +217,17 @@ check("builder rejects notes referencing missing media", () => {
     assert.ok(byGuid["ms" + createHash("sha1").update("k2::cloze").digest("hex").slice(0, 12)].ords.every(o => [0, 1].includes(o)));
     const source = byGuid["ms" + createHash("sha1").update("k1::basic").digest("hex").slice(0, 12)].fields[2];
     assert.ok(source.includes("deck.pdf · 第 2 页"), "source text must reference doc+page: " + source);
+  });
+  const mediaPath = "_marginstudy-media/" + "a".repeat(64) + ".png";
+  vault.adapter = { exists: async path => path === mediaPath, readBinary: async () => Uint8Array.from(PNG).buffer };
+  plugin.store.cardsOfDoc = () => [{ id: "external", docPath: "deck.pdf", type: "flashcard", front: "image", back: "", tags: [], links: [], image: mediaPath }];
+  await exporter.exportAnkiApkg(plugin);
+  const externalApkg = join(temporary, "external.apkg");
+  await writeFile(externalApkg, Buffer.from(writes.at(-1).buffer));
+  const externalReport = await verifyWithPython(externalApkg);
+  check("externalized image exports before vault indexing", () => {
+    assert.equal(externalReport.ok, true);
+    assert.equal(externalReport.counts.media, 1);
   });
 }
 

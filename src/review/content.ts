@@ -22,7 +22,7 @@ export function cardImages(card: Card): string[] {
 export function imageUrl(plugin: MarginStudyPlugin, path: string): string {
   if (/^(data:|blob:|https?:|app:)/i.test(path)) return path;
   const file = plugin.app.vault.getAbstractFileByPath(path);
-  return file instanceof TFile ? plugin.app.vault.getResourcePath(file) : path;
+  return file instanceof TFile ? plugin.app.vault.getResourcePath(file) : path.startsWith("_marginstudy-media/") ? plugin.app.vault.adapter.getResourcePath(path) : path;
 }
 
 export function appendSources(container: HTMLElement, plugin: MarginStudyPlugin, card: Card): void {
