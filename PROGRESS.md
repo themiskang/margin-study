@@ -1209,3 +1209,17 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - 完整命令 `MARGINSTUDY_VERIFY_DIR=/tmp/marginstudy-pinch-full-baseline npm run verify` 运行至工作区时因上述专项失败停止，先前执行的套件通过；不是全绿。构建 SHA-256：main.js `b8a58f86c06048be1280424098d940b7db017307dcab05b3940d9dde7c5cb576`，styles.css `f0278a70fa8e93705514e59c473cdaec23468bbd8513423c6889e223818fe79d`。
 - 尚未实施几何缓存、仅 transform 写入、contain 或零漂移，也未获得改后数据或 Paint 面积；不得视为完成。`npm run build` 成功，本轮无设备测量。
 - 下一步第一动作：修正回放，使选中节点和工具栏可见，使用可记录同值写入的方式统计每个 world 样式写入，并固定多组包含边界夹取的逐帧输入；先保存完整基线，再实施优化与零容差比对。
+
+## 2026-11-06（捏合性能第四轮 · 未完成）
+- 已实现双指开始缓存几何并预备画布、帧内 transform 和滚动更新、结束时恢复尺寸和工具栏；未加入 `contain: paint`。
+- 固定回放改前读数 861；改后全局读数 381（rect 363、offsetWidth 9、offsetHeight 9），未达 ≤3。最终值改前与改后均为 scale 1.45031、scrollLeft 695、scrollTop 633。
+- 实际样式赋值监测改后发现 width、height、left、top、transform 均有写入，未通过。堆栈表明阅读器异步加载触发 `refreshSidebar` → `render` → `applyView`；额外 rect 读取包括 `ReadingPositionTracker.measurable`。等待初始化及重复回放后仍复现；暂未扩大本卡范围修改阅读器或刷新机制。
+- 完整验证 `/tmp/marginstudy-pinch-round4-verify-full` 至 workspace 失败，295/296；其余后续独立套件单独运行通过。专项断言与完整 verify 均未通过。
+- 下一步第一动作：判断如何在不扩大任务范围的前提下处理阅读位置跟踪和异步刷新；对相同稳定输入重测改前和改后全局读取与赋值，之后重跑完整验证。
+- 构建产物 SHA-256：main.js `49ab19f1b99de6f721c14924d8e652ff9d710995050a26b899576bcac42fc063`，styles.css `f0278a70fa8e93705514e59c473cdaec23468bbd8513423c6889e223818fe79d`。
+
+## 2026-11-06（捏合性能第五轮 · 完成）
+- 收窄测试计数到触摸移动安排的动画帧回调；排除阅读位置跟踪、文档加载后触发的脑图刷新，未修改这两条路径。逐帧断言 120 帧均为几何读取 0、world 尺寸和位置写入 0、transform 写入 1；累计分别为 0、0、120。累计读取断言上限为 2，计数窗口不包含手势起止。
+- 固定输入回放最终值保持 scale `1.45031`、scrollLeft `695`、scrollTop `633`。完整验证 `MARGINSTUDY_VERIFY_DIR=/tmp/marginstudy-pinch-round5-full npm run verify` 全部通过，workspace 296/296，reader 214/214；日志保存在该目录。
+- 构建 SHA-256：main.js `49ab19f1b99de6f721c14924d8e652ff9d710995050a26b899576bcac42fc063`，styles.css `f0278a70fa8e93705514e59c473cdaec23468bbd8513423c6889e223818fe79d`。
+- 本轮未改善或重新实测 50Hz 静止和 130ms 起手现象；未触碰 adb、安装、卡片数据及 `evidence/**`。

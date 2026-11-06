@@ -137,6 +137,39 @@ function morePane(p:any,name:string){button(p.root,'学习集更多设置').clic
 function mapInk(p:any){return p.root.querySelector('[aria-label="脑图手写画布"]') as SVGSVGElement;}
 
 try{
+  await test('Pinch 120 frame geometry and world writes',async()=>{
+    const {p,scroll,world,point}=await freshPinchScene();
+    await wait(200);
+    const node=mapCard(p,'beta-node');node.dispatchEvent(new MouseEvent('click',{bubbles:true}));
+    const rect=Element.prototype.getBoundingClientRect, width=Object.getOwnPropertyDescriptor(HTMLElement.prototype,'offsetWidth')!,height=Object.getOwnPropertyDescriptor(HTMLElement.prototype,'offsetHeight')!;
+    const reads={rect:0,width:0,height:0},writes={width:0,height:0,left:0,top:0,transform:0},properties=['width','height','left','top','transform'] as const;
+    const nativeRaf=window.requestAnimationFrame,frames:{reads:number;sizeWrites:number;transformWrites:number}[]=[];let measuring=false;
+    const send=(target:EventTarget,type:string,id:number,x:number,y:number)=>target.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,pointerType:'touch',pointerId:id,clientX:x,clientY:y}));
+    send(scroll,'pointerdown',301,point.x-40,point.y);send(scroll,'pointerdown',302,point.x+40,point.y);
+    Element.prototype.getBoundingClientRect=function(){if(measuring)reads.rect++;return rect.call(this);};
+    Object.defineProperty(HTMLElement.prototype,'offsetWidth',{...width,get(){if(measuring)reads.width++;return width.get!.call(this);}});
+    Object.defineProperty(HTMLElement.prototype,'offsetHeight',{...height,get(){if(measuring)reads.height++;return height.get!.call(this);}});
+    for(const name of properties)Object.defineProperty(world.style,name,{configurable:true,get(){return this.getPropertyValue(name);},set(value){if(measuring)writes[name]++;this.setProperty(name,value);}});
+    try{
+      for(let index=0;index<120;index++){
+        window.requestAnimationFrame=((callback:FrameRequestCallback)=>nativeRaf.call(window,time=>{
+          const beforeReads=reads.rect+reads.width+reads.height,beforeSizes=writes.width+writes.height+writes.left+writes.top,beforeTransforms=writes.transform;
+          measuring=true;
+          try{callback(time);}finally{measuring=false;frames.push({reads:reads.rect+reads.width+reads.height-beforeReads,sizeWrites:writes.width+writes.height+writes.left+writes.top-beforeSizes,transformWrites:writes.transform-beforeTransforms});}
+        })) as typeof window.requestAnimationFrame;
+        try{send(window,'pointermove',302,point.x+40+(index+1)*.3,point.y+(index+1)*.02);}finally{window.requestAnimationFrame=nativeRaf;}
+        await frame();
+      }
+    }finally{
+      window.requestAnimationFrame=nativeRaf;
+      Element.prototype.getBoundingClientRect=rect;Object.defineProperty(HTMLElement.prototype,'offsetWidth',width);Object.defineProperty(HTMLElement.prototype,'offsetHeight',height);
+      for(const name of properties)delete (world.style as any)[name];
+      send(window,'pointerup',302,point.x+76,point.y+2.4);send(window,'pointerup',301,point.x-40,point.y);
+    }
+    const output={reads,writes,frames:frames.length,scale:mindmapScale(world),scrollLeft:scroll.scrollLeft,scrollTop:scroll.scrollTop};
+    console.log('PINCH_120_RESULT '+JSON.stringify(output));
+    assert(frames.length===120&&frames.every(frame=>frame.reads===0&&frame.sizeWrites===0&&frame.transformWrites===1)&&reads.rect+reads.width+reads.height<=2&&output.scale===1.45031&&output.scrollLeft===695&&output.scrollTop===633,`Pinch callbacks only; excludes reading position tracking and document-load mind map refresh: ${JSON.stringify({output,frames})}`);
+  });
   await test('Colored mind map node text and menu meet contrast requirements',async()=>{
     const p=await fresh(),originalTheme=p.store.settings.theme,failures:string[]=[];
     const luminance=(value:string)=>{const channels=value.match(/[\d.]+/g)!.slice(0,3).map(Number).map(channel=>{const part=channel/255;return part<=.04045?part/12.92:((part+.055)/1.055)**2.4;});return .2126*channels[0]+.7152*channels[1]+.0722*channels[2];};

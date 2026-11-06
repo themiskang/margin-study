@@ -117,6 +117,7 @@ export class MindmapRenderer {
   private renderAfterDrag = false;
   private pinchFrame = 0;
   private pinchPending: { x: number; y: number; factor: number } | null = null;
+  private pinchGeom: { scrollRect: DOMRect; worldRect: DOMRect; worldOffsetW: number; scaleStart: number; scrollLeft: number; scrollTop: number } | null = null;
   private viewportResize: ResizeObserver | null = null;
   private viewportResizeFrame = 0;
   private positionViewOnNextApply = true;
@@ -628,6 +629,7 @@ export class MindmapRenderer {
 
   /** Screen rectangles include zoom and scroll; overlay coordinates stay local to the map root. */
   private positionNodeToolbar(): void {
+    if (this.pinchGeom) return;
     const bar = this.nodeToolbarEl, root = this.root, viewport = this.scrollEl;
     if (!bar || !root || !viewport || bar.style.display === "none") return;
     const area = viewport.getBoundingClientRect(), origin = root.getBoundingClientRect();
@@ -755,6 +757,14 @@ export class MindmapRenderer {
     }
     if (this.touchPoints.size === 2) {
       this.finishNodeDrag?.(); this.finishCanvasPan?.();
+      if (this.scrollEl && this.world && this.canvasWrap) {
+        this.pinchGeom = {
+          scrollRect: this.scrollEl.getBoundingClientRect(), worldRect: this.world.getBoundingClientRect(),
+          worldOffsetW: this.world.offsetWidth, scaleStart: this.viewScale,
+          scrollLeft: this.scrollEl.scrollLeft, scrollTop: this.scrollEl.scrollTop,
+        };
+        this.prepareGestureSurface(Math.max(0.1, this.viewScale * 0.5));
+      }
       this.world?.classList.add("is-pinching");
       const [a,b] = [...this.touchPoints.values()]; this.pinchDistance = Math.hypot(a.x-b.x,a.y-b.y);
       event.preventDefault(); event.stopPropagation();
@@ -784,6 +794,7 @@ export class MindmapRenderer {
       if (event.type !== "pointercancel" && pending) this.zoomAt(pending.x, pending.y, pending.factor);
     }
     this.touchPoints.delete(event.pointerId); this.pinchDistance = 0;
+    this.finishPinch();
     this.world?.classList.remove("is-pinching");
     if (!this.touchPoints.size) this.clearTouchPointers();
   };
@@ -791,6 +802,7 @@ export class MindmapRenderer {
     if (this.pinchFrame) cancelAnimationFrame(this.pinchFrame);
     this.pinchFrame = 0; this.pinchPending = null;
     this.touchPoints.clear(); this.pinchDistance = 0;
+    this.finishPinch();
     this.world?.classList.remove("is-pinching");
     window.removeEventListener("pointermove", this.onTouchPointerMove, true);
     window.removeEventListener("pointerup", this.onTouchPointerEnd, true);
@@ -842,6 +854,18 @@ export class MindmapRenderer {
     if (!this.scrollEl) return;
     const next = Math.max(0.1, Math.min(6, this.viewScale * factor));
     if (next === this.viewScale) return;
+    const geom = this.pinchGeom;
+    if (geom && this.world) {
+      const left = geom.worldRect.left + geom.scrollLeft - this.scrollEl.scrollLeft;
+      const top = geom.worldRect.top + geom.scrollTop - this.scrollEl.scrollTop;
+      const pointX = (clientX - left) / this.viewScale;
+      const pointY = (clientY - top) / this.viewScale;
+      this.viewScale = next;
+      this.world.style.transform = `scale(${next})`;
+      this.scrollEl.scrollLeft = this.viewGutterX + pointX * next - (clientX - geom.scrollRect.left);
+      this.scrollEl.scrollTop = this.viewGutterY + pointY * next - (clientY - geom.scrollRect.top);
+      return;
+    }
     const point = this.viewCoordinates(clientX, clientY), rect = this.scrollEl.getBoundingClientRect();
     const ratio = next / this.viewScale;
     this.viewScale = next;
@@ -860,6 +884,24 @@ export class MindmapRenderer {
   private resetView(): void {
     this.viewScale = 1;
     this.positionViewOnNextApply = true;
+    this.applyView();
+  }
+
+  private prepareGestureSurface(minScale: number): void {
+    if (!this.canvasWrap || !this.world) return;
+    const surfaceW = Math.max(this.baseW, this.viewportW / minScale);
+    const surfaceH = Math.max(this.baseH, this.viewportH / minScale);
+    this.world.style.width = `${surfaceW}px`;
+    this.world.style.height = `${surfaceH}px`;
+    this.world.style.left = `${this.viewGutterX}px`;
+    this.world.style.top = `${this.viewGutterY}px`;
+    this.canvasWrap.style.width = `${Math.ceil(Math.max(this.viewportW, surfaceW * 6 + this.viewGutterX * 2))}px`;
+    this.canvasWrap.style.height = `${Math.ceil(Math.max(this.viewportH, surfaceH * 6 + this.viewGutterY * 2))}px`;
+  }
+
+  private finishPinch(): void {
+    if (!this.pinchGeom) return;
+    this.pinchGeom = null;
     this.applyView();
   }
 
