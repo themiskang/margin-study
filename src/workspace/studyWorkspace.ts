@@ -255,7 +255,8 @@ export class StudyWorkspaceView extends ItemView {
     const aiShortcut=this.toolbarButton("sparkles","immersiveAI",()=>this.openAuxiliary("ai"));
     documentShortcut.classList.add("ms-workspace-floating-action");aiShortcut.classList.add("ms-workspace-floating-action");
     this.workspaceFloatingActions.append(documentShortcut,aiShortcut);
-    this.root.append(this.toolbar, this.body, this.bottomCapsule, this.workspaceNoticeLayer, this.workspaceFloatingActions);
+    this.mapPane.append(this.workspaceFloatingActions);
+    this.root.append(this.toolbar, this.body, this.bottomCapsule, this.workspaceNoticeLayer);
     this.renderer = new MindmapRenderer(this.plugin, { nativeChrome: true, onSelectionChange: nodes => this.onMindmapSelectionChange(nodes) }); this.renderer.mount(this.mapHost);
     this.fixedViewsHost=el("div",{class:"ms-fixed-views"});this.mapPane.append(this.fixedViewsHost);this.drawFixedViews();
     this.register(this.renderer.subscribeHandwritingModeChange(mode=>{if(this.reader&&!this.syncingHandwriting&&this.reader.getHandwritingSyncPreference()){this.syncingHandwriting=true;try{this.reader.setHandwritingMode(mode);}finally{this.syncingHandwriting=false;}}}));
@@ -1041,10 +1042,12 @@ export class StudyWorkspaceView extends ItemView {
     if(!this.fixedViewsHost)return;
     this.fixedViewsHost.replaceChildren();
     const position=this.plugin.store.settings.fixedViewPosition;
-    if(position&&Number.isFinite(position.x)&&Number.isFinite(position.y)){this.fixedViewsHost.style.left=`${clamp(position.x,0,1)*100}%`;this.fixedViewsHost.style.top=`${clamp(position.y,0,1)*100}%`;this.fixedViewsHost.style.bottom="auto";}
+    const paneHeight=this.mapPane.clientHeight;
+    if(position&&Number.isFinite(position.x)&&Number.isFinite(position.y)&&position.y<=(paneHeight>0?26/paneHeight:.035)){this.fixedViewsHost.style.left=`clamp(0px, ${clamp(position.x,0,1)*100}%, max(0px, calc(100% - 38px)))`;this.fixedViewsHost.style.top=`clamp(0px, ${clamp(position.y,0,1)*100}%, 26px)`;this.fixedViewsHost.style.right="auto";}
+    else {this.fixedViewsHost.style.left="";this.fixedViewsHost.style.top="";this.fixedViewsHost.style.right="";}
     const toggle=el("button",{type:"button",class:"ms-fixed-views-toggle","aria-label":"固定视图","aria-expanded":String(this.fixedViewsOpen),text:"📌"});
     toggle.addEventListener("pointerdown",event=>{if(event.button!==0)return;const pane=this.mapPane.getBoundingClientRect(),host=this.fixedViewsHost.getBoundingClientRect(),startX=event.clientX,startY=event.clientY,offsetX=host.left-pane.left,offsetY=host.top-pane.top;this.fixedViewsDragged=false;toggle.setPointerCapture(event.pointerId);
-      const move=(next:PointerEvent)=>{if(Math.hypot(next.clientX-startX,next.clientY-startY)<4&&!this.fixedViewsDragged)return;this.fixedViewsDragged=true;const width=Math.max(1,pane.width-toggle.offsetWidth),height=Math.max(1,pane.height-toggle.offsetHeight),x=clamp((offsetX+next.clientX-startX)/width,0,1),y=clamp((offsetY+next.clientY-startY)/height,0,1);this.fixedViewsHost.style.left=`${x*width}px`;this.fixedViewsHost.style.top=`${y*height}px`;this.fixedViewsHost.style.bottom="auto";this.plugin.store.settings.fixedViewPosition={x:x*width/Math.max(1,pane.width),y:y*height/Math.max(1,pane.height)};this.positionFixedPanel();this.plugin.store.save();};
+      const move=(next:PointerEvent)=>{if(Math.hypot(next.clientX-startX,next.clientY-startY)<4&&!this.fixedViewsDragged)return;this.fixedViewsDragged=true;const width=Math.max(0,pane.width-toggle.offsetWidth),height=Math.min(26,Math.max(0,pane.height-toggle.offsetHeight)),x=clamp(offsetX+next.clientX-startX,0,width),y=clamp(offsetY+next.clientY-startY,0,height);this.fixedViewsHost.style.left=`${x}px`;this.fixedViewsHost.style.top=`${y}px`;this.fixedViewsHost.style.right="auto";this.plugin.store.settings.fixedViewPosition={x:x/Math.max(1,pane.width),y:y/Math.max(1,pane.height)};this.positionFixedPanel();this.plugin.store.save();};
       const end=()=>{toggle.removeEventListener("pointermove",move);toggle.removeEventListener("pointerup",end);toggle.removeEventListener("pointercancel",end);if(this.fixedViewsDragged)this.plugin.store.save();};toggle.addEventListener("pointermove",move);toggle.addEventListener("pointerup",end);toggle.addEventListener("pointercancel",end);
     });
     toggle.addEventListener("click",()=>{if(this.fixedViewsDragged){this.fixedViewsDragged=false;return;}this.fixedViewsOpen=!this.fixedViewsOpen;this.drawFixedViews();});this.fixedViewsHost.append(toggle);
@@ -1060,9 +1063,9 @@ export class StudyWorkspaceView extends ItemView {
   }
   private positionFixedPanel(): void {
     const panel=this.fixedViewsHost.querySelector<HTMLElement>(".ms-fixed-views-panel");if(!panel)return;
-    const position=this.plugin.store.settings.fixedViewPosition;
-    panel.style.left=position&&position.x>.55?"auto":"46px";panel.style.right=position&&position.x>.55?"46px":"auto";
-    panel.style.top=position&&position.y<.3?"0":"auto";panel.style.bottom=position&&position.y<.3?"auto":"0";
+    const host=this.fixedViewsHost.getBoundingClientRect(),pane=this.mapPane.getBoundingClientRect();
+    panel.style.left=host.left-pane.left>pane.width*.55?"auto":"46px";panel.style.right=host.left-pane.left>pane.width*.55?"46px":"auto";
+    panel.style.top=host.top-pane.top<pane.height*.3?"0":"auto";panel.style.bottom=host.top-pane.top<pane.height*.3?"auto":"0";
   }
   private selectedContext(): AiContext|undefined {
     const recent=this.selection&&Date.now()-this.selection.at<=5000?this.selection:undefined;

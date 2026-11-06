@@ -1,3 +1,12 @@
+## 2026-11-06（脑图右侧浮层遮挡修复）
+
+- 完成：rail、Select 内缩至 19px；快捷浮钮相对脑图区定位并与 rail 间隔 15px；固定视图默认停靠顶部留白，旧内容区位置回到停靠点，拖动范围限制在顶部留白并保存。
+- 验证：历史实机改前数据见 `evidence/acceptance-20261106/CC-LAYOUT-RESULT.md`；新增场景与传统模式的滚动条、浮钮、图标命中及图钉断言；完整验收 27/27，Workspace 293/293，Reader 214/214，日志 `/private/tmp/marginstudy-layout-full/`。
+- 实机改后 rect（x,y,w,h，CSS px）：场景 rail `(1445,223.59,48,275)`、Select `(1444,548.59,49,49)`、浮钮组 `(1386,376.5,44,100)`、图钉 `(1455,97,38,38)`；传统 rail `(1445,229.34,48,275)`、Select `(1444,554.34,49,49)`、浮钮组 `(1386,380,44,100)`、图钉 `(1455,104,38,38)`。两模式滚动条宽 15，rail 和 Select 右缘 1493，浮钮右缘 1430，6 个图标中心全部命中自身。受控滚动至节点与图钉横向对齐、节点到达可见区上缘：场景节点 `(1454.85,148.96,230,80.19)`，传统节点 `(1454.85,155.96,230,80.19)`，均与图钉零相交；滚动位置已恢复。
+- 安装：隔离库 `main.js` SHA-256 `25ca5bf7dbed1d1f2362de09f58965c189a8f4dc1567d44f5c92a53cde3e1329`，`styles.css` SHA-256 `200f4e5877675eb44daaea6af089c51c3a24937e7c1552baa85e45eb5d2001e4`；宿主已重载，恢复 `light`、`white`、`scenes`。
+- 注意：首次启动验收时遗漏临时输出目录，运行器写入了被忽略的 `evidence/verification/`；发现后已中止，后续日志均写入 `/private/tmp/`。原目录内容未备份，无法确认或恢复被覆盖的旧日志。
+- 完成定义：A–D 的布局、命中、受控滚动与完整验收均已通过。
+
 ## 2026-11-04 A30 参考矩阵与几何验收分工
 
 接收后备资料辅助席（Hermes IDE 终端 × Claude Code，实际模型 `deepseek-v4.1-flash[1m]`）的 `official-reference/A30-REFERENCE-MATRIX.md`：44,767 B，SHA-256 `365bbfb779ec7bf4b4001c5b479ed2d190460fe45d97f6001fbffba68c159830`。官方 manifest 已增至 35 项。矩阵明确 MN5 实机六图用于几何、原生导出仅用于计数、官网多数图片仅定性，以及等价样本非原件。
@@ -1128,3 +1137,9 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - 完成：注册「切换界面模式」命令及 `Cmd+Alt+I` 默认快捷键，加入功能搜索和学习集更多设置；切换当前学习集的场景/传统界面，刷新工作区并持久化。
 - 改前：新增工作区行为断言 291/292，因命令未注册失败；记录 `/private/tmp/marginstudy-trad-before/workspace.log`。改后：工作区 292/292，覆盖命令、快捷键映射、搜索、菜单、往返与重建；完整 `npm run verify` 27/27，Reader 214/214、功能搜索 10/10；记录 `/private/tmp/marginstudy-trad-complete/`。验收为合成宿主和 Chromium，未对安装后的真实 Obsidian 执行快捷键复验。
 - 安装：隔离库 `main.js` SHA-256 `826086f7a50b34955b18f1d0f0331a1e6ddc2003b309a093daac922b08840dd0`，`styles.css` SHA-256 `c0d0f85f3d7cb9bc95efbb39160e7e72c091febfb80ec4da6b5029935311b0a4`；与构建文件一致。未提交，未修改 `evidence/**`，未操作 Pad 双指。
+
+## 2026-11-06 14:33 证据目录被覆盖事故（登记）
+- 事实：兵部本轮首次启动工作区验收时未指定临时输出目录，运行器把 14 个套件日志写入 `evidence/verification/`（build/decks/mobile-sha256/model-additive/model-l3/organize-ui/pdf-save/pending/review-ui/review/study-observed-ui/study-ui/study/typecheck，时间 14:16–14:17），覆盖了 2026-11-05 A11 收尾同名的逐套件日志。兵部发现后中止，未备份，无法还原原件。
+- 存活：`evidence/verification/results.json`、`workspace.log`、`reader.log` 仍是 11-05 原件；更早的含日期目录（10-17 / 10-23 / 11-05）未受影响。
+- 影响：A11 的证据链以 `results.json` 为主仍成立；但同名逐套件日志已不对应 A11 那次运行，不得再引用它们作为 A11 证据。
+- 后续：所有 verify 必须显式给 `MARGINSTUDY_VERIFY_DIR`（临时目录），并加脚本级护栏防止再写入 `evidence/`。

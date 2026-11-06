@@ -104,7 +104,7 @@
 .ms-workspace-import-web {margin:8px;font-size:12px;white-space:normal;height:auto;min-height:32px;}
 .ms-workspace-reader,.ms-workspace-map {display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;}
 .ms-workspace-map {position:relative;}
-.ms-fixed-views {position:absolute;left:12px;bottom:70px;z-index:8;width:38px;height:38px;}
+.ms-fixed-views {position:absolute;right:19px;top:12px;z-index:8;width:38px;height:38px;}
 .ms-fixed-views-toggle {width:38px;height:38px;border-radius:50%;box-shadow:0 2px 9px #0002;background:var(--background-primary,#fff);}
 .ms-fixed-views-panel {position:absolute;left:46px;bottom:0;display:flex;flex-direction:column;gap:4px;max-height:45vh;max-width:240px;overflow:auto;padding:8px;border:1px solid var(--background-modifier-border,#ddd);border-radius:10px;background:var(--background-primary,#fff);box-shadow:0 3px 12px #0002;}
 .ms-workspace-reader {flex:var(--ms-reader-ratio,.5) 1 0;order:2;background:#fff;}
@@ -604,7 +604,7 @@ body.ms-study-host-space .claudian-container.claudian-zen {display:none!importan
 .ms-study-workspace .ms-bottom-scene-tools[data-scene-id="excerpt"] [data-ms-tool="document-notebook"] { margin-left:10px; }
 .ms-study-workspace .ms-bottom-scene-tools[data-scene-id="excerpt"] [data-ms-tool="excerpt.more"] { width:22px;margin-left:17px; }
 .ms-study-home-screen [data-home-group] { padding-top:2px; }
-.ms-workspace-floating-actions { position:absolute;top:calc(50% - 62px);right:16px;z-index:36;display:flex;flex-direction:column;gap:12px;width:44px;pointer-events:none; }
+.ms-workspace-floating-actions { position:absolute;top:calc(50% - 93.5px);right:82px;z-index:36;display:flex;flex-direction:column;gap:12px;width:44px;pointer-events:none; }
 .ms-study-workspace .ms-workspace-floating-action { box-sizing:border-box;display:flex;align-items:center;justify-content:center;flex:none;width:44px;height:44px;min-width:44px;min-height:44px;margin:0;padding:11px;border:0;border-radius:50%;background:#667484;color:#fff;box-shadow:0 2px 9px #0002;pointer-events:auto; }
 .ms-workspace-floating-action svg { width:22px;height:22px;stroke-width:1.8; }
 .ms-workspace-floating-action:hover { background:#58697b; }

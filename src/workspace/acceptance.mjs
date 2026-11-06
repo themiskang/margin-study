@@ -116,7 +116,8 @@ try{
     work.capItemError=Math.max(...work.capItemErrors.flatMap(item=>Object.values(item)));
     work.capRightError=Math.abs(work.context.right-(width===1512?1105:727));
     work.capItemCountError=Math.abs(work.contextItems.length-7);
-    const floatRefs=width===1512?[[1452,376.5],[1452,432.5]]:[[696,height===427?186.5:376.5],[696,height===427?242.5:432.5]];
+    const floatTop=work.map.y+work.map.height/2-(height<=600?38:93.5),floatX=work.map.right-126;
+    const floatRefs=[[floatX,floatTop],[floatX,floatTop+56]];
     work.floatingErrors=work.floating.map((item,index)=>({x:Math.abs(item.rect.x-floatRefs[index][0]),y:Math.abs(item.rect.y-floatRefs[index][1]),width:Math.abs(item.rect.width-44),height:Math.abs(item.rect.height-44)}));
     work.floatingError=Math.max(...work.floatingErrors.flatMap(item=>Object.values(item)));
     const attachmentRef=width===1512?{x:722,y:102,w:32,h:46}:tallNarrow?{x:718,y:102,w:32,h:46}:{x:344,y:97,w:44,h:44};

@@ -249,7 +249,7 @@ body.ms-theme-dark .ms-mindmap-root .ms-node-comment { border-top-color: #ffffff
 .ms-mindmap-root.is-native-chrome > button.ms-native-canvas-menu > span:first-child { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ms-native-canvas-chevron { font-size: 20px; height: 15px; font-weight: 400; line-height: 11px; }
 .ms-native-map-rail {
-  position: absolute; z-index: 6; top: 18%; right: 9px; display: flex; flex-direction: column; align-items: center;
+  position: absolute; z-index: 6; top: 18%; right: 19px; display: flex; flex-direction: column; align-items: center;
   box-sizing: border-box; width: 48px; max-height: calc(82% - 90px); overflow-y: auto; padding: 9px 6px; gap: 8px; border-radius: 26px; background: #fafafae8;
 }
 .ms-mindmap-root button.ms-native-map-icon {
@@ -262,7 +262,7 @@ body.ms-theme-dark .ms-mindmap-root .ms-node-comment { border-top-color: #ffffff
 .ms-mindmap-root .ms-native-map-icon.is-active { color: #4a95f4; background: #edf6ff; }
 .ms-native-map-rail-divider { width: 25px; height: 1px; margin: 2px 0; background: #b9b9b9; }
 .ms-mindmap-root .ms-native-map-select {
-  position: absolute; z-index: 6; top: min(calc(18% + 325px), calc(100% - 64px)); right: 9px; display: flex; align-items: center; justify-content: center;
+  position: absolute; z-index: 6; top: min(calc(18% + 325px), calc(100% - 64px)); right: 19px; display: flex; align-items: center; justify-content: center;
   width: 49px; height: 49px; margin: 0; padding: 3px; border: 0; border-radius: 50%;
   background: #fafafae8; color: #747b86; font-size: 12px; font-weight: 600; box-shadow: none;
 }
