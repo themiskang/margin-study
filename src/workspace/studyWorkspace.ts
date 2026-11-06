@@ -87,7 +87,6 @@ export class StudyWorkspaceView extends ItemView {
   private mapHost!: HTMLElement;
   private fixedViewsHost!: HTMLElement;
   private fixedViewsOpen = false;
-  private fixedViewsDragged = false;
   private fixedViewsSignature = "";
   private recallSettingsSetId: string | undefined | null = null;
   private recallDisplayMode: "in-place" | "layered" = "in-place";
@@ -271,6 +270,10 @@ export class StudyWorkspaceView extends ItemView {
       }
     },true);
     this.registerDomEvent(window, "keydown", event => {
+      if (!event.defaultPrevented && event.metaKey && event.altKey && !event.shiftKey && (event.code==="KeyM" || event.key.toLowerCase()==="m") && this.app.workspace.activeLeaf===this.leaf) {
+        const target=event.target;
+        if (!(target instanceof Element && target.closest("input,textarea,[contenteditable=true]"))) { event.preventDefault(); event.stopPropagation(); this.renderer?.toggleSceneMultiSelect(); return; }
+      }
       if (!event.defaultPrevented && event.metaKey && event.altKey && (event.code==="KeyK" || event.key.toLowerCase()==="k")) {
         const target=event.target;
         if (!(target instanceof Element && target.closest("input,textarea,[contenteditable=true]")) && this.canContinuousExcerpt()) { event.preventDefault(); this.toggleContinuousExcerpt(); return; }
@@ -600,7 +603,7 @@ export class StudyWorkspaceView extends ItemView {
     contextItem("场景模板",template?.name??"传统界面",undefined,()=>this.openStudyMore());
     contextItem("文档",this.state.activePath?.split("/").pop()??"未打开","file-text",()=>this.chooseDocument());
     contextItem("脑图",canvas?.name??"未选择","share-2",item=>{const target=this.mapPane.querySelector<HTMLButtonElement>('[aria-label="选择脑图"]');if(target){const rect=item.getBoundingClientRect();target.dispatchEvent(new MouseEvent("click",{bubbles:true,clientX:rect.left,clientY:rect.bottom}));}});
-    context.append(contextIcon("star","固定视图入口",()=>this.fixedViewsHost.querySelector<HTMLButtonElement>('[aria-label="固定视图"]')?.click()),contextIcon("search","搜索文档",()=>this.openReaderSearch()));
+    context.append(contextIcon("star","固定视图入口",()=>{this.fixedViewsOpen=!this.fixedViewsOpen;this.drawFixedViews();}),contextIcon("search","搜索文档",()=>this.openReaderSearch()));
     const controlsId=uid("workspace-tools");
     const controls=el("div",{class:"ms-workspace-toolbar-controls",id:controlsId});controls.append(main,side);
     controls.hidden=sceneHeader&&!this.workspaceToolsOpen;
@@ -801,11 +804,10 @@ export class StudyWorkspaceView extends ItemView {
       add("redo-2","重做",()=>this.applyHistory(true),false,!this.currentHistoryState()?.canRedo);
       if(selection.sceneId==="handwriting")add("layers","手写层",button=>this.reader?.openHandwritingSettings(button),false,!hasReader);
     }else if(selection.sceneId==="organize"){
-      add("panels-top-left","卡片分组看板",()=>this.root.querySelector<HTMLButtonElement>('[aria-label="卡片分组看板"]')?.click());
+      add("panels-top-left","卡片分组看板",()=>this.renderer?.openBoard());
       add("bottom-hierarchy","层级",()=>this.openRecallHierarchy(tools));
       add("copy","复制移动",button=>{if(button)this.renderer?.openSceneCopyMoveMenu(button);});
       add("link","链接",()=>this.renderer?.toggleSceneConnectMode());
-      add("mouse-pointer-2","选择",()=>this.renderer?.toggleSceneMultiSelect());
       add("pencil","铅笔笔尖",()=>this.setReaderHandwritingMode("pen"),this.readerTool==="pen",!hasReader);
       add("undo-2","撤销",()=>this.applyHistory(false),false,!this.currentHistoryState()?.canUndo);
       add("redo-2","重做",()=>this.applyHistory(true),false,!this.currentHistoryState()?.canRedo);
@@ -1041,16 +1043,6 @@ export class StudyWorkspaceView extends ItemView {
   private drawFixedViews(): void {
     if(!this.fixedViewsHost)return;
     this.fixedViewsHost.replaceChildren();
-    const position=this.plugin.store.settings.fixedViewPosition;
-    const paneHeight=this.mapPane.clientHeight;
-    if(position&&Number.isFinite(position.x)&&Number.isFinite(position.y)&&position.y<=(paneHeight>0?26/paneHeight:.035)){this.fixedViewsHost.style.left=`clamp(0px, ${clamp(position.x,0,1)*100}%, max(0px, calc(100% - 38px)))`;this.fixedViewsHost.style.top=`clamp(0px, ${clamp(position.y,0,1)*100}%, 26px)`;this.fixedViewsHost.style.right="auto";}
-    else {this.fixedViewsHost.style.left="";this.fixedViewsHost.style.top="";this.fixedViewsHost.style.right="";}
-    const toggle=el("button",{type:"button",class:"ms-fixed-views-toggle","aria-label":"固定视图","aria-expanded":String(this.fixedViewsOpen),text:"📌"});
-    toggle.addEventListener("pointerdown",event=>{if(event.button!==0)return;const pane=this.mapPane.getBoundingClientRect(),host=this.fixedViewsHost.getBoundingClientRect(),startX=event.clientX,startY=event.clientY,offsetX=host.left-pane.left,offsetY=host.top-pane.top;this.fixedViewsDragged=false;toggle.setPointerCapture(event.pointerId);
-      const move=(next:PointerEvent)=>{if(Math.hypot(next.clientX-startX,next.clientY-startY)<4&&!this.fixedViewsDragged)return;this.fixedViewsDragged=true;const width=Math.max(0,pane.width-toggle.offsetWidth),height=Math.min(26,Math.max(0,pane.height-toggle.offsetHeight)),x=clamp(offsetX+next.clientX-startX,0,width),y=clamp(offsetY+next.clientY-startY,0,height);this.fixedViewsHost.style.left=`${x}px`;this.fixedViewsHost.style.top=`${y}px`;this.fixedViewsHost.style.right="auto";this.plugin.store.settings.fixedViewPosition={x:x/Math.max(1,pane.width),y:y/Math.max(1,pane.height)};this.positionFixedPanel();this.plugin.store.save();};
-      const end=()=>{toggle.removeEventListener("pointermove",move);toggle.removeEventListener("pointerup",end);toggle.removeEventListener("pointercancel",end);if(this.fixedViewsDragged)this.plugin.store.save();};toggle.addEventListener("pointermove",move);toggle.addEventListener("pointerup",end);toggle.addEventListener("pointercancel",end);
-    });
-    toggle.addEventListener("click",()=>{if(this.fixedViewsDragged){this.fixedViewsDragged=false;return;}this.fixedViewsOpen=!this.fixedViewsOpen;this.drawFixedViews();});this.fixedViewsHost.append(toggle);
     if(!this.fixedViewsOpen)return;
     const panel=el("div",{class:"ms-fixed-views-panel","aria-label":"固定视图列表"});this.fixedViewsHost.append(panel);this.positionFixedPanel();
     const store=this.plugin.store,set=store.studySets.find(item=>item.id===store.activeStudySetId),canvas=store.canvases.find(item=>item.id===store.activeCanvasId);
@@ -1096,6 +1088,7 @@ export class StudyWorkspaceView extends ItemView {
     action("导入网页 / 微信文章…","download",()=>openWebImport(this.plugin));
     const studySetId=this.plugin.store.activeStudySetId;
     action("切换界面模式","layout-template",()=>this.toggleInterfaceMode());
+    action("固定视图…","pin",()=>{this.fixedViewsOpen=!this.fixedViewsOpen;this.drawFixedViews();});
     if(studySetId)for(const template of this.plugin.store.getSceneTemplates())action(`场景模板：${template.name}`,"layout-template",()=>{this.plugin.store.selectStudyScene(studySetId,template.id,template.scenes[0].id);this.reader?.refreshSceneSettings?.();this.drawToolbar();this.saveLayout();});
     action("管理场景模板…","layout-template",()=>this.openSceneTemplateManager());
     action("工作区设置…","settings-2",()=>this.openWorkspaceSettings());

@@ -11,7 +11,15 @@ Element.prototype.setPointerCapture=function(){};Element.prototype.releasePointe
 window.addEventListener('error',event=>errors.push(event.message));
 window.addEventListener('unhandledrejection',event=>errors.push(String(event.reason)));
 function assert(value:any,message:string){if(!value)throw new Error(message);}
-function button(root:ParentNode,label:string):HTMLButtonElement{const node=[...root.querySelectorAll<HTMLButtonElement>('button')].find(value=>value.getAttribute('aria-label')===label||value.textContent===label);assert(node,'Missing button '+label);return node!;}
+function button(root:ParentNode,label:string):HTMLButtonElement{
+  let node=[...root.querySelectorAll<HTMLButtonElement>('button')].find(value=>value.getAttribute('aria-label')===label||value.textContent===label);
+  if(!node&&['连接卡片','多选','脑图手写','手形工具'].includes(label)){
+    button(root,'选择脑图').click();
+    if(label!=='多选')button(document.querySelector('#test-menu')!,'工具 ▸').click();
+    node=button(document.querySelector('#test-menu')!,label==='多选'?'多选 ⌥⌘M':label);
+  }
+  assert(node,'Missing button '+label);return node!;
+}
 const pause=()=>new Promise<void>(resolve=>setTimeout(resolve,0));
 const surface=(p:any)=>p.host.querySelector('[aria-label="脑图手写画布"]') as SVGSVGElement;
 function pointer(node:Element,type:string,x:number,y:number,extra:any={}){node.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,pointerId:17,button:0,isPrimary:true,clientX:x,clientY:y,...extra}));}

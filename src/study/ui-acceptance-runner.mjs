@@ -23,7 +23,8 @@ const mockedObsidian = obsidian.replace(/export class Menu \{[\s\S]*?(?=\nexport
   hide() { document.querySelector('#test-menu')?.remove(); this.hidden(); return this; }
   onHide(callback: () => void) { this.hidden = callback; }
   addItem(cb: any) { const item: any = {title:'',disabled:false,action:()=>{},setTitle(value:any){this.title=value;return this;},setDisabled(value:any){this.disabled=value;return this;},setChecked(value:any){this.checked=value;return this;},onClick(value:any){this.action=value;return this;}};cb(item);this.items.push(item);return this; }
-  showAtMouseEvent() { document.querySelector('#test-menu')?.remove(); const menu=document.createElement('div');menu.id='test-menu';menu.setAttribute('role','menu');for(const item of this.items){const button=document.createElement('button');button.textContent=item.title;button.disabled=item.disabled;button.onclick=()=>{menu.remove();item.action();};menu.append(button);}document.body.append(menu); }
+  showAtMouseEvent() { document.querySelector('#test-menu')?.remove(); const menu=document.createElement('div');menu.id='test-menu';menu.setAttribute('role','menu');for(const item of this.items){const button=document.createElement('button');button.textContent=item.title;button.disabled=item.disabled;button.setAttribute('aria-checked',String(!!item.checked));button.onclick=(event)=>{menu.remove();item.action(event);};menu.append(button);}document.body.append(menu); }
+  showAtPosition() { this.showAtMouseEvent(); }
 }`).replace(/export function setIcon\([\s\S]*?(?=\nexport )/, `export function setIcon(element: HTMLElement, icon: string) {
   const paths: Record<string,string> = {
     list:'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',

@@ -29,7 +29,16 @@ const wait=(ms=0)=>new Promise<void>(resolve=>setTimeout(resolve,ms));
 const frame=()=>new Promise<void>(resolve=>requestAnimationFrame(()=>resolve()));
 function assert(value:any,message:string){if(!value)throw new Error(message);}
 async function until(test:()=>any,message:string){const deadline=performance.now()+4000;while(!test()){if(performance.now()>deadline)throw new Error(message);await wait(10);}}
-function button(root:ParentNode,label:string):HTMLButtonElement{const node=[...root.querySelectorAll<HTMLButtonElement>('button')].find(item=>item.getAttribute('aria-label')===label||item.textContent===label);assert(node,'Missing button '+label);return node!;}
+function button(root:ParentNode,label:string):HTMLButtonElement{
+  let node=[...root.querySelectorAll<HTMLButtonElement>('button')].find(item=>item.getAttribute('aria-label')===label||item.textContent===label);
+  if(!node&&label==='固定视图'){button(root,'学习集更多设置').click();node=button(root,'固定视图…');}
+  const labels:Record<string,string>={'大纲':'大纲','卡片分组看板':'卡片分组看板 ⌃⌘M','多选':'多选 ⌥⌘M','脑图手写':'脑图手写','手形工具':'手形工具'};
+  if(!node&&labels[label]){
+    const graph=(root as Element).matches?.('.ms-mindmap-root')?root:root.querySelector('.ms-mindmap-root');
+    if(graph){button(graph,'选择脑图').click();if(label==='脑图手写'||label==='手形工具')button(document.querySelector('#test-menu')!,'工具 ▸').click();node=button(document.querySelector('#test-menu')!,labels[label]);}
+  }
+  assert(node,'Missing button '+label);return node!;
+}
 const state=(p:any)=>p.view.getState() as any;
 const mapCard=(p:any,id='anchor-node')=>p.root.querySelector(`.ms-node[data-id="${id}"]`) as HTMLElement;
 const annotation=(p:any)=>p.root.querySelector('.ms-workspace-reader [data-ann-id="anchor-a"]') as HTMLElement;
@@ -175,7 +184,7 @@ try{
       button(p.root,'大纲').click();await frame();assert(dark(color(p.root.querySelector('.ms-map-floating-header'))),'outline header is not dark');
       const surface=p.root.querySelector<HTMLElement>('.ms-study-workspace')??p.root;
       await p.view.openFile(p.delta);await until(()=>!!surface.querySelector('.ms-page'),'PDF paper missing');
-      for(const [theme,paper] of [['sepia','rgb(245, 239, 223)'],['green','rgb(237, 250, 204)']]){surface.dataset.readingTheme=theme;await frame();for(const selector of ['.ms-workspace-toolbar','.ms-workspace-tabs','.ms-workspace-map','.ms-mindmap','.ms-native-map-rail','.ms-workspace-context','.ms-bottom-primary'])assert(dark(color(surface.querySelector(selector))),`${theme} shell not dark: ${selector} ${color(surface.querySelector(selector))}`);assert(color(surface.querySelector('.ms-page'))===paper,`${theme} paper ${color(surface.querySelector('.ms-page'))} differs from ${paper}`);}
+      for(const [theme,paper] of [['sepia','rgb(245, 239, 223)'],['green','rgb(237, 250, 204)']]){surface.dataset.readingTheme=theme;await frame();for(const selector of ['.ms-workspace-toolbar','.ms-workspace-tabs','.ms-workspace-map','.ms-mindmap','.ms-workspace-context','.ms-bottom-primary'])assert(dark(color(surface.querySelector(selector))),`${theme} shell not dark: ${selector} ${color(surface.querySelector(selector))}`);assert(color(surface.querySelector('.ms-page'))===paper,`${theme} paper ${color(surface.querySelector('.ms-page'))} differs from ${paper}`);}
     } finally {p.store.settings.theme=originalTheme;applyTheme(p.plugin);}
   });
   await test('MN5 outline stays inside map and matches both interface geometries',async()=>{
@@ -196,7 +205,8 @@ try{
   await test('Tablet host button padding does not collapse scene or mind-map icons',async()=>{
     const style=document.createElement('style');style.textContent='.is-tablet button:not(.clickable-icon){padding:4px 20px}';document.head.prepend(style);document.body.classList.add('is-tablet');
     try{const p=await fresh();p.store.selectStudyScene(p.set.id,'standard','excerpt');p.view.refresh(true);await frame();
-      const scene=p.root.querySelector<SVGElement>('.ms-bottom-action:not(.ms-bottom-scene-tab) svg'),map=p.root.querySelector<SVGElement>('.ms-native-map-icon svg');
+      button(p.root,'大纲').click();
+      const scene=p.root.querySelector<SVGElement>('.ms-bottom-action:not(.ms-bottom-scene-tab) svg'),map=p.root.querySelector<SVGElement>('.ms-map-floating-panel .ms-native-map-icon svg');
       assert(!!scene&&scene.getBoundingClientRect().width>=19,'tablet host padding collapsed scene icon');assert(!!map&&map.getBoundingClientRect().width>=19,'tablet host padding collapsed map icon');
     }finally{document.body.classList.remove('is-tablet');style.remove();}
   });
@@ -2568,24 +2578,31 @@ try{
     const body=p.root.querySelector<HTMLElement>('[aria-label="卡片分组看板面板"] .ms-board-body')!;assert(body,'board body missing');body.scrollTop=220;await frame();const expected=body.scrollTop;assert(expected>40,'board fixture did not have scrollable content');
     button(p.root,'固定视图').click();button(p.root,'固定当前看板').click();await frame();const fixed=p.store.studySets.find((s:any)=>s.id===p.set.id).fixedViews[0];assert(fixed.boardViewport?.y===expected,'board scroll was not saved');button(p.root,'关闭面板').click();p.root.querySelector<HTMLButtonElement>(`[data-fixed-view="${fixed.id}"]`)!.click();await frame();const restored=p.root.querySelector<HTMLElement>('[aria-label="卡片分组看板面板"] .ms-board-body')!;assert(Math.abs(restored.scrollTop-expected)<3,`board scroll was not restored: ${restored.scrollTop}/${expected}`);
   });
-  await test('A08 floating entry can be dragged and its position survives reopen',async()=>{
-    const p=await fresh();button(p.root,'固定视图').click();const toggle=button(p.root,'固定视图'),box=toggle.getBoundingClientRect();
-    for(const [type,x,y] of [['pointerdown',box.left+10,box.top+10],['pointermove',box.left+70,box.top-20],['pointerup',box.left+70,box.top-20]] as const)toggle.dispatchEvent(new PointerEvent(type,{bubbles:true,pointerId:22,button:0,clientX:x,clientY:y}));
-    assert(p.store.settings.fixedViewPosition,'floating entry drag did not save position');const moved=toggle.getBoundingClientRect(),pane=p.root.querySelector('.ms-workspace-map')!.getBoundingClientRect(),saved=state(p);await p.view.onClose();p.view.unload();p.view.containerEl.remove();await p.store.flush();const reopened=new Store(p.store.host);await reopened.load();assert(JSON.stringify(reopened.settings.fixedViewPosition)===JSON.stringify(p.store.settings.fixedViewPosition),'floating entry position lost after reopen');p.store=reopened;p.plugin.store=reopened;p.view=new StudyWorkspaceView(p.leaf,p.plugin);p.root=p.view.contentEl;p.view.load();await p.view.onOpen();await p.view.setState(saved);await frame();const restored=button(p.root,'固定视图').getBoundingClientRect(),reopenedPane=p.root.querySelector('.ms-workspace-map')!.getBoundingClientRect();assert(Math.abs(restored.left-reopenedPane.left-(moved.left-pane.left))<6&&Math.abs(restored.top-reopenedPane.top-(moved.top-pane.top))<6,`floating entry moved within pane after reopen`);
+  await test('Legacy fixed position does not render a floating entry',async()=>{
+    const p=await fresh();p.store.settings.fixedViewPosition={x:.18,y:.56};p.view.refresh(true);await frame();
+    assert(!p.root.querySelector('.ms-fixed-views-toggle'),'fixed toggle remains');button(p.root,'固定视图').click();assert(p.root.querySelector('[aria-label="固定视图列表"]'),'fixed views menu does not open panel');
   });
-  await test('Map controls avoid scrollbar, each other and visible nodes in both interfaces',async()=>{
+  await test('Map multi-select responds to the MN5 shortcut',async()=>{
+    const p=await fresh();const graph=p.root.querySelector<HTMLElement>('.ms-mindmap-root')!;
+    window.dispatchEvent(new KeyboardEvent('keydown',{key:'m',code:'KeyM',metaKey:true,altKey:true,bubbles:true,cancelable:true}));
+    assert(graph.dataset.selectionMode==='multiple','shortcut did not enable multi-select');
+    window.dispatchEvent(new KeyboardEvent('keydown',{key:'m',code:'KeyM',metaKey:true,altKey:true,bubbles:true,cancelable:true}));
+    assert(graph.dataset.selectionMode==='single','shortcut did not disable multi-select');
+  });
+  await test('Organize toolbar has no separate multi-select entry',async()=>{
+    const p=await fresh();p.store.setStudyInterface(p.set.id,'scenes');p.store.selectStudyScene(p.set.id,'standard','organize');p.view.refresh(true);await frame();
+    const toolbar=p.root.querySelector('[aria-label="学习场景工具栏"]')!;
+    assert(toolbar&&!toolbar.querySelector('[aria-label="选择"]'),'organize toolbar retained multi-select');
+  });
+  await test('Map canvas has no removed controls in both interfaces',async()=>{
     const p=await fresh();
     for(const mode of ['scenes','traditional'] as const){
       p.store.settings.fixedViewPosition={x:.18,y:.56};p.store.setStudyInterface(p.set.id,mode);p.view.refresh(true);await frame();
-      const root=p.root.querySelector<HTMLElement>('.ms-mindmap-root')!,scroll=root.querySelector<HTMLElement>('.ms-mindmap')!,rail=root.querySelector<HTMLElement>('.ms-native-map-rail')!,select=root.querySelector<HTMLElement>('.ms-native-map-select')!,actions=p.root.querySelector<HTMLElement>('.ms-workspace-floating-actions')!,pin=p.root.querySelector<HTMLElement>('.ms-fixed-views-toggle')!;
-      const rb=rail.getBoundingClientRect(),sb=select.getBoundingClientRect(),ab=actions.getBoundingClientRect(),pb=pin.getBoundingClientRect(),viewport=scroll.getBoundingClientRect();
-      assert(rb.right<=viewport.right-19&&sb.right<=viewport.right-19,`${mode} rail or select overlaps scrollbar`);
-      assert(ab.right<=rb.left-15,`${mode} floating actions overlap rail`);
-      for(const icon of rail.querySelectorAll<HTMLElement>('.ms-native-map-icon')){const box=icon.getBoundingClientRect(),hit=document.elementFromPoint(box.left+box.width/2,box.top+box.height/2);assert(hit===icon||icon.contains(hit),`${mode} rail icon covered: ${icon.getAttribute('aria-label')}`);}
-      assert(pb.bottom<=viewport.top,`${mode} legacy pin was not docked above content`);
-      const savedScroll=scroll.scrollTop;scroll.scrollTop=Math.max(0,scroll.scrollTop-245);await frame();
-      for(const node of scroll.querySelectorAll<HTMLElement>('.ms-node')){const box=node.getBoundingClientRect();assert(Math.min(pb.right,box.right,viewport.right)>Math.max(pb.left,box.left,viewport.left)&&Math.min(pb.bottom,box.bottom,viewport.bottom)>Math.max(pb.top,box.top,viewport.top)?false:true,`${mode} pin covers a visible node`);}
-      scroll.scrollTop=savedScroll;
+      const root=p.root.querySelector<HTMLElement>('.ms-mindmap-root')!;
+      assert(!p.root.querySelector('.ms-native-map-rail,.ms-native-map-select,.ms-fixed-views-toggle'),`${mode} removed controls remain`);
+      assert(root.querySelector('.ms-mindmap')&&p.root.querySelector('.ms-workspace-floating-actions'),`${mode} canvas or immersive actions missing`);
+      const map=p.root.querySelector<HTMLElement>('.ms-workspace-map')!,mapRight=map.getBoundingClientRect().right,actions=[...p.root.querySelectorAll<HTMLElement>('.ms-workspace-floating-action')];
+      assert(actions.length===2&&actions.every(action=>{const rect=action.getBoundingClientRect();return Math.abs(rect.width-44)<1&&mapRight-rect.right>=12&&mapRight-rect.right<=20;}),`${mode} immersive action geometry incorrect: ${JSON.stringify(actions.map(action=>action.getBoundingClientRect().toJSON()))}, map right ${mapRight}`);
     }
   });
   await test('A07 study home exposes three regions and persists pin and category filter',async()=>{
@@ -2676,10 +2693,10 @@ try{
     assert(p.store.getStudyScene(p.set.id)?.sceneId==='recall'&&recallReader.getRecallMode(),'recall handwriting exited recall instead of overlaying the handwriting tool');
     assert(JSON.stringify({cards:p.store.cards,nodes:p.store.nodes,annotations:await p.store.loadAnnotations(p.alpha.path)})===business,'entering recall handwriting changed business data');
     select('organize');await frame();const organizeRow=bar.querySelector<HTMLElement>('.ms-bottom-scene-tools:not([aria-hidden="true"])')!;
-    const copyMove=organizeRow.querySelector<HTMLButtonElement>('[data-ms-tool="copy-move"]')!,links=organizeRow.querySelector<HTMLButtonElement>('[data-ms-tool="links"]')!,selection=organizeRow.querySelector<HTMLButtonElement>('[data-ms-tool="selection"]')!;
+    const copyMove=organizeRow.querySelector<HTMLButtonElement>('[data-ms-tool="copy-move"]')!,links=organizeRow.querySelector<HTMLButtonElement>('[data-ms-tool="links"]')!;
     copyMove.click();await frame();assert(document.querySelector('#test-menu [role="menuitem"]'),'copy/move menu did not open from its scene tool');document.querySelector('#test-menu')?.remove();
     links.click();await frame();assert(p.root.querySelector('.ms-mindmap-root')?.classList.contains('is-connect-mode'),'scene link tool did not enter connect mode');links.click();await frame();assert(!p.root.querySelector('.ms-mindmap-root')?.classList.contains('is-connect-mode'),'scene link tool did not exit connect mode');
-    selection.click();await frame();assert(p.root.querySelector('.ms-mindmap-root')?.classList.contains('is-multi-select'),'scene selection tool did not enter multiselect mode');selection.click();await frame();assert(!p.root.querySelector('.ms-mindmap-root')?.classList.contains('is-multi-select'),'scene selection tool did not exit multiselect mode');
+    assert(!organizeRow.querySelector('[data-ms-tool="selection"]'),'organize row retained multi-select');
   });
   await test('A04 R1-R7: ordinary pen pressed state stays exclusive through tool changes and collapse with zero ink writes',async()=>{
     const p=await fresh();p.store.setStudyInterface(p.set.id,'scenes');p.view.refresh(true);await frame();await p.view.openFile(p.alpha);p.view.refresh(true);await frame();

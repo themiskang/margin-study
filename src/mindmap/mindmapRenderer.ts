@@ -357,6 +357,10 @@ export class MindmapRenderer {
     this.nativeCanvasButton = el("button", { type: "button", class: "ms-native-canvas-menu", "aria-label": "选择脑图" });
     this.nativeCanvasButton.addEventListener("click", (event) => {
       const menu = new Menu();
+      menu.addItem(item => item.setTitle("大纲").onClick(() => this.options.onOpenOutline ? this.options.onOpenOutline() : this.toggleNativePanel("outline")));
+      menu.addItem(item => item.setTitle("卡片分组看板 ⌃⌘M").onClick(() => this.openBoard()));
+      menu.addItem(item => item.setTitle("多选 ⌥⌘M").setChecked(this.multiSelect).onClick(() => this.toggleSceneMultiSelect()));
+      menu.addItem(item => item.setTitle("工具 ▸").onClick((click) => this.openMapToolMenu(click)));
       for (const canvas of this.plugin.store.canvases.filter((candidate) => candidate.studySetId === this.plugin.store.activeStudySetId && candidate.kind !== "review")) {
         menu.addItem((item) => item.setTitle((canvas.id === this.currentCanvasId() ? "✓ " : "") + canvas.name).onClick(() => { this.plugin.store.setActiveCanvas(canvas.id); this.render(); this.plugin.refreshSidebar(); }));
       }
@@ -370,31 +374,31 @@ export class MindmapRenderer {
         } });
       }));
       menu.addItem((item) => item.setTitle("脑图工具与设置…").onClick(() => this.openNativeTools()));
-      menu.addItem((item) => item.setTitle("大纲").onClick(() => this.toggleNativePanel("outline")));
       menu.addItem((item) => item.setTitle("新建手绘卡片…").onClick(() => this.options.onHandwrite ? this.options.onHandwrite() : this.openDrawingCard()));
       menu.showAtMouseEvent(event);
     });
-    const rail = el("div", { class: "ms-native-map-rail", role: "toolbar", "aria-label": "脑图工具" });
-    rail.append(this.nativeIcon("大纲", "list", () => this.options.onOpenOutline ? this.options.onOpenOutline() : this.toggleNativePanel("outline")),
-      this.nativeIcon("卡片分组看板", "panels-top-left", () => this.options.onOpenBoard ? this.options.onOpenBoard() : this.toggleNativePanel("board")),
-      el("span", { class: "ms-native-map-rail-divider", "aria-hidden": "true" }));
-    const hand = this.nativeIcon("手形工具", "hand", () => { this.setHandwritingMode("off"); this.connectMode = false; this.pendingFrom = null; this.exitSelection(); this.root?.classList.remove("is-connect-mode"); });
-    hand.classList.add("is-active"); hand.dataset.nativeTool = "hand";
-    const copy = this.nativeIcon("复制与粘贴", "copy", (event) => {
-      const menu = new Menu();
-      menu.addItem((item) => item.setTitle("复制选中卡片").setDisabled(!this.selectedIds.size).onClick(() => this.copyNodes()));
-      menu.addItem((item) => item.setTitle("粘贴独立副本").setDisabled(!cardClipboard.fragment).onClick(() => this.pasteNodes("clone")));
-      menu.addItem((item) => item.setTitle("粘贴共享引用").setDisabled(!cardClipboard.fragment).onClick(() => this.pasteNodes("reference")));
-      menu.showAtMouseEvent(event);
-    });
-    const link = this.nativeIcon("连接卡片", "link", () => { this.toggleConnect(); this.root?.classList.toggle("is-connect-mode", this.connectMode); });
-    link.dataset.nativeTool = "link";
-    const pen = this.nativeIcon("脑图手写", "spline", () => this.setHandwritingMode(this.handwritingMode === "off" ? "pen" : "off"));
-    pen.dataset.nativeTool = "ink";
-    rail.append(hand, copy, link, pen);
-    this.multiSelectBtn = el("button", { type: "button", class: "ms-native-map-select", text: "Select", "aria-label": "多选", "aria-pressed": "false" });
-    this.multiSelectBtn.addEventListener("click", () => this.setMultiSelect(!this.multiSelect));
-    this.root!.append(this.nativeCanvasButton, rail, this.multiSelectBtn);
+    this.root!.append(this.nativeCanvasButton);
+  }
+
+  openBoard(): void {
+    if (this.options.onOpenBoard) this.options.onOpenBoard(); else this.toggleNativePanel("board");
+  }
+
+  private openMapToolMenu(event: MouseEvent | KeyboardEvent): void {
+    const menu = new Menu();
+    menu.addItem(item => item.setTitle("手形工具").setChecked(this.handwritingMode === "off" && !this.connectMode && !this.multiSelect).onClick(() => {
+      this.setHandwritingMode("off"); this.connectMode = false; this.pendingFrom = null; this.exitSelection(); this.root?.classList.remove("is-connect-mode");
+    }));
+    menu.addItem(item => item.setTitle("复制与粘贴 ▸").onClick(click => {
+      const copy = new Menu();
+      copy.addItem(entry => entry.setTitle("复制选中卡片").setDisabled(!this.selectedIds.size).onClick(() => this.copyNodes()));
+      copy.addItem(entry => entry.setTitle("粘贴独立副本").setDisabled(!cardClipboard.fragment).onClick(() => this.pasteNodes("clone")));
+      copy.addItem(entry => entry.setTitle("粘贴共享引用").setDisabled(!cardClipboard.fragment).onClick(() => this.pasteNodes("reference")));
+      copy.showAtPosition({x: click instanceof MouseEvent ? click.clientX : 0, y: click instanceof MouseEvent ? click.clientY : 0});
+    }));
+    menu.addItem(item => item.setTitle("连接卡片").setChecked(this.connectMode).onClick(() => this.toggleSceneConnectMode()));
+    menu.addItem(item => item.setTitle("脑图手写").setChecked(this.handwritingMode !== "off").onClick(() => this.setHandwritingMode(this.handwritingMode === "off" ? "pen" : "off")));
+    menu.showAtPosition({x: event instanceof MouseEvent ? event.clientX : 0, y: event instanceof MouseEvent ? event.clientY : 0});
   }
 
   private toggleNativePanel(kind: "outline" | "board"): void {
@@ -426,7 +430,7 @@ export class MindmapRenderer {
     const { modal } = createModal("脑图工具");
     const tools = el("div", { class: "ms-native-tools-menu ms-toolbar" });
     const multi = this.multiSelectBtn, review = this.reviewControlBtn;
-    this.buildToolbar(tools); this.multiSelectBtn = multi; this.reviewControlBtn = review;
+    this.buildToolbar(tools); this.multiSelectBtn?.remove(); this.multiSelectBtn = multi; this.reviewControlBtn = review;
     modal.append(tools);
   }
 

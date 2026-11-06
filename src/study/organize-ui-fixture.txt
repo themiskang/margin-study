@@ -279,15 +279,14 @@ try {
   });
   await test('Native chrome places controls at the right, keeps old tools reachable, and opens locally owned floating panels', async () => {
     const p=await fresh();p.addCard('a','Article excerpt');p.addNode('one','a');target.style.width='760px';const {host,view}=p.graph({nativeChrome:true});assert(!host.querySelector('.ms-mindmap-root > .ms-toolbar'),'native workspace retained long top toolbar');
-    const rail=host.querySelector('.ms-native-map-rail')!, bounds=rail.getBoundingClientRect(),outer=host.getBoundingClientRect();assert(bounds.right<=outer.right&&bounds.left>outer.left+outer.width/2&&bounds.width<=52,'tool rail not right aligned');
-    assert(button(host,'多选').getBoundingClientRect().top>bounds.bottom,'Select overlaps the floating tool rail');
+    assert(!host.querySelector('.ms-native-map-rail,.ms-native-map-select'),'canvas controls remain');
     const hostStyle=document.createElement('style');hostStyle.textContent='button:not(.clickable-icon){background-color:#e0e0e0;color:#000}';target.append(hostStyle);
     const pill=getComputedStyle(button(host,'选择脑图'));assert(pill.color==='rgb(116, 123, 134)'&&pill.backgroundColor!=='rgb(224, 224, 224)','host button styles replaced native canvas pill colors');hostStyle.remove();
-    for(const label of ['手形工具','复制与粘贴'])assert(button(host,label).querySelector('svg')?.getAttribute('fill')==='currentColor',`${label} is not a filled glyph`);
-    assert(button(host,'脑图手写').querySelector('svg')?.getAttribute('stroke')==='currentColor','handwriting glyph lost its continuous line');
-    button(host,'大纲').click();assert(host.querySelector('.ms-map-floating-panel .ms-outline-renderer.is-native')&&p.plugin.sidebar===p.sentinel,'outline float absent/stole sidebar');button(host,'关闭面板').click();button(host,'卡片分组看板').click();assert(host.querySelector('.ms-map-floating-panel .ms-card-board.is-native'),'board float absent');button(host,'关闭面板').click();
-    button(host,'选择脑图').click();button(document.querySelector('#test-menu')!,'脑图工具与设置…').click();assert(button(document.querySelector('.ms-modal')!,'导入范围卡片')&&button(document.querySelector('.ms-modal')!,'自动布局'),'low-frequency commands lost');
-    document.querySelector('.ms-modal-bg')!.remove();button(host,'多选').click();assert(host.querySelector('[data-selection-mode="multiple"]'),'Select did not enable selection');view.dispose();
+    const choose=(label:string)=>{button(host,'选择脑图').click();button(document.querySelector('#test-menu')!,label).click();};
+    choose('大纲');assert(host.querySelector('.ms-map-floating-panel .ms-outline-renderer.is-native')&&p.plugin.sidebar===p.sentinel,'outline float absent/stole sidebar');button(host,'关闭面板').click();choose('卡片分组看板 ⌃⌘M');assert(host.querySelector('.ms-map-floating-panel .ms-card-board.is-native'),'board float absent');button(host,'关闭面板').click();
+    button(host,'选择脑图').click();button(document.querySelector('#test-menu')!,'脑图工具与设置…').click();assert(button(document.querySelector('.ms-modal')!,'导入范围卡片')&&button(document.querySelector('.ms-modal')!,'自动布局'),'low-frequency commands lost');assert(![...document.querySelectorAll('.ms-modal button')].some(item=>item.textContent==='多选'),'tools modal retained a multi-select entry');
+    document.querySelector('.ms-modal-bg')!.remove();choose('多选 ⌥⌘M');assert(host.querySelector('[data-selection-mode="multiple"]'),'menu did not enable selection');
+    choose('工具 ▸');for(const label of ['手形工具','复制与粘贴 ▸','连接卡片','脑图手写'])assert(button(document.querySelector('#test-menu')!,label),`missing ${label}`);button(document.querySelector('#test-menu')!,'手形工具').click();assert(!host.querySelector('[data-selection-mode="multiple"]'),'hand did not exit selection');view.dispose();
   });
   (window as any).acceptanceScenes=['outline-edit','board-two-level','native-map','native-cards'];
   (window as any).showAcceptanceScene=async(scene:string)=>{
