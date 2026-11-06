@@ -18,6 +18,7 @@ import { DocumentReaderView } from "../documents/documentReader";
 import { MindmapRenderer } from "../mindmap/mindmapRenderer";
 import { jumpToCardSource, openDetail, renderCardList, startReview } from "../cards/cardView";
 import { openReviewDeckBrowser, openReviewDecks } from "../review/decks";
+import { imageUrl } from "../review/content";
 import { mountResearchBrowser, researchSession } from "../research/browser";
 import type { ResearchHandle, ResearchSession } from "../research/browser";
 import { mountAiPanel, openAiSettings } from "../ai";
@@ -292,8 +293,8 @@ export class StudyWorkspaceView extends ItemView {
       this.syncHistoryButtons();
       if (change) this.renderer?.updateMovedNodes(change.movedNodeIds); else this.scheduleRefresh();
     }));
-    this.registerEvent(this.app.vault.on("create", () => this.scheduleRefresh()));
-    this.registerEvent(this.app.vault.on("delete", () => this.scheduleRefresh()));
+    this.registerEvent(this.app.vault.on("create", file => { if (file.path !== "_marginstudy-recovery" && !file.path.startsWith("_marginstudy-recovery/")) this.scheduleRefresh(); }));
+    this.registerEvent(this.app.vault.on("delete", file => { if (file.path !== "_marginstudy-recovery" && !file.path.startsWith("_marginstudy-recovery/")) this.scheduleRefresh(); }));
     this.registerDomEvent(this.root, "keydown", event => {
       const target=event.target as HTMLElement;
       if(!event.defaultPrevented&&(event.ctrlKey||event.metaKey)&&!event.altKey&&!event.shiftKey&&event.key.toLowerCase()==="f"&&!target.closest("input,textarea,[contenteditable=true]")){event.preventDefault();this.openReaderSearch();return;}
@@ -1565,7 +1566,7 @@ export class StudyWorkspaceView extends ItemView {
       for(const id of deck.cardIds){const card=store.getCard(id);if(!card||!ids.has(id)||this.deckQuery&&![card.title,card.front,card.back,card.tags.join(" ")].join(" ").toLowerCase().includes(this.deckQuery.toLowerCase()))continue;
         const row=el("article",{class:"ms-native-list-card","data-review-card":id,tabindex:"0"});row.style.setProperty("--card-color",card.color??"#ffffad");
         if(card.title)row.append(el("strong",{text:card.title}));row.append(el("div",{text:card.front}));
-        if(card.image)row.append(el("img",{src:card.image,alt:"卡片图片"}));
+        if(card.image)row.append(el("img",{src:imageUrl(this.plugin,card.image),alt:"卡片图片"}));
         row.addEventListener("dblclick",()=>openDetail(this.plugin,card,()=>this.refresh(true)));row.addEventListener("click",()=>this.renderer?.revealCard(id));
         row.append(this.toolbarButton("chevron-right","回到卡片原文",()=>jumpToCardSource(this.plugin,card)));list.append(row);
       }

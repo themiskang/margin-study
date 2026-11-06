@@ -14,6 +14,7 @@ import { createModal } from "../utils/modal";
 import { getOutline } from "../pdf/outline";
 import { annotationNotebook, documentNotebookState, notebookMeta } from "../annot/documentNotebooks";
 import { annotationTextRuns, renderTextRuns } from "../annot/textRuns";
+import { imageUrl } from "../review/content";
 
 export type DocumentNavigationTab = "contents" | "thumbnails" | "bookmarks" | "annotations" | "cards";
 export const documentNavigationTabs: { id: DocumentNavigationTab; label: string; icon: string }[] = [
@@ -164,7 +165,7 @@ export class DocumentNavigation {
           const body = el("div", { class: "ms-document-source-card-body markdown-rendered" }); row.append(body);
           void MarkdownRenderer.render(this.plugin.app, card.front || card.title || "", body, path, this.markdownOwner)
             .catch(() => { if (current()) body.textContent = card.front; })
-            .then(() => { if (current() && card.image) body.append(el("img", { src: card.image, alt: "卡片图片" })); });
+            .then(() => { if (current() && card.image) body.append(el("img", { src: imageUrl(this.plugin, card.image), alt: "卡片图片" })); });
           row.addEventListener("click", () => {
             if (source.anchorAnnId) this.reader.flashAnnotation(source.anchorAnnId); else if (source.page) { if (this.reader.gotoSourcePage) this.reader.gotoSourcePage(source.page); else this.reader.gotoPage?.(source.page); }
             this.markSelected(row); this.plugin.viewEvents.onDocumentCardSelect?.(card.id);

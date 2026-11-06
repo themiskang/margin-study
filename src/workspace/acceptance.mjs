@@ -29,7 +29,7 @@ await build({entryPoints:[join(temporary,"acceptance-fixture.ts")],bundle:true,p
   builder.onResolve({filter:/\/pdfjs$/},()=>({path:join(temporary,"fakePdf.ts")}));
 }}]});
 const allowed=new Set(["index.html","fixture.js","styles.css"]);
-const server=createServer(async(request,response)=>{const name=new URL(request.url,"http://127.0.0.1").pathname.slice(1)||"index.html";if(!allowed.has(name)){response.statusCode=404;response.end();return;}response.setHeader("Content-Type",name.endsWith(".js")?"text/javascript":name.endsWith(".css")?"text/css":"text/html; charset=utf-8");response.end(await readFile(join(temporary,name)));});
+const server=createServer(async(request,response)=>{const name=new URL(request.url,"http://127.0.0.1").pathname.slice(1)||"index.html";if(name==="_capacitor_file_/_marginstudy-media/test.png"){response.setHeader("Content-Type","image/png");response.end(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aN0AAAAASUVORK5CYII=","base64"));return;}if(!allowed.has(name)){response.statusCode=404;response.end();return;}response.setHeader("Content-Type",name.endsWith(".js")?"text/javascript":name.endsWith(".css")?"text/css":"text/html; charset=utf-8");response.end(await readFile(join(temporary,name)));});
 await new Promise(done=>server.listen(0,"127.0.0.1",done));
 const session=(await exec("agent-browser",["session","id","--scope","worktree","--prefix",`marginstudy-workspace-${process.pid}`],{cwd:project})).stdout.trim();
 const browser=(...args)=>exec("agent-browser",["--session",session,...args],{cwd:project,maxBuffer:4*1024*1024});

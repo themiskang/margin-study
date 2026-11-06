@@ -18,7 +18,7 @@ const source = "data:image/png;base64," + imageBytes.toString("base64");
 const card = { id: "card", docPath: "sample.pdf", front: "", tags: [], links: [], image: source };
 let disk = { cards: [card], nodes: [{ id: "node", title: "node", x: 0, y: 0 }], edges: [] };
 const before = Buffer.byteLength(JSON.stringify(disk));
-const files = new Map(), dirs = new Set();
+const files = new Map(), dirs = new Set(), modified = new Map();
 const interruptedPath = "_marginstudy-media/" + createHash("sha256").update(imageBytes).digest("hex") + ".png";
 files.set(interruptedPath, Buffer.from("interrupted"));
 let failWrite = false;
@@ -27,7 +27,11 @@ const adapter = {
   mkdir: async path => dirs.add(path),
   writeBinary: async (path, bytes) => { if (failWrite) throw new Error("synthetic write failure"); files.set(path, Buffer.from(bytes)); },
   readBinary: async path => Uint8Array.from(files.get(path)).buffer,
-  write: async (path, text) => files.set(path, text),
+  write: async (path, text) => { files.set(path, text); modified.set(path, Date.now()); },
+  read: async path => files.get(path),
+  list: async path => ({ files: [...files.keys()].filter(file => file.startsWith(path + "/")), folders: [] }),
+  stat: async path => files.has(path) ? { type: "file", size: Buffer.byteLength(files.get(path)), mtime: modified.get(path) ?? 0 } : null,
+  remove: async path => files.delete(path),
   getResourcePath: path => "mock:///" + path,
 };
 const vault = { adapter, getFiles: () => [], getAbstractFileByPath: () => null };
@@ -72,3 +76,26 @@ await store.flush();
 assert.equal(disk.cards[0].image, failed);
 assert.equal(store.cards[0].image, failed);
 console.log(`PASS synthetic migration ${before} -> ${after} bytes; idempotence, failure fallback, rendering and all fields`);
+await new Promise(resolve => setTimeout(resolve, 50));
+for (const path of [...files.keys()]) if (path.startsWith("_marginstudy-recovery/")) files.delete(path);
+for (let index = 0; index < 3; index++) {
+  const writerId = `device-old${index}-abc123`;
+  await adapter.write(`_marginstudy-recovery/pending-main-${writerId}.json`, JSON.stringify({ schemaVersion: 2, writerId, padding: "x".repeat(19_200_000) }));
+}
+const foreign = "_marginstudy-recovery/other-user-file.json";
+await adapter.write(foreign, "do not delete");
+disk = { cards: [], nodes: [], edges: [] };
+failWrite = false;
+for (let index = 0; index < 10; index++) {
+  const session = new Store(host);
+  await session.load();
+  session.save();
+  await session.flush();
+  for (let attempt = 0; attempt < 100 && [...files.keys()].filter(path => path.startsWith("_marginstudy-recovery/pending-main-")).length > 3; attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+}
+await new Promise(resolve => setTimeout(resolve, 100));
+const recoveries = [...files.entries()].filter(([path]) => path.startsWith("_marginstudy-recovery/pending-main-"));
+const recoveryBytes = recoveries.reduce((sum, [, value]) => sum + Buffer.byteLength(value), 0);
+assert.ok(recoveries.length <= 3 && recoveryBytes < 1_000_000, `${recoveries.length} files, ${recoveryBytes} bytes`);
+assert.equal(files.get(foreign), "do not delete");
+console.log(`PASS 10 sessions: ${recoveries.length} recovery files, ${recoveryBytes} bytes; unrelated file retained`);

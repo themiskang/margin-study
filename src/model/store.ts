@@ -98,6 +98,7 @@ export class Store {
   conflictPath: string | null = null;
 
   private writerId = uid("device");
+  private recoveryCleanupStarted = false;
   private revision = 0;
   private baseline: any = null;
   private mainDirty = false;
@@ -455,7 +456,38 @@ export class Store {
     await this.ensureDir(dir);
     const path = `${dir}/${label}-${rolling ? this.writerId : uid("snapshot")}.json`;
     await this.host.app.vault.adapter.write(path, JSON.stringify(payload, null, 2));
+    if (label === "pending-main" && !this.recoveryCleanupStarted) {
+      this.recoveryCleanupStarted = true;
+      void this.pruneMainRecoveries(path).catch(error => console.warn("MarginStudy recovery cleanup failed", error));
+    }
     return path;
+  }
+
+  private async pruneMainRecoveries(currentPath: string): Promise<void> {
+    const adapter = this.host.app.vault.adapter;
+    if (!adapter.list || !adapter.stat || !adapter.remove) return;
+    const candidates: { path: string; mtime: number; size: number }[] = [];
+    for (const path of (await adapter.list("_marginstudy-recovery")).files) {
+      const match = /^_marginstudy-recovery\/pending-main-(device-[a-z0-9]+-[a-z0-9]{1,6})\.json$/.exec(path);
+      if (!match) continue;
+      const stat = await adapter.stat(path);
+      if (!stat || stat.type !== "file") continue;
+      try {
+        const data = JSON.parse(await adapter.read(path));
+        if (data?.writerId !== match[1] || data?.schemaVersion !== 2) continue;
+      } catch { continue; }
+      candidates.push({ path, mtime: stat.mtime, size: stat.size });
+    }
+    candidates.sort((left, right) => Number(right.path === currentPath) - Number(left.path === currentPath) || right.mtime - left.mtime);
+    let count = 0, size = 0;
+    for (const file of candidates) {
+      if (file.path === currentPath || (count < 3 && size + file.size < 1024 * 1024)) {
+        count++; size += file.size;
+      } else {
+        await adapter.remove(file.path);
+        console.info("MarginStudy recovery removed", file.path, file.size);
+      }
+    }
   }
 
   sidecarPath(path: string): string { return path + ".mstudy.json"; }

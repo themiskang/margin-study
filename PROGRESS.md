@@ -1257,3 +1257,23 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - 完整验证 `MARGINSTUDY_VERIFY_DIR=/tmp/marginstudy-media-20261106-final2 npm run verify` 全绿，reader 214/214、workspace 298/298、APKG 9/9。未触碰 adb、安装、真实库或 `evidence/**`。
 - 构建 SHA-256：main.js `f1aa1c0187883aee550ea675cc17871a79455e8d00547137158a6d0f5bf5de8d`；styles.css `f0278a70fa8e93705514e59c473cdaec23468bbd8513423c6889e223818fe79d`。
 - 实测库 18.33 MB 中单字段 14.1 MB；仅移除此字段预计约 4.23 MB，其余大图片继续外置可再降低。未对真实库测量迁移后大小或安卓性能；其他数据占用可能使实际结果高于 1 MB。无法识别图片类型或无法解码时保留原值。
+
+## 2026-11-07（二次拖动卡顿 · 媒体外置构建最终复测 · Hermes 实机）
+- 完成：同一 5 步配方/5 窗/分析器（`analyze_drag2.py` 未改）跑 4 组配方（pA/pB/pC gap350 + pT gap90，144 Hz 顶帧 6944444 ns）+ 3 组 flush 探针（g0 空闲 / g1 落盘 / g2 带字节记账）+ 图片与落盘重开验证。被测构建 `main.js d365268a9fe2c9bd59551689cd580698`（设备实取一致）、`data.json` 9,997 B。
+- 结论①：**W5 的 60–65 ms `androidBridge` 长任务消失**——4 组配方全 trace 0 个 >50 ms 主线程任务，最长 30.6/28.7/32.5/10.1 ms 且均属「点空白取消选中」；`androidBridge` 调用单次 ≤1.5 ms（合计 2.3–2.5 ms），基线为 60–190 ms 原生侧阻塞。
+- 结论②：**flush 级联消失**——g0 0 个、g1 0 个（最大 6.9 ms）、g2 0 个（最大 4.4 ms）长任务，对照基线 f1 的 6 段 810.6 ms（128.9/204.5/210.2/66.4/137.8/62.8）。落盘 19.2 MB→9.6 KB、2034 ms→28–33 ms（恢复文件 9,593 B + data.json 9,593 B + saveData 7,083 B）。
+- 结论③：无功能退化。W2 mean 2.23–2.77（基线 3.31–3.47）；W5 mean 1.88–2.88（基线 1.18–1.41，单帧略贵但 0 长任务、rAF 中位 6.9–7.0 ms）；P2 0.41–0.87、P5 0.60–1.00；拖动内 `render()`/DOM 变更 0（新会话首存除外）。
+- 图片：看板 4/4 张加载（1440×3168、1440×3168、1414×804、4096×3072）、详情弹窗 1440×3168、脑图节点 1414×804，均目视确认非空白；`_marginstudy-media/` 3 个文件 sha256 与文件名一致；`data.json` 内联 data URL = 0。
+- 落盘：拖动提交 → +802 ms 去抖 → flush 28.4 ms；`Page.reload` 与 `am force-stop`+重启两次均保住 330.25/330.75 与全部图片；随后复位 211.991/210.073，`rev 525`、`dirty=false`、磁盘 9,997 B。
+- 残留：①每会话首次落盘因 `writeRecovery` 新建 `pending-main-<writerId>.json` 触发 vault create → refresh 26.4 + render 24.6 ms（pC 复现，落在 W3/W4 之间）；②`studyWorkspace.ts:1568`、`documentNavigation.ts:167` 仍用裸 `card.image`，裸相对路径实测 404/`naturalWidth=0`，这两处列表会显示空白；③恢复目录每会话新增 ~10 KB，另有 3 个迁移前 19.2 MB 旧文件未清。
+- 证据：`evidence/acceptance-20261106/HERMES-DRAG2-FINAL.md` + `drag2-trace-pA|pB|pC|pT.json`、`drag2-summary-p*.json`、`drag2-final-compare.json`、`flushprobe2-trace-g0|g1.json`、`flushprobe3-trace-g2.json`、截图 `drag2-final-01..05/99`、`drag2-harness/` 新增脚本。
+- 现场：A30-OPPO 学习集库主页、`selectedIds=[]`、`viewScale=1`、trace 已关闭、无未 flush 编辑；`adb forward` 移除 `tcp:9333`，原有 `54779/37395` 未动，未 kill/start adb server；产品代码未改未提交。
+
+## 2026-11-07（媒体外置收尾修复）
+- 两处卡片列表原来直接设置相对路径，原实机证据为 404、`naturalWidth=0`；现均通过 `imageUrl()`。合成浏览器验收确认两处 `/_capacitor_file_/` 资源 URL 返回 200 且图片解码。全局搜索没有第三处直接使用 `card.image` 的裸图片路径；其余命中包括标注图片、编辑器和已解析的图片参数。
+- 新会话首次主数据恢复文件创建及恢复文件删除均忽略该目录的 vault 事件，普通文件创建仍触发刷新。合成首次落盘断言 `scheduleRefresh=0`、`render=0`；改前实机为刷新 26.4 ms、重建 24.6 ms。
+- 异步清理仅处理文件名符合设备生成规则且 JSON 的 `schemaVersion`、`writerId` 一致的 `pending-main` 文件；保留当前副本和最近副本，最多 3 个、合计小于 1 MiB，删除逐个记日志。当前副本即使超过上限也保留；冲突快照、标注恢复及不匹配文件不删除，故目录总量并非无条件受限。
+- 合成 10 次会话：3 个主数据恢复文件共 6,520 字节；3 个约 19.2 MB 旧副本清除，另一个非插件文件保留。真实库未操作。
+- 专项 workspace 验证 `/tmp/marginstudy-media-closeout-ui` 为 300/300；完整验证 `/tmp/marginstudy-media-closeout-20261107-final2` 全绿，workspace 300/300、reader 214/214、APKG 9/9。
+- 构建 SHA-256：main.js `c6ff1a92508555335eb057561a5f41c58cfc1d1db6706404880b27becff726a9`；styles.css `f0278a70fa8e93705514e59c473cdaec23468bbd8513423c6889e223818fe79d`。清理旧大文件需读取及解析其内容，未在设备上测量这一步的耗时。
+- 可选 W5 单帧优化本轮未修改；未触碰 adb、安装、真实库、`evidence/**` 或提交。

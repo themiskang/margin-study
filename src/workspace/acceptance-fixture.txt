@@ -137,6 +137,41 @@ function morePane(p:any,name:string){button(p.root,'学习集更多设置').clic
 function mapInk(p:any){return p.root.querySelector('[aria-label="脑图手写画布"]') as SVGSVGElement;}
 
 try{
+  await test('External card images load in review and document navigation',async()=>{
+    const p=await fresh(),path='_marginstudy-media/test.png';
+    p.app.vault.adapter.getResourcePath=(value:string)=>'/_capacitor_file_/'+value;
+    p.store.updateCard('anchor-card',{image:path});
+    const deck=p.store.createReviewDeck('Image review',p.set.id);p.store.enqueueReviewInDeck(['anchor-card'],deck.id);
+    p.view.refresh(true);button(p.root,'复习卡组').click();
+    const review=p.root.querySelector<HTMLImageElement>('[data-review-card="anchor-card"] img')!;
+    assert(review?.src.includes('/_capacitor_file_/'+path),'review card did not resolve resource path');
+    await until(()=>review.complete&&review.naturalWidth>0,'review image did not decode');
+    assert((await fetch(review.src)).status===200,'review image did not return 200');
+    button(p.root,'文档目录与书签').click();button(p.root.querySelector('[aria-label="书页查找方式"]')!,'卡片').click();
+    await until(()=>p.root.querySelector('[data-card-id="anchor-card"] img'),'document card image missing');
+    const nav=p.root.querySelector<HTMLImageElement>('[data-card-id="anchor-card"] img')!;
+    assert(nav.src.includes('/_capacitor_file_/'+path),'document card did not resolve resource path');
+    await until(()=>nav.complete&&nav.naturalWidth>0,'document image did not decode');
+    assert((await fetch(nav.src)).status===200,'document image did not return 200');
+  });
+  await test('Recovery creation and cleanup do not refresh the workspace',async()=>{
+    const p=await fresh();await p.store.flush();await wait(150);
+    let scheduled=0,renders=0;
+    const view=p.view as any,oldSchedule=view.scheduleRefresh,renderer=view.renderer,oldRender=renderer.render;
+    view.scheduleRefresh=function(){scheduled++;return oldSchedule.apply(this,arguments);};
+    renderer.render=function(){renders++;return oldRender.apply(this,arguments);};
+    const write=p.app.vault.adapter.write;
+    p.app.vault.adapter.write=async(path:string,value:string)=>{const exists=await p.app.vault.adapter.exists(path);await write(path,value);if(!exists)p.events.get('create')?.forEach((listener:any)=>listener({path}));};
+    try{
+      p.writes.delete([...p.writes.keys()].find((path:string)=>path.startsWith('_marginstudy-recovery/pending-main-')));
+      p.store.moveNode('anchor-node',333,444);await p.store.flush();await wait(150);
+      assert(scheduled===0&&renders===0,`recovery scheduled ${scheduled}, rendered ${renders}`);
+      p.events.get('delete')?.forEach((listener:any)=>listener({path:'_marginstudy-recovery/pending-main-device-old-abc123.json'}));
+      assert(scheduled===0,'recovery deletion scheduled refresh');
+      p.events.get('create')?.forEach((listener:any)=>listener({path:'ordinary.md'}));
+      assert(scheduled===1,'ordinary creation did not schedule refresh');
+    }finally{view.scheduleRefresh=oldSchedule;renderer.render=oldRender;}
+  });
   await test('Pinch 120 frame geometry and world writes',async()=>{
     const {p,scroll,world,point}=await freshPinchScene();
     await wait(200);
