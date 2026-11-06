@@ -127,10 +127,13 @@ function mapInk(p:any){return p.root.querySelector('[aria-label="脑图手写画
 
 try{
   await test('Dark theme renders home and workspace surfaces darker than light',async()=>{
-    const p=await fresh();
+    const p=await fresh(),originalTheme=p.store.settings.theme;
     const color=(node:Element|null)=>{assert(node,'missing theme surface');return getComputedStyle(node!).backgroundColor;};
-    const dark=(value:string)=>{const channels=value.match(/\d+/g)?.slice(0,3).map(Number);return !!channels&&channels.length===3&&channels.every(channel=>channel<100);};
+    const dark=(value:string)=>{const channels=value.match(/[\d.]+/g)?.map(Number);return !!channels&&channels.length>=3&&(channels[3]??1)>=.9&&channels.slice(0,3).every(channel=>channel<100);};
+    const luminance=(value:string)=>{const channels=value.match(/[\d.]+/g)!.slice(0,3).map(Number).map(channel=>{const part=channel/255;return part<=.04045?part/12.92:((part+.055)/1.055)**2.4;});return .2126*channels[0]+.7152*channels[1]+.0722*channels[2];};
+    const contrast=(foreground:string,background:string)=>{const values=[luminance(foreground),luminance(background)].sort((left,right)=>right-left);return (values[0]+.05)/(values[1]+.05);};
     try {
+      assert(!dark('rgba(0, 0, 0, 0)')&&!dark('rgba(0, 0, 0, 0.89)')&&dark('rgba(0, 0, 0, 0.9)'),'dark alpha threshold is incorrect');
       p.store.settings.theme='light';applyTheme(p.plugin);p.view.showStudyHome();await frame();
       const home=p.root.querySelector('.ms-study-home-screen'),workspace=p.root,lightHome=color(home),lightWorkspace=color(workspace);
       p.store.settings.theme='dark';applyTheme(p.plugin);await frame();
@@ -138,9 +141,17 @@ try{
       assert(dark(darkHome)&&dark(darkWorkspace)&&darkHome!==lightHome&&darkWorkspace!==lightWorkspace,`theme colors: ${lightHome}, ${darkHome}, ${lightWorkspace}, ${darkWorkspace}`);
       for(const selector of ['.ms-study-home-navigation','.ms-study-home-card','.ms-study-home-cover'])assert(dark(color(home!.querySelector(selector))),`not dark: ${selector}`);
       button(home! as ParentNode,p.set.name).click();await frame();
-      for(const selector of ['.ms-workspace-map','.ms-mindmap','.ms-node','.ms-workspace-reader-host','.ms-bottom-primary'])assert(dark(color(p.root.querySelector(selector))),`not dark: ${selector}`);
+      for(const selector of ['.ms-workspace-toolbar','.ms-workspace-library','.ms-workspace-map','.ms-mindmap','.ms-node','.ms-workspace-reader-host','.ms-bottom-primary'])assert(dark(color(p.root.querySelector(selector))),`not dark: ${selector}`);
+      const action=p.root.querySelector<HTMLButtonElement>('.ms-bottom-action:not(.ms-bottom-scene-tab):not(:disabled)')!;
+      assert(action,'missing bottom action');const pressed=action.getAttribute('aria-pressed');action.setAttribute('aria-pressed','true');await wait(200);
+      assert(dark(color(action)),`pressed action is not dark: ${color(action)}`);
+      if(pressed===null)action.removeAttribute('aria-pressed');else action.setAttribute('aria-pressed',pressed);
+      const pill=p.root.querySelector('.ms-bottom-primary');const ratio=contrast(getComputedStyle(action).color,color(pill));
+      assert(ratio>=4.5,`bottom action contrast ${ratio.toFixed(2)} < 4.5`);
       button(p.root,'大纲').click();await frame();assert(dark(color(p.root.querySelector('.ms-map-floating-header'))),'outline header is not dark');
-    } finally {document.body.classList.remove('ms-theme-dark','ms-theme-light');}
+      const surface=p.root.querySelector<HTMLElement>('.ms-study-workspace')??p.root;
+      for(const [theme,paper,border] of [['sepia','rgb(245, 239, 223)','#dcd6c6'],['green','rgb(237, 250, 204)','#cedeb3']]){surface.dataset.readingTheme=theme;await frame();const style=getComputedStyle(surface);assert(color(surface.querySelector('.ms-workspace-toolbar'))===paper&&style.getPropertyValue('--ms-workspace-border').trim()===border,`${theme} reading colors not preserved`);}
+    } finally {p.store.settings.theme=originalTheme;applyTheme(p.plugin);}
   });
   await test('Tablet host button padding does not collapse scene or mind-map icons',async()=>{
     const style=document.createElement('style');style.textContent='.is-tablet button:not(.clickable-icon){padding:4px 20px}';document.head.prepend(style);document.body.classList.add('is-tablet');

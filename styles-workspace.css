@@ -650,11 +650,11 @@ body.ms-study-host-space .claudian-container.claudian-zen {display:none!importan
 body.ms-theme-dark .ms-study-workspace {
   --background-primary:#24272e;--background-secondary:#1c1f25;--text-normal:#e7e9ed;--text-muted:#adb4bf;
   --background-modifier-border:#464b55;--background-modifier-hover:#383e49;
-  --ms-workspace-border:#464b55;--ms-native-ink:#b6bdc8;
+  --ms-native-ink:#b6bdc8;--ms-native-blue:#8dc1ff;
   background:#1c1f25;color:#e7e9ed;
 }
 body.ms-theme-dark .ms-study-workspace[data-reading-theme=white] {
-  --ms-reading-paper:#24272e;--ms-reading-canvas:#1c1f25;--ms-reading-raised:#30343d;--ms-reading-text:#e7e9ed;
+  --ms-reading-paper:#24272e;--ms-reading-canvas:#1c1f25;--ms-reading-raised:#30343d;--ms-reading-text:#e7e9ed;--ms-workspace-border:#464b55;
 }
 body.ms-theme-dark .ms-study-workspace .ms-native-popover.ms-study-home-screen {background:#1c1f25;color:#e7e9ed;}
 body.ms-theme-dark .ms-study-home-screen .ms-study-home-navigation {background:#272b33;border-color:#464b55;}
@@ -670,10 +670,10 @@ body.ms-theme-dark .ms-study-workspace .ms-native-menu-row {color:#e7e9ed;}
 body.ms-theme-dark .ms-study-workspace .ms-native-menu-row:hover {background:#39414d!important;}
 body.ms-theme-dark .ms-study-workspace .ms-native-menu-row.is-active {background:#394b60!important;color:#9ac9ff!important;}
 body.ms-theme-dark .ms-study-home-screen .ms-study-home-header-tools button.ms-study-home-create {background:#3b414b;color:#e7e9ed;}
-body.ms-theme-dark .ms-study-workspace :is(.ms-workspace-map,.ms-workspace-reader-host,.ms-workspace-child-view .ms-scroll) {background:#1c1f25;}
-body.ms-theme-dark .ms-study-workspace .ms-mindmap-root.is-native-chrome {--ms-map-canvas:#1c1f25;--ms-map-paper:#30343d;--ms-map-text:#e7e9ed;}
-body.ms-theme-dark .ms-study-workspace .ms-mindmap-root .ms-node:not(.has-color) :is(.ms-node-header,.ms-node-heading) {background:#393f49;color:#e7e9ed;}
-body.ms-theme-dark .ms-study-workspace .ms-mindmap-root .ms-node {border-color:var(--ms-node-color,#555d69);}
+body.ms-theme-dark .ms-study-workspace[data-reading-theme=white] :is(.ms-workspace-map,.ms-workspace-reader-host,.ms-workspace-child-view .ms-scroll) {background:#1c1f25;}
+body.ms-theme-dark .ms-study-workspace[data-reading-theme=white] .ms-mindmap-root.is-native-chrome {--ms-map-canvas:#1c1f25;--ms-map-paper:#30343d;--ms-map-text:#e7e9ed;}
+body.ms-theme-dark .ms-study-workspace[data-reading-theme=white] .ms-mindmap-root .ms-node:not(.has-color) :is(.ms-node-header,.ms-node-heading) {background:#393f49;color:#e7e9ed;}
+body.ms-theme-dark .ms-study-workspace[data-reading-theme=white] .ms-mindmap-root .ms-node {border-color:var(--ms-node-color,#555d69);}
 body.ms-theme-dark .ms-study-workspace .ms-mindmap-root button.ms-native-canvas-menu {background:#383e49;color:#d2d9e2;}
 body.ms-theme-dark .ms-study-workspace .ms-map-floating-panel {background:#24272e;border-color:#505762;}
 body.ms-theme-dark .ms-study-workspace .ms-map-floating-header {background:#30343d;color:#d2d9e2;border-color:#505762;}
@@ -688,3 +688,15 @@ body.ms-theme-dark .ms-study-workspace .ms-bottom-collapse>span {background:#d1d
 body.ms-theme-dark .ms-study-workspace :is(.ms-workspace-floating-action,.ms-workspace-attachment-capsule) {background:#4d5b6a;color:#fff;}
 body.ms-theme-dark .ms-study-workspace :is(.ms-native-popover,.ms-workspace-notice) {background:#30343d;color:#e7e9ed;border-color:#505762;}
 body.ms-theme-dark .ms-study-workspace :is(.ms-document-navigation,.ms-document-navigation-tabs,.ms-toc-toolbar) {border-color:#464b55;}
+body.ms-theme-dark .ms-study-workspace .ms-bottom-capsule-shell button.ms-bottom-action:hover:not(:disabled):not([aria-pressed=true]) {background:#505966;}
+body.ms-theme-dark .ms-study-workspace .ms-bottom-capsule-shell button.ms-bottom-action[aria-pressed=true]:not(:disabled) {background:#424c5a;color:#e7e9ed;}
+body.ms-theme-dark .ms-study-workspace .ms-bottom-capsule-shell button.ms-bottom-action[aria-label="标题链接"][aria-pressed=true]:not(:disabled) {background:#424c5a;color:#b7d6ff;}
+body.ms-theme-dark .ms-study-workspace .ms-bottom-capsule-shell button.ms-bottom-action.ms-bottom-scene-tab[aria-selected=true]:not(:disabled) {background:#596473;color:#fff;}
+body.ms-theme-dark .ms-study-workspace .ms-tb-btn:hover {background:#383e49;}
+body.ms-theme-dark .ms-study-workspace .ms-tb-btn.is-active,body.ms-theme-dark .ms-study-workspace button.ms-native-text-tool.is-active {background:#394b60;color:var(--ms-native-blue);}
+body.ms-theme-dark .ms-study-workspace button:is(.ms-workspace-document,.ms-workspace-canvas,.ms-workspace-study-name):hover {background:#383e49;}
+body.ms-theme-dark .ms-study-workspace button.ms-workspace-document.is-active,body.ms-theme-dark .ms-study-workspace button.ms-workspace-canvas[aria-current=true] {background:#394b60;color:var(--ms-native-blue);}
+body.ms-theme-dark .ms-study-workspace :is(.ms-workspace-context-label,.ms-workspace-empty strong),body.ms-theme-dark .ms-study-home-screen :is(.ms-study-home-section h4,.ms-study-home-recent-label) {color:#bfc7d2;}
+body.ms-theme-dark .ms-study-workspace:not([data-reading-theme=white]) {--background-primary:var(--ms-reading-paper);--background-secondary:var(--ms-reading-canvas);--text-normal:var(--ms-reading-text);--text-muted:var(--ms-native-ink);background:var(--ms-reading-paper);color:var(--ms-reading-text);}
+body.ms-theme-dark .ms-study-workspace:not([data-reading-theme=white]) :is(.ms-workspace-map,.ms-mindmap,.ms-workspace-reader-host) {background:var(--ms-reading-canvas);}
+body.ms-theme-dark .ms-study-workspace:not([data-reading-theme=white]) .ms-mindmap-root.is-native-chrome {--ms-map-canvas:var(--ms-reading-canvas);--ms-map-paper:var(--ms-reading-paper);--ms-map-text:var(--ms-reading-text);}
