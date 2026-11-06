@@ -3,8 +3,15 @@ import {spawn} from "node:child_process";
 import {mkdir,writeFile} from "node:fs/promises";
 import {fileURLToPath,pathToFileURL} from "node:url";
 import {resolve,relative,sep} from "node:path";
-const root=fileURLToPath(new URL("../",import.meta.url)), output=pathToFileURL(resolve(root,process.env.MARGINSTUDY_VERIFY_DIR||"evidence/verification")+sep);
+import {tmpdir} from "node:os";
+const root=fileURLToPath(new URL("../",import.meta.url));
+// 证据护栏：默认写到临时目录，禁止默认覆盖 evidence/（2026-11-06 事故：14 个套件日志被覆盖）。
+const defaultDir=`${tmpdir()}${sep}marginstudy-verify-${Date.now()}`;
+const outDir=resolve(root,process.env.MARGINSTUDY_VERIFY_DIR||defaultDir);
+if(outDir.startsWith(resolve(root,"evidence")+sep)&&process.env.MARGINSTUDY_ALLOW_EVIDENCE!=="1")throw new Error(`拒绝写入 evidence/：${relative(root,outDir)}；如确有需要设 MARGINSTUDY_ALLOW_EVIDENCE=1`);
+const output=pathToFileURL(outDir+sep);
 await mkdir(output,{recursive:true});
+console.log(`verify output: ${relative(root,outDir)}`);
 const allSuites=[
   ["typecheck","node_modules/typescript/bin/tsc","--noEmit"],
   ["build","esbuild.config.mjs","production"],

@@ -8,6 +8,7 @@ import {readFile, writeFile, mkdir, stat} from "node:fs/promises";
 import {createHash} from "node:crypto";
 import {fileURLToPath} from "node:url";
 import {resolve, relative, sep} from "node:path";
+import {tmpdir} from "node:os";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const argv = process.argv.slice(2);
@@ -86,7 +87,8 @@ const record = {
   pairs,
   artifacts,
 };
-const outDir = resolve(root, process.env.MARGINSTUDY_VERIFY_DIR || "evidence/verification");
+const outDir = resolve(root, process.env.MARGINSTUDY_VERIFY_DIR || `${tmpdir()}${sep}marginstudy-verify-${Date.now()}`);
+if (outDir.startsWith(resolve(root, "evidence") + sep) && process.env.MARGINSTUDY_ALLOW_EVIDENCE !== "1") throw new Error(`拒绝写入 evidence/：${relative(root, outDir)}；如确有需要设 MARGINSTUDY_ALLOW_EVIDENCE=1`);
 await mkdir(outDir, {recursive: true});
 const stamp = startedAt.replace(/[:.]/g, "-");
 const recordPath = resolve(outDir, `regress-${stamp}.json`);
