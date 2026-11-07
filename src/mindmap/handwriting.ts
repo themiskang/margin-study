@@ -31,6 +31,7 @@ export class MindmapHandwritingController {
   private surface = svg("svg", { class: "ms-map-ink", tabindex: "0", role: "application", "aria-label": "脑图手写画布" });
   private saved = svg("g");
   private live = svg("g");
+  private preview: { canvas: HTMLCanvasElement; context: CanvasRenderingContext2D; buffer: HTMLCanvasElement | null; bufferContext: CanvasRenderingContext2D | null; rendered: number; left: number; top: number; scale: number; dpr: number; width: number; height: number; frame: number } | null = null;
   private selectionGroup = svg("g");
   private palette = el("div", { class: "ms-map-ink-palette", role: "toolbar", "aria-label": "脑图手写工具" });
   private mode: HandwritingMode = "off";
@@ -231,6 +232,7 @@ export class MindmapHandwritingController {
       const point = this.point(event), previous = this.drawing.stroke.points[this.drawing.stroke.points.length - 1];
       if (event.pointerType === "pen" && !event.pressure) point.pressure = previous.pressure;
       this.drawing.stroke.points.push(point);
+      this.paintPreview();
     }
     if (this.editing) {
       const edit = this.editing; edit.trail.push(this.point(event)); this.cancel();
@@ -255,7 +257,12 @@ export class MindmapHandwritingController {
     this.commitDrawing();
   }
   private drawLive(): void {
-    this.live.replaceChildren(); if (this.drawing) this.live.append(createMindmapInkStroke(this.straightStroke(this.drawing.stroke, this.drawing.lineMode)));
+    if (this.drawing) {
+      if (!this.preview) this.startPreview();
+      this.paintPreview();
+      return;
+    }
+    this.live.replaceChildren();
     if (this.editing?.kind === "erase") this.live.append(svg("path", { d: path(this.editing.trail), fill: "none", stroke: "#777", "stroke-width": "18", "stroke-linecap": "round", opacity: ".25" }));
     else if (this.editing?.kind === "lasso") this.live.append(svg("path", { d: path(this.editing.trail), fill: "none", stroke: "#448aff", "stroke-width": "1.5", "stroke-dasharray": "5 4" }));
     if (this.editing?.kind === "move") {
@@ -263,6 +270,78 @@ export class MindmapHandwritingController {
       this.saved.querySelectorAll<SVGElement>("[data-map-ink-stroke]").forEach((group) => { if (this.selected.has(group.dataset.mapInkStroke!)) group.setAttribute("transform", `translate(${delta.x} ${delta.y})`); });
       this.drawSelection(delta);
     }
+  }
+  private startPreview(): void {
+    const canvas = document.createElement("canvas"), context = canvas.getContext("2d");
+    if (!context) return;
+    canvas.className = "ms-map-ink-preview";
+    this.root.append(canvas);
+    const opacity = this.drawing?.stroke.opacity ?? (this.drawing?.stroke.tool === "highlight" ? .32 : 1);
+    const buffer = opacity < 1 ? document.createElement("canvas") : null, bufferContext = buffer?.getContext("2d") ?? null;
+    if (buffer && !bufferContext) { canvas.remove(); return; }
+    this.preview = { canvas, context, buffer, bufferContext, rendered: 0, left: NaN, top: NaN, scale: NaN, dpr: 0, width: 0, height: 0, frame: 0 };
+    window.addEventListener("resize", this.resizePreview);
+    const tick = () => {
+      if (!this.preview) return;
+      this.paintPreview();
+      if (this.preview) this.preview.frame = requestAnimationFrame(tick);
+    };
+    this.preview.frame = requestAnimationFrame(tick);
+  }
+  private resizePreview = (): void => { this.paintPreview(true); };
+  private paintPreview(force = false): void {
+    const preview = this.preview, drawing = this.drawing;
+    if (!preview || !drawing) return;
+    const bounds = this.world.getBoundingClientRect(), scale = bounds.width / Math.max(1, this.world.offsetWidth);
+    const dpr = window.devicePixelRatio || 1, width = window.innerWidth, height = window.innerHeight;
+    const rootBounds = this.root.getBoundingClientRect();
+    const offsetLeft = `${-rootBounds.left - this.root.clientLeft + this.root.scrollLeft}px`, offsetTop = `${-rootBounds.top - this.root.clientTop + this.root.scrollTop}px`;
+    if (preview.canvas.style.left !== offsetLeft) preview.canvas.style.left = offsetLeft;
+    if (preview.canvas.style.top !== offsetTop) preview.canvas.style.top = offsetTop;
+    const viewport = this.world.closest(".ms-mindmap")?.getBoundingClientRect() ?? this.root.getBoundingClientRect();
+    const rectangle = (bounds: DOMRect) => `M ${bounds.left} ${bounds.top} H ${bounds.right} V ${bounds.bottom} H ${bounds.left} Z`;
+    const clip = `path(evenodd, "${rectangle(viewport)}")`;
+    if (preview.canvas.style.clipPath !== clip) preview.canvas.style.clipPath = clip;
+    const sizeChanged = preview.dpr !== dpr || preview.width !== width || preview.height !== height;
+    const changed = sizeChanged || preview.left !== bounds.left || preview.top !== bounds.top || preview.scale !== scale;
+    if (sizeChanged) {
+      preview.canvas.width = Math.round(width * dpr); preview.canvas.height = Math.round(height * dpr);
+      preview.context.setTransform(dpr, 0, 0, dpr, 0, 0);
+      if (preview.buffer && preview.bufferContext) {
+        preview.buffer.width = preview.canvas.width; preview.buffer.height = preview.canvas.height;
+        preview.bufferContext.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
+    }
+    if (changed || force || drawing.lineMode !== "off") {
+      preview.context.clearRect(0, 0, width, height); preview.rendered = 0;
+      preview.bufferContext?.clearRect(0, 0, width, height);
+    }
+    preview.left = bounds.left; preview.top = bounds.top; preview.scale = scale; preview.dpr = dpr; preview.width = width; preview.height = height;
+    const stroke = this.straightStroke(drawing.stroke, drawing.lineMode), points = stroke.points, context = preview.bufferContext ?? preview.context;
+    context.lineCap = "round"; context.lineJoin = "round"; context.strokeStyle = stroke.color; context.globalAlpha = preview.buffer ? 1 : (stroke.opacity ?? (stroke.tool === "highlight" ? .32 : 1));
+    const pressure = stroke.tool !== "highlight" && points.some((point) => point.pressure !== undefined);
+    let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+    for (let index = Math.max(1, preview.rendered); index < points.length; index++) {
+      const previous = points[index - 1], point = points[index];
+      context.lineWidth = stroke.width * scale * (pressure ? .25 + 1.5 * ((previous.pressure ?? .5) + (point.pressure ?? .5)) / 2 : 1);
+      const x1 = bounds.left + previous.x * scale, y1 = bounds.top + previous.y * scale, x2 = bounds.left + point.x * scale, y2 = bounds.top + point.y * scale, margin = context.lineWidth / 2 + 2 / dpr;
+      context.beginPath(); context.moveTo(x1, y1);
+      context.lineTo(x2, y2); context.stroke();
+      if (preview.buffer) {
+        left = Math.min(left, x1 - margin, x2 - margin); top = Math.min(top, y1 - margin, y2 - margin);
+        right = Math.max(right, x1 + margin, x2 + margin); bottom = Math.max(bottom, y1 + margin, y2 + margin);
+      }
+    }
+    if (preview.buffer && left < right && top < bottom) {
+      const x = Math.max(0, Math.floor(left * dpr)), y = Math.max(0, Math.floor(top * dpr));
+      const endX = Math.min(preview.canvas.width, Math.ceil(right * dpr)), endY = Math.min(preview.canvas.height, Math.ceil(bottom * dpr));
+      if (endX > x && endY > y) {
+        preview.context.clearRect(x / dpr, y / dpr, (endX - x) / dpr, (endY - y) / dpr);
+        preview.context.globalAlpha = stroke.opacity ?? (stroke.tool === "highlight" ? .32 : 1);
+        preview.context.drawImage(preview.buffer, x, y, endX - x, endY - y, x / dpr, y / dpr, (endX - x) / dpr, (endY - y) / dpr);
+      }
+    }
+    preview.rendered = points.length;
   }
   private history(redo: boolean): void { this.commitDrawing(); this.cancel(); this.clearSelection(); if (redo) this.options.redo(); else this.options.undo(); this.render(); }
   private clearSelection(): void { this.selected.clear(); this.selectionGroup.replaceChildren(); this.deleteButton.hidden = true; }
@@ -309,6 +388,7 @@ export class MindmapHandwritingController {
   }
   private cancel(): void {
     this.drawing = null; this.editing = null; const pointer = this.pointerId; this.pointerId = null; this.live.replaceChildren();
+    if (this.preview) { cancelAnimationFrame(this.preview.frame); this.preview.canvas.remove(); this.preview = null; window.removeEventListener("resize", this.resizePreview); }
     this.saved.querySelectorAll<SVGElement>("[transform]").forEach((group) => group.removeAttribute("transform")); this.drawSelection();
     if (pointer !== null && this.surface.hasPointerCapture?.(pointer)) this.surface.releasePointerCapture(pointer);
   }

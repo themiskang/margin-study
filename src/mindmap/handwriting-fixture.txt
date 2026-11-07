@@ -2,6 +2,7 @@ import { Store } from '__PROJECT__/src/model/store';
 import { MindmapRenderer } from '__PROJECT__/src/mindmap/mindmapRenderer';
 import { exportMindmapPng } from '__PROJECT__/src/export/mindmapExport';
 import { MarkdownRenderer } from 'obsidian';
+import { createMindmapInkStroke } from '__PROJECT__/src/mindmap/handwritingSvg';
 
 const target=document.querySelector('#fixtures') as HTMLElement,results:any[]=[],mounted:MindmapRenderer[]=[],stores:Store[]=[],errors:string[]=[];
 (window as any).results=results;
@@ -34,7 +35,111 @@ async function fresh(existing?:any){
  const host=document.createElement('section');host.style.cssText='height:650px;width:1050px;max-width:100%;position:relative';target.append(host);
  let calls:string[]=[];const view=new MindmapRenderer(plugin,{nativeChrome:true,onHandwritingModeChange:(mode:any)=>calls.push(mode)} as any);view.mount(host);mounted.push(view);return{store,set,canvasId,plugin,host,view,storage,calls};
 }
-try{
+ try{
+ await test('Preview uses viewport coordinates outside a contained leaf',async()=>{
+  const p=await fresh();p.host.style.cssText+=';contain:strict;top:80px';p.view.setHandwritingMode('pen');button(p.host,'脑图手写设置').click();
+  const node=surface(p),rect=node.getBoundingClientRect();pointer(node,'pointerdown',rect.left+100,rect.top+100);
+  const canvas=document.querySelector('canvas.ms-map-ink-preview') as HTMLCanvasElement,bounds=canvas?.getBoundingClientRect();
+  assert(canvas?.parentElement===p.host.querySelector('.ms-mindmap-root')&&bounds&&Math.abs(bounds.x)<=1&&Math.abs(bounds.y)<=1&&Math.abs(bounds.width-innerWidth)<=1&&Math.abs(bounds.height-innerHeight)<=1,'preview is not positioned against the viewport: '+JSON.stringify(bounds?.toJSON()));
+  const clip=canvas.style.clipPath.match(/^path\(evenodd, "(.+)"\)$/);assert(clip&&getComputedStyle(canvas).clipPath!=='none','preview clipping is unsupported');
+  const path=new Path2D(clip![1]),context=canvas.getContext('2d')!,map=(p.host.querySelector('.ms-mindmap') as HTMLElement).getBoundingClientRect();
+  assert(Number(getComputedStyle(canvas).zIndex)<Number(getComputedStyle(p.host.querySelector('.ms-map-ink-palette')!).zIndex),'preview is above palette');
+  assert(!context.isPointInPath(path,map.left-2,map.top-2,'evenodd'),'preview escapes map viewport');
+  p.host.style.top='125px';await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));
+  const moved=canvas.getBoundingClientRect();assert(Math.abs(moved.left)<=1&&Math.abs(moved.top)<=1,'preview shifted after ancestor moved: '+JSON.stringify(moved.toJSON()));
+  pointer(node,'pointercancel',rect.left+100,rect.top+100);
+ });
+ await test('Viewport preview and committed SVG masks agree on release',async()=>{
+  for(const mode of ['pen','highlight']){
+   for(const view of mounted.splice(0))view.dispose();target.replaceChildren();
+   const p=await fresh();p.host.style.cssText+=';contain:strict;top:80px';p.view.setHandwritingMode(mode as any);
+   const node=surface(p),rect=node.getBoundingClientRect(),points=[[120,180],[150,190],[180,175],[210,195],[240,180]];
+   pointer(node,'pointerdown',rect.left+points[0][0],rect.top+points[0][1],{pointerType:'pen',pressure:.5});
+   for(const point of points.slice(1,-1))pointer(node,'pointermove',rect.left+point[0],rect.top+point[1],{pointerType:'pen',pressure:.5});
+   const canvas=document.querySelector('canvas.ms-map-ink-preview') as HTMLCanvasElement,context=canvas.getContext('2d')!,remove=canvas.remove.bind(canvas);let snapshot:ImageData;
+   canvas.remove=()=>{snapshot=context.getImageData(0,0,canvas.width,canvas.height);remove();};
+   const last=points.at(-1)!;pointer(node,'pointerup',rect.left+last[0],rect.top+last[1],{pointerType:'pen',pressure:0});
+   const group=p.host.querySelector('[data-map-ink-stroke]') as SVGGElement,ctm=group.getScreenCTM()!,xml=new XMLSerializer().serializeToString(group);
+   const source=`<svg xmlns="http://www.w3.org/2000/svg" width="${innerWidth}" height="${innerHeight}" viewBox="0 0 ${innerWidth} ${innerHeight}"><g transform="matrix(${ctm.a} ${ctm.b} ${ctm.c} ${ctm.d} ${ctm.e} ${ctm.f})">${xml}</g></svg>`;
+   const image=new Image(),url=URL.createObjectURL(new Blob([source],{type:'image/svg+xml'}));await new Promise<void>((resolve,reject)=>{image.onload=()=>resolve();image.onerror=()=>reject(new Error('SVG mask failed to load'));image.src=url;});URL.revokeObjectURL(url);
+   const raster=document.createElement('canvas');raster.width=canvas.width;raster.height=canvas.height;const rasterContext=raster.getContext('2d')!;rasterContext.scale(devicePixelRatio,devicePixelRatio);rasterContext.drawImage(image,0,0);
+   const svgPixels=rasterContext.getImageData(0,0,raster.width,raster.height).data,previewPixels=snapshot!.data,threshold=mode==='pen'?64:20,width=canvas.width,height=canvas.height;
+   const mask=(data:Uint8ClampedArray)=>{const result:number[]=[];for(let index=0;index<width*height;index++)if(data[index*4+3]>=threshold)result.push(index);return result;};
+   const first=mask(previewPixels),second=mask(svgPixels);assert(first.length&&second.length,'empty '+mode+' mask');
+   const distance=(from:number[],to:Uint8ClampedArray)=>from.reduce((sum,index)=>{const x=index%width,y=Math.floor(index/width);let nearest=25;for(let dy=-4;dy<=4;dy++)for(let dx=-4;dx<=4;dx++){const xx=x+dx,yy=y+dy;if(xx>=0&&xx<width&&yy>=0&&yy<height&&to[(yy*width+xx)*4+3]>=threshold)nearest=Math.min(nearest,dx*dx+dy*dy);}return sum+Math.sqrt(nearest);},0)/from.length/devicePixelRatio;
+   const chamfer=(distance(first,svgPixels)+distance(second,previewPixels))/2;results.push({name:mode+' release mask chamfer CSS px',passed:chamfer<=.5,value:chamfer});assert(chamfer<=.5,mode+' release mask chamfer '+chamfer);
+  }
+ });
+ await test('Live pressure ink uses canvas across 120 frames and commits unchanged SVG',async()=>{
+  const p=await fresh();p.view.setHandwritingMode('pen');const node=surface(p),live=node.children[1] as SVGGElement,rect=node.getBoundingClientRect();
+  const observer=new MutationObserver(()=>{});observer.observe(node,{childList:true,subtree:true,attributes:true,characterData:true});
+  pointer(node,'pointerdown',rect.left+100,rect.top+100,{pointerType:'pen',pressure:.2});const canvas=document.querySelector('canvas.ms-map-ink-preview') as HTMLCanvasElement;assert(canvas,'live canvas missing');
+  for(let index=0;index<120;index++){
+   await new Promise<void>(resolve=>requestAnimationFrame(()=>resolve()));
+   pointer(node,'pointermove',rect.left+101+index,rect.top+100+Math.sin(index/10)*20,{pointerType:'pen',pressure:.1+.8*(index%11)/10});
+  }
+  assert(observer.takeRecords().length===0&&live.childNodes.length===0,'live SVG changed during drawing');
+  assert(canvas.width===Math.round(innerWidth*devicePixelRatio)&&getComputedStyle(canvas).pointerEvents==='none'&&getComputedStyle(canvas).position==='absolute','canvas size, position or pointer behavior incorrect');
+  pointer(node,'pointerup',rect.left+221,rect.top+100,{pointerType:'pen',pressure:0});
+  const stroke=ink(p).layers[0].strokes[0],expected=createMindmapInkStroke(stroke).outerHTML,actual=p.host.querySelector(`[data-map-ink-stroke="${stroke.id}"]`)?.outerHTML;
+ assert(actual===expected,'saved pressure geometry or style changed');assert(live.childNodes.length===0&&!canvas.isConnected,'live layers retained after release');observer.disconnect();
+ });
+ await test('Preview reprojects on zoom and resize and one undo removes the stroke',async()=>{
+  const p=await fresh();p.view.setHandwritingMode('pen');const node=surface(p),world=p.host.querySelector('.ms-mindmap-world') as HTMLElement,rect=world.getBoundingClientRect();
+  pointer(node,'pointerdown',rect.left+100,rect.top+100,{pointerType:'pen',pressure:.2});
+  pointer(node,'pointermove',rect.left+150,rect.top+100,{pointerType:'pen',pressure:.8});
+  const canvas=document.querySelector('canvas.ms-map-ink-preview') as HTMLCanvasElement,context=canvas.getContext('2d')!,lines:number[][]=[];
+  const lineTo=context.lineTo.bind(context);context.lineTo=(x:number,y:number)=>{lines.push([x,y]);lineTo(x,y);};
+  p.view.restoreViewport({...p.view.captureViewport(),scale:1.5});await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));
+  const zoomed=world.getBoundingClientRect(),scale=zoomed.width/world.offsetWidth;
+  assert(lines.length>0&&Math.abs(lines[0][0]-(zoomed.left+150*scale))<.5&&Math.abs(lines[0][1]-(zoomed.top+100*scale))<.5,'old ink did not reproject');
+  pointer(node,'pointermove',zoomed.left+200*scale,zoomed.top+110*scale,{pointerType:'pen',pressure:.5});
+  const last=lines[lines.length-1];assert(Math.abs(last[0]-(zoomed.left+200*scale))<.5&&Math.abs(last[1]-(zoomed.top+110*scale))<.5,'new ink detached from pointer');
+  lines.length=0;window.dispatchEvent(new Event('resize'));assert(lines.length>=2&&canvas.width===Math.round(innerWidth*devicePixelRatio),'resize did not redraw');
+  pointer(node,'pointerup',zoomed.left+200*scale,zoomed.top+110*scale,{pointerType:'pen',pressure:0});assert(ink(p).layers[0].strokes.length===1,'stroke not saved');
+  const saved=p.host.querySelector('[data-map-ink-stroke] path') as SVGPathElement,ctm=saved.getScreenCTM()!,endpoint=new DOMPoint(200,110).matrixTransform(ctm);
+  assert(Math.hypot(last[0]-endpoint.x,last[1]-endpoint.y)<.5,'canvas and saved SVG endpoints differ');
+  button(p.host,'撤销脑图手写').click();assert(!ink(p)||!ink(p).layers[0].strokes.length,'one undo did not remove stroke');
+ });
+ await test('Highlighter previews without pressure width and commits original style',async()=>{
+  const p=await fresh();p.view.setHandwritingMode('highlight');const node=surface(p),rect=node.getBoundingClientRect();
+  pointer(node,'pointerdown',rect.left+100,rect.top+100,{pointerType:'pen',pressure:.1});
+  const canvas=document.querySelector('canvas.ms-map-ink-preview') as HTMLCanvasElement,context=canvas.getContext('2d')!;
+  pointer(node,'pointermove',rect.left+150,rect.top+100,{pointerType:'pen',pressure:.2});
+  pointer(node,'pointermove',rect.left+200,rect.top+100,{pointerType:'pen',pressure:.9});
+  const sample=(x:number,y:number)=>context.getImageData(Math.round(x*devicePixelRatio),Math.round(y*devicePixelRatio),1,1).data;
+  const first=sample(rect.left+125,rect.top+100),second=sample(rect.left+175,rect.top+100),join=sample(rect.left+150,rect.top+100);
+  assert([first,second,join].every(pixel=>Math.abs(pixel[3]/255-.32)<.02),'highlighter alpha accumulated or width changed with pressure');
+  const color=[0,1,2].map(index=>Math.round(first[index]*first[3]/255+242*(1-first[3]/255)));
+  assert(color.every((value,index)=>Math.abs(value-[246,233,190][index])<=[6,6,10][index]),'highlighter composite color differs from SVG');
+  pointer(node,'pointerup',rect.left+200,rect.top+100,{pointerType:'pen',pressure:0});
+  const saved=ink(p).layers[0].strokes[0];assert(saved.tool==='highlight'&&saved.opacity===.32&&p.host.querySelector(`[data-map-ink-stroke="${saved.id}"]`)?.outerHTML===createMindmapInkStroke(saved).outerHTML,'highlighter commit changed');
+ });
+ await test('Highlighter compositing keeps live SVG unchanged for 120 frames',async()=>{
+  const p=await fresh();p.view.setHandwritingMode('highlight');const node=surface(p),live=node.children[1],rect=node.getBoundingClientRect(),durations:number[]=[];
+  const observer=new MutationObserver(()=>{});observer.observe(node,{childList:true,subtree:true,attributes:true,characterData:true});
+  pointer(node,'pointerdown',rect.left+100,rect.top+200,{pointerType:'pen',pressure:.5});
+  for(let index=0;index<120;index++){
+   await new Promise<void>(resolve=>requestAnimationFrame(()=>resolve()));
+   const start=performance.now();pointer(node,'pointermove',rect.left+101+index,rect.top+200,{pointerType:'pen',pressure:.5});durations.push(performance.now()-start);
+  }
+  assert(observer.takeRecords().length===0,'highlighter changed live SVG');
+  results.push({name:'Highlighter pointer processing timing (isolated Chromium)',passed:true,mean:durations.reduce((sum,value)=>sum+value,0)/durations.length,max:Math.max(...durations),over9:durations.filter(value=>value>9).length});
+  pointer(node,'pointerup',rect.left+221,rect.top+200,{pointerType:'pen',pressure:0});observer.disconnect();
+ });
+ await test('Release paints the last endpoint before committing three strokes',async()=>{
+  const p=await fresh();p.view.setHandwritingMode('pen');const node=surface(p),rect=node.getBoundingClientRect();
+  for(let index=0;index<3;index++){
+   const y=rect.top+100+index*30;pointer(node,'pointerdown',rect.left+100,y);pointer(node,'pointermove',rect.left+150,y);
+   const canvas=document.querySelector('canvas.ms-map-ink-preview') as HTMLCanvasElement,context=canvas.getContext('2d')!,remove=canvas.remove.bind(canvas);
+   let alpha=0;canvas.remove=()=>{alpha=context.getImageData(Math.round((rect.left+170)*devicePixelRatio),Math.round(y*devicePixelRatio),1,1).data[3];remove();};
+   pointer(node,'pointerup',rect.left+170,y);assert(alpha===255,'release endpoint missing or pen opacity changed');
+   const stroke=ink(p).layers[0].strokes[index],path=p.host.querySelector(`[data-map-ink-stroke="${stroke.id}"] path`) as SVGPathElement,endpoint=new DOMPoint(stroke.points.at(-1).x,stroke.points.at(-1).y).matrixTransform(path.getScreenCTM()!);
+   assert(Math.hypot(endpoint.x-(rect.left+170),endpoint.y-y)<.5,'release endpoint differs from SVG');
+  }
+  for(let index=0;index<3;index++)button(p.host,'撤销脑图手写').click();
+  assert(!ink(p)||!ink(p).layers[0].strokes.length,'three strokes require three undos');
+ });
  await test('Canvas handwriting mode is observable without duplicate callbacks and a pen stroke survives reopening',async()=>{
   const p=await fresh(),events:string[]=[];assert(p.view.getHandwritingMode()==='off','initial handwriting mode must be off');const unsubscribe=p.view.subscribeHandwritingModeChange(mode=>events.push(mode));
   p.view.setHandwritingMode('pen');p.view.setHandwritingMode('pen');assert(events.join(',')==='pen'&&p.calls.join(',')==='pen','unchanged mode echoed a callback');

@@ -1,3 +1,11 @@
+## 2026-11-07（手写预览视口定位）
+
+- 完成：预览 canvas 挂到所属 document 的 body，避开 `.workspace-leaf` 的 `contain: strict`；保持 fixed、z-index 35 和原有逐帧重投影及抬笔交接。按脑图可视区裁剪，并挖除工具栏和设置面板区域，避免跨层遮挡；canvas 不接收指针事件。
+- 改前隔离 Chromium 模拟 `contain: strict` 与 80px 位移，预览 rect 为 `(8, 88, 1280, 633)`，视口几何断言失败。改后视口误差不超过 1px；同点序列交接掩膜双向 chamfer：笔 0、荧光笔 0.001224 CSS px，包含实际 canvas 定位的独立几何断言。工具栏、设置面板挖空及脑图边界裁剪断言通过。
+- 笔、荧光笔各连续 120 帧，整个手写 SVG 子树均无写入；荧光笔隔离 Chromium 事件处理均值 0.170ms、最大 0.300ms、超过 9ms 为 0。此数据不代表真机性能。
+- 完整 `MARGINSTUDY_VERIFY_DIR=/tmp/marginstudy-ink-final-20261107 npm run verify` 全通过，手写 23/23；详细数据位于 `/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-map-ink-U3Tm3r/results.json`。构建 `main.js` SHA-256 `09acf8a6ff4e9eb0dfdcb5d9bbb97262da3af42b2c24300bd17da93f08396d92`。
+- 完成定义：四项断言均通过；未操作 adb、安装、真实库或 evidence，未提交。下一步第一动作：无。
+
 ## 2026-11-07（CC-A05 宿主侧模板编辑器 + JSON 真实往返验收）
 - 隔离库实机 6 项：①编辑器可达/编辑 PASS（名称、工具删 `continuous-excerpt`、首色 `#123456`、浮窗 false、选区菜单加 `speech`、笔名 `验收红笔`；笔颜色 color well 未改成功）；②真实保存对话框导出 PASS（`~/Downloads/CC-A05-template-20261107.json`，2639 B，`version:1`，6 色均合法）；③导入 FAIL/部分：仅改 `template.name` 不改 id 时被 `模板 ID 已存在` 拒绝（rev 2440 不变），删除源模板后同文件导入成功且与文件 deep-equal（rev 2442），再次导入被拒且 rev 不变；④非法 version 999 / `#12345` 均未写入且 rev 2442（颜色用例 toast 未捕获）；⑤启用后工具栏 10 项（标准 13 项，隐藏留白/套索/连续摘录）、选区菜单含“朗读”、新摘录卡颜色 `#123456`、无摘录浮窗、笔盒显示 `验收红笔`；切回标准后 13 项与默认设置恢复（rev 2448）；⑥界面无删除模板入口（实装与源码均无删除 API），删除需求判 FAIL，已用 Store API 清理自建模板/摘录卡/标注/节点至 22 卡/18 节点/4 标注，rev 2450，回到学习集主页。
 - 构建：实装 `main.js` `b7a99bf8ce77a938ebd73c725e489697d02b61692fcb893550b654c3d16429b4`，与任务卡 `c6ff1a92…` 及仓库 `76d56e18…` 均不一致，结论只对实装构建成立。
@@ -1341,3 +1349,106 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - 第 2 项：临时学习集 `A31C-UNDO-TEMP` 内 `a31c-n1` 120,120 →200,170；真实「撤销」后同一 click 任务内（t=+60.8 ms，元素未重建）`重做.disabled=false`，CDP 回读 t=+67.6 ms 亦 false；立即点重做精确回 200,170。第二轮 200,170→280,220，撤销后 150 ms 采样 7 次（50.1/204.5/361.7/515.7/671.1/829.2/985.1 ms）全 false，点重做精确回 280,220。对比上一轮 10.1 s 全 disabled，修复生效。
 - 现场：A30-OPPO 学习首页，无选中/无 modal/无临时学习集；sets 1、canvases 2、nodes 5、cards 6、decks 0、templates 0；`data.json` 10,681 B、rev 606，与开工前逐字段比对仅 revision/savedAt/writerId 差异；无 trace；`adb forward tcp:9333` 已移除，54779/37395 未动，未 kill/start server；产品代码未改未提交。
 - 证据：`evidence/acceptance-20261106/HERMES-A31-CLOSE-RESULT.md` + `a31c-01…a31c-06` 截图 + `a31c-run.log` + `a31c-harness/`。
+
+## 2026-11-07（手写笔延迟定位 · Pad 实机 · Hermes · 只量不改）
+- 判定：延迟主因不是"事件处理慢"也不是"帧节奏慢"，而是 **输入管道 8.3 ms + 每帧重建实时笔迹导致的掉帧**；A/B/C 中 **C（drawLive 只增不重建）消除最多**，B（point 的 rect 缓存）实测为 0。
+- 设备构建 `main.js` MD5 `27ffcfe88ed3c9d2f181f2e1a12e0f9d`（与给定一致）；面板 2400×3392、活动模式 7＝144Hz、DPR 2.625；空闲 rAF 16.66 ms，笔输入期间 6.9 ms（系统为笔升帧，非 50Hz 卡死）。
+- 合成对照（120 帧 ×1 点/帧，3 次重复）：handler A 1.02 / B 0.79–1.04 / C 0.36 ms；drawLive A 0.84 / C 0.15 ms；Script 总量 A 139–156、C 68–71 ms。trace 逐帧：A 8.34 ms/帧（UpdateLayoutTree 2.67、Layerize 1.69、Paint 整视口 8,140,800 px²），C 7.51（样式重算 2.42 未消），G（单 path 延长 d）4.43（样式 0.25）；E（drawLive 空实现）0.87 ⇒ 全部样式/重绘由笔迹 DOM 重建引起。
+- 真实笔（`adb shell input stylus swipe`，事件 8.34 ms≈120 Hz）：事件→JS 入口五组一致 8.3 ms；处理 A 0.47–0.51 / C 0.12 ms；时间戳→所在帧 A 10.25–10.44、C 9.57–9.60 ms；超 9 ms 帧 A 18–19/230（max 31–37 ms）、C 2/246（max 9.3）；3 s 笔画 A 56/492（max 31.5）、C 1/502（max 9.4）。端到端到上屏估算 ≈17 ms（A）/16.5 ms（C）。
+- 通道限制：`sendevent`/写 `/dev/input/event6` 被 SELinux 拒绝、设备无 root/su；物理笔无人手实测，真实笔数据来自 InputManager 注入（保留 pointerType=pen 与真实分发，跳过内核笔驱动与系统预测）。
+- 最小改动建议：`src/mindmap/handwriting.ts:257-266` 的 `drawLive()` 改为每笔画只建 1 个 `<g>`、每帧只追加新线段（压力宽度规则对齐 `handwritingSvg.ts:19-23`），`cancel()` 补 `liveState=null`；不建议做 B，不建议只做 G。
+- 现场：未写入任何笔迹（options.write 全程计数，3 次调用 0 次落库；canvas `handwriting` 读回 undefined、DOM 笔迹节点 0）；`data.json` 10,684 B / md5 `016b6487d97e5946417846cc3aec63ff` / mtime 15:39 未变；手写模式已关闭；回到 A30-OPPO 学习集主页；trace 已 end、Debugger 已 disable；`adb forward tcp:9333` 已移除，54779/37395 未动，未 kill/start server；产品代码未改未提交。
+- 证据：`evidence/acceptance-20261106/HERMES-INK-LATENCY.md` + `ink-latency/`（CDP/计时脚本、trace 逐帧汇总、原始逐事件记录）。
+
+## 2026-11-07（手写实时层增量渲染）
+- 普通压力笔迹按笔画复用 `<g>` 并追加新线段；无压力笔迹和荧光笔更新单条路径。直线模式可能改变已有几何，继续重建预览；取消和提交清空实时层。
+- 隔离浏览器验收连续 120 帧：实时层 `replaceChildren` 为 0、组与已有线段节点保持不变、每帧增加一段；最终 SVG 与原保存层渲染器逐属性一致，抬笔后实时层节点数为 0。改前同一验收失败于组被重建。
+- 完整 `MARGINSTUDY_VERIFY_DIR=/tmp/marginstudy-ink-incremental-20261107-full npm run verify` 全通过；手写 14/14、Reader 214/214、Workspace 303/303。沙箱内首次运行因本地监听受限中止，授权环境运行通过。
+- 构建 SHA-256：`main.js` `3e07e91a5d5643132171d703e4665e88a73d06898c66a27d5619a0d33bb8913f`；`styles.css` `19d6ac538e602d9b1742af41759547cc42dfaa48a9e09e36f8cc680e01dc2ad4`。
+- 未重新采集帧预算数据；既有设备 InputManager 注入对照 A→C：1.2 秒超 9 ms 帧 18/230→2/246，3 秒 56/492→1/502，不能视为本次构建实测。追加 SVG 节点仍可能触发样式重算和整视口重绘。
+- 未使用 adb、安装、写真实库或修改 `evidence/**`，未提交。
+
+## 2026-11-07（手写增量渲染 · Pad 实机复测 · Hermes）
+- 判定：**JS 侧与主线程帧预算已达 C 组水平；帧间隔 >9 ms 计数未复现上轮 C，仍差 19 帧/3 s**。
+- 设备构建 `main.js` MD5 `f2e00a70bfa31d36c33d7fd286c1d952` / SHA-256 `3e07e91a…`、`styles.css` `9fa85ad3…` 实测一致；144 Hz 活动模式、DPR 2.625；canvas `canvas-mw0ngdqj-a4je9j`、`lineMode=off`。
+- 真实笔（`input stylus swipe`，143 点/1.2 s、360 点/3 s）：处理 **0.13 ms**（上轮 A 0.47–0.51、C 0.12–0.13）；时间戳→所在帧 **9.76–9.78 ms**（A 10.25–10.44、C 9.57–9.60）；超 9 ms 帧 **12–15/218（1.2 s）与 20/490（3 s）**，上轮 A 18/230 与 56/492、C 2/246 与 1/502；稳定段 6–8/142 与 17/402。同场对照：旧"每事件重建"行为 R 30/218、72/487；`drawLive` 空实现 E 6/216、1/482 ⇒ 残留由渲染路径产生，起始 ~30 ms 长帧与渲染无关（E 29.5 ms）。
+- trace：`ProxyMain::BeginMainFrame` mean 2.70/2.95、p90 4.22/4.36、max 7.75/6.25 ms，**>9 ms 帧 0/219 与 0/480**（R 对照 6/480、max 10.28）；每帧 UpdateLayoutTree 0.62 ms、Paint 1.51 次×8,324,108 px²、Layerize 0.65、Commit 0.26 ⇒ 剩余来源是整视口重绘 + 样式重算，不是 handler。
+- 合成 120 帧 ×5：每事件 0.374–0.429（中位 0.400）ms（A 1.02、C 0.36），Script 72.5–83.9 ms（C 68–71），样式重算 1.77–2.03 ms/帧，`liveRebuilds=0`。
+- 视觉等价：121 点→120 段逐段 `<path>`，`d`/`stroke-width` 与 `createMindmapInkStroke` **120/120 全等**，段间 gaps=0，宽度 2.536–5.181（116 个不同值），实时组身份 121 帧不变、第 30 帧段列表是第 90 帧前缀、60 帧窗口 0 删除 0 组替换；抬笔后实时层 0 节点，连写 3 笔节点数逐笔回到 4/1370，无泄漏。
+- 现场：`options.write` 全程计数（每次抬笔 +1、0 次落库），canvas `handwriting` 读回 undefined；`data.json` 10,684 B / mtime 16:12 / md5 `b0c5f18…` 未变；已按 `mindmapRenderer.ts:185-188` 恢复 write；手写模式关闭、回 A30-OPPO 学习集主页；trace 已 end、注入全局已清；`adb forward tcp:9333` 已移除，54779/37395 未动，未 kill/start server；产品代码未改未提交。
+- 未覆盖：`lineMode=auto/always` 的 `replaceWith` 重建分支、荧光笔/无压力分支、已有大量笔迹的画布、物理笔人手实测（InputManager 注入）。
+- 证据：`evidence/acceptance-20261106/HERMES-INK-RETEST.md` + `ink-retest/`（`real.js`/`harness.js` 与上轮字节一致，新增 R/E 对照与 `analyze-frames.mjs`）。
+
+## 2026-11-07（手写渲染剩余帧成本 · 第二轮）
+- 未达到完成定义：120 帧局部样式/布局范围和非整视口 Paint 未证明；目标设备 >9ms 帧数未测，不能认定接近 1/500。
+- 既有实现的 live 本来就是独立 `<g>`，线段路径属性由 `createMindmapInkSegment` 直接设置。隔离 Chrome 合成页面、120 帧追加 120 段对照：基线、给 `<g>` 设置 `contain: layout style` + `will-change: transform`、迁移至带相同提示的独立绝对定位 SVG，三者各出现 240 次 Paint；前两者 Paint clip 含 1300×930 整视口，独立 SVG 同样包含整视口。每组 UpdateLayoutTree 120 次、elementCount 1；Layout 120 次、每次 dirtyObjects 4，无法证明仅涉及 live 子树。结果与脚本位于 `/tmp/margin-ink-trace-result.json`、`/tmp/margin-ink-trace.mjs`。Chrome 为 headless、禁用 GPU，合成页面并非目标 WebView，不能推断实机增益或帧数。
+- `<g>` 提示候选通过 120 帧几何等价及抬笔清理测试，但未消除 Paint；已撤回候选和对应临时测试，不引入未经证实的图层提示。独立 SVG 仅在合成页面验证，未改产品结构；它可能改变合成和叠层行为，尚无视觉等价证据。
+- 最终构建完整 `npm run verify` 通过：`/tmp/marginstudy-ink-render-20261107-final/results.json`；手写 14/14、Reader 214/214、Workspace 303/303。原有 120 帧测试的逐段几何/属性等价和抬笔节点清空通过；最终版本未设置临时 contain 或 will-change。`main.js` SHA-256 `3e07e91a5d5643132171d703e4665e88a73d06898c66a27d5619a0d33bb8913f`，`styles.css` SHA-256 `19d6ac538e602d9b1742af41759547cc42dfaa48a9e09e36f8cc680e01dc2ad4`。
+- 下一步第一动作：在允许的目标 WebView 真实 GPU 环境采集逐层 raster/invalidations，核对 trace 的 Paint clip 与实际脏矩形；若仍整层重绘，探索保留逐段 SVG 几何与原有透明度叠加效果的分块绘制方案，再进行同场 120 帧和 >9ms 帧对照。当前禁用 adb、安装和真实库修改，无法重现已有 Pad 同场测量。
+- 未使用 adb、安装、改真实库或 `evidence/**`，未提交。
+
+## 2026-11-07（手写帧成本 A/B · 目标 WebView 运行时注入 · Hermes）
+- 判定：**B 结构性无效、C 只有 −16%、D（SVG 覆盖层）只有 −22%；把 D 的同一套屏幕空间逻辑换成 canvas 承载（X）后 >9 ms 帧 2/494（−96%），与"完全不渲染"对照 Z（7/486）同级**。推荐按 D 的思路落地、承载必须用 canvas；若只能在 A–E 五选一，D 为最优但不划算（比 C 少 3 帧/500 却要改绘制路径），C 是低风险备选。
+- 构建 `main.js` md5 `f2e00a70bfa31d36c33d7fd286c1d952`（未改）；设备 OPD2409、144 Hz、DPR 2.625、视口 1292×914；canvas `canvas-mw0ngdqj-a4je9j`、`lineMode=off`、`options.write` 全程计数桩。全部改动为运行时注入（`evidence/acceptance-20261106/ink-ab/ab.js`）。
+- 3 s 真实笔（`input stylus swipe`，361±1 点）逐组中位：>9 ms 帧 **A 50/496（28–62，n=24）、B 48/498（n=4）、C 42/497（n=24）、D 39/497（n=15）、D2 38/497（n=12）、X 2/494（n=8）、Z 7/486（n=3）**；安慰剂 P（无效样式写）54/496 ⇒ C 的 −8 帧不是任意样式写入的副作用。交错配对：A/C 6 对 C 低 5 次（均值 −10.3），A/D 6 对 D 低 5 次（−7.7），A/D2 4 对全低（−14.3）。
+- 机制（trace）：A/B/C 每个变动帧 2 次 paint（一次无界 clip 2.8e14 + 一次整视口 8,140,800 设备 px²），3 s 494 帧中 363 帧如此，无一次 clip 等于 world（7.37M）⇒ "world 重绘"实为无界失效；D 把无界变成有界 3.4M 但仍有整视口 paint（均值 8.32M→4.79M，仅 −42%）；X 把 UpdateLayoutTree/Paint/RasterTask 全部消掉，3 s 仅 10 次 paint（0.02/帧），BMF mean 1.22 ms（A 2.77、C 3.20、D 3.05）。contain 落在 0×0 的 `<g>` 上（计算值 `layout style` 但无布局盒），给 `ink.surface` 加同属性（B2）亦 45/485、53/492 无效果。
+- 坐标一致性（要求 <0.5 CSS px）：D 覆盖层 client 折线 vs 提交世界坐标笔画经真实 CTM 渲染的屏幕位置 **max 0.297 / mean 0.20 px**（n=360）；提交笔画的屏幕位置 vs 笔尖 clientX/Y max 0.297–0.301（A 同口径 0.298–0.301，即输入量化下限 1/2.625=0.381 px/设备像素）；世界坐标首末点与 A 逐位相同。X（canvas）同尺 max 0.298。逐段 path 数与段宽 A/B/C/D 每 12 点采样完全一致（11…359 段）。
+- E 组（pointerrawupdate）：样本数与 pointermove 相同（360/360）、`timeStamp` 完全相同，入口延迟 8.19 vs 8.50 ms ⇒ 只早到 0.31 ms，不改几何、不改帧节奏，不建议采用。
+- 基线口径：本会话 A 为 50/496，上轮 20/490（页面左侧带标注 PDF、设备已连续跑近 2 h、CPU 56–60 ℃），跨轮绝对值不可比，全部结论只用同会话交错对照。
+- 现场：未写入任何笔迹（`writes`=1/轮、仅内存 `lastWrite`，canvas `handwriting` 读回 undefined、DOM `[data-map-ink-stroke]`=0）；`data.json` 10,684 B / mtime 16:12 / md5 `b0c5f18455a86c00f6586128bb842400` 未变；`options.write` 已按 `mindmapRenderer.ts` 原实现逐字恢复；注入全局删除、`live/surface` 的 contain/willChange 复位、`[data-ab-overlay]`=0；手写模式关闭；回 A30-OPPO 学习集主页（与上轮 `ink-retest-close-verified.png` 同形态）；各轮 trace 已 end；`adb forward tcp:9333` 已移除，54779/37395 未动，未 kill/start server；产品代码未改未提交。
+- 未覆盖：`lineMode=auto/always`、荧光笔/无压力分支、已有大量笔迹的画布、书写中平移/缩放（覆盖层缓存了笔画起始的 rect/scale）、人手物理笔（InputManager 注入，pressure 恒 1）。
+- 证据：`evidence/acceptance-20261106/HERMES-INK-AB.md` + `ink-ab/`（`ab.js`/`ab.mjs`/`aggregate.mjs`/`analyze.mjs`/`visual-check.mjs`/`cleanup.mjs`、`ab-*.json`、`a12x-shot.png`/`d12x-shot.png`/`x12x-shot.png`/`xpair-early.png`/`xpair-late.png`、`ab-close-verified.png`）；trace 原始 JSON 在 `/Users/tanlihen/.hermes/cache/scratch/ink-ab/`。
+
+## 2026-11-07（手写 canvas 实时覆盖层）
+- 画笔和荧光笔实时显示改用 fixed canvas，保存、取消、撤销仍沿用原路径；覆盖层位于脑图根容器，z-index 35，低于工具栏 40 和设置面板 45。每帧检查 world 矩形、缩放、DPR 和视口尺寸，变化时清空重投影；resize 主动重绘。
+- 隔离浏览器验收 16/16：连续 120 帧实时 SVG 无 DOM 写入，提交后与原 SVG 渲染器生成的几何和属性一致；缩放至 1.5、resize、端点误差小于 0.5 CSS px、荧光笔无压力变宽及单次撤销通过。该端点比较为合成浏览器场景，非目标设备实测。
+- 完整 `MARGINSTUDY_VERIFY_DIR=/tmp/marginstudy-canvas-20261107-final npm run verify` 通过；Reader 214/214、Workspace 303/303。
+- 构建 SHA-256：`main.js` `35a37d0f18a3fe8c9b0452ef5b4282c3e968159d004713d721db42fd4ac66564`；`styles.css` `1eb2c3e119bd6c303d0d3acfa90f4638a46176e6cfa1595bf934c35bf7197c62`。
+- 未重新采集目标 WebView 的 Paint trace 或物理笔帧时，不能把既有运行时注入 A/B 数值视为本构建的实测结果。按透明度逐段绘制时，半透明线段的重叠可能比 SVG 组透明度更深，尚未完成像素等价验证。
+- 下一步第一动作：在允许的目标环境中对本构建采集 Paint trace，并检查半透明荧光笔交叠处的视觉差异；当前任务禁止 adb、安装、真实库写入与修改 `evidence/**`。
+
+## 2026-11-07（手写 canvas 覆盖层 · 产品构建实机验收 · Hermes）
+- 判定：**第 1、3(笔)、4、5 项 PASS；第 2 项部分 FAIL** —— 帧成本达到注入 X 组同一水平，但①抬笔瞬间笔尾长出 1.5–2.3 CSS px（端点判据 <0.5 不满足）、②半透明荧光笔书写中 alpha 0.953 vs 抬笔后 0.33（2.9× 偏深，抬笔跳色）。两项均为产品实现缺陷，已给最小修复建议，未改产品代码。
+- 设备构建 `main.js` md5 `8b09a8a3cb349c37375aa10308fefdfe`（sha256 `35a37d0f…`）、`styles.css` md5 `b26d79c42386031d4df6d17334b1209e`，设备与本机逐字节一致；Obsidian pid 26771 全程未重启；144 Hz 活动模式、DPR 2.625、视口 1292×914、canvas `canvas-mw0ngdqj-a4je9j`（0 存量笔迹）。
+- 第 1 项（3 s 真实笔，n=6，`options.write` 计数桩，与 A/X 同口径）：`>9 ms` 帧 **4.5/449 中位 = 1.00%**（3–5 / 439–456），笔画窗口内 2/426（0.47%）；**采集时 renderRate 144.0 Hz**（mode 7 renderFrameRate 144.00002，rAF p50 6.9 ms）。1.2 s 对照 3.5/194.5 = 1.80%。trace（n=2）：`BeginMainFrame` **mean 0.92 / p90 1.22 / max 5.09 ms**、>9 ms 0；paint **0.027 次/帧**（3 s 共 12 次，仅落在起笔 #3–12 与收笔 #430–448 四帧，8 次整视口 + 2 次无界 + 2 次起笔 49.5M）。对照：A 50/496（10.3%，2.77/4.55/5.89，1.47 次）、X 注入 2/494（0.40%，1.22/1.75/6.61，0.02）、Z 不渲染 7/486（1.44%）⇒ 产品比 A 降 90%，与 X 同级且主线程更低，与"完全不渲染"对照同带。
+- 第 2 项（canvas 末帧 `toDataURL` vs 抬笔后截图，after−before 差分掩膜）：笔（v02/v03）中心线偏移 max **0.19 / 0.381 CSS px**、宽度差 max 0.381/0.762、canvas→SVG 像素距 max **0.381** ⇒ 走向/宽度 PASS；**端点 FAIL**：canvas 只画到 180/181 点，末点距最后 move 点 1.98/1.47 px，SVG 首帧比 canvas 末帧长 **2.286 CSS px**（`up()` push 末点后未重画就 `commitDrawing()`）。荧光笔（h01，`#ffd54f` .32，宽 21）有效 alpha canvas **0.953**（0.933–0.976）vs SVG **0.330**，合成色 (254,214,87) vs (246,232,189)，ΔRGB (8,−18,−102) ⇒ **FAIL**；根因：`paintPreview()` 逐段 `stroke()` 且 `globalAlpha=.32`，圆头重叠约 8 层，`1−(1−0.32)^8≈0.95`。
+- 第 3 项：笔 3 连笔，rAF 逐帧 637 帧 **0 空白帧 / 0 双画帧**（canvas 与 SVG 在 `commitDrawing()` 同一任务内交接），screencast 232 帧（~57 fps）墨迹覆盖度单调增、无 0 无跳变，`previewCount 0`、`live 0`、DOM 笔数恒等笔数 ⇒ 无空白/残留/双画。荧光笔同配方在抬笔瞬间覆盖度 10216→16、10788→932、11440→1588（`hl-01-before-up.png` vs `hl-02-after-up.png` 可见实心黄→淡黄）⇒ 跳色 FAIL（与第 2 项同根因）。
+- 第 4 项（笔画 45% 处 `zoomAt(中点,1.5)`）：preview 变换 722.62/310.81/0.99949 → 580.14/217.10/1.49923，清屏后按新变换重画 265/266 点；canvas 折线 vs 真实 CTM 逐点 mean 0.248 / p90 0.376 / max **0.403 CSS px**（判据 <1），无错位 ⇒ PASS。残差来自 `bounds.width/offsetWidth` 与 `viewScale` 的 0.077% 差。
+- 第 5 项：一笔 = 1 次 write（`脑图手写`）= 1 条历史，撤销 1 次后 strokes 0 / DOM 0 / `previewCount 0`，再撤销无副作用；3 笔 → 3 次撤销 → 0 ⇒ PASS。
+- 修复建议（未实施）：①荧光笔整笔离屏合成（段用 alpha=1 画进离屏 canvas，可见 canvas 每帧清脏矩形后 `globalAlpha=opacity` 一次性 `drawImage`）；②`up()` 里 push 末点后先 `paintPreview()` 再 `commitDrawing()`；③可选缓存 `worldRect/scale`，去掉每帧两次强制布局（trace 里 UpdateLayoutTree 0.305 ms/帧约占 BMF 1/3）。
+- 现场：未写入笔迹（两本画布 `handwriting` = undefined/null、DOM 0）；`data.json` 10,684 B 不变，md5 `182421a3…`→`8e9036e0…`，18:34 与 18:36 两次快照逐字段只差 `revision 622→623` 与 `savedAt`（撤销测试的库事务记账）；注入已清（`__IC` false、`.ms-map-ink-preview` 0）、`options.write` 按 `mindmapRenderer.ts` 原实现恢复、手写模式关闭、`viewScale` 复位 1、回 A30-OPPO 学习集主页（`close-verified.png`）；各轮 trace 已 end、`adb forward tcp:9333` 已移除（54779/37395 未动，未 kill/start server）；产品代码未改未提交。
+- 未覆盖：`pressure` 恒 1（压力分段宽度只验证结构）、`lineMode=auto/always`、存量笔迹画布、screencast 仅 ~57 fps（<17 ms 单帧白闪靠 144 Hz rAF 状态 + 同任务结构补足）、第 1 项用计数桩不含落盘成本。
+- 证据：`evidence/acceptance-20261106/HERMES-INK-CANVAS.md` + `ink-canvas/`（`page.js`/`run.mjs`/`analyze.py`/`color.py`/`analyze-flash.py`/`summarize.py`/`cleanup.mjs`/`probe.mjs`、`raw/run-*.json`、`raw/trace-*.json`、`ink-v02-01-canvas-last-frame.png`/`ink-v02-02-svg-first-frame.png`、`hl-01-before-up.png`/`hl-02-after-up.png`、`f03-f*.jpg`/`fh02-f*.jpg`、`close-verified.png`）。
+
+## 2026-11-07（canvas 端点与透明度修复）
+- 抬笔在追加末点后同步绘制尚未绘制的线段，再由 `commitDrawing` 清理 canvas、写入并渲染 SVG；已有段不会重复绘制。
+- 透明笔迹使用不透明离屏 canvas，按新增段包围盒清理并合成显示 canvas；不透明笔沿用原路径。缩放、尺寸变化和直线模式重建时同步清理离屏及显示画布。
+- 隔离 Chromium：手写验收 19/19，覆盖连续三笔抬笔端点、单笔撤销、接缝 alpha、合成颜色、120 帧实时 SVG 无写入；120 次荧光笔 pointermove 处理均值 0.105 ms、最大 0.20 ms、超过 9 ms 为 0。该数字包含完整事件处理，并非离屏增量成本，不能代表目标设备。
+- 完整验证通过：`/tmp/marginstudy-ink-20261107-full/results.json`。构建 SHA-256：`main.js` `95bec773c4049a901723508936318211d2332328dba512eb5fd9bce510fe03ed`；`styles.css` `1eb2c3e119bd6c303d0d3acfa90f4638a46176e6cfa1595bf934c35bf7197c62`。
+- 尚未完成目标设备验收：禁止 adb、安装和真实库数据修改，无法复现该设备 144 Hz >9 ms 帧占比及 120 帧 Paint trace；隔离浏览器 SVG 零写入不能证明没有整视口 Paint，也不能证明实机像素差。下一步第一动作：在允许的目标设备非 adb 验证通道采集本构建 120 帧 Paint 与 3 秒帧间隔，并比较 canvas 末帧和 SVG 首帧像素。
+
+## 2026-11-07（手写 canvas 两项修复 · Pad 实机复验 · Hermes）
+- 判定：**两处修复均成立；同时查出一个既有阻断缺陷（F1）**。①抬笔端点：同一口径 chamfer `svg→canvas` **2.286 → 0.381 CSS px**，笔尾端点差 **0.373 / 0.430 / 0.373**（3 笔，判据 <0.5），抬笔前 canvas 已画满 `N-1/N-1`、提交帧 `N/N`（`up()` 补画生效）；②荧光笔 alpha：canvas **0.322** vs SVG **0.325**（差 mean 0.003 / max 0.007，判据 ≤0.02），合成色 ΔRGB max **(0.5, 1.0, 0.8)**（上轮 (8,−18,−102)）；③性能不回退：3 s `>9 ms` 帧 **4.5/441.5 = 1.02%**（上轮 1.00%），BMF **0.96/0.91**、p90 1.28/1.22、max 9.44/5.60 ms（上轮 0.92/1.22/5.09），renderRate **144.0 Hz**，同轮 `drawLive` 对 SVG **写入 0/360–361 次**（`live` 子树 0 变更）；④闪帧：笔/荧光笔各 3 笔 **0 空白 / 0 双画 / 0 残留**，荧光笔抬笔**不再跳色**。
+- F1（阻断，两轮同源、非本次修复引入）：`.ms-map-ink-preview{position:fixed;inset:0}` 挂在 `.ms-mindmap-root`，而 Obsidian `.workspace-leaf` 带 `contain:strict`，使其成为包含块 ⇒ canvas 元素 rect **(0, 80, 1292.19, 914.29)**（视口 0,0,1292,914），位图内容按视口坐标绘制 ⇒ 书写中整条笔迹比笔尖**低 80 CSS px**，抬笔瞬间整条上跳 80 px。证据：位图 vs 屏幕掩膜对齐 dy 扫描 **+210 设备 px（+80 CSS）时 IoU 0.50、dy=0 时 0.00**；screencast 逐帧包围盒 up 前 y 460–720 → up 后 380–640；红底定位与 leaf 裁剪一致。修法二选一：覆盖层挂 `document.body`，或 `setTransform` 里减去元素自身视口偏移。上轮"2.29 px"与本轮 0.381 px 都是**位图 vs 位图**比较，看不见元素摆位。
+- 设备构建 `main.js` md5 `4a932fc6d609e428464006574275c53e`（sha256 `95bec773…`）、`styles.css` md5 `b26d79c4…`，设备与本机逐字节一致；Obsidian pid 13290 全程未重启；144 Hz、DPR 2.625、视口 1292×914、canvas `canvas-mw0ngdqj-a4je9j`（0 存量）。
+- 通道/配方/口径沿用 `HERMES-INK-CANVAS.md`；harness 仅增量只读：`canvas-at-commit` 快照（在 `commitDrawing` 前取 = canvas 末帧，含 `up()` 补画的末点）、`drawLive` 写入计数 + `MutationObserver`、`snapMode=meta`（`toDataURL` 一次阻塞 111–126 ms，meta 轮剔除该 harness 成本）。
+- 现场：未写入任何笔迹（两本画布 `handwriting`=null、无 `layers[*].strokes`）；`data.json` 10,684 B、md5 `51a82254…` 收尾未变（`revision` 632 来自本轮真实写入+撤销的库事务）；注入已清（`__IC` false、`.ms-map-ink-preview` 0）、`options.write` 按 `mindmapRenderer.ts:186-189` 恢复、手写模式关闭、`viewScale` 1、回 A30-OPPO 学习集主页（`close-verified.png`）；各轮 trace 已 end；`adb forward tcp:9333` 已移除（54779/37395 未动，未 kill/start server）；产品代码未改未提交。
+- 未覆盖：`pressure` 恒 1、`lineMode=auto/always`、存量大量笔迹画布、screencast ~57 fps（<17 ms 单帧白闪靠 144 Hz rAF 状态 + 同任务交接补足）。
+- 证据：`evidence/acceptance-20261106/HERMES-INK-FINAL.md` + `ink-canvas/`（新增 `endpoint.py`/`hlcolor.py`/`hljump.py`/`cardtext.py`，`offset-evidence-mid.png`/`offset-evidence-after.png`、`midprobe-*.png`、`redprobe.png`、`raw/run-{e02,e03,e04,hh01,hh02,p4-*,f04,f05,f06,fhh*,midprobe}.json`）。
+## 2026-11-07（F2 手写预览层级）
+- 采用方案 A：预览 canvas 放入 `.ms-mindmap-root`，使用绝对定位及 z-index 35；工具栏和设置面板继续自然叠在其上。移除调色板和设置面板挖空，保留脑图视口裁剪，使半透明控件下的墨迹能够透出。
+- 绘制期间每帧读取根容器矩形并更新负偏移；world 缩放和平移仍由原有重投影逻辑处理。隔离浏览器验证含祖先位移、视口范围、缩放、120 帧 SVG 零变更和笔迹位图平均 chamfer；23/23 通过。
+- 完整验证通过：`/tmp/marginstudy-f2-20261107/results.json`；Reader 214/214、Workspace 303/303。`main.js` SHA-256 `52faeb3a359cdfe81af0f6d4827272bf9ddbe8b435db47fad285ba2a927da1f8`；`styles.css` SHA-256 `8e3cbe002ad1cdb8f382b7188b5b2c923470571caa27bbe4e0cbb3be772919fba`。
+- 未完成：底部栏、悬浮按钮、调色板各三点的书写中与抬笔后截图逐像素对照；笔尾最大 chamfer；本构建 Paint trace 和目标设备 144 Hz 性能。现有平均 chamfer 与 SVG 零变更不足以证明这些断言。未使用 adb、安装或修改 `evidence/**`。
+- 下一步第一动作：在隔离 Chromium 中构造带真实三类控件的场景，截取同一笔 canvas 末帧和 SVG 首帧，记录九点 RGB 与最大笔尾 chamfer，再采集 Paint trace；如需目标设备数据，使用用户允许的非 adb 通道。
+
+## 2026-11-07（手写预览层级 F2 · Pad 实机复验 · Hermes）
+- 判定：**四项全部通过**。F2 修复成立：预览 canvas 从 body 移到 `.ms-mindmap-root`（absolute、z 35），与成品墨迹（z 30）同一层叠分支，底部场景栏（40）/悬浮按钮（36）/调色板（40）对二者的遮挡逐像素相同。
+- 设备构建 `main.js` md5 `38d8ba9c2ab86287bddf146167a6f926` / sha256 `52faeb3a…`、`styles.css` md5 `5cc5e156…` / sha256 `8e3cbe00…`，两端逐字节一致；pid 26910 未重启；144 Hz、DPR 2.625、视口 1292×914、`canvas-mw0ngdqj-a4je9j`（0 存量）。
+- 第 1 项（三处 × 3 像素，书写中 mid2 vs 抬笔后 after1）：底部栏 **(193,194,196) vs (193,194,196)**（上轮 (48,52,59) vs (190,192)）；悬浮按钮实心三像素 Δ(0,0,0)（不透明控件两种状态都看不见），缺口三点 Δ≤(1,0,1)（可见墨迹也不变）；调色板三点 Δ(0,0,0)，行内墨迹跨度两种状态完全相同（上轮 13 px「抬笔才出现」消失）。
+- 第 2 项：12 笔 3,740 帧 canvas rect 恒 (0,0,1292.19,914.29)（最大偏差 0.29 px，判据 ≤1），clip 只剩脑图视口且与 `.ms-mindmap` 四边差 ≤0.02 px；脑图上方 64 px 带书写中墨色像素 0；**笔尾 0.346 / 0.346 / 0.346 CSS px**（穿越栏 0.381、穿越调色板 0.000，判据 ≤0.5）；chamfer 笔 0.381（0 像素 >0.5）。
+- 第 3 项：3 s 真实笔 `>9 ms` 帧中位 **4/444 = 0.91%**（0.22–1.83%，n=6；上轮 0.57%，区间重叠但中位高 0.34 pp，如实登记）；主线程 BMF **1.04/1.07**、p90 1.43/1.49、max 5.92/5.86、>9 ms 0/442（上轮 1.05/0.99、1.40/1.33、7.64/5.27）；paint 0.027/帧（12 次，8 整视口 + 2 无界）；renderRate **144.0 Hz**；`drawLive` 对 SVG **0/360–361** 次写入。
+- 第 4 项：五组对照图（`F2-01…F2-05`）确认书写中/抬笔后墨迹同长同深，无「抬笔变淡」、无整段被裁。
+- 作废批次登记：`f2caps01/02` mid2 落在笔画 73%（未到取样点）、`f2pal01` 水平笔画被世界左缘夹住、`f2pal02` 起笔在可视区外 → 修正时序与路径后重测。
+- 现场：未写入笔迹（`strokes 0`、DOM 0、canvas 无 `handwriting`）；`data.json` 10,684 B / md5 `2661044178feca5e41612aadb6951563`，与恢复快照 `pending-main-device-rolling-000001.json` 逐字段只差 `writerId`（rev 657 两边一致；646→657 来自本轮 12 次真实提交+撤销的库事务）；`options.write` 已恢复、手写模式关闭、`viewScale` 1、回 A30-OPPO 主页（`close-verified.png`）、trace 已 end、`adb forward tcp:9333` 已移除（54779/37395 未动，未 kill/start server）；产品代码未改未提交。
+- 证据：`evidence/acceptance-20261106/HERMES-INK-F2.md` + `ink-f2/`（`f2.mjs`/`chain.mjs`/`tail_check.py`/`sample_pts.py`、`raw/run-f2*.json`、`raw/summary-*.json`、`F2-01…05*.png`、`close-verified.png`）。

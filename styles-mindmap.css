@@ -288,6 +288,7 @@ body.ms-theme-dark .ms-mindmap-root .ms-node-comment { border-top-color: #ffffff
   .ms-mindmap-root .ms-selection-icon svg { width: 22px; height: 22px; }
 }
 .ms-map-ink{position:absolute;inset:0;width:100%;height:100%;overflow:visible;z-index:30;touch-action:none;outline:none}
+.ms-map-ink-preview{position:absolute;width:100vw;height:100vh;pointer-events:none;z-index:35;will-change:transform}
 .ms-map-ink-palette{position:absolute;left:12px;top:50%;transform:translateY(-50%);z-index:40;display:flex;flex-direction:column;gap:4px;padding:8px;background:rgba(83,84,85,.84);border-radius:14px;box-shadow:0 8px 25px #0002}
 .ms-map-ink-palette[hidden]{display:none}
 .ms-mindmap-root .ms-map-ink-palette>button{appearance:none;background:none;border:0;box-shadow:none;color:#eee;width:34px;height:34px;padding:5px;border-radius:9px;font-size:24px;line-height:1}
