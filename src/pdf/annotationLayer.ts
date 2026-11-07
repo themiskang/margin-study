@@ -203,7 +203,7 @@ export class AnnotationController extends BaseAnnotationController {
       const items = await this.reader.getEditableOutline();
       if (revision !== this.documentRevision || !this.docPath) return;
       const item = {id:uid("toc"),title:text.trim(),page:target.pageNum,level:0,rects:target.rects};
-      const index = items.findIndex(entry => entry.page > item.page);
+      const index = items.findIndex(entry => entry.level === 0 && entry.page > item.page);
       items.splice(index < 0 ? items.length : index, 0, item);
       await this.reader.setEditableOutline(items);new Notice("已添加文档目录条目");
     }}, { id: "extend", label: "Extend", run: () => extend() },

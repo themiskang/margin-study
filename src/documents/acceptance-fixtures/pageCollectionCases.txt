@@ -2,10 +2,66 @@ import { createNotebookBytes } from '/Users/tanlihen/Documents/Qoder/2026-10-14/
 import { createPageCollection, readPageCollection, appendPageReferences, reorderPageReferences, openPageCollectionDocument, PageCollectionDocument, parsePageCollection, parsePageRange, openPageReorganization, updatePageCollectionSourcePath } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/documents/pageCollection';
 import { ReaderView as RealReaderView } from 'marginstudy-real-reader';
 import { getOutline } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/outline';
+import { DocumentNavigation } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/workspace/documentNavigation';
 
 function bytes(style:any,pages=3,width=595,height=842){return createNotebookBytes({format:'marginstudy-notebook',version:1,id:'source-'+style,title:'Source '+style,style,pageCount:pages,width,height,createdAt:'2026-10-15T00:00:00Z'});}
 export async function runPageCollectionAcceptance({test,assert,wait,plugin,add,app,configs,writes}:any){
  const source=()=>{const a=add('reference-source-a.pdf',{bytes:bytes('grid')}),b=add('reference-source-b.pdf',{bytes:bytes('lines',2,500,700)});return{a,b};};
+ await test('Dragging a source thumbnail into a collection appends one undoable page',async()=>{
+  const {a,b}=source(),p=plugin(),file=await createPageCollection(p,{title:'拖入页面',pages:[{sourcePath:a.path,sourcePage:1}]});
+  const sourceView:any=new RealReaderView({app} as any,p),targetView:any=new RealReaderView({app} as any,p);await sourceView.onOpen();await targetView.onOpen();
+  let sourceNav:any,targetNav:any;
+  try{await sourceView.loadFileByPath(b.path);await targetView.loadFileByPath(file.path);sourceNav=new DocumentNavigation(p,sourceView,'thumbnails',()=>{});targetNav=new DocumentNavigation(p,targetView,'thumbnails',()=>{});document.body.append(sourceNav.element,targetNav.element);
+   for(let index=0;index<150&&(!sourceNav.element.querySelector('[data-page="2"]')||!targetNav.element.querySelector('.ms-document-page-grid'));index++)await wait(20);
+   const source=sourceNav.element.querySelector('.ms-document-page-preview[data-page="2"]'),grid=targetNav.element.querySelector('.ms-document-page-grid'),transfer=new DataTransfer();
+   assert(source&&grid,'thumbnail grid missing');source.dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:transfer}));grid.dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer:transfer}));grid.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));
+   for(let index=0;index<150&&(await readPageCollection(p,file)).pages.length!==2;index++)await wait(20);
+   const after=await readPageCollection(p,file);assert(after.pages.length===2&&after.pages[1].sourcePath===b.path&&after.pages[1].sourcePage===2,'drag did not append source page');
+   for(let index=0;index<150&&(targetView.getDoc()?.numPages!==2||targetView.getEditHistoryState().undoLabel!=='追加页面');index++)await wait(20);assert(targetView.getEditHistoryState().undoLabel==='追加页面','drag transaction did not finish');await targetView.undoLastEdit();assert((await readPageCollection(p,file)).pages.length===1,'drag append was not one undoable transaction');
+  }finally{sourceNav?.dispose();targetNav?.dispose();await sourceView.onClose();await targetView.onClose();}
+ });
+ await test('Appending pages from another document can be undone in the target',async()=>{
+  const {a,b}=source(),p=plugin(),file=await createPageCollection(p,{title:'跨文档撤销追加',pages:[{sourcePath:a.path,sourcePage:1}]});
+  const sourceView:any=new RealReaderView({app} as any,p),targetView:any=new RealReaderView({app} as any,p);await sourceView.onOpen();await targetView.onOpen();
+  try{await sourceView.loadFileByPath(b.path);await targetView.loadFileByPath(file.path);p.openDocument=async()=>{await targetView.refreshPageCollection();return targetView;};
+   const before=await readPageCollection(p,file);sourceView.openPageReorganization();const modal=document.querySelector('.ms-page-reorganization-modal')!;
+   (modal.querySelector('[aria-label="重组页码"]') as HTMLInputElement).value='2';const target=modal.querySelector('[aria-label="追加到文档"]') as HTMLSelectElement;target.value=file.path;target.dispatchEvent(new Event('change'));([...modal.querySelectorAll('button')].find(node=>node.textContent==='完成') as HTMLButtonElement).click();
+   for(let index=0;index<150&&document.contains(modal);index++)await wait(20);
+   for(let index=0;index<150&&(targetView.getDoc()?.numPages!==2||targetView.getEditHistoryState().undoLabel!=='追加页面');index++)await wait(20);
+   assert(targetView.getDoc()?.numPages===2&&targetView.getEditHistoryState().undoLabel==='追加页面','target did not finish receiving page');await targetView.undoLastEdit();assert(JSON.stringify(await readPageCollection(p,file))===JSON.stringify(before),'target undo did not remove appended page');
+  }finally{await sourceView.onClose();await targetView.onClose();}
+ });
+ await test('Appending pages to the current collection is one undoable transaction',async()=>{
+  const {a}=source(),p=plugin(),file=await createPageCollection(p,{title:'撤销追加',pages:[{sourcePath:a.path,sourcePage:1},{sourcePath:a.path,sourcePage:3}]});
+  const v:any=new RealReaderView({app} as any,p);await v.onOpen();
+  try{await v.loadFileByPath(file.path);const before=await readPageCollection(p,file);v.openPageReorganization();const modal=document.querySelector('.ms-page-reorganization-modal')!;
+   (modal.querySelector('[aria-label="重组页码"]') as HTMLInputElement).value='2';const target=modal.querySelector('[aria-label="追加到文档"]') as HTMLSelectElement;target.value=file.path;target.dispatchEvent(new Event('change'));([...modal.querySelectorAll('button')].find(node=>node.textContent==='完成') as HTMLButtonElement).click();
+   for(let index=0;index<150&&document.contains(modal);index++)await wait(20);
+   assert((await readPageCollection(p,file)).pages.length===3,'append failed');await v.undoLastEdit();assert(JSON.stringify(await readPageCollection(p,file))===JSON.stringify(before),'undo did not restore collection before append');
+  }finally{await v.onClose();}
+ });
+ await test('Collection reorder is one undoable transaction including its outline',async()=>{
+  const {a}=source(),p=plugin(),file=await createPageCollection(p,{title:'撤销重排',pages:[{sourcePath:a.path,sourcePage:1},{sourcePath:a.path,sourcePage:3}]});
+  const v:any=new RealReaderView({app} as any,p);await v.onOpen();
+  try{await v.loadFileByPath(file.path);await v.setEditableOutline([{id:'chapter',title:'Chapter',page:2,level:0}]);const before=JSON.stringify(await v.getEditableOutline());
+   v.openPageReorganization();const button=(root:ParentNode,text:string)=>[...root.querySelectorAll('button')].find(node=>node.textContent===text)! as HTMLButtonElement;
+   button(document.querySelector('.ms-page-reorganization-modal')!,'排列或移除页面').click();const modal=document.querySelector('.ms-page-reorganization-modal')!;button(modal,'下移').click();button(modal,'保存').click();
+   for(let index=0;index<100&&document.contains(modal);index++)await wait(10);
+   assert((await readPageCollection(p,file)).pages.map((entry:any)=>entry.sourcePage).join(',')==='3,1','reorder failed');
+   await v.undoLastEdit();assert((await readPageCollection(p,file)).pages.map((entry:any)=>entry.sourcePage).join(',')==='1,3'&&JSON.stringify(await v.getEditableOutline())===before,'undo did not restore page order and outline');
+   await v.redoLastEdit();assert((await readPageCollection(p,file)).pages.map((entry:any)=>entry.sourcePage).join(',')==='3,1'&&(await v.getEditableOutline())[0].page===1,'redo did not restore moved page and TOC');await v.undoLastEdit();
+   v.openPageReorganization();button(document.querySelector('.ms-page-reorganization-modal')!,'排列或移除页面').click();const removeModal=document.querySelector('.ms-page-reorganization-modal')!;button(removeModal,'移除').click();button(removeModal,'保存').click();for(let index=0;index<100&&document.contains(removeModal);index++)await wait(10);
+   assert((await readPageCollection(p,file)).pages.length===1,'removal failed');await v.undoLastEdit();assert((await readPageCollection(p,file)).pages.map((entry:any)=>entry.sourcePage).join(',')==='1,3'&&JSON.stringify(await v.getEditableOutline())===before,'undo did not restore removed page and TOC');
+  }finally{await v.onClose();}
+ });
+ await test('Collection outline follows the referenced page after reordering',async()=>{
+  const {a}=source(),p=plugin(),file=await createPageCollection(p,{title:'目录重排',pages:[{sourcePath:a.path,sourcePage:1},{sourcePath:a.path,sourcePage:3}]});
+  const v:any=new RealReaderView({app} as any,p);await v.onOpen();
+  try{await v.loadFileByPath(file.path);await v.setEditableOutline([{id:'chapter',title:'Chapter',page:2,level:0,rects:[{x:10,y:20,w:30,h:40}]}]);
+   const collection=await readPageCollection(p,file);await reorderPageReferences(p,file,[collection.pages[1].id,collection.pages[0].id]);await v.refreshPageCollection();
+   const item=(await v.getEditableOutline())[0];assert(item.page===1&&item.rects[0].x===10,'outline lost its referenced page or selection anchor');
+  }finally{await v.onClose();}
+ });
  await test('Virtual page collection renders original PDF pages across documents and never writes or embeds source PDF content',async()=>{
   const {a,b}=source(),p=plugin(),originalA=await app.vault.readBinary(a),originalB=await app.vault.readBinary(b),start=writes.length;
   const file=await createPageCollection(p,{title:'原页引用验收',pages:[{sourcePath:a.path,sourcePage:3},{sourcePath:b.path,sourcePage:2},{sourcePath:a.path,sourcePage:1}],origin:'toc'});

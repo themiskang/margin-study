@@ -327,16 +327,20 @@ export class ReaderView extends ItemView {
     if (!this.doc || !this.loadedPath?.toLowerCase().endsWith(".pdf")) return null;
     return this.doc instanceof EditedPdfDocument ? structuredClone(this.doc.edits) : originalPdfPages(this.doc.numPages);
   }
+  getPdfExportPageEdits(): PdfPageEdits | null {
+    if (this.doc instanceof PageCollectionDocument) return { version: 1, pages: this.doc.pageCollection.pages.map(page => ({ id: page.id, imported: { path: page.sourcePath, page: page.sourcePage } })) };
+    return this.getPdfPageEdits();
+  }
   async exportEditedPdf(options: EditedPdfExportOptions = {}): Promise<Uint8Array> {
     await this.finishExtendEditing();
     await this.plugin.store.flush();
-    const edits = this.getPdfPageEdits(), document = this.doc, path = this.loadedPath, revision = this.loadRevision;
+    const edits = this.getPdfExportPageEdits(), document = this.doc, path = this.loadedPath, revision = this.loadRevision;
     if (!edits || !path || this.destroyed || this.pendingLoad || this.applyingPageEdits) throw new Error("请等待 PDF 加载完成");
     if (this.exportingPdf) throw new Error("PDF 正在导出，请稍后重试");
     const crop = JSON.stringify(this.crop), pages = JSON.stringify(edits), notes = JSON.stringify(this.getExtendNotes()), notebook=this.getDocumentNotebookId(), outline=JSON.stringify(this.plugin.store.getDocMeta(path).documentOutline);
     const current = () => {
       if (options.signal?.aborted || this.destroyed || this.doc !== document || this.loadedPath !== path || this.filePath !== path || this.loadRevision !== revision
-        || JSON.stringify(this.getPdfPageEdits()) !== pages || JSON.stringify(this.crop) !== crop || JSON.stringify(this.getExtendNotes())!==notes || this.getDocumentNotebookId()!==notebook || JSON.stringify(this.plugin.store.getDocMeta(path).documentOutline)!==outline) throw new Error("导出已取消：文档或页面发生变化");
+        || JSON.stringify(this.getPdfExportPageEdits()) !== pages || JSON.stringify(this.crop) !== crop || JSON.stringify(this.getExtendNotes())!==notes || this.getDocumentNotebookId()!==notebook || JSON.stringify(this.plugin.store.getDocMeta(path).documentOutline)!==outline) throw new Error("导出已取消：文档或页面发生变化");
     };
     current(); this.exportingPdf = true;
     try { return await buildEditedPdf(this,edits,options,current); }
@@ -345,21 +349,21 @@ export class ReaderView extends ItemView {
   async exportEditedPdfLongImage(options: LongImageOptions = {}): Promise<LongImageResult> {
     await this.finishExtendEditing();
     await this.plugin.store.flush();
-    const edits = this.getPdfPageEdits(), document = this.doc, path = this.loadedPath, revision = this.loadRevision;
+    const edits = this.getPdfExportPageEdits(), document = this.doc, path = this.loadedPath, revision = this.loadRevision;
     if (!edits || !path || this.destroyed || this.pendingLoad || this.applyingPageEdits) throw new Error("请等待 PDF 加载完成");
     if (this.exportingPdf) throw new Error("PDF 正在导出，请稍后重试");
     const crop = JSON.stringify(this.crop), pages = JSON.stringify(edits), notes = JSON.stringify(this.getExtendNotes()), notebook=this.getDocumentNotebookId(), outline=JSON.stringify(this.plugin.store.getDocMeta(path).documentOutline);
     const current = () => {
       if (options.signal?.aborted || this.destroyed || this.doc !== document || this.loadedPath !== path || this.filePath !== path || this.loadRevision !== revision
-        || JSON.stringify(this.getPdfPageEdits()) !== pages || JSON.stringify(this.crop) !== crop || JSON.stringify(this.getExtendNotes())!==notes || this.getDocumentNotebookId()!==notebook || JSON.stringify(this.plugin.store.getDocMeta(path).documentOutline)!==outline) throw new Error("导出已取消：文档或页面发生变化");
+        || JSON.stringify(this.getPdfExportPageEdits()) !== pages || JSON.stringify(this.crop) !== crop || JSON.stringify(this.getExtendNotes())!==notes || this.getDocumentNotebookId()!==notebook || JSON.stringify(this.plugin.store.getDocMeta(path).documentOutline)!==outline) throw new Error("导出已取消：文档或页面发生变化");
     };
     current(); this.exportingPdf = true;
     try { return await buildEditedPdfLongImage(this,edits,options,current); }
     finally { this.exportingPdf = false; }
   }
   getPdfExportAnnotations(): import("./exportAnnotations").PdfExportAnnotation[] { return this.annController.getPdfExportAnnotations(); }
-  openPdfExport(): void { if(!this.getPdfPageEdits())return;this.closePdfExport?.();this.closePdfExport=openPdfExport(this); }
-  getPdfPageId(page: number): string | undefined { return this.doc instanceof EditedPdfDocument ? this.doc.edits.pages[page - 1]?.id : this.doc && this.loadedPath?.toLowerCase().endsWith(".pdf") && page > 0 && page <= this.doc.numPages ? `source:${page}` : undefined; }
+  openPdfExport(): void { if(!this.getPdfExportPageEdits())return;this.closePdfExport?.();this.closePdfExport=openPdfExport(this); }
+  getPdfPageId(page: number): string | undefined { return this.doc instanceof EditedPdfDocument ? this.doc.edits.pages[page - 1]?.id : this.doc instanceof PageCollectionDocument ? this.doc.pageCollection.pages[page - 1]?.id : this.doc && this.loadedPath?.toLowerCase().endsWith(".pdf") && page > 0 && page <= this.doc.numPages ? `source:${page}` : undefined; }
   getPdfPageRotation(page: number): number { return this.doc instanceof EditedPdfDocument ? this.doc.edits.pages[page - 1]?.rotation ?? 0 : 0; }
   getDisplayAnnotation(annotation: Annotation): Annotation { return this.doc instanceof EditedPdfDocument ? mapEditedPdfAnnotation(annotation,this.doc.edits) : this.doc instanceof PageCollectionDocument ? mapCollectionAnnotation(annotation,this.doc.pageCollection) : annotation; }
   subscribePageChanges(listener: () => void): () => void { this.pageChangeListeners.add(listener); return () => this.pageChangeListeners.delete(listener); }
@@ -564,7 +568,9 @@ export class ReaderView extends ItemView {
   getPageReference(page: number): PageReference | undefined { return this.doc instanceof PageCollectionDocument ? this.doc.pageCollection.pages[page-1] : undefined; }
   getPageReferences(pages: number[]): PageReferenceInput[] {
     if (!this.loadedPath) return [];
-    return pages.map((page) => { const entry = this.getPageReference(page); const sourcePage = this.doc instanceof EditedPdfDocument ? this.doc.edits.pages[page-1]?.sourcePage : page;
+    return pages.map((page) => { const entry = this.getPageReference(page), edited = this.doc instanceof EditedPdfDocument ? this.doc.edits.pages[page-1] : undefined;
+      if (edited?.imported) return {sourcePath:edited.imported.path,sourcePage:edited.imported.page,sourceNotebookId:this.getDocumentNotebookId()};
+      const sourcePage = this.doc instanceof EditedPdfDocument ? edited?.sourcePage : page;
       if (!entry && !sourcePage) throw new Error("空白插页暂不能用于书页重组");
       return entry ? {sourcePath:entry.sourcePath,sourcePage:entry.sourcePage,sourceNotebookId:entry.sourceNotebookId} : {sourcePath:this.loadedPath!,sourcePage:sourcePage!,sourceNotebookId:this.getDocumentNotebookId()}; });
   }
@@ -573,9 +579,9 @@ export class ReaderView extends ItemView {
     if (!(file instanceof TFile)) { new Notice("源文档已不存在：" + entry.sourcePath); return; }
     const reader = await this.plugin.openDocument(file); await (reader as any).selectDocumentNotebook?.(entry.sourceNotebookId); if (reader.gotoSourcePage) reader.gotoSourcePage(entry.sourcePage); else reader.gotoPage?.(entry.sourcePage);
   }
-  async refreshPageCollection(referenceId = this.getPageReference(this.currentPage)?.id): Promise<void> {
+  async refreshPageCollection(referenceId = this.getPageReference(this.currentPage)?.id, preserveEditHistory = false): Promise<void> {
     if (!this.loadedPath || !(this.doc instanceof PageCollectionDocument)) return;
-    const path=this.loadedPath; this.restoredState={path,scale:this.scale,fitWidth:this.widthFitted,layout:this.layout,continuous:this.continuous,position:this.captureLocation(),referenceId}; await this.loadFileByPath(path,true);
+    const path=this.loadedPath; this.restoredState={path,scale:this.scale,fitWidth:this.widthFitted,layout:this.layout,continuous:this.continuous,position:this.captureLocation(),referenceId}; await this.loadFileByPath(path,true,preserveEditHistory);
   }
 
   async setState(state: any): Promise<void> {
@@ -1748,7 +1754,7 @@ export class ReaderView extends ItemView {
     const saved = this.plugin.store.getDocMeta(path).documentOutline;
     const items = saved ?? (await getOutline(doc)).map((item, index) => ({ ...item, id: "embedded:" + index, pageId: this.getPdfPageId(item.page) }));
     if (this.loadedPath !== path || this.doc !== doc) throw new Error("文档已切换，目录读取已取消");
-    return structuredClone(items).map(item => ({ ...item, page: item.pageId ? (this.getPdfPageEdits()?.pages.findIndex(page => page.id === item.pageId) ?? -1) + 1 : item.page }));
+    return structuredClone(items).map(item => ({ ...item, page: item.pageId ? this.doc instanceof PageCollectionDocument ? this.doc.pageCollection.pages.findIndex(page => page.id === item.pageId) + 1 : (this.getPdfPageEdits()?.pages.findIndex(page => page.id === item.pageId) ?? -1) + 1 : item.page }));
   }
   async setEditableOutline(items: DocumentOutlineItem[]): Promise<void> {
     const path = this.loadedPath, doc = this.doc;
@@ -1771,6 +1777,21 @@ export class ReaderView extends ItemView {
   }
   navigateToOutline(item: DocumentOutlineItem): void {
     if (item.page > 0) void this.navigateToReference(item.page, item.rects ?? [], "pdf", false);
+  }
+  async toggleOutlineFold(item: DocumentOutlineItem, items: DocumentOutlineItem[]): Promise<void> {
+    const path=this.loadedPath,doc=this.doc,notebook=this.getDocumentNotebookId(),index=items.findIndex(entry=>entry.id===item.id);
+    if(!path||!doc||index<0||item.page<1)throw new Error("目录没有有效的目标页面");
+    const next=items.slice(index+1).find(entry=>entry.level<=item.level&&entry.page>0),end=next?.page??doc.numPages+1;
+    if(end<=item.page)throw new Error("相邻章节位于同一页或页序无效，无法按整页折叠");
+    const before=structuredClone(notebookMeta(this.plugin.store.getDocMeta(path),notebook).foldedPages),pages=Array.from({length:end-item.page},(_,offset)=>item.page+offset),folded=new Set(before??[]);
+    const expand=pages.every(page=>folded.has(page));for(const page of pages)expand?folded.delete(page):folded.add(page);
+    const after=[...folded].sort((first,second)=>first-second);
+    const apply=async(value:number[]|undefined,expected:number[]|undefined)=>{
+      if(this.destroyed||this.loadedPath!==path||this.doc!==doc||this.getDocumentNotebookId()!==notebook)throw new Error("文档已切换，章节折页已取消");
+      if(JSON.stringify(notebookMeta(this.plugin.store.getDocMeta(path),notebook).foldedPages)!==JSON.stringify(expected))throw new Error("折页状态已变化，请重新操作");
+      updateNotebookMeta(this.plugin,path,{foldedPages:structuredClone(value)},notebook);this.applyDocumentNotebookView();
+    };
+    await apply(after,before);this.recordExtendEdit(expand?"展开章节":"折叠章节",redo=>apply(redo?after:before,redo?before:after));
   }
   getDoc(): any {
     return this.doc;

@@ -3,9 +3,30 @@ import { PDFDocument, StandardFonts, degrees, rgb, PDFName, PDFString, PDFArray,
 import { loadPdf } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/pdfjs';
 import { savePdfExport } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/pdfExportSave';
 import { imagePagesPdf, isPageImage } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/imagePages';
+import { createPageCollection } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/documents/pageCollection';
 
 export async function runPdfExportAcceptance({test,assert,wait,plugin,add,app}:any){
  const make=async(labels:string[],rotation=0)=>{const pdf=await PDFDocument.create(),font=await pdf.embedFont(StandardFonts.Helvetica);for(const label of labels){const page=pdf.addPage([500,700]);page.drawText(label,{x:80,y:500,font,size:20});page.drawRectangle({x:100,y:100,width:50,height:50,color:rgb(1,0,0)});page.setRotation(degrees(rotation));}return (await pdf.save()).slice().buffer;};
+ await test('Imported virtual PDF pages can be referenced in a page collection',async()=>{
+  const source=add('collection-import-main.pdf',{bytes:await make(['MAIN'])}),p=plugin(),view=new ReaderView({app} as any,p);await view.onOpen();
+  try{await view.loadFileByPath(source.path);await view.insertPdfPages(1,new File([await make(['INSERTED'])],'inserted.pdf'),[1]);const references=view.getPageReferences([2]);
+   assert(references.length===1&&references[0].sourcePath.startsWith('MarginStudyImports/page-assets/')&&references[0].sourcePage===1,'imported virtual page cannot be used in a collection');
+   const file=await createPageCollection(p,{title:'插入页引用',pages:references});await view.loadFileByPath(file.path);const output=await view.exportEditedPdf({includeAnnotations:false}),doc=await loadPdf(output.slice().buffer);
+   try{const text=(await(await doc.getPage(1)).getTextContent()).items.map((item:any)=>item.str).join('');assert(text==='INSERTED','referenced imported page exported wrong content');}finally{await doc.destroy();}
+  }finally{await view.onClose();view.containerEl.remove();}
+ });
+ await test('Collection export follows virtual page order across source PDFs',async()=>{
+  const a=add('collection-export-a.pdf',{bytes:await make(['FIRST','SECOND'])}),b=add('collection-export-b.pdf',{bytes:await make(['THIRD'])}),p=plugin();
+  const file=await createPageCollection(p,{title:'导出顺序',pages:[{sourcePath:b.path,sourcePage:1},{sourcePath:a.path,sourcePage:2},{sourcePath:a.path,sourcePage:1}]});
+  const view=new ReaderView({app} as any,p);await view.onOpen();
+  try{await view.loadFileByPath(file.path);const output=await view.exportEditedPdf({includeAnnotations:false}),doc=await loadPdf(output.slice().buffer);
+   try{const texts=[];for(let page=1;page<=doc.numPages;page++)texts.push((await(await doc.getPage(page)).getTextContent()).items.map((item:any)=>item.str).join(''));assert(texts.join(',')==='THIRD,SECOND,FIRST','export did not preserve virtual order: '+texts);}
+   finally{await doc.destroy();}
+   const subset=await view.exportEditedPdf({pages:[1,3],includeAnnotations:false}),selected=await loadPdf(subset.slice().buffer);
+   try{const texts=[];for(let page=1;page<=selected.numPages;page++)texts.push((await(await selected.getPage(page)).getTextContent()).items.map((item:any)=>item.str).join(''));assert(texts.join(',')==='THIRD,FIRST','selected virtual pages exported in the wrong order: '+texts);}
+   finally{await selected.destroy();}
+  }finally{await view.onClose();view.containerEl.remove();}
+ });
  await test('PDF export keeps preset ink widths and opacity including pressure, invisible ink and legacy defaults',async()=>{
   const source=await PDFDocument.create();source.addPage([500,700]);const path='export-preset-ink.pdf';add(path,{bytes:(await source.save()).slice().buffer});const p=plugin(),view=new ReaderView({app} as any,p);await view.onOpen();
   const samples=[

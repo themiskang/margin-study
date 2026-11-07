@@ -8,11 +8,11 @@ import { loadPdf } from "./pdfjs";
 import { savePdfExport } from "./pdfExportSave";
 
 export function openPdfExport(reader: ReaderView): () => void {
-  const edits=reader.getPdfPageEdits();if(!edits)return()=>{};
+  const edits=reader.getPdfExportPageEdits();if(!edits)return()=>{};
   const doc=reader.getDoc(),path=reader.getFilePath(),fingerprint=JSON.stringify(edits),crop=JSON.stringify(reader.getPageCrop()),notes=JSON.stringify(reader.getExtendNotes()),notebook=reader.getDocumentNotebookId(),abort=new AbortController();
   let closed=false,busy=false,closeChild:(()=>void)|null=null,observer:IntersectionObserver|null=null;
   const tasks=new Set<any>(),canvases=new Set<HTMLCanvasElement>(),selected=new Set(edits.pages.map((_,index)=>index+1));
-  const current=()=>{if(closed||abort.signal.aborted||reader.getDoc()!==doc||reader.getFilePath()!==path||JSON.stringify(reader.getPdfPageEdits())!==fingerprint||JSON.stringify(reader.getPageCrop())!==crop||JSON.stringify(reader.getExtendNotes())!==notes||reader.getDocumentNotebookId()!==notebook)throw new Error('文档或页面已切换，导出已取消');};
+  const current=()=>{if(closed||abort.signal.aborted||reader.getDoc()!==doc||reader.getFilePath()!==path||JSON.stringify(reader.getPdfExportPageEdits())!==fingerprint||JSON.stringify(reader.getPageCrop())!==crop||JSON.stringify(reader.getExtendNotes())!==notes||reader.getDocumentNotebookId()!==notebook)throw new Error('文档或页面已切换，导出已取消');};
   const {bg,modal,close}=createModal('Select Pages for Export',()=>{if(closed)return;closed=true;abort.abort();closeChild?.();observer?.disconnect();tasks.forEach(task=>task.cancel());canvases.forEach(canvas=>canvas.width=canvas.height=0);});
   bg.classList.add('ms-pdf-export-bg');modal.classList.add('ms-pdf-export-modal');modal.setAttribute('role','dialog');modal.setAttribute('aria-label','Select Pages for Export');modal.setAttribute('aria-modal','true');
   const childPanel=(title:string)=>{closeChild?.();const panel=createModal(title,()=>{closeChild=null;});panel.modal.setAttribute('role','dialog');panel.modal.setAttribute('aria-label',title);panel.modal.setAttribute('aria-modal','true');modal.append(panel.bg);closeChild=panel.close;return panel;};

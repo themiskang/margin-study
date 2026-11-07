@@ -551,6 +551,7 @@ export interface ReaderLike {
   getEditableOutline?(): Promise<DocumentOutlineItem[]>;
   setEditableOutline?(items: DocumentOutlineItem[]): Promise<void>;
   navigateToOutline?(item: DocumentOutlineItem): void;
+  toggleOutlineFold?(item: DocumentOutlineItem, items: DocumentOutlineItem[]): Promise<void>;
 }
 
 export type RecallOptionKey =

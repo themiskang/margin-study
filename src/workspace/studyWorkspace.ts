@@ -1271,7 +1271,7 @@ export class StudyWorkspaceView extends ItemView {
       source.addEventListener("click",()=>{this.dismissPopup();this.selectAuxiliary("research");this.research?.navigate(sourceUrl);this.saveLayout();});pane.append(source);
     }
     const reader=this.reader;
-    if(reader instanceof ReaderView&&reader.getPdfPageEdits()){
+    if(reader instanceof ReaderView&&reader.getPdfExportPageEdits()){
       const path=reader.getFilePath(),exportDocument=el("button",{class:"ms-native-menu-row",text:"Export Document…","aria-label":"Export Document"});
       exportDocument.addEventListener("click",()=>{this.dismissPopup();if(this.reader===reader&&reader.getFilePath()===path)reader.openPdfExport();});pane.append(exportDocument);
     }

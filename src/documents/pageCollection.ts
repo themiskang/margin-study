@@ -217,6 +217,18 @@ export async function reorderPageReferences(plugin: MarginStudyPlugin, file: TFi
     const main=remap(meta); plugin.store.updateDocMeta(file.path,{foldedPages:main.foldedPages,bookmarks:main.bookmarks,documentNotebookMeta:scoped});await plugin.store.flush();return next;
   } finally { locks.delete(file.path); }
 }
+async function restorePageReferences(plugin: MarginStudyPlugin, file: TFile, expected: PageCollection, target: PageCollection, metadata: any): Promise<void> {
+  if (locks.has(file.path)) throw new Error("此重组文档正在更新"); locks.add(file.path);
+  try {
+    if (JSON.stringify(await readPageCollection(plugin,file)) !== JSON.stringify(expected)) throw new Error("文档已在其他窗口更新，请重新打开后再操作");
+    await validateSources(plugin,target);
+    if (JSON.stringify(await readPageCollection(plugin,file)) !== JSON.stringify(expected)) throw new Error("文档已在其他窗口更新，请重新打开后再操作");
+    await plugin.app.vault.modifyBinary(file,collectionBytes(target));
+    const current=plugin.store.getDocMeta(file.path), scoped={...current.documentNotebookMeta};
+    for(const [id,state] of Object.entries(metadata.documentNotebookMeta??{})) scoped[id]={...scoped[id],foldedPages:(state as any).foldedPages,bookmarks:(state as any).bookmarks};
+    plugin.store.updateDocMeta(file.path,{foldedPages:metadata.foldedPages,bookmarks:metadata.bookmarks,documentNotebookMeta:scoped});await plugin.store.flush();
+  } finally { locks.delete(file.path); }
+}
 export function parsePageRange(value: string, count: number): number[] {
   const result: number[] = []; for (const token of value.trim().split(/[,，\s]+/).filter(Boolean)) {
     const match = /^(\d+)(?:[-–—](\d+))?$/.exec(token); if (!match) throw new Error("页码示例：1-3, 5, 8");
@@ -227,7 +239,21 @@ export function parsePageRange(value: string, count: number): number[] {
 }
 export interface PageCollectionReader {
   getFilePath(): string | null; getDoc(): any; getDocumentNotebookId(): string;
-  getPageReferences(pages: number[]): PageReferenceInput[]; refreshPageCollection(referenceId?: string): Promise<void>;
+  getPageReferences(pages: number[]): PageReferenceInput[]; refreshPageCollection(referenceId?: string, preserveEditHistory?: boolean): Promise<void>;
+  recordExtendEdit(label: string, apply: (redo: boolean) => Promise<void>): void;
+}
+export async function appendPageReferencesInReader(plugin: MarginStudyPlugin, reader: PageCollectionReader, inputs: PageReferenceInput[]): Promise<void> {
+  const path=reader.getFilePath(),file=path?plugin.app.vault.getAbstractFileByPath(path):null;
+  if(!(file instanceof TFile)||!(reader.getDoc() instanceof PageCollectionDocument))throw new Error("请先打开目标重组文档");
+  const before=await readPageCollection(plugin,file),beforeMeta=structuredClone(plugin.store.getDocMeta(file.path)),beforeAnnotations=structuredClone(await plugin.store.loadAnnotations(file.path));
+  const after=await appendPageReferences(plugin,file,inputs),afterMeta=structuredClone(plugin.store.getDocMeta(file.path)),afterAnnotations=structuredClone(await plugin.store.loadAnnotations(file.path));
+  await reader.refreshPageCollection(undefined,true);reader.recordExtendEdit("追加页面",async redo=>{
+    if(reader.getFilePath()!==file.path)throw new Error("文档已切换，页面撤销已取消");
+    const current=await plugin.store.loadAnnotations(file.path),expected=redo?beforeAnnotations:afterAnnotations;
+    if(JSON.stringify(current)!==JSON.stringify(expected))throw new Error("文档批注已变化，页面撤销已取消");
+    await restorePageReferences(plugin,file,redo?before:after,redo?after:before,redo?afterMeta:beforeMeta);
+    plugin.store.saveAnnotationsDebounced(file.path,structuredClone(redo?afterAnnotations:beforeAnnotations));await plugin.store.flush();await reader.refreshPageCollection(undefined,true);
+  });
 }
 export function openPageReorganization(plugin: MarginStudyPlugin, reader: PageCollectionReader): void {
   const doc = reader.getDoc(), path = reader.getFilePath(); if (!doc || !path) { new Notice("请先打开文档"); return; }
@@ -241,9 +267,23 @@ export function openPageReorganization(plugin: MarginStudyPlugin, reader: PageCo
   target.addEventListener("change",()=>{title.disabled=!!target.value;method.disabled=!!target.value;});
   const actions=el("div",{class:"ms-modal-actions"}),cancel=el("button",{class:"ms-btn",text:"取消"}),save=el("button",{class:"ms-btn primary",text:"完成"});cancel.addEventListener("click",close);
   save.addEventListener("click",async()=>{save.disabled=true;try{const inputs=reader.getPageReferences(parsePageRange(range.value,doc.numPages));let file:TFile;
-    if(target.value){const existing=plugin.app.vault.getAbstractFileByPath(target.value);if(!(existing instanceof TFile))throw new Error("目标文档已不存在");file=existing;await appendPageReferences(plugin,file,inputs.map((entry)=>({...entry,annotations:"include"})));}
+    if(target.value){const existing=plugin.app.vault.getAbstractFileByPath(target.value);if(!(existing instanceof TFile))throw new Error("目标文档已不存在");file=existing;
+      const before=await readPageCollection(plugin,file),beforeMeta=structuredClone(plugin.store.getDocMeta(file.path)),beforeAnnotations=structuredClone(await plugin.store.loadAnnotations(file.path));
+      const after=await appendPageReferences(plugin,file,inputs.map((entry)=>({...entry,annotations:"include"})));
+      const afterMeta=structuredClone(plugin.store.getDocMeta(file.path)),afterAnnotations=structuredClone(await plugin.store.loadAnnotations(file.path));
+      let destination:PageCollectionReader;
+      if(file.path===path){destination=reader;await destination.refreshPageCollection(undefined,true);}
+      else destination=await plugin.openDocument(file) as unknown as PageCollectionReader;
+      destination.recordExtendEdit("追加页面",async redo=>{
+        if(destination.getFilePath()!==file.path)throw new Error("文档已切换，页面撤销已取消");
+        const expected=redo?beforeAnnotations:afterAnnotations,replacement=redo?afterAnnotations:beforeAnnotations,current=await plugin.store.loadAnnotations(file.path);
+        if(JSON.stringify(current)!==JSON.stringify(expected))throw new Error("文档批注已变化，页面撤销已取消");
+        await restorePageReferences(plugin,file,redo?before:after,redo?after:before,redo?afterMeta:beforeMeta);
+        plugin.store.saveAnnotationsDebounced(file.path,structuredClone(replacement));await plugin.store.flush();await destination.refreshPageCollection(undefined,true);
+      });close();return;
+    }
     else file=await createPageCollection(plugin,{title:title.value,pages:inputs,origin:method.value as PageReferenceOrigin,annotations:method.value==="selection"?"include":"clean"});
-    close();if(file.path===path)await reader.refreshPageCollection();else await plugin.openDocument(file);
+    close();if(file.path!==path)await plugin.openDocument(file);
   }catch(error){status.textContent=(error as Error).message;save.disabled=false;}});actions.append(cancel,save);modal.append(status,actions);
   if(doc instanceof PageCollectionDocument) {
     const manage=el("button",{class:"ms-btn",text:"排列或移除页面"});manage.addEventListener("click",()=>{close();openCollectionPageOrder(plugin,reader,doc.pageCollection);});modal.append(manage);
@@ -254,5 +294,5 @@ function openCollectionPageOrder(plugin: MarginStudyPlugin, reader: PageCollecti
   const render=()=>{clear(list);pages.forEach((entry,index)=>{const row=el("div",{class:"ms-reference-page-row",draggable:"true","data-reference-id":entry.id});row.append(el("span",{text:`${index+1}. ${entry.sourcePath.split("/").pop()} · ${entry.sourcePage}`}));
     for(const [label,change] of [["上移",-1],["下移",1],["移除",0]] as const){const button=el("button",{class:"ms-btn",text:label});button.disabled=pages.length===1&&change===0||(change===-1&&index===0)||(change===1&&index===pages.length-1);button.addEventListener("click",()=>{if(change===0)pages.splice(index,1);else [pages[index],pages[index+change]]=[pages[index+change],pages[index]];render();});row.append(button);}
     row.addEventListener("dragstart",event=>{event.dataTransfer?.setData("application/x-marginstudy-reference-order",entry.id);});row.addEventListener("dragover",event=>{if(event.dataTransfer?.types.includes("application/x-marginstudy-reference-order"))event.preventDefault();});row.addEventListener("drop",event=>{const id=event.dataTransfer?.getData("application/x-marginstudy-reference-order"),from=pages.findIndex(page=>page.id===id);if(from<0)return;event.preventDefault();const [moved]=pages.splice(from,1);pages.splice(index,0,moved);render();});list.append(row);});};render();
-  const actions=el("div",{class:"ms-modal-actions"}),cancel=el("button",{class:"ms-btn",text:"取消"}),save=el("button",{class:"ms-btn primary",text:"保存"});cancel.addEventListener("click",close);save.addEventListener("click",async()=>{save.disabled=true;try{const file=plugin.app.vault.getAbstractFileByPath(reader.getFilePath()!);if(!(file instanceof TFile))throw new Error("文档已不存在");await reorderPageReferences(plugin,file,pages.map(entry=>entry.id));await reader.refreshPageCollection();close();}catch(error){status.textContent=(error as Error).message;save.disabled=false;}});actions.append(cancel,save);modal.append(list,status,actions);
+  const actions=el("div",{class:"ms-modal-actions"}),cancel=el("button",{class:"ms-btn",text:"取消"}),save=el("button",{class:"ms-btn primary",text:"保存"});cancel.addEventListener("click",close);save.addEventListener("click",async()=>{save.disabled=true;try{const file=plugin.app.vault.getAbstractFileByPath(reader.getFilePath()!);if(!(file instanceof TFile))throw new Error("文档已不存在");const before=await readPageCollection(plugin,file),beforeMeta=structuredClone(plugin.store.getDocMeta(file.path));const after=await reorderPageReferences(plugin,file,pages.map(entry=>entry.id)),afterMeta=structuredClone(plugin.store.getDocMeta(file.path));await reader.refreshPageCollection(undefined,true);if(JSON.stringify(before)!==JSON.stringify(after))reader.recordExtendEdit("重排页面",async redo=>{if(reader.getFilePath()!==file.path)throw new Error("文档已切换，页面撤销已取消");await restorePageReferences(plugin,file,redo?before:after,redo?after:before,redo?afterMeta:beforeMeta);await reader.refreshPageCollection(undefined,true);});close();}catch(error){status.textContent=(error as Error).message;save.disabled=false;}});actions.append(cancel,save);modal.append(list,status,actions);
 }

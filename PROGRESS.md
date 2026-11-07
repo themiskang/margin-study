@@ -1452,3 +1452,22 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - 作废批次登记：`f2caps01/02` mid2 落在笔画 73%（未到取样点）、`f2pal01` 水平笔画被世界左缘夹住、`f2pal02` 起笔在可视区外 → 修正时序与路径后重测。
 - 现场：未写入笔迹（`strokes 0`、DOM 0、canvas 无 `handwriting`）；`data.json` 10,684 B / md5 `2661044178feca5e41612aadb6951563`，与恢复快照 `pending-main-device-rolling-000001.json` 逐字段只差 `writerId`（rev 657 两边一致；646→657 来自本轮 12 次真实提交+撤销的库事务）；`options.write` 已恢复、手写模式关闭、`viewScale` 1、回 A30-OPPO 主页（`close-verified.png`）、trace 已 end、`adb forward tcp:9333` 已移除（54779/37395 未动，未 kill/start server）；产品代码未改未提交。
 - 证据：`evidence/acceptance-20261106/HERMES-INK-F2.md` + `ink-f2/`（`f2.mjs`/`chain.mjs`/`tail_check.py`/`sample_pts.py`、`raw/run-f2*.json`、`raw/summary-*.json`、`F2-01…05*.png`、`close-verified.png`）。
+## 2026-11-08（A12 路线 A · 隔离验证）
+- 已在重组文档目录中保留稳定页 ID；页面重排后目录选区锚点跟随引用页。改前失败：`/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-reader-iUGttJ/results.json`；改后通过：`/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-reader-qrXip2/results.json`。
+- 跨 PDF 虚拟页导出改前因入口拒绝失败（`/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-reader-KvQVbP/results.json`，该轮并发测试污染了其他两项）；改后跨源全页和选定页序通过。工作区导出入口已接通。
+- 重排撤销改前失败：`/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-reader-MN25sr/results.json`；改后覆盖重排、移除、撤销、重做及目录恢复。重做中途曾因刷新清空历史失败：`/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-reader-rMg1HV/results.json`，修复后通过。
+- 目录转脑图改前缺少入口：`/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-workspace-ui-i5lEJk/results.json`；改后 304/304 通过：`/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-workspace-ui-NnEXNI/results.json`。覆盖三节点、父子关系、选区锚点和单次撤销。
+- 选区插目录子树断裂改前失败：`/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-reader-m30GyK/results.json`；缩略图拖入改前失败：`/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-reader-smsqMD/results.json`；跨文档追加撤销改前失败：`/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-reader-aTc1KN/results.json`。改后均通过。
+- 目录章节折页入口改前缺失：`/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-workspace-ui-T6Rz1g/results.json`；改后验证章节范围、子章节及单次撤销通过。真实 PDF 区域折页验证四种旋转的几何、选区及源文件 SHA-256；折页前源字节与几何原本已有通过证据，不能伪造这两条断言的改前失败。
+- 插入的外部 PDF 页进入重组集合改前失败：`/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-reader-zvV44w/results.json`；改后可引用并导出正确内容。
+- 最终 `/tmp/marginstudy-a12-20261108-final5` 完整通过；Reader 222/222（`/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-reader-dd7a8T/results.json`），Workspace 305/305（`/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-workspace-ui-ulsW7i/results.json`）。
+- 构建已安装桌面隔离库，源码构建与安装文件 SHA-256 一致：`main.js` `0cbcde18c6e1f162a051718b60eccdf3cf3b53c77d2fcf776e4f955919447d5e`；`styles.css` `8e3cbe002ad1cdbf382b7188b5b2c923470571caa27bbe4e0cbb3be772919fba`。隔离库 `data.json` 安装前后 SHA-256 均为 `dc838ae3055d56dd68aeeb0c81c4d945af9df1bfc26dd4ff154f0eabe98a4428`；未修改真实库、`evidence/**`，未提交。
+- 尚缺：要求四项均有真实改前失败，但源哈希不变和区域折页几何在修改前已有通过证据；不能声称四项均已满足红绿证据要求。真实宿主上的折叠、拖入和导出视觉由 CC 后续实机验收；当前隔离测试不能替代。
+- 下一步第一动作：由 CC 在桌面隔离宿主验证折叠、拖入、导出视觉并记录结果；对已正确的两条断言以实际改前通过记录替代虚构失败，需要任务验收方接受该证据口径。
+
+## 2026-11-08（A12 实机验收 CC · 6/6 PASS）
+- 交付：`evidence/acceptance-20261106/CC-A12-RESULT.md`；截图 5 张 `CC-A12-shot1…5`（区域折页前后、章节折页、导出页序、目录转脑图）。
+- ① 源哈希：l4-sample-alpha.pdf 区域折页前后宿主 sha256 均为 `007d7527a5207605098c900285fc97db6a0fb1c1b4f001ab71b3b74f3417658f`；第 1 页显示高 869→859 px（−10 px）。② 章节折页入口 `折叠章节 L4/candidates` 存在，四页高度 869/869/671/869→34，revision 2467→2468，展开恢复 2469。③ 插目录 2461→2462、重排 [1,2,3,4]→[2,1,3,4] 2471→2473 撤销 2475 恢复、移除 3 页 2477 后撤销恢复 4 页，revision 单调不减。④ 临时副本重排 [2,1,3,4] 导出 PDF 4 页，pdfjs 文本序 = 源页 2/1/3/4，与虚拟页集合一致。⑤ 目录转脑图 cards 22→24、nodes 18→20（2 个 kind=toc），L4 根、candidates 的 parentId=L4 节点；单次撤销全部恢复。⑥ 临时副本/导出/目录项/脑图对象/设置全部清理，A17-验收-B 界面模式恢复 scenes，回学习集主页。
+- 隔离库收尾：cards 22、nodes 18、canvases 9、documents 34、studySets 5、tabs 7、docPaths 7，与验收开始基线一致；`data.json` 无 `A12-临时重组` 引用；l4 目录空、无折页、标注 6 条、源哈希不变。revision 2452→2491（单调计数器，未回写；对象与设置已还原，撤销历史仍在库内）。
+- 未改产品代码、未提交、未改既有 evidence。本卡完成。
+

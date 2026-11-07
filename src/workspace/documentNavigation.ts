@@ -15,6 +15,7 @@ import { getOutline } from "../pdf/outline";
 import { annotationNotebook, documentNotebookState, notebookMeta } from "../annot/documentNotebooks";
 import { annotationTextRuns, renderTextRuns } from "../annot/textRuns";
 import { imageUrl } from "../review/content";
+import { appendPageReferencesInReader, PageCollectionDocument, type PageCollectionReader } from "../documents/pageCollection";
 
 export type DocumentNavigationTab = "contents" | "thumbnails" | "bookmarks" | "annotations" | "cards";
 export const documentNavigationTabs: { id: DocumentNavigationTab; label: string; icon: string }[] = [
@@ -97,7 +98,7 @@ export class DocumentNavigation {
       const annotations = selected === "cards" || selected === "annotations" ? (await this.plugin.store.loadAnnotations(path)).map(annotation => this.reader.getDisplayAnnotation?.(annotation) ?? annotation) : [];
       if (this.disposed || request !== this.request) return;
       const cards = selected === "cards" ? this.plugin.store.cards.filter(card => !card.hidden&&this.source(card, path)) : [];
-      const signature = JSON.stringify([selected, path, notebook, notebookMeta(meta).bookmarks, meta.pdfCrop, meta.pdfPageEdits, meta.documentOutline, this.editingOutline, annotations, cards]);
+      const signature = JSON.stringify([selected, path, notebook, notebookMeta(meta).bookmarks, notebookMeta(meta).foldedPages, meta.pdfCrop, meta.pdfPageEdits, meta.documentOutline, this.editingOutline, annotations, cards]);
       if (this.signature === signature) return; this.signature = signature;
       revision = ++this.revision; this.stopPreviews();
       this.markdownOwner.unload(); this.markdownOwner = new Component(); this.markdownOwner.load();
@@ -133,12 +134,23 @@ export class DocumentNavigation {
         const pages = selected === "thumbnails" ? display?.map(entry=>entry.number)??Array.from({ length: doc.numPages }, (_, index) => index + 1)
           : [...new Set(notebookMeta(meta).bookmarks ?? [])].filter(page => Number.isInteger(page) && page > 0 && page <= doc.numPages).sort((a, b) => a - b);
         const grid = el("div", { class: "ms-document-page-grid" }); this.list.append(grid);
+        if(selected==="thumbnails"&&doc instanceof PageCollectionDocument){
+          grid.addEventListener("dragover",event=>{if(event.dataTransfer?.types.includes("application/x-marginstudy-page-reference"))event.preventDefault();});
+          grid.addEventListener("drop",event=>{
+            const raw=event.dataTransfer?.getData("application/x-marginstudy-page-reference");if(!raw)return;event.preventDefault();
+            try{if(raw.length>4096)throw new Error("页面引用无效");const input=JSON.parse(raw);void appendPageReferencesInReader(this.plugin,this.reader as unknown as PageCollectionReader,[{sourcePath:input.sourcePath,sourcePage:input.sourcePage,sourceNotebookId:input.sourceNotebookId,origin:"page"}]).catch(error=>new Notice(String(error)));}
+            catch(error){new Notice("页面拖入失败："+String(error));}
+          });
+        }
         this.thumbnails = new IntersectionObserver(entries => {
           for (const entry of entries) if (entry.isIntersecting) { this.thumbnails?.unobserve(entry.target); void this.renderThumbnail(entry.target as HTMLElement, doc, current); }
         }, { root: this.list, rootMargin: "160px" });
         for (const page of pages) {
           const row = el("button", { class: "ms-document-page-preview", "aria-label": `第 ${page} 页`, "data-page": String(page) });
           if(display)row.dataset.displayPage="true";
+          if(selected==="thumbnails"&&typeof (this.reader as any).getPageReferences==="function"){
+            row.draggable=true;row.addEventListener("dragstart",event=>{const sourcePage=display?.find(entry=>entry.number===page)?.page??page;try{const reference=(this.reader as unknown as PageCollectionReader).getPageReferences([sourcePage])[0];if(reference)event.dataTransfer?.setData("application/x-marginstudy-page-reference",JSON.stringify(reference));}catch(error){event.preventDefault();new Notice(String(error));}});
+          }
           row.append(el("canvas", { "aria-hidden": "true" }), el("span", { class: "ms-document-preview-number", text: String(page) }));
           row.addEventListener("click", () => { this.selectedPage = page; if(display)void this.reader.gotoDisplayPage?.(page);else this.reader.gotoPage?.(page); this.markSelected(row); });
           if (this.selectedPage === page) row.setAttribute("aria-current", "true");
@@ -203,6 +215,12 @@ export class DocumentNavigation {
         event.preventDefault();const index=items.findIndex(entry=>entry.id===item.id),target=items[index+(event.key==="ArrowUp"?-1:1)];
         if(target)this.moveOutline(item.id,target.id,event.key==="ArrowDown");
       }});row.append(title);
+      if(!this.editingOutline&&this.reader.toggleOutlineFold&&item.page>0){
+        const next=items.slice(items.indexOf(item)+1).find(entry=>entry.level<=item.level&&entry.page>0),end=next?.page??(this.reader.getDoc?.()?.numPages??0)+1;
+        const folded=new Set(notebookMeta(this.plugin.store.getDocMeta(this.reader.getFilePath()!)).foldedPages??[]),expanded=end>item.page&&Array.from({length:end-item.page},(_,offset)=>item.page+offset).every(page=>folded.has(page));
+        const toggle=el("button",{text:expanded?"展开":"折叠","aria-label":`${expanded?"展开":"折叠"}章节 ${item.title}`});
+        toggle.addEventListener("click",()=>{void this.reader.toggleOutlineFold!(item,items).catch(error=>new Notice(String(error)));});row.append(toggle);
+      }
       const more=el("button", {class:"ms-toc-more",text:"…","aria-label":"目录菜单 "+item.title});
       more.addEventListener("click",event=>{const menu=new Menu();
         menu.addItem(entry=>entry.setTitle("Rename").onClick(()=>this.renameOutline(item)));
@@ -222,8 +240,27 @@ export class DocumentNavigation {
       action("+",()=>new Notice('请选择 PDF 页面上的文字，再点击 Insert into TOC'));
     }
     if(!this.editingOutline)action("AI TOC",()=>this.generateOutline());
+    if(!this.editingOutline)action("目录转脑图",()=>{void this.outlineToMindmap().catch(error=>new Notice(String(error)));},!items.length);
     action(this.editingOutline?"Done":"Edit",()=>{this.editingOutline=!this.editingOutline;this.outlineSelection.clear();this.signature="";void this.refresh();});
     this.list.append(toolbar);
+  }
+  private async outlineToMindmap():Promise<void> {
+    const path=this.reader.getFilePath(),canvasId=this.plugin.store.activeCanvasId,items=structuredClone(this.outlineItems);
+    if(!path||!canvasId||!items.length)throw new Error("请先打开文档并选择脑图");
+    const annotations=await this.plugin.store.loadAnnotations(path);
+    if(this.disposed||this.reader.getFilePath()!==path||this.plugin.store.activeCanvasId!==canvasId)throw new Error("文档或脑图已切换");
+    const notebook=documentNotebookState(this.plugin.store.getDocMeta(path)).active,parents:string[]=[];
+    this.plugin.store.libraryTransaction("目录转脑图",()=>{
+      const next=[...annotations];
+      for(const [index,item] of items.entries()){
+        const cardId=uid("card"),nodeId=uid("node"),anchorAnnId=item.page>0&&item.rects?.length?uid("ann"):undefined;
+        if(anchorAnnId)next.push({id:anchorAnnId,docPath:path,docKind:"pdf",page:item.page,type:"highlight",rects:structuredClone(item.rects!),pdfCoordinateSpace:"pdf",pdfReferencePages:item.pageId?[{id:item.pageId,page:item.page}]:undefined,documentNotebookId:notebook,text:item.title,color:"#ffff00",cardId,createdAt:new Date().toISOString()});
+        this.plugin.store.addCard({id:cardId,docPath:path,documentNotebookId:notebook,page:item.page||undefined,anchorAnnId,type:"excerpt",front:item.title,title:item.title,tags:[],links:[],createdAt:new Date().toISOString()});
+        this.plugin.store.addNode({id:nodeId,cardId,canvasId,parentId:item.level?parents[item.level-1]??null:null,title:item.title,kind:"toc",collapsed:false,x:80+item.level*260,y:80+index*100});
+        parents.length=item.level;parents[item.level]=nodeId;
+      }
+      if(next.length!==annotations.length)this.plugin.store.saveAnnotationsDebounced(path,next);
+    });
   }
   private generateOutline():void {
     this.closeOutlineEditor?.();const path=this.reader.getFilePath(),doc=this.reader.getDoc?.(),service=aiServiceFor(this.plugin),controller=new AbortController();

@@ -1640,6 +1640,26 @@ try{
     button(nav,'Delete').click();await until(()=>!nav.querySelector('[aria-label="Renamed"]'),'delete failed');await reader.undoLastEdit();await until(()=>nav.querySelector('[aria-label="Renamed"]'),'undo did not restore deleted TOC');
     button(nav,'Done').click();await until(()=>!nav.querySelector('input[type="checkbox"]'),'Done did not exit editor');button(nav,'Renamed').click();await until(()=>(reader.getState() as any).position.page===3,'edited TOC targets wrong page');
   });
+  await test('Converting a PDF TOC creates a linked hierarchy in one undoable operation',async()=>{
+    const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;
+    await reader.setEditableOutline([{id:'toc-root',title:'Chapter',page:1,level:0,rects:[{x:80,y:500,w:40,h:18}]},{id:'toc-child',title:'Section',page:2,level:1,rects:[{x:90,y:500,w:50,h:18}]},{id:'toc-next',title:'Next',page:3,level:0}]);
+    button(p.root,'文档目录与书签').click();const nav=p.root.querySelector<HTMLElement>('[aria-label="书页查找"]')!;await until(()=>nav.querySelector('[aria-label="Chapter"]'),'TOC missing');
+    const oldCards=p.store.cards.length,oldNodes=p.store.nodes.length;button(nav,'目录转脑图').click();
+    await until(()=>p.store.nodes.length===oldNodes+3,'TOC conversion did not create three nodes');
+    const nodes=p.store.nodes.slice(oldNodes),cards=p.store.cards.slice(oldCards),chapter=nodes.find(node=>node.title==='Chapter')!,section=nodes.find(node=>node.title==='Section')!,next=nodes.find(node=>node.title==='Next')!;
+    assert(cards.length===3&&chapter.parentId===null&&section.parentId===chapter.id&&next.parentId===null,'TOC conversion hierarchy or card count is wrong');
+    const ann=await p.store.loadAnnotations(p.delta.path),card=cards.find(item=>item.id===section.cardId)!;
+    assert(card.page===2&&ann.some(item=>item.id===card.anchorAnnId&&item.rects[0]?.x===90),'TOC conversion lost selection anchor');
+    assert(p.store.undoLibraryChange()&&p.store.nodes.length===oldNodes&&p.store.cards.length===oldCards,'TOC conversion was not one transaction');
+  });
+  await test('A TOC chapter fold hides its pages and one undo restores them',async()=>{
+    const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;
+    await reader.setEditableOutline([{id:'fold-parent',title:'Chapter',page:1,level:0},{id:'fold-child',title:'Section',page:2,level:1},{id:'fold-next',title:'Next',page:3,level:0}]);
+    button(p.root,'文档目录与书签').click();const nav=p.root.querySelector<HTMLElement>('[aria-label="书页查找"]')!;await until(()=>nav.querySelector('[aria-label="Chapter"]'),'TOC missing');
+    button(nav,'折叠章节 Chapter').click();await until(()=>reader.getPageRecord(1)?.wrapper.classList.contains('ms-page-folded'),'chapter did not fold');
+    assert(reader.getPageRecord(2)?.wrapper.classList.contains('ms-page-folded')&&!reader.getPageRecord(3)?.wrapper.classList.contains('ms-page-folded'),'chapter fold crossed its next sibling');
+    await reader.undoLastEdit();assert(!reader.getPageRecord(1)?.wrapper.classList.contains('ms-page-folded')&&!reader.getPageRecord(2)?.wrapper.classList.contains('ms-page-folded'),'one undo did not unfold the chapter');
+  });
   await test('Text excerpt mode permits pointer selection through existing PDF highlights while Hand keeps annotation actions',async()=>{
     const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;await reader.renderPage(1);
     await p.store.saveAnnotationsNow(p.delta.path,[{id:'overlap-probe',docPath:p.delta.path,docKind:'pdf',page:1,type:'highlight',rects:[{x:80,y:500,w:200,h:18}],pdfCoordinateSpace:'pdf',text:'Delta page 1',color:'#ffff00',createdAt:'today'}]);
