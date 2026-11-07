@@ -1295,3 +1295,49 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - 合成 Store 验收通过：拒绝操作 revision 不变；个人模板删除 revision +1，重开后不存在；活动模板及其他引用模板的学习集切回 `standard`，重开后保持。界面验收覆盖确认、取消、删除和下拉刷新。
 - 完整验证 `MARGINSTUDY_VERIFY_DIR=/tmp/marginstudy-a05-delete-20261107-full npm run verify` 全绿，workspace 301/301、reader 214/214；补充重开断言后 Store 专项再次通过。
 - 构建 SHA-256：main.js `394a908996b837fca7d29d72a35b7852d94d5204b55e071fb67166bd9855709b`；styles.css `f0278a70fa8e93705514e59c473cdaec23468bbd8513423c6889e223818fe79d`。未触碰 adb、安装、真实库、`evidence/**` 或提交。
+
+## 2026-11-07（Pad 收口批次 · 六项实机验收 · Hermes）
+- 被测构建实装 md5 未变：`1fe592922e3ff5d50e7083a142f0ae59` / `3ddc10b56cec6529d937918f0ae71e79`（= HEAD `60792ee`，未改代码、未提交）。
+- 结论①：PAD-PINCH-01 合成捏合 0.4%（1/224，8.05ms）与 0.0%（0/222，max 6.47）超 6.94ms，主线程 p90 5.58/5.22、max 8.05/6.47；**物理手感仍待用户复测**。口径：本轮面板空载 60Hz（16.7ms），非基线 50.07Hz，超预算列仍按 6.94ms 同定义。
+- 结论②：PAD-DRAG-01 五步配方两轮，W5（二次拖动）**≥50ms 长任务 0 个**（基线外置前 60–65ms），`render()`/`scheduleRefresh` 0 次；W5 单帧 2/24 超 6.94ms（9.04/8.36、8.97/10.02），drag trace 期间面板被顶到 144Hz（6944444 ns）。
+- 结论③：新会话首次拖动 + flush 后 100.5ms 再点，`render`/`scheduleRefresh`/`refresh`/DOM 变更全 0，首次 `writeRecovery(pending-main)`（+804ms）不再引发整图重建。
+- 结论④：PAD-LAYOUT-01 临时学习集 7 节点（2 根×2 子 + 高卡 230×369.93），自动布局后 21 对矩形交集面积 0（布局前 215,738.5 px²）。
+- 结论⑤：PAD-ADD-01 真实菜单路径导入，Notice「已导入 6 个节点」但实际 +8 节点（6 卡 + 2 文档根）；画布数与 `activeCanvasId` 不变（加入当前脑图）；二次导入返回「没有可导入的新卡片（已存在对应节点）」且 0 新增。**文案与节点数口径不一致**，待产品决定是否改文案。
+- 结论⑥：A05-01 Pad 通过 —— 复制标准→保存（Notice 模板已保存）→启用→删除并确认→模板消失、scene 回 `standard`、persisted rev 545→547；内置行无删除按钮。
+- 新发现（非阻断）：模板编辑器「保存模板」位于 1292×914 首屏之外（y≈1113 > 914，需滚动），不滚动点击会静默点空；启动后默认落在学习首页，首页遮罩会吞掉第一次手势；删除活动学习集后 `activeStudySetId` 变空并被持久化。
+- 现场：A30-OPPO 主页、无选中、scale 1、无 trace、临时学习集与临时模板全部删除（sets=1、canvases=2、nodes=5、cards=6、sceneTemplates=0）、`dirty=false`、rev 561、节点坐标复位；`adb forward tcp:9333` 已移除，原有 54779/37395 未动，未 kill/start adb server。
+- 证据：`evidence/acceptance-20261106/HERMES-PAD-FINAL.md` + `padfinal-harness/pf_*.mjs`、`pf-trace-pinch-a|b.json`、`pf-pinch-summary-a|b.json`、`drag2-trace-pf-r1|r2.json`、`drag2-summary-pf-r1|r2.json`、`pf-layout-before|after.json`、`pf-add-01-*.json`、`pf-a05-*.json`、`pf-item3-firstdrag.json`、`pf-positions*.json`、截图 `pf-*.png`。
+- 下一步第一动作：请用户在 Pad 上做两项物理复测（双指缩放手感、真实手指二次拖动跟手性），并在 `HERMES-PAD-FINAL.md` §7 对应条目回填结论。
+
+## 2026-11-07（Pad 三项 UI 小修）
+- 导入 Notice 改为报告实际新增节点数；合成验收覆盖两张卡加两个新根、已有根及重复导入。
+- 模板编辑器面板限制在工作区内，保存按钮固定在滚动面板底部；合成验收检查初始位置和滚动后可见、可点。
+- 复习列表与文档导航图片保留 `imageUrl()`；既有合成验收检查资源路径、图片解码及 HTTP 200。
+- 完整验收 `/tmp/marginstudy-pad-ui-20261107-final` 全通过，Workspace 302/302、Reader 214/214；未对最终版本做 Pad 实机界面复验。
+- 已将构建安装到桌面隔离库及 Pad 隔离库，两个文件两端哈希一致：`main.js` SHA-256 `a58fbb505141fb8fe725f18962096119df994dbe4e1619dd975af7a767d1f80d`、MD5 `20e556643fd12b0d4b12a9f9b0a48ae0`；`styles.css` SHA-256 `19d6ac538e602d9b1742af41759547cc42dfaa48a9e09e36f8cc680e01dc2ad4`、MD5 `9fa85ad3172e1ed69816a423a625c577`。未重启 ADB server、修改卡片数据或 `evidence/**`，未提交。
+
+## 2026-11-07（A31 冻结签收核验 · Pad 实机 · Hermes）
+- 判定：7 项中 4 项通过（程序回退、媒体五项、模板保存按钮、导入 Notice），2 项不成立，1 项为数据报告。
+- 第 1 项：`main.js`/`styles.css` 均为交付构建（设备实取 SHA-256 `a58fbb50…`/`19d6ac53…`），强停重启后 sets 1 / canvases 2 / nodes 5 / cards 6、5 个节点坐标逐位不变，`data.json` 10,684 B（rev 561→562，仅 revision/savedAt 变）；**但两端 `manifest.json` 仍是 `1.2.40`（MD5 `d2739e3c…`），仓库才是 `1.3.0`（`e04518f9…`），插件版本回读 1.2.40** —— 安装只覆盖了 main.js/styles.css。
+- 第 2 项：临时学习集内 `a31-n1` 120,120 →(+80/+50)→ 200,170，真实「撤销」按钮点击后精确回到 120,120；**「重做」按钮在撤销后 10.1 s 内（150 ms 采样）始终 `disabled`**，`store.future=1` 却点不动；触发一次工具栏重绘后按钮可用，点击精确回到 200,170。根因：`syncHistoryButtons()` 只刷 `[data-bottom-action]`，scenes 模式场景条的撤销/重做只有 `data-ms-tool`（`studyWorkspace.ts:776/805/814`），回调里也没有 `drawToolbar()`。
+- 第 3 项：用 `git archive HEAD` + 同版本 node_modules 复现上一构建（md5 `1fe59292…`、SHA-256 `394a9089…`、5,022,888 B，逐字节一致），推到设备重启后数据原样，再换回 `20e55664…`/`a58fbb50…` 重启复核，数据仍原样。
+- 第 4 项：卡片详情 1440×3168、看板 4 张（1440×3168×2、1414×804、4096×3072）、脑图节点 1414×804、复习列表 4 张、文档导航卡片页签 4 张，`naturalWidth` 全 >0 且 `currentSrc` 为 `_capacitor_file_…/_marginstudy-media/<sha256>.jpg`。
+- 第 5 项：`_marginstudy-recovery/` 104 MB（106,272 KB）/ 12 文件 / 0 子目录；3 个 `pending-annotations`（36,109,015 + 36,109,055×2 B）占全部体积，`pending-main` 已滚动压到 ~10 KB/份。
+- 第 6 项：编辑器 scrollTop 0 时「保存模板」rect [12.76, 847.52, 99.96, 44]，bottom 891.52 ≤ 视口 914 且 ≤ 面板 bottom 897.29，`elementFromPoint` 命中按钮本身。
+- 第 7 项：真实菜单导入 Notice「已导入 8 个节点」= 实际 +8（6 卡片节点 + 2 文档根节点），画布数与 `activeCanvasId` 不变；新画布复测同为 8/8。
+- 现场：A30-OPPO 学习首页、无选中、scale 1、无 modal/看板/书页查找面板、无 trace、无临时学习集/模板/卡组（sets 1、canvases 2、nodes 5、cards 6、decks 0、templates 0）；`data.json` 10,681 B、rev 593；与开工前逐字段比对只有 revision/savedAt/writerId/两处 workspaceState 差异；`adb forward tcp:9333` 已移除，54779/37395 未动，未 kill/start server。
+- 证据：`evidence/acceptance-20261106/HERMES-A31-RESULT.md` + `a31-01…a31-99` 截图 + `a31-harness/` 脚本。
+- 待决策：①重做按钮修法（补 `data-bottom-action` 或回调 `drawToolbar()`）；②是否把 1.3.0 的 `manifest.json` 补推到两端；③恢复目录 3 个 36 MB 注解快照的清理策略。
+
+## 2026-11-07（A31 撤销/重做按钮状态修复）
+- 场景工具栏撤销、重做按钮补充 `data-bottom-action`，复用现有历史状态同步；提交、撤销和重做时立即更新顶栏与胶囊按钮，无需整图重绘。
+- 新增四种场景的节点拖动、立即撤销和立即重做行为验收，检查坐标精确恢复、两处按钮一致及重做后撤销可用。修复前复现 `excerpt redo unavailable immediately after undo`；修复后 Workspace 303/303 通过。
+- 完整 `npm run verify` 通过，结果位于 `/tmp/marginstudy-a31-history-20261107-full/results.json`；Reader 214/214、Workspace 303/303。首次沙箱内运行因 `127.0.0.1` 监听被拒而中止，随后在允许本地监听的环境完整通过。
+- 构建 SHA-256：`main.js` `9643b1b574efed6209af7daaa9ca789b68cd8155d1c89cef51aaf179a0da1b96`；`styles.css` `19d6ac538e602d9b1742af41759547cc42dfaa48a9e09e36f8cc680e01dc2ad4`。未使用 adb、安装、改真实库或 `evidence/**`，未提交；未进行 Pad 实机复测。
+
+## 2026-11-07（A31 收尾核验 · Pad 实机 · Hermes · 两项修复后）
+- 判定：两项均通过，**A31 通过**。
+- 第 1 项：设备构建 `main.js` MD5 `27ffcfe8…` / SHA-256 `9643b1b5…`、`styles.css` `9fa85ad3…`、`manifest.json` `e04518f9…`（1.3.0）；强停重启（pid 5384）后 `plugin.manifest.version=1.3.0`，rev 593→594（+1），sets 1 / canvases 2 / nodes 5 / cards 6，5 个节点坐标逐位不变，`data.json` 10,681 B 不变。
+- 第 2 项：临时学习集 `A31C-UNDO-TEMP` 内 `a31c-n1` 120,120 →200,170；真实「撤销」后同一 click 任务内（t=+60.8 ms，元素未重建）`重做.disabled=false`，CDP 回读 t=+67.6 ms 亦 false；立即点重做精确回 200,170。第二轮 200,170→280,220，撤销后 150 ms 采样 7 次（50.1/204.5/361.7/515.7/671.1/829.2/985.1 ms）全 false，点重做精确回 280,220。对比上一轮 10.1 s 全 disabled，修复生效。
+- 现场：A30-OPPO 学习首页，无选中/无 modal/无临时学习集；sets 1、canvases 2、nodes 5、cards 6、decks 0、templates 0；`data.json` 10,681 B、rev 606，与开工前逐字段比对仅 revision/savedAt/writerId 差异；无 trace；`adb forward tcp:9333` 已移除，54779/37395 未动，未 kill/start server；产品代码未改未提交。
+- 证据：`evidence/acceptance-20261106/HERMES-A31-CLOSE-RESULT.md` + `a31c-01…a31c-06` 截图 + `a31c-run.log` + `a31c-harness/`。

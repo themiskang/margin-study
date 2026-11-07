@@ -1662,6 +1662,7 @@ export class MindmapRenderer {
     }
     const cards = this.plugin.store.activeStudySetId ? this.plugin.store.getScopedCards() : this.plugin.store.cardsOfDoc(ad!);
     let added = 0;
+    const before = this.scopedNodes().length;
     for (const c of cards) {
       if (this.scopedNodes().some((n) => n.cardId === c.id)) continue;
       const rootId = this.ensureRoot(c.docPath);
@@ -1684,7 +1685,7 @@ export class MindmapRenderer {
     if (added === 0) {
             new Notice("没有可导入的新卡片（已存在对应节点）");
     } else {
-            new Notice(`已导入 ${added} 个节点`);
+            new Notice(`已导入 ${this.scopedNodes().length - before} 个节点`);
       this.autoLayout();
       this.render();
     }

@@ -137,6 +137,15 @@ function morePane(p:any,name:string){button(p.root,'学习集更多设置').clic
 function mapInk(p:any){return p.root.querySelector('[aria-label="脑图手写画布"]') as SVGSVGElement;}
 
 try{
+  await test('Import notice counts card references and new document roots',async()=>{
+    const p=await fresh();
+    for(const [id,docPath] of [['import-gamma',p.gamma.path],['import-delta',p.delta.path]])p.store.addCard({id,docPath,type:'excerpt',front:id,tags:[],links:[],createdAt:'today'});
+    const renderer=(p.view as any).renderer,before=p.store.nodes.length;
+    renderer.importCards();assert(p.store.nodes.length-before===4&&notices.at(-1)==='已导入 4 个节点','notice did not count two cards and two roots');
+    renderer.importCards();assert(notices.at(-1)==='没有可导入的新卡片（已存在对应节点）','duplicate import notice changed');
+    p.store.addCard({id:'import-gamma-2',docPath:p.gamma.path,type:'excerpt',front:'More',tags:[],links:[],createdAt:'today'});
+    const next=p.store.nodes.length;renderer.importCards();assert(p.store.nodes.length-next===1&&notices.at(-1)==='已导入 1 个节点','existing root was counted again');
+  });
   await test('External card images load in review and document navigation',async()=>{
     const p=await fresh(),path='_marginstudy-media/test.png';
     p.app.vault.adapter.getResourcePath=(value:string)=>'/_capacitor_file_/'+value;
@@ -2028,6 +2037,22 @@ try{
       tracker.restore();
     }
   });
+  await test('Scene history buttons update immediately after moving, undoing and redoing a node',async()=>{
+    const p=await fresh();p.store.setStudyInterface(p.set.id,'scenes');
+    for(const [template,scene] of [['standard','excerpt'],['standard','handwriting'],['standard','organize'],['read-write-recall','writing']] as const){
+      p.store.selectStudyScene(p.set.id,template,scene);p.view.refresh(true);await frame();
+      const toolbar=p.root.querySelector('.ms-native-main-tools')!,dock=p.root.querySelector('.ms-bottom-scene-tools')!;
+      const topUndo=button(toolbar,'撤销'),topRedo=button(toolbar,'重做'),undo=button(dock,'撤销'),redo=button(dock,'重做');
+      const node=mapCard(p,'beta-node'),box=node.getBoundingClientRect(),before={...p.store.getNode('beta-node')!};
+      pointer(node,'pointerdown',box.left+20,box.top+20,91);pointer(window,'pointermove',box.left+100,box.top+70,91);pointer(window,'pointerup',box.left+100,box.top+70,91);
+      const moved={...p.store.getNode('beta-node')!};assert(moved.x!==before.x&&moved.y!==before.y,'drag did not move node');
+      assert(!undo.disabled&&!topUndo.disabled&&redo.disabled&&topRedo.disabled,scene+' commit history buttons differ');
+      undo.click();assert(p.store.getLibraryHistoryState().canRedo&&!redo.disabled&&!topRedo.disabled,scene+' redo unavailable immediately after undo');
+      assert(p.store.getNode('beta-node')!.x===before.x&&p.store.getNode('beta-node')!.y===before.y,scene+' undo changed coordinates');
+      redo.click();assert(p.store.getNode('beta-node')!.x===moved.x&&p.store.getNode('beta-node')!.y===moved.y,scene+' immediate redo changed coordinates');
+      assert(p.store.getLibraryHistoryState().canUndo&&!undo.disabled&&!topUndo.disabled&&redo.disabled&&topRedo.disabled,scene+' redo history buttons differ');
+    }
+  });
   await test('node moves update incrementally without rebuilding',async()=>{
     const p=await fresh();await wait(200);await p.store.flush();await wait(100);
     const renderer=(p.view as any).renderer,original=renderer.render.bind(renderer);let renders=0,incremental=0;
@@ -2565,6 +2590,7 @@ try{
     const manager=()=>p.root.querySelector<HTMLElement>('[aria-label="场景模板管理"]')!;
     button(manager(),'复制标准').click();await frame();
     const editor=p.root.querySelector<HTMLElement>('[aria-label="编辑场景模板"]')!;assert(editor,'template editor missing');
+    editor.scrollTop=0;await frame();const saveButton=button(editor,'保存模板'),saveRect=saveButton.getBoundingClientRect(),editorRect=editor.getBoundingClientRect();assert(saveRect.bottom<=Math.min(editorRect.bottom,window.innerHeight)&&saveRect.top>=editorRect.top,'save button is outside the initial viewport');const hit=document.elementFromPoint(saveRect.left+saveRect.width/2,saveRect.top+saveRect.height/2);assert(hit===saveButton||saveButton.contains(hit),'save button is covered');editor.scrollTop=editor.scrollHeight;await frame();assert(saveButton.getBoundingClientRect().bottom<=Math.min(editor.getBoundingClientRect().bottom,window.innerHeight),'save button is outside the viewport after scrolling');
     const name=editor.querySelector<HTMLInputElement>('[aria-label="模板名称"]')!;name.value='合成模板';name.dispatchEvent(new Event('input',{bubbles:true}));
     const tool=editor.querySelector<HTMLInputElement>('[data-template-tool="excerpt.rectangle"]')!;assert(tool.checked,'source tool missing');tool.click();
     const palette=editor.querySelector<HTMLInputElement>('[aria-label="摘录颜色"]')!;palette.value='#123456, #abcdef';
