@@ -1630,3 +1630,10 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - 原因（我的责任）：CC 会话 jsonl 涨到 53MB 后仍在反复调 cua-driver，我判断为跑飞并主动中断，导致报告未落盘；前一版 CC 还因 `group/all-quota` 的 tool-use 并发 400 失败过一次
 - 下一步第一动作：在 `card-mvfbecsw-rqdvzq`（基线 media=0）上重跑一次，记账后操作、操作后比对、再撤销，闭合三条缺口
 - [ ] [ ] A16 真机三条缺口（+1 / 字段不变 / 撤销回原）
+
+## 2026-11-08 23:50 A16 真机缺口补齐（三条闭合）
+- 完成：在 `card-mvz1ujjr-xc0u80`（基线 media=0）上重跑整卡截图批注完整流程，补齐前次 CC 中断缺的三条数值
+- 结论：结论：保存后 commentMedia 0→1（恰好+1）、front/back/title 不变、源文件 `第二份资料.html` sha256 前后同为 `04a3c596…4e44`、revision 2516→2517；新评论 collapsed:true / kind:ink / strokes:1 / hasImage+hasSnapshot；一次撤销后 media 1→0、front 不变、revision 回到 2516。五项断言全 pass，A16 真机项闭合
+- 证据：evidence/acceptance-20261106/CC-A16-RESULT.md（含完整流程数值与 4 张前次 CC 截图）
+- 方法：真实 DOM click 打开详情与截图批注弹窗，canvas 上派发合成 pen PointerEvent 走产品 cardInkInput 监听器，未直接改 store
+- 路线 A 批次 A2（A15/A14/A16）全部完成
