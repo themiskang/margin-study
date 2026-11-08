@@ -1,13 +1,13 @@
 import type { Stroke } from "../types";
 import { cloneStrokes, eraseInk, selectInk, transformSelectedInk } from "./penGeometry";
 import type { InkChange, InkRecord, InkSelection, PenTool } from "./penGeometry";
+import { inkEndpoint, inkPoint, inkSamples, PalmGuard } from "./penInput";
 
 const SVGNS = "http://www.w3.org/2000/svg";
 function normCoords(container: HTMLElement, event: PointerEvent): Stroke {
   const rect = container.getBoundingClientRect();
-  return { x: Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width))),
-    y: Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height))),
-    ...(event.pointerType === "pen" ? { pressure: Math.max(0.05, Math.min(1, event.pressure || 0.5)) } : {}) };
+  return inkPoint(event, Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width))),
+    Math.max(0, Math.min(1, (event.clientY - rect.top) / Math.max(1, rect.height))));
 }
 function pathData(points: Stroke[], width: number, height: number): string {
   return points.map((point, index) => `${index ? "L" : "M"} ${point.x * width} ${point.y * height}`).join(" ");
@@ -52,6 +52,8 @@ export class PenController {
   private currentGroup: SVGGElement | null = null;
   private guide: SVGPathElement | null = null;
   private pointerId: number | null = null;
+  private pointerType: string | null = null;
+  private palm = new PalmGuard();
   private snapshot: InkRecord[] = [];
   private selection: InkSelection[] = [];
   private selectionRect: SVGRectElement | null = null;
@@ -83,7 +85,7 @@ export class PenController {
     const gesture = this.gesture, stroke = this.current;
     this.gesture = null; this.current = []; this.currentGroup?.remove(); this.currentGroup = null;
     this.guide?.remove(); this.guide = null;
-    const pointer = this.pointerId; this.pointerId = null;
+    const pointer = this.pointerId; this.pointerId = null; this.pointerType = null;
     if (pointer !== null && this.overlay.hasPointerCapture?.(pointer)) this.overlay.releasePointerCapture(pointer);
     if (gesture === "draw") {
       if (stroke.length === 1) stroke.push({ ...stroke[0], x: Math.min(1, stroke[0].x + 0.0001) });
@@ -111,9 +113,10 @@ export class PenController {
   private records(): InkRecord[] { return this.opts.getInk?.() ?? []; }
   private bind(): void {
     this.overlay.addEventListener("pointerdown", (event: PointerEvent) => {
+      if (this.palm.down(event, this.pointerType)) return;
       if (!this.active || this.gesture || event.button !== 0 || event.isPrimary === false) return;
       event.preventDefault(); event.stopPropagation(); this.overlay.focus({ preventScroll: true });
-      this.pointerId = event.pointerId; this.current = [normCoords(this.container, event)]; this.delta = { x: 0, y: 0 };
+      this.pointerId = event.pointerId; this.pointerType = event.pointerType; this.current = [normCoords(this.container, event)]; this.delta = { x: 0, y: 0 };
       this.snapshot = this.records().map((record) => ({ id: record.id, strokes: cloneStrokes(record.strokes) }));
       if (this.tool === "draw" || this.tool === "highlight") {
         this.gesture = "draw"; this.clearSelection(); this.currentGroup = document.createElementNS(SVGNS, "g"); this.overlay.append(this.currentGroup);
@@ -129,10 +132,11 @@ export class PenController {
       try { this.overlay.setPointerCapture(event.pointerId); } catch { /* synthetic/older WebView */ }
     });
     this.overlay.addEventListener("pointermove", (event: PointerEvent) => {
+      if (this.palm.move(event, this.pointerType)) return;
       if (!this.gesture || event.pointerId !== this.pointerId) return;
       event.preventDefault();
-      const bounds = this.container.getBoundingClientRect(), samples = event.getCoalescedEvents?.() ?? [event];
-      for (const sample of samples.length ? samples : [event]) {
+      const bounds = this.container.getBoundingClientRect();
+      for (const sample of inkSamples(event)) {
         const point = normCoords(this.container, sample), previous = this.current[this.current.length - 1];
         this.current.push(point);
         if (this.gesture === "draw" && this.currentGroup) inkPath(this.currentGroup, [previous, point], bounds.width, bounds.height, this.opts.getColor(),
@@ -142,10 +146,11 @@ export class PenController {
       if (this.gesture === "move") { const last = this.current[this.current.length - 1]; this.delta = { x: last.x - this.current[0].x, y: last.y - this.current[0].y }; this.drawSelection(); }
     });
     this.overlay.addEventListener("pointerup", (event: PointerEvent) => {
+      this.palm.end(event);
       if (event.pointerId !== this.pointerId) return;
-      const last = this.current[this.current.length - 1], endpoint = normCoords(this.container, event);
-      if (last && (Math.abs(last.x - endpoint.x) > 1e-7 || Math.abs(last.y - endpoint.y) > 1e-7)) {
-        this.current.push({ ...endpoint, ...(last.pressure === undefined ? {} : { pressure: last.pressure }) });
+      const last = this.current[this.current.length - 1], endpoint = last && inkEndpoint(event, normCoords(this.container, event), last);
+      if (endpoint) {
+        this.current.push(endpoint);
         if (this.gesture === "move") this.delta = { x: endpoint.x - this.current[0].x, y: endpoint.y - this.current[0].y };
       }
       const gesture = this.gesture;
@@ -156,7 +161,7 @@ export class PenController {
       } else if (gesture === "move") this.opts.onChange?.(transformSelectedInk(this.snapshot, this.selection, this.delta));
       this.flush();
     });
-    const cancel = (event: PointerEvent) => { if (event.pointerId === this.pointerId) this.flush(); };
+    const cancel = (event: PointerEvent) => { this.palm.end(event); this.palm.cancel(event, this.pointerType, this.pointerId); if (event.pointerId === this.pointerId) this.flush(); };
     this.overlay.addEventListener("pointercancel", cancel); this.overlay.addEventListener("lostpointercapture", cancel);
     this.overlay.addEventListener("keydown", (event: KeyboardEvent) => {
       if (!this.active) return;

@@ -362,6 +362,7 @@ try {
   await clickButton("插入手写批注"); await clickButton("保存");
   const handwritten=(await inspect()).cards.find(card=>card.id==="native-style-card");
   check("the native pen control honors the persisted preset width and saves the drawn image as an ink comment",()=>{assert.ok(inkThickness>=8,`card canvas stroke thickness was ${inkThickness}`);assert.ok(handwritten.commentMedia.some(item=>item.kind==="ink"&&item.image.startsWith("data:image/png;base64,")));assert.equal(handwritten.front,formatted.front);});
+  check("A15 card ink persists vector strokes with identity and style",()=>{const ink=handwritten.commentMedia.find(item=>item.kind==="ink");assert.ok(ink.strokes?.length,"card ink has no vector strokes");const stroke=ink.strokes[0];assert.ok(stroke.id&&stroke.points.length&&stroke.color&&Number.isFinite(stroke.width)&&Number.isFinite(stroke.opacity));});
 } catch (caught) { error = caught; console.error(caught.stack || caught); process.exitCode = 1;
   const diagnostics = await Promise.allSettled([browser("get", "url"), browser("console"), browser("errors"), evaluate("({url:location.href, width:innerWidth,height:innerHeight,fixture:!!window.reviewFixture,body:document.body?.textContent?.slice(0,4000)})")]);
   await writeFile(join(evidence, "failure-diagnostics.json"), JSON.stringify(diagnostics.map(result => result.status === "fulfilled" ? result.value : String(result.reason)),null,2));

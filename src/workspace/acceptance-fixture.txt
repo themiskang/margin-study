@@ -961,6 +961,25 @@ try{
     document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));const overlay=p.root.querySelector<SVGSVGElement>('.ms-workspace-reader .ms-pen-overlay')!,box=overlay.getBoundingClientRect(),y=box.top+Math.min(140,box.height*.25);pointer(overlay,'pointerdown',box.left+40,y);pointer(overlay,'pointermove',box.left+100,y+10);pointer(overlay,'pointerup',box.left+150,y+16);await p.store.flush();
     const ink=(await p.store.loadAnnotations(p.alpha.path)).find(item=>item.type==='pen');assert(ink?.inkWidth===4.6,'document ink did not use the document-only preset width: '+JSON.stringify(ink));
   });
+  await test('A15 editing a legacy document width preserves the other effective widths',async()=>{
+    const p=await fresh(),preset=p.store.settings.handwritingPresets!.find(item=>item.id==='pen-1')!,original=preset.width;
+    delete preset.documentWidth;delete preset.mindmapWidth;delete preset.cardWidth;
+    const dock=p.root.querySelector<HTMLElement>('[aria-label="MN4 阅读工具栏"]')!;button(dock,'书写').click();button(dock,'普通笔 1').click();button(dock,'更多').click();button(document.querySelector('[aria-label="手写预设列表"]')!,'手写设置…').click();
+    const field=document.querySelector<HTMLInputElement>('[aria-label="手写预设文档粗细"]')!;field.value='9';field.dispatchEvent(new Event('input',{bubbles:true}));
+    const saved=p.store.settings.handwritingPresets!.find(item=>item.id==='pen-1')!;
+    assert(saved.documentWidth===9&&saved.mindmapWidth===original&&saved.cardWidth===original,'legacy widths changed together: '+JSON.stringify(saved));
+    document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
+  });
+  await test('A15 document stroke undoes once without changing library history',async()=>{
+    const p=await fresh(),dock=p.root.querySelector<HTMLElement>('[aria-label="MN4 阅读工具栏"]')!;button(dock,'书写').click();button(dock,'普通笔 1').click();
+    const before=p.store.getLibraryHistoryState().revision,annotations=JSON.stringify(await p.store.loadAnnotations(p.alpha.path)),overlay=p.root.querySelector<SVGSVGElement>('.ms-workspace-reader .ms-pen-overlay')!,box=overlay.getBoundingClientRect();
+    pointer(overlay,'pointerdown',box.left+40,box.top+80);pointer(overlay,'pointermove',box.left+100,box.top+90);pointer(overlay,'pointerup',box.left+150,box.top+96);
+    assert((await p.store.loadAnnotations(p.alpha.path)).some(item=>item.type==='pen'),'document stroke was not saved');
+    assert(p.store.getLibraryHistoryState().revision===before,'document stroke changed library history');
+    p.view.getReader()!.undoLastEdit();
+    assert(JSON.stringify(await p.store.loadAnnotations(p.alpha.path))===annotations,'one undo did not remove the document stroke');
+    assert(p.store.getLibraryHistoryState().revision===before,'document undo changed library history');
+  });
   await test('Mind-map ink uses the active preset mind-map width instead of the document width',async()=>{
     const p=await fresh(),preset=p.store.settings.handwritingPresets!.find(item=>item.id==='pen-1')!;Object.assign(preset,{documentWidth:4.6,mindmapWidth:8.2,cardWidth:11.4});p.view.refresh(true);await frame();
     const graph=p.root.querySelector('.ms-mindmap-root') as HTMLElement;button(graph,'脑图手写').click();const surface=mapInk(p),box=surface.getBoundingClientRect();pointer(surface,'pointerdown',box.left+80,box.top+120);pointer(surface,'pointermove',box.left+140,box.top+160);pointer(surface,'pointerup',box.left+200,box.top+120);await p.store.flush();

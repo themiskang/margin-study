@@ -1,5 +1,8 @@
 import type { Stroke } from "../types";
 import { el } from "../utils/dom";
+import { inkEndpoint, inkPoint, inkSamples, PalmGuard } from "../annot/penInput";
+import type { MindmapInkStroke } from "../mindmap/handwritingContracts";
+import { uid } from "../utils/id";
 
 interface DrawingStyle { color: string; width: number; opacity: number; }
 const DEFAULT_DRAWING_STYLE: DrawingStyle = { color: "#5269dc", width: 3, opacity: 1 };
@@ -39,7 +42,7 @@ export function appendReviewDrawing(container: HTMLElement, drawing: Stroke[][])
 }
 
 /** Own-format normalized points; no native app drawing format is used. */
-export function reviewDrawingInput(options: Partial<DrawingStyle> = {}): { element: HTMLElement; value(): Stroke[][] | undefined } {
+export function reviewDrawingInput(options: Partial<DrawingStyle> = {}): { element: HTMLElement; value(): Stroke[][] | undefined; vectorStrokes(): MindmapInkStroke[] } {
   const style: DrawingStyle = {
     color: options.color ?? DEFAULT_DRAWING_STYLE.color,
     width: Number.isFinite(options.width) ? Math.max(.5, Math.min(24, Number(options.width))) : DEFAULT_DRAWING_STYLE.width,
@@ -50,33 +53,42 @@ export function reviewDrawingInput(options: Partial<DrawingStyle> = {}): { eleme
   const canvas = drawingCanvas(); canvas.style.touchAction = "none"; canvas.style.cursor = "crosshair";
   canvas.setAttribute("aria-label", "在此绘制本次复习批注");
   const strokes: Stroke[][] = [];
-  let current: Stroke[] | undefined, pointerId: number | undefined;
+  const ids: string[] = [];
+  let current: Stroke[] | undefined, pointerId: number | undefined, pointerType: string | null = null;
+  const palm = new PalmGuard();
   const point = (event: PointerEvent): Stroke => {
     const bounds = canvas.getBoundingClientRect();
-    return { x: Math.max(0, Math.min(1, (event.clientX - bounds.left) / Math.max(1, bounds.width))), y: Math.max(0, Math.min(1, (event.clientY - bounds.top) / Math.max(1, bounds.height))),
-      ...(event.pointerType === "pen" ? { pressure: Math.min(1, Math.max(.05, event.pressure || .5)) } : {}) };
+    return inkPoint(event, Math.max(0, Math.min(1, (event.clientX - bounds.left) / Math.max(1, bounds.width))), Math.max(0, Math.min(1, (event.clientY - bounds.top) / Math.max(1, bounds.height))));
   };
   canvas.addEventListener("pointerdown", event => {
+    if (palm.down(event, pointerType)) return;
     if (pointerId !== undefined || event.button !== 0) return;
-    pointerId = event.pointerId; current = [point(event)]; strokes.push(current);
+    pointerId = event.pointerId; pointerType = event.pointerType; current = [point(event)]; strokes.push(current); ids.push(uid("ink"));
     canvas.setPointerCapture(event.pointerId); event.preventDefault(); paint(canvas, strokes, style);
   });
   canvas.addEventListener("pointermove", event => {
+    if (palm.move(event, pointerType)) return;
     if (!current || pointerId !== event.pointerId) return;
-    const samples = event.getCoalescedEvents?.();
-    current.push(...(samples?.length ? samples : [event]).map(point)); paint(canvas, strokes, style);
+    current.push(...inkSamples(event).map(point)); paint(canvas, strokes, style);
   });
   const finish = (event: PointerEvent) => {
+    palm.end(event);
+    if (event.type !== "pointerup") palm.cancel(event, pointerType, pointerId ?? null);
     if (pointerId !== event.pointerId) return;
-    current = undefined; pointerId = undefined;
+    if (event.type === "pointerup" && current?.length) {
+      const endpoint = inkEndpoint(event, point(event), current[current.length - 1]);
+      if (endpoint) { current.push(endpoint); paint(canvas, strokes, style); }
+    }
+    current = undefined; pointerId = undefined; pointerType = null;
     if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
   };
   canvas.addEventListener("pointerup", finish); canvas.addEventListener("pointercancel", finish); canvas.addEventListener("lostpointercapture", finish);
   const actions = el("div", { style: "display:flex;gap:8px;margin-top:6px" });
   const undo = el("button", { class: "ms-btn", text: "撤销一笔" });
-  undo.addEventListener("click", () => { strokes.pop(); current = undefined; pointerId = undefined; paint(canvas, strokes, style); });
+  undo.addEventListener("click", () => { strokes.pop(); ids.pop(); current = undefined; pointerId = undefined; pointerType = null; paint(canvas, strokes, style); });
   const clear = el("button", { class: "ms-btn", text: "清空手绘" });
-  clear.addEventListener("click", () => { strokes.length = 0; current = undefined; pointerId = undefined; paint(canvas, strokes, style); });
+  clear.addEventListener("click", () => { strokes.length = 0; ids.length = 0; current = undefined; pointerId = undefined; pointerType = null; paint(canvas, strokes, style); });
   actions.append(undo, clear); element.append(canvas, actions);
-  return { element, value: () => strokes.length ? strokes.map(stroke => stroke.map(item => ({ ...item }))) : undefined };
+  return { element, value: () => strokes.length ? strokes.map(stroke => stroke.map(item => ({ ...item }))) : undefined,
+    vectorStrokes: () => strokes.map((points, index) => ({ id: ids[index], tool: "pen", color: style.color, width: style.width, opacity: style.opacity, points: points.map(point => ({ ...point })) })) };
 }

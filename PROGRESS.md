@@ -1532,3 +1532,45 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - `MARGINSTUDY_VERIFY_DIR=/tmp/a24-verify-20261108 npm run verify` 全部 32 个套件通过，Reader 222/222、Workspace 305/305。首次沙箱测试监听 localhost 报 EPERM，授权环境运行通过。
 - 已构建安装桌面隔离库，构建与安装 SHA-256 一致：`main.js` `8d1626348ef1c408d56adc2b401d424545be268e3aba125a891a2fa907ab0373`；`styles.css` `8e3cbe002ad1cdbf382b7188b5b2c923470571caa27bbe4e0cbb3be772919fba`。隔离库 `data.json` 安装前后均为 `5e89b7f2de146887412f787d0cf28bc1a9734971a7be46dafcf3488a3a2c011e`。未改真实库、`evidence/**`，未提交。
 - 未覆盖：真实桌面宿主中三档切换、样式、服务状态及失败提示的实际交互，交 CC 验收。下一步第一动作：验收方决定是否接受四项改前已通过的真实基线代替改前失败；CC 在隔离宿主复核实际界面与服务行为。
+
+## 2026-11-08 · A15 共享笔输入（进行中）
+
+- 文档、脑图、卡片输入已接入共享压力、合并事件、抬笔端点及笔会话期间的 touch 拦截。文档真实改前测试 `/tmp/a15-before/reader.log`：20 次 touch 均未污染笔迹，但 20 次冒泡至父级，新增拦截断言失败；改后 Reader 223/223 通过，日志 `/tmp/a15-verify-20261108/reader.log`。不能将原本已通过的零污染称为改前失败。
+- 卡片评论当前以 PNG 保存；复习手绘存点数组，均无与文档和脑图一致的笔迹 ID、样式及逐笔保存事务。三处逐字段同步和撤销事务尚未实现和验证。已添加旧预设回退宽度的隔离界面断言，待确认改前结果及修复。
+- OPPO 输入事件到处理完成的 P95/最大值、20 次物理掌触及真笔实测留 Pad 后续 Hermes；没有实测结果不得判达标。未触碰 adb、真实库或 `evidence/**`。
+- 旧预设宽度改前实际失败：`/tmp/a15-verify-20261108/workspace.log`，更改文档宽度时脑图和卡片均从原宽度变成 9。已按旧宽度分别物化字段；改后 Workspace 306/306 通过。完整 `/tmp/a15-verify-final-20261108` 全部通过（Reader 223/223、Workspace 306/306、脑图手写 24/24）。之后增加卡片与文档采样对照，Reader 单独复验 `/tmp/a15-reader-card-20261108` 224/224 通过，不计入前述完整验证。
+- 已安装桌面隔离库：`main.js` SHA-256 `ff7017f50d3ff4f4d5f17168109e1835299c67a2e26c1dab8aff4065f8658a4a`，`styles.css` `8e3cbe002ad1cdb8f382b7188b5b2c923470571caa27bbe4e0cbb3be772919fba`；安装前后隔离库 `data.json` SHA-256 均为 `86940ee4d1b321ad4960bb933d75185d421554d69e586ff50d25014c906749d7`。
+- 下一步第一动作：梳理 `src/cards/nativeEditor.ts` 的 `commentMedia` 创建和卡片编辑保存事务，设计兼容现有 PNG 的结构化笔迹及逐笔历史；随后补齐三处真实同步、撤销测试并重跑全量验收。本卡未完成。
+- 续做：卡片评论新增可选 `strokes`，记录每笔 ID、points、pressure、color、width、opacity 和 tool，PNG 保留；旧评论不需迁移。改前 UI 断言失败日志 `/tmp/a15-vector-before-20261108/review-ui.log`，原因为 `card ink has no vector strokes`；改后 typecheck 和 review-ui 通过，日志 `/tmp/a15-vector-after-20261108/`。这只验证卡片字段存在，不代表三处结构与字段值已一致。
+- 事务现状：脑图使用 Store 历史，文档使用阅读器独立历史，卡片手写仍是编辑器草稿并在保存时合并；尚未实现单笔统一事务。真实 Store 改前断言 `/tmp/a15-transaction-before-20261108/workspace.log` 失败：文档一笔没有产生库历史条目（306/307 通过）；新增脑图一笔 revision +1、撤销再 +1 断言，`/tmp/a15-map-history-20261108` 24/24 通过。工作区中保留失败断言，待修复后重跑。下一步第一动作：统一文档、脑图、卡片的单笔持久化和撤销路径，避免文档本地历史与库历史重复撤销；补三处逐字段及 revision 对照，完成完整 `npm run verify` 和隔离库安装及哈希。本卡未完成。
+- A15 第三轮完成（2026-11-08）：采用文档独立历史口径，真实文档笔画写入 sidecar 后撤销一次即恢复原标注，绘制和撤销均不改变库历史 revision；Workspace 307/307。三处输入对照使用实际 `PenController`、脑图画布及卡片手绘控件，同一批带压力事件与相同样式逐字段比较 points、pressure、color、width、opacity；脑图世界坐标先归一化以匹配文档和卡片坐标，浮点误差容差 `1e-5`，脑图手写 25/25。卡片仍为编辑器草稿撤销，未改为库事务。
+- 完整 `MARGINSTUDY_VERIFY_DIR=/tmp/a15-round3-full npm run verify` 退出 0；Reader 224/224、Workspace 307/307、脑图手写 25/25，其余套件全部通过。构建产物已安装到桌面隔离库，源与安装文件 SHA-256 一致：main.js `52e14891f2470106246227c12223490005191242b5ef137e993028dfec861622`；styles.css `8e3cbe002ad1cdbf382b7188b5b2c923470571caa27bbe4e0cbb3be772919fba`。未操作 adb、真实库或 evidence，未提交；未重启宿主，安装不代表宿主已加载新代码。
+
+## 2026-11-08 · A15 实机缺陷修复
+
+- 改前行为断言实际失败：`/tmp/a15-def-before.log` 中取消笔输入后的 touch 生成笔迹，脑图初始颜色 `#30343b` 与文档及卡片 `#000000` 不一致；25/27 通过。改后完整验证中的脑图手写 28/28 通过，涵盖三处取消后 400ms 内拒绝 touch、窗口外手指书写、活跃笔期间 touch move 不冒泡、捕获丢失和脑图会话内改色。模拟事件不等同于真机手掌复验。
+- 文档、脑图、卡片共享掌触分流：笔取消或丢失捕获时记录笔指针及时间，400ms 内拒绝新 touch，窗口取值依据实测延迟 289ms 并留余量；被拒指针的 move 不冒泡。脑图进入画笔时读取同一预设的颜色、脑图宽度和透明度，用户改色在当前脑图手写会话内保留。预设允许分别配置文档、脑图和卡片宽度，默认值相同，故三处默认值相等不代表用户分别配置后强制相等。
+- `MARGINSTUDY_VERIFY_DIR=/tmp/a15-def-full-20261108 npm run verify` 全部 32 套件通过，Reader 224/224、Workspace 307/307、脑图手写 28/28。其后尝试附加增强并请求重跑时，权限自动审核因额度限制未执行；附加改动已完整回退，当前代码和已通过构建一致。
+- 已构建并安装桌面隔离库，源和安装 SHA-256 一致：`main.js` `f2948feae68c10e9146e4899424030237f9bd85671ea7b6e8770143d77a9edbe`；`styles.css` `8e3cbe002ad1cdbf382b7188b5b2c923470571caa27bbe4e0cbb3be772919fba`。隔离库 `data.json` 安装前后均为 `86940ee4d1b321ad4960bb933d75185d421554d69e586ff50d25014c906749d7`。未重启宿主，不代表宿主已加载新构建；未操作 adb、真实库、`evidence/**`，未提交。
+- 已知问题，另立记录：脑图撤销与库事务栈耦合，画笔后保存卡片会先撤卡片事务，本轮不修。真机触控、真笔及手掌复验留 Hermes，不能根据合成测试宣称实机通过。
+- 真机复验（Hermes，2026-11-08，设备 `9885dd6f`，构建 md5 `5672636508bec89b6f90d5e0d7908dfe` / SHA-256 `f2948fea…`）：任务书配方（真笔 4s swipe + 检测到 pen down 后 5 次真 `input tap`，间隔 220ms）跑了 5 轮，**每轮仍生成 3 条指触笔迹**（4/5 次 tap 到达页面，其中仅 1 次落在 cancel 后 400ms 窗口内被拒，另 3 次落在 527–1145ms）。窗口内 touch 合计 13/13（配方 5 + 背靠背诊断 8）全部被拒、零污染，说明守卫有效；400ms 窗口短于 220ms×5=880ms 的注入跨度，是「5 次 tap 零笔迹」不可能成立的算术原因。笔迹仍被 `pointercancel` 截断（4–11 点 / 4000ms）。回归项通过 2/2（cancel 后 1.6s 的单次 tap 正常落成 1 条笔迹）。
+- **DEF-A15-1 未关闭**：修复到位的部分是「窗口内拒绝」，缺的是窗口长度。建议下一卡二选一：每次被拒 touch 也刷新 `lastPenAt`（链式续期，只改 `PalmGuard.down()`），或把 `PALM_REJECTION_WINDOW_MS` 提到 ≥1200ms；两者都不影响已通过的回归项。验收配方另需按「到达数」而非「注入数」判定（本轮 7/7 轮只到 4 次）。证据：`evidence/acceptance-20261106/HERMES-A15-RESULT.md` §9，数据 `a15-item1c-real-palm-fix{,2,3}.json`、`a15-item1c-burst.json`；设备已清笔迹回基线（22 pen）、回 A30-OPPO 主页，构建未重推，产品代码未改。
+
+## 2026-11-08 · A15 掌触守卫链式续期（第二轮）
+
+- 保留 400ms 窗口；共享 `PalmGuard` 只在笔取消或 touch 被掌触守卫拒绝时刷新时间。被拒 touch 间隔小于 400ms 时持续拦截；最后一次拒绝后满 400ms 恢复触摸。活跃笔期间被拒的 touch 也续期，允许普通触摸不会续期。
+- 改前真实行为红灯：`/tmp/a15-chain-before-20261108/mindmap-ink-export.log`，文档、脑图、卡片在笔取消后 300/600/900/2000/2001ms 的累计触摸笔迹均为 `[0,1,2,3,4]`，期望 `[0,0,0,1,2]`；三端无笔连续 touch 回归已通过。活跃笔拒绝 touch 后的续期及 400ms 边界三端也均在改前失败。
+- 改后定向 `/tmp/a15-chain-after-20261108/mindmap-ink-export.log` 37/37 通过，含三端指定时间序列、无笔连续 touch、活跃笔触发续期、最后拒绝后 399ms 拒绝及 400ms 恢复、恢复后连续 touch；使用合成事件和受控单调时钟，不等同真机结果。
+- 全量 `MARGINSTUDY_VERIFY_DIR=/tmp/a15-chain-full-20261108 npm run verify` 退出 0，32/32 套件通过；Reader 224/224、Workspace 307/307、脑图手写 37/37。首次改前定向在沙箱内监听 localhost 失败（`EPERM`），授权后重跑得到上述行为红灯。
+- 已构建并安装桌面隔离库，源与安装文件逐字节一致：`main.js` SHA-256 `bc75013088e685ef7be75ae7dddd9cb07eb82edef5572a366afe7addc28c6db4`；`styles.css` SHA-256 `8e3cbe002ad1cdbf382b7188b5b2c923470571caa27bbe4e0cbb3be772919fba`。隔离库 `data.json` 安装前后 SHA-256 均为 `86940ee4d1b321ad4960bb933d75185d421554d69e586ff50d25014c906749d7`。未重载宿主，不代表宿主已加载新构建。
+- 本任务包开发及合成验收完成；真机复验留 Hermes，DEF-A15-1 的真机闭环尚未完成。后续复验按页面实际到达的 touch 数判定，核对连续触摸被拒及最后一次拒绝后 400ms 的独立手指恢复。未触碰 adb、真实库或 `evidence/**`，未提交。
+
+## 2026-11-08 · A15 掌触链式续期真机复验（Hermes）
+
+- 设备 `9885dd6f`，构建 md5 `e7b5f7ed9415aab08864c85768b73f28` / SHA-256 `bc750130…`（仓库与设备双侧一致，编译产物内 `PalmGuard.down()` 被拒分支刷新 `lastPenAt`）。按任务书配方（真笔 4s `input stylus swipe` + pen down 后 5 次真 `input tap`，间隔 220 ms，串内不做任何 CDP 调用）跑 3 轮：每轮 5 次注入 **4 次到达页面**，相邻到达间隔 **115–320 ms 全部 < 400 ms**，**3/3 轮零指触笔迹**；每轮唯一新增批注是 1 条被 `pointercancel` 截断的真笔笔迹（8/7/8 点）。
+- 回归（`off`→`pen` 生成新 overlay/守卫实例，会话内 0 pen 事件，落点命中 overlay）：3 次 tap 各生成 **1 条 2 点笔迹**，首点 (0.26,0.3002)/(0.3599,0.4399)/(0.4598,0.5802) 与落点一致，**3/3 通过**。
+- **DEF-A15-1 关闭**。残余风险（本轮未出现）：220 ms 串若中途丢 1 次 tap，到达间隔会变成 ≈440 ms > 400 ms 窗口，其后一次 tap 理论可漏成笔迹；若要把平台丢包纳入容差，需窗口 ≥700 ms 或改为「笔后固定冷却期」。建议登记为观察项。
+- 并行会话登记：本机同时跑了两份同任务 Hermes（PID 42660 起于 14:31、PID 43532 起于 14:38）。PID 42660 的 14:36 批跑在每次 tap 前插 CDP 命中校验，宿主发送间隔被拉长到 743–761 ms（R2/R3），其产生的 3 条指触笔迹属测量装置缺陷，已作废；其 §10 初稿的「未关闭」结论已按节奏合规的一遍改写。两遍均只按各自记录的 id 删除新增批注，终态一致。
+- 收尾：按 id 精确删除（R1/R2/R3 各 22→23→22，回归 22→25→22），终态 **22 pen + 1 highlight**、createdAt 仅 2026-11-03/04（今日新增 0）、`rev 667`、`libraryHistoryRevision 0`、`mainDirty=false`、手写 off（`.ms-pen-overlay` 0）、回 **A30-OPPO 主页**、无 modal/菜单；cards 6 / nodes 5 / documents 4 / studySets [A30-OPPO]。
+- 构建未重推、产品代码未改未提交。adb 未 kill-server/start-server；转发 `tcp:9412` 已移除，原有 `tcp:54779`、`tcp:37395` 未动；中途转发掉线 1 次，重试 1 次（重建同一 pid 的 localabstract 转发）后恢复。
+- 证据：`evidence/acceptance-20261106/HERMES-A15-RESULT.md` §10；`a15-item1c-chain4.json`（判定依据）、`a15-item1c-chain.json`/`chain2.json`（作废遍）、`a15-regression-chain.json`、`a15chain-99-final-home.png`、`a15-harness/fixpalm_chain4.mjs`。

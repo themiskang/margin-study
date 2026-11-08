@@ -1242,8 +1242,8 @@ export abstract class BaseAnnotationController {
       const next = { ...preset, ...patch, id: preset.id };
       next.width = clampHandwritingWidth(next.type, next.width);
       next.documentWidth = clampHandwritingWidth(next.type, next.documentWidth ?? next.width);
-      next.mindmapWidth = clampHandwritingWidth(next.type, next.mindmapWidth ?? next.width);
-      next.cardWidth = clampHandwritingWidth(next.type, next.cardWidth ?? next.width);
+      next.mindmapWidth = clampHandwritingWidth(next.type, next.mindmapWidth ?? preset.width);
+      next.cardWidth = clampHandwritingWidth(next.type, next.cardWidth ?? preset.width);
       return next;
     });
     this.plugin.store.setEffectiveSceneSettings({handwritingPresets:presets});

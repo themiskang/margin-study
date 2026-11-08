@@ -190,7 +190,7 @@ export class MindmapRenderer {
         onModeChange: (mode) => this.setHandwritingMode(mode),
         preset: (mode) => {
           const preset = this.mindmapHandwritingPreset(mode);
-          return preset ? { width: handwritingPresetWidth(preset, "mindmap") } : undefined;
+          return preset ? { width: handwritingPresetWidth(preset, "mindmap"), color: preset.color, opacity: preset.opacity } : undefined;
         },
         updateWidth: (mode, width) => this.updateMindmapHandwritingWidth(mode, width),
         undo: () => { this.plugin.store.undoLibraryChange(); this.render(); this.plugin.refreshSidebar(); },

@@ -1,6 +1,7 @@
 import { el } from "../utils/dom";
 import { uid } from "../utils/id";
 import { eraseInk, selectInk } from "../annot/penGeometry";
+import { inkEndpoint, inkPoint, inkSamples, PalmGuard } from "../annot/penInput";
 import { openTextModal, openConfirm } from "../utils/modal";
 import type { HandwritingMode, MindmapHandwriting, MindmapInkPoint, MindmapInkStroke } from "./handwritingContracts";
 import { createMindmapInkStroke, visibleMindmapInkLayers } from "./handwritingSvg";
@@ -20,7 +21,7 @@ interface CanvasInkOptions {
   read(canvasId: string): MindmapHandwriting | undefined;
   write(canvasId: string, data: MindmapHandwriting, label: string): void;
   onModeChange(mode: HandwritingMode): void;
-  preset(mode: "pen" | "highlight"): { width: number } | undefined;
+  preset(mode: "pen" | "highlight"): { width: number; color: string; opacity: number } | undefined;
   updateWidth(mode: "pen" | "highlight", width: number): void;
   undo(): void;
   redo(): void;
@@ -37,11 +38,14 @@ export class MindmapHandwritingController {
   private mode: HandwritingMode = "off";
   private renderedCanvasId: string | undefined;
   private pointerId: number | null = null;
+  private pointerType: string | null = null;
+  private palm = new PalmGuard();
   private drawing: { canvasId: string; data: MindmapHandwriting; stroke: MindmapInkStroke; lineMode: "off" | "auto" | "always" } | null = null;
   private editing: { kind: "erase" | "lasso" | "move"; canvasId: string; data: MindmapHandwriting; trail: MindmapInkPoint[] } | null = null;
   private selected = new Set<string>();
   private deleteButton = el("button", { type: "button", "aria-label": "删除选中笔迹", title: "删除选中笔迹", text: "×" });
   private penColor = "#30343b";
+  private penColorOverride = false;
   private highlightColor = "#ffd54f";
   private penWidth = 3;
   private highlightWidth = 16;
@@ -69,7 +73,7 @@ export class MindmapHandwritingController {
       icon.append(svg("path", { d: glyph })); button.append(icon);
       button.dataset.inkMode = mode; button.addEventListener("click", () => options.onModeChange(mode)); this.palette.append(button);
     }
-    this.colorInput.addEventListener("change", () => { if (this.mode === "highlight") this.highlightColor = this.colorInput.value; else this.penColor = this.colorInput.value; });
+    this.colorInput.addEventListener("change", () => { if (this.mode === "highlight") this.highlightColor = this.colorInput.value; else { this.penColor = this.colorInput.value; this.penColorOverride = true; } });
     this.widthInput.addEventListener("input", () => {
       const width = Number(this.widthInput.value);
       if (this.mode === "highlight") this.highlightWidth = width; else this.penWidth = width;
@@ -87,7 +91,7 @@ export class MindmapHandwritingController {
     this.surface.addEventListener("pointerdown", (event) => this.down(event));
     this.surface.addEventListener("pointermove", (event) => this.move(event));
     this.surface.addEventListener("pointerup", (event) => this.up(event));
-    const cancel = (event: PointerEvent) => { if (event.pointerId === this.pointerId) this.cancel(); };
+    const cancel = (event: PointerEvent) => { this.palm.end(event); this.palm.cancel(event, this.pointerType, this.pointerId); if (event.pointerId === this.pointerId) this.cancel(); };
     this.surface.addEventListener("pointercancel", cancel);
     this.surface.addEventListener("lostpointercapture", cancel);
     this.surface.addEventListener("dblclick", (event) => { if (this.mode !== "off") { event.preventDefault(); event.stopPropagation(); } });
@@ -104,12 +108,12 @@ export class MindmapHandwritingController {
     if (this.mode !== mode) { this.commitDrawing(); this.cancel(); this.clearSelection(); }
     this.mode = mode; this.surface.style.pointerEvents = mode === "off" ? "none" : "auto";
     this.palette.hidden = mode === "off"; this.root.classList.toggle("is-map-handwriting", mode !== "off");
-    if (mode === "off") this.closeSettings();
+    if (mode === "off") { this.closeSettings(); this.penColorOverride = false; }
     if (mode === "pen" || mode === "highlight") {
       const preset = this.options.preset(mode);
       if (preset) {
         if (mode === "highlight") this.highlightWidth = preset.width;
-        else this.penWidth = preset.width;
+        else { this.penWidth = preset.width; this.penOpacity = preset.opacity; if (!this.penColorOverride) this.penColor = preset.color; }
       }
     }
     this.surface.dataset.inkMode = mode;
@@ -202,13 +206,13 @@ export class MindmapHandwritingController {
 
   private point(event: PointerEvent): MindmapInkPoint {
     const bounds = this.world.getBoundingClientRect(), scale = bounds.width / Math.max(1, this.world.offsetWidth);
-    return { x: Math.max(0, (event.clientX - bounds.left) / scale), y: Math.max(0, (event.clientY - bounds.top) / scale),
-      ...(event.pointerType === "pen" ? { pressure: Math.min(1, Math.max(.05, event.pressure || .5)) } : {}) };
+    return inkPoint(event, Math.max(0, (event.clientX - bounds.left) / scale), Math.max(0, (event.clientY - bounds.top) / scale));
   }
   private down(event: PointerEvent): void {
+    if (this.palm.down(event, this.pointerType)) return;
     const canvasId = this.options.canvasId();
     if (this.mode === "off" || this.pointerId !== null || !canvasId || event.button !== 0 || event.isPrimary === false) return;
-    event.preventDefault(); event.stopPropagation(); this.surface.focus({ preventScroll: true }); this.pointerId = event.pointerId;
+    event.preventDefault(); event.stopPropagation(); this.surface.focus({ preventScroll: true }); this.pointerId = event.pointerId; this.pointerType = event.pointerType;
     if (this.mode === "pen" || this.mode === "highlight") { this.clearSelection(); this.drawing = { canvasId, data: cloneInk(this.options.read(canvasId)), lineMode: this.lineMode, stroke: { id: uid("ink"), opacity: this.mode === "highlight" ? this.highlightOpacity : this.penOpacity, tool: this.mode, color: this.mode === "highlight" ? this.highlightColor : this.penColor, width: this.mode === "highlight" ? this.highlightWidth : this.penWidth, points: [this.point(event)] } }; }
     else if (this.mode === "eraser") { this.clearSelection(); this.editing = { kind: "erase", canvasId, data: cloneInk(this.options.read(canvasId)), trail: [this.point(event)] }; }
     else if (this.mode === "lasso") {
@@ -219,19 +223,20 @@ export class MindmapHandwritingController {
     this.drawLive(); try { this.surface.setPointerCapture(event.pointerId); } catch { /* Synthetic dispatch and older WebViews lack active pointer capture. */ }
   }
   private move(event: PointerEvent): void {
+    if (this.palm.move(event, this.pointerType)) return;
     if (event.pointerId !== this.pointerId) return;
-    event.preventDefault(); const samples = event.getCoalescedEvents?.() ?? [];
-    for (const sample of samples.length ? samples : [event]) {
+    event.preventDefault();
+    for (const sample of inkSamples(event)) {
       const point = this.point(sample); this.drawing?.stroke.points.push(point); this.editing?.trail.push(point);
     }
     this.drawLive();
   }
   private up(event: PointerEvent): void {
+    this.palm.end(event);
     if (event.pointerId !== this.pointerId) return;
     if (this.drawing) {
-      const point = this.point(event), previous = this.drawing.stroke.points[this.drawing.stroke.points.length - 1];
-      if (event.pointerType === "pen" && !event.pressure) point.pressure = previous.pressure;
-      this.drawing.stroke.points.push(point);
+      const previous = this.drawing.stroke.points[this.drawing.stroke.points.length - 1], point = inkEndpoint(event, this.point(event), previous);
+      if (point) this.drawing.stroke.points.push(point);
       this.paintPreview();
     }
     if (this.editing) {
@@ -387,7 +392,7 @@ export class MindmapHandwritingController {
     layer.strokes.push(this.straightStroke(drawing.stroke, drawing.lineMode)); this.options.write(drawing.canvasId, current, "脑图手写"); this.render();
   }
   private cancel(): void {
-    this.drawing = null; this.editing = null; const pointer = this.pointerId; this.pointerId = null; this.live.replaceChildren();
+    this.drawing = null; this.editing = null; const pointer = this.pointerId; this.pointerId = null; this.pointerType = null; this.live.replaceChildren();
     if (this.preview) { cancelAnimationFrame(this.preview.frame); this.preview.canvas.remove(); this.preview = null; window.removeEventListener("resize", this.resizePreview); }
     this.saved.querySelectorAll<SVGElement>("[transform]").forEach((group) => group.removeAttribute("transform")); this.drawSelection();
     if (pointer !== null && this.surface.hasPointerCapture?.(pointer)) this.surface.releasePointerCapture(pointer);

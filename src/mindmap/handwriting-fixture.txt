@@ -3,6 +3,9 @@ import { MindmapRenderer } from '__PROJECT__/src/mindmap/mindmapRenderer';
 import { exportMindmapPng } from '__PROJECT__/src/export/mindmapExport';
 import { MarkdownRenderer } from 'obsidian';
 import { createMindmapInkStroke } from '__PROJECT__/src/mindmap/handwritingSvg';
+import { PenController } from '__PROJECT__/src/annot/pen';
+import { reviewDrawingInput } from '__PROJECT__/src/review/drawing';
+import { handwritingPresets, handwritingPresetWidth } from '__PROJECT__/src/annot/handwritingPresets';
 
 const target=document.querySelector('#fixtures') as HTMLElement,results:any[]=[],mounted:MindmapRenderer[]=[],stores:Store[]=[],errors:string[]=[];
 (window as any).results=results;
@@ -35,7 +38,111 @@ async function fresh(existing?:any){
  const host=document.createElement('section');host.style.cssText='height:650px;width:1050px;max-width:100%;position:relative';target.append(host);
  let calls:string[]=[];const view=new MindmapRenderer(plugin,{nativeChrome:true,onHandwritingModeChange:(mode:any)=>calls.push(mode)} as any);view.mount(host);mounted.push(view);return{store,set,canvasId,plugin,host,view,storage,calls};
 }
+async function palmInput(name:string){
+ const p=await fresh();p.view.setHandwritingMode('pen');
+ const host=document.createElement('div');host.style.cssText='width:400px;height:200px';target.append(host);const saved:any[]=[];
+ const pen=new PenController(host,{getColor:()=>'black',onCommit:strokes=>saved.push(strokes[0])});pen.setActive(true);
+ const overlay=host.querySelector('svg')!,drawing=reviewDrawingInput();host.append(drawing.element);(drawing.element as HTMLDetailsElement).open=true;const card=drawing.element.querySelector('canvas')!;
+ const node=name==='document'?overlay:name==='map'?surface(p):card,rect=node.getBoundingClientRect();
+ return {send:(type:string,id:number,pointerType:string)=>pointer(node,type,rect.left+30+id,rect.top+30,{pointerId:id,pointerType,pressure:.5}),count:()=>name==='document'?saved.length:name==='map'?(ink(p)?.layers[0].strokes.length??0):drawing.vectorStrokes().length,dispose:()=>{pen.destroy();host.remove();}};
+}
+function withPalmClock(action:(setTime:(time:number)=>void)=>void){
+ const original=Object.getOwnPropertyDescriptor(performance,'now');let time=0;Object.defineProperty(performance,'now',{configurable:true,value:()=>time});
+ try{action(value=>{time=value;});}finally{if(original)Object.defineProperty(performance,'now',original);else delete (performance as any).now;}
+}
  try{
+ for(const name of ['document','map','card']){
+  await test('A15 '+name+' chains rejected touches after pen cancel and restores finger writing',async()=>{
+   const input=await palmInput(name);
+   try{withPalmClock(setTime=>{
+    const {send,count}=input;send('pointerdown',1,'pen');send('pointercancel',1,'pen');const baseline=count(),observed:number[]=[];
+    for(const [time,id] of [[300,2],[600,3],[900,4],[2000,5],[2001,6]]){setTime(time);send('pointerdown',id,'touch');send('pointerup',id,'touch');observed.push(count()-baseline);}
+    assert(JSON.stringify(observed)==='[0,0,0,1,2]',name+' stroke counts at 300/600/900/2000/2001ms: '+JSON.stringify(observed));
+   });}finally{input.dispose();}
+  });
+  await test('A15 '+name+' allows consecutive touch strokes without a pen session',async()=>{
+   const input=await palmInput(name);
+   try{withPalmClock(setTime=>{
+    const {send,count}=input,observed:number[]=[];for(const [time,id] of [[0,2],[100,3],[200,4]]){setTime(time);send('pointerdown',id,'touch');send('pointerup',id,'touch');observed.push(count());}
+    assert(JSON.stringify(observed)==='[1,2,3]',name+' touch-only stroke counts: '+JSON.stringify(observed));
+   });}finally{input.dispose();}
+  });
+  await test('A15 '+name+' renews on active-pen palm rejection and expires at 400ms',async()=>{
+   const input=await palmInput(name);
+   try{withPalmClock(setTime=>{
+    const {send,count}=input;send('pointerdown',1,'pen');setTime(10);send('pointerdown',2,'touch');send('pointerup',2,'touch');setTime(20);send('pointerup',1,'pen');const baseline=count(),observed:number[]=[];
+    for(const [time,id] of [[409,3],[809,4],[810,5]]){setTime(time);send('pointerdown',id,'touch');send('pointerup',id,'touch');observed.push(count()-baseline);}
+    assert(JSON.stringify(observed)==='[0,1,2]',name+' stroke counts at 399/400ms after last rejection: '+JSON.stringify(observed));
+   });}finally{input.dispose();}
+  });
+ }
+ await test('A15 cancelled pen suppresses nearby touch but permits later finger writing',async()=>{
+  const p=await fresh();p.view.setHandwritingMode('pen');
+  const host=document.createElement('div');host.style.cssText='width:400px;height:200px';target.append(host);const saved:any[]=[];
+  const pen=new PenController(host,{getColor:()=>'black',onCommit:strokes=>saved.push(strokes[0])});pen.setActive(true);
+  const overlay=host.querySelector('svg')!,drawing=reviewDrawingInput();host.append(drawing.element);(drawing.element as HTMLDetailsElement).open=true;const card=drawing.element.querySelector('canvas')!;
+  try{
+   for(const [name,node] of [['document',overlay],['map',surface(p)],['card',card]] as const){
+    let leaked=0;const listener=(event:Event)=>{if((event as PointerEvent).pointerType==='touch')leaked++;};node.parentElement!.addEventListener('pointermove',listener);
+    const rect=node.getBoundingClientRect(),send=(type:string,id:number,pointerType:string)=>pointer(node,type,rect.left+30+id,rect.top+30,{pointerId:id,pointerType,pressure:.5});
+    send('pointerdown',1,'pen');send('pointermove',1,'pen');send('pointermove',2,'touch');send('pointermove',1,'pen');send('pointercancel',1,'pen');
+    const count=()=>name==='document'?saved.length:name==='map'?(ink(p)?.layers[0].strokes.length??0):drawing.vectorStrokes().length;
+    const baseline=count();send('pointerdown',2,'touch');send('pointermove',2,'touch');send('pointerup',2,'touch');
+    assert(count()===baseline,name+' touch after cancel created a stroke');assert(leaked===0,name+' active pen touch move bubbled');
+    await new Promise(resolve=>setTimeout(resolve,430));send('pointerdown',3,'touch');send('pointermove',3,'touch');send('pointerup',3,'touch');
+    assert(count()===baseline+1,name+' finger writing after window failed');node.parentElement!.removeEventListener('pointermove',listener);
+   }
+  }finally{pen.destroy();host.remove();}
+ });
+ await test('A15 lost pen capture rejects touch and map color override lasts through tool changes',async()=>{
+  const host=document.createElement('div');host.style.cssText='width:400px;height:200px';target.append(host);const saved:any[]=[];
+  const pen=new PenController(host,{getColor:()=>'black',onCommit:strokes=>saved.push(strokes)});pen.setActive(true);const overlay=host.querySelector('svg')!;
+  try{
+   pointer(overlay,'pointerdown',10,10,{pointerId:1,pointerType:'pen'});pointer(overlay,'lostpointercapture',10,10,{pointerId:1,pointerType:'pen'});
+   pointer(overlay,'pointerdown',20,20,{pointerId:2,pointerType:'touch'});pointer(overlay,'pointerup',20,20,{pointerId:2,pointerType:'touch'});assert(saved.length===1,'lost capture allowed touch stroke');
+   const p=await fresh();p.view.setHandwritingMode('pen');const color=p.host.querySelector<HTMLInputElement>('[aria-label="脑图笔迹颜色"]')!;color.value='#123456';color.dispatchEvent(new Event('change'));
+   p.view.setHandwritingMode('eraser');p.view.setHandwritingMode('pen');gesture(p,[[100,100],[150,150]],{pointerType:'pen'});assert(ink(p).layers[0].strokes[0].color==='#123456','map color override was lost within session');
+  }finally{pen.destroy();host.remove();}
+ });
+ await test('A15 initial document map card pen styles share preset',async()=>{
+  const p=await fresh(),preset=handwritingPresets(p.store.getEffectiveSceneSettings())[0];
+  p.view.setHandwritingMode('pen');gesture(p,[[100,100],[150,150]],{pointerType:'pen',pressure:.5});
+  const map=ink(p).layers[0].strokes[0],documentStyle={color:preset.color,width:handwritingPresetWidth(preset,'document'),opacity:preset.opacity};
+  const card=reviewDrawingInput({color:preset.color,width:handwritingPresetWidth(preset,'card'),opacity:preset.opacity});target.append(card.element);(card.element as HTMLDetailsElement).open=true;
+  const canvas=card.element.querySelector('canvas')!,rect=canvas.getBoundingClientRect();pointer(canvas,'pointerdown',rect.left+10,rect.top+10,{pointerType:'pen'});pointer(canvas,'pointerup',rect.left+20,rect.top+20,{pointerType:'pen'});
+  const cardStyle=card.vectorStrokes()[0];for(const field of ['color','width','opacity'] as const)assert(map[field]===documentStyle[field]&&cardStyle[field]===documentStyle[field],field+' mismatch: '+JSON.stringify({map:map[field],document:documentStyle[field],card:cardStyle[field]}));
+ });
+ await test('A15 document, mindmap and card strokes match field by field',async()=>{
+  const p=await fresh();p.view.setHandwritingMode('pen');
+  const node=surface(p),world=p.host.querySelector('.ms-mindmap-world') as HTMLElement,bounds=world.getBoundingClientRect(),scale=bounds.width/world.offsetWidth;
+  const samples=[[100,100,.2],[130,130,.8],[150,140,0]];
+  for(const [index,[x,y,pressure]] of samples.entries())pointer(node,index===0?'pointerdown':index===samples.length-1?'pointerup':'pointermove',bounds.left+x*scale,bounds.top+y*scale,{pointerType:'pen',pressure});
+  const map=ink(p).layers[0].strokes[0],style={color:map.color,width:map.width,opacity:map.opacity};
+  const host=document.createElement('div');host.style.cssText='width:400px;height:200px;position:relative';target.append(host);let documentStroke:any;
+  const pen=new PenController(host,{getColor:()=>style.color,getWidth:()=>style.width,getOpacity:()=>style.opacity,onCommit:(strokes,tool,width,opacity)=>documentStroke={points:strokes[0],color:style.color,width,opacity}});pen.setActive(true);
+  const overlay=host.querySelector('svg')!,drawing=reviewDrawingInput(style);host.append(drawing.element);(drawing.element as HTMLDetailsElement).open=true;const cardCanvas=drawing.element.querySelector('canvas')!;
+  try{
+   for(const targetNode of [overlay,cardCanvas]){
+    const rect=(targetNode===overlay?host:targetNode).getBoundingClientRect();
+    for(const [index,[x,y,pressure]] of samples.entries())pointer(targetNode,index===0?'pointerdown':index===samples.length-1?'pointerup':'pointermove',rect.left+x/world.offsetWidth*rect.width,rect.top+y/world.offsetHeight*rect.height,{pointerType:'pen',pressure});
+   }
+   const card=drawing.vectorStrokes()[0],normalizedMap={...map,points:map.points.map((point:any)=>({...point,x:point.x/world.offsetWidth,y:point.y/world.offsetHeight}))};
+   for(const [name,stroke] of [['document',documentStroke],['card',card]] as const){
+    for(const field of ['color','width','opacity'] as const)assert(stroke[field]===normalizedMap[field],name+' '+field+' differs');
+    assert(stroke.points.length===normalizedMap.points.length,name+' point count differs');
+    stroke.points.forEach((point:any,index:number)=>{const expected=normalizedMap.points[index];for(const field of ['x','y','pressure'])assert(Math.abs(point[field]-expected[field])<1e-5,name+' '+field+' differs at '+index+': '+JSON.stringify({point,expected}));});
+   }
+  }finally{pen.destroy();host.remove();}
+ });
+ await test('A15 pen session rejects twenty touch contacts and commits one undoable stroke',async()=>{
+  const p=await fresh();p.view.setHandwritingMode('pen');const revision=p.store.getLibraryHistoryState().revision,node=surface(p),rect=node.getBoundingClientRect();let leaked=0;
+  p.host.addEventListener('pointerdown',(event:any)=>{if(event.pointerType==='touch')leaked++;});
+  pointer(node,'pointerdown',rect.left+100,rect.top+100,{pointerType:'pen',pressure:.2});
+  for(let id=30;id<50;id++){pointer(node,'pointerdown',rect.left+200,rect.top+200,{pointerId:id,pointerType:'touch',width:50,height:40});pointer(node,'pointermove',rect.left+220,rect.top+220,{pointerId:id,pointerType:'touch'});pointer(node,'pointerup',rect.left+220,rect.top+220,{pointerId:id,pointerType:'touch'});}
+  pointer(node,'pointermove',rect.left+130,rect.top+130,{pointerType:'pen',pressure:.8});pointer(node,'pointerup',rect.left+130,rect.top+130,{pointerType:'pen',pressure:0});
+  const strokes=ink(p).layers[0].strokes;assert(leaked===0&&strokes.length===1&&strokes[0].points.length===2,'touch leaked or contaminated map stroke');assert(p.store.getLibraryHistoryState().revision===revision+1,'map stroke did not create exactly one history entry');
+  p.store.undoLibraryChange();assert(!ink(p)?.layers[0].strokes.length&&p.store.getLibraryHistoryState().revision===revision+2,'one undo did not remove map stroke');
+ });
  await test('Preview uses viewport coordinates outside a contained leaf',async()=>{
   const p=await fresh();p.host.style.cssText+=';contain:strict;top:80px';p.view.setHandwritingMode('pen');button(p.host,'脑图手写设置').click();
   const node=surface(p),rect=node.getBoundingClientRect();pointer(node,'pointerdown',rect.left+100,rect.top+100);

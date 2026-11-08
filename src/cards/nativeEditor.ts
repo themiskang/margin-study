@@ -161,7 +161,7 @@ export function mountNativeCardEditor(plugin: MarginStudyPlugin, options: {
     textComment.classList.toggle("has-text", !!back.value.trim());
     textActions.hidden = !editingComments || !back.value.trim();
   }
-  const addMedia = (image: string, kind: "image" | "ink", name?: string) => { attached.push({ id: uid("comment"), image, kind, name }); drawAttached(); attachedRoot.lastElementChild?.scrollIntoView({block:"nearest"}); };
+  const addMedia = (image: string, kind: "image" | "ink", name?: string, strokes?: NonNullable<Card["commentMedia"]>[number]["strokes"]) => { attached.push({ id: uid("comment"), image, kind, name, ...(strokes ? { strokes } : {}) }); drawAttached(); attachedRoot.lastElementChild?.scrollIntoView({block:"nearest"}); };
   drawAttached();
   for(const input of [back,...sourceTexts.map(item=>item.input)])input.addEventListener("input", () => { comment.disabled = !editingComments && !hasText() && !comments.length && !attached.length; sizeComment(); });
   tools.append(pen, camera, mic, tag, rich, comment, more);
@@ -248,7 +248,7 @@ export function mountNativeCardEditor(plugin: MarginStudyPlugin, options: {
   const addDrawing = el("button", { class: "ms-btn", text: "插入手写批注" });
   addDrawing.addEventListener("click", () => {
     const canvas = drawing.element.querySelector("canvas"); if (!canvas || !drawing.value()?.length) { new Notice("请先写下批注"); return; }
-    addMedia(canvas.toDataURL("image/png"), "ink", "手写评论"); handwriting.hidden = true;
+    addMedia(canvas.toDataURL("image/png"), "ink", "手写评论", drawing.vectorStrokes()); handwriting.hidden = true;
   }); handwriting.append(drawing.element, addDrawing);
   pen.addEventListener("click", () => { handwriting.hidden = !handwriting.hidden; });
   const recorder = new VoiceRecorder(); let stopping = false, recordingStarted = false;

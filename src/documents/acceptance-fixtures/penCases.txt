@@ -4,6 +4,7 @@ import { ReaderView } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/
 import { ReaderView as RealReaderView } from 'marginstudy-real-reader';
 import { PDFDocument } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/node_modules/pdf-lib/es/index.js';
 import { loadPdf } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/pdfjs';
+import { reviewDrawingInput } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/review/drawing';
 
 function pointer(overlay:SVGSVGElement,host:HTMLElement,type:string,x:number,y:number,extra:any={}){
  const bounds=host.getBoundingClientRect();overlay.dispatchEvent(new PointerEvent(type,{clientX:bounds.left+x*bounds.width,clientY:bounds.top+y*bounds.height,pointerId:1,button:0,isPrimary:true,bubbles:true,...extra}));
@@ -26,6 +27,26 @@ async function drawPermanent(view:any,p:any,points:number[][],wait:any){
  view.setHandwritingMode('pen');const host=pageHost(view),overlay=host.querySelector<SVGSVGElement>('.ms-pen-overlay')!;drag(overlay,host,points);await wait(20);view.setHandwritingMode('off');await p.store.flush();
 }
 export async function runPenAcceptance({test,assert,wait,plugin,add,app,htmlController}:any){
+ await test('A15 active pen rejects twenty palm contacts without leaking them to the parent',()=>{
+  const host=document.createElement('div');host.style.cssText='width:400px;height:200px;position:relative';document.querySelector('#fixtures')!.append(host);let saved:any,leaked=0;
+  const pen=new PenController(host,{getColor:()=>'red',onCommit:strokes=>saved=strokes});pen.setActive(true);const overlay=host.querySelector('svg')!;
+  host.addEventListener('pointerdown',event=>{if(event.pointerType==='touch')leaked++;});
+  try{pointer(overlay,host,'pointerdown',.1,.2,{pointerType:'pen',pressure:.2});
+   for(let id=2;id<22;id++){pointer(overlay,host,'pointerdown',.8,.8,{pointerId:id,pointerType:'touch',width:50,height:40,cancelable:true});pointer(overlay,host,'pointermove',.9,.9,{pointerId:id,pointerType:'touch'});pointer(overlay,host,'pointerup',.9,.9,{pointerId:id,pointerType:'touch'});}
+   pointer(overlay,host,'pointermove',.3,.4,{pointerType:'pen',pressure:.8});pointer(overlay,host,'pointerup',.3,.4,{pointerType:'pen',pressure:0});
+   assert(saved[0].length===2&&leaked===0,'palm leaked or contaminated pen: '+JSON.stringify({saved,leaked}));
+  }finally{pen.destroy();host.remove();}
+ });
+ await test('A15 card input rejects palms and keeps the same normalized samples as document ink',()=>{
+  const host=document.createElement('div');host.style.cssText='width:400px;height:200px;position:relative';document.querySelector('#fixtures')!.append(host);let saved:any,leaked=0;
+  const pen=new PenController(host,{getColor:()=>'red',onCommit:strokes=>saved=strokes});pen.setActive(true);const overlay=host.querySelector('svg')!,drawing=reviewDrawingInput();host.append(drawing.element);(drawing.element as HTMLDetailsElement).open=true;const canvas=drawing.element.querySelector('canvas')!;
+  canvas.setPointerCapture=()=>{};canvas.releasePointerCapture=()=>{};host.addEventListener('pointerdown',event=>{if(event.target===canvas&&event.pointerType==='touch')leaked++;});
+  const dispatch=(target:Element,type:string,x:number,y:number,extra:any)=>{const bounds=(target===overlay?host:target).getBoundingClientRect();target.dispatchEvent(new PointerEvent(type,{clientX:bounds.left+x*bounds.width,clientY:bounds.top+y*bounds.height,pointerId:1,button:0,isPrimary:true,bubbles:true,cancelable:true,...extra}));};
+  try{
+   for(const target of [overlay,canvas]){const box=target===overlay?host:canvas;dispatch(box===host?overlay:canvas,'pointerdown',.1,.2,{pointerType:'pen',pressure:.2});if(target===canvas)for(let id=2;id<22;id++)dispatch(canvas,'pointerdown',.8,.8,{pointerId:id,pointerType:'touch'});dispatch(box===host?overlay:canvas,'pointermove',.3,.4,{pointerType:'pen',pressure:.8});dispatch(box===host?overlay:canvas,'pointerup',.6,.7,{pointerType:'pen',pressure:0});}
+   const card=drawing.value()!;assert(leaked===0&&card[0].length===saved[0].length&&card[0].every((point:any,index:number)=>Math.abs(point.x-saved[0][index].x)<1e-5&&Math.abs(point.y-saved[0][index].y)<1e-5&&point.pressure===saved[0][index].pressure),'card samples differ or palm leaked: '+JSON.stringify({card,saved,leaked}));drawing.element.querySelector<HTMLButtonElement>('button')!.click();assert(!drawing.value(),'one undo did not remove card stroke');
+  }finally{pen.destroy();host.remove();}
+ });
  await test('Stylus captures pressure and renders variable width; legacy and mouse ink stay uniform',()=>{
   const host=document.createElement('div');host.style.cssText='width:400px;height:200px;position:relative';document.querySelector('#fixtures')!.append(host);let saved:any;
   const pen=new PenController(host,{getColor:()=>'red',onCommit:strokes=>saved=strokes});pen.setActive(true);const overlay=host.querySelector('svg')!;
