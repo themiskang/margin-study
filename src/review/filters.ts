@@ -8,7 +8,7 @@ export function reviewFilterControls(cards: Card[], current: ReviewOptions, onAp
   const field = (title: string, element: HTMLElement) => { const label = el("label", { class: "ms-review-field", text: title }); label.append(element); form.append(label); };
   const favoriteLabel = el("label", { class: "ms-deck-bind" }), favorite = el("input", { type: "checkbox", "aria-label": "只看收藏卡片" }) as HTMLInputElement;
   favorite.checked = !!current.favorite; favoriteLabel.append(favorite, "只看收藏卡片"); form.append(favoriteLabel);
-  const tags = el("input", { class: "ms-search", type: "text", "aria-label": "复习筛选标签", placeholder: "多个标签用逗号分隔，需全部符合" }) as HTMLInputElement;
+  const tags = el("input", { class: "ms-search", type: "text", "aria-label": "复习筛选标签", placeholder: "标签完整路径，多个用逗号分隔" }) as HTMLInputElement;
   tags.value = current.tags?.join(", ") ?? ""; field("标签", tags);
   const select = (label: string, choices: [string,string][], selected: string): HTMLSelectElement => {
     const element = el("select", { class: "ms-select", "aria-label": label }) as HTMLSelectElement;
@@ -30,5 +30,5 @@ export function reviewFilterControls(cards: Card[], current: ReviewOptions, onAp
     onApply({ favorite: favorite.checked, tags: chosenTags.length ? chosenTags : undefined, docPaths: doc.value ? [doc.value] : undefined,
       colors: color.value ? [color.value] : undefined, ratings: rating.value ? [Number(rating.value)] : undefined, order: order.value as ReviewOptions["order"] });
   });
-  details.append(el("p", { class: "ms-muted", text: "各项条件取交集。浏览可包含未到期卡片，问答评分仍使用符合条件的到期题。" }), form); return details;
+  details.append(el("p", { class: "ms-muted", text: "各项条件取交集。父标签包含其后代，带 / 的完整路径精确匹配。浏览可包含未到期卡片，评分仅包含到期题。" }), form); return details;
 }

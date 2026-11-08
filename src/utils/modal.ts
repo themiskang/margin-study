@@ -71,6 +71,7 @@ export function createModal(
   // 关闭时一并移除 document 上的 Esc 监听，避免点背景/按钮关闭后监听器残留（内存泄漏）
   const onKey = (e: KeyboardEvent) => {
     if (e.key !== "Escape" || e.defaultPrevented) return;
+    if (bg.hidden) return;
     const layers = ownerDocument.querySelectorAll(".ms-modal-bg");
     if (layers[layers.length - 1] !== bg) return;
     e.preventDefault(); close();

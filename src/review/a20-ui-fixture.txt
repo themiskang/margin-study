@@ -1,0 +1,172 @@
+import { Store } from '__PROJECT__/src/model/store';
+import { ReviewSession } from '__PROJECT__/src/review/questions';
+import { startReview } from '__PROJECT__/src/review/reviewView';
+import { openReviewDeckBrowser, openReviewDecks } from '__PROJECT__/src/review/decks';
+import { filterReviewCards } from '__PROJECT__/src/review/selection';
+import { MarkdownRenderer, TFile } from 'obsidian';
+
+(HTMLElement.prototype as any).empty = function () { this.replaceChildren(); };
+(MarkdownRenderer as any).render = async (_app: any, text: string, host: HTMLElement) => { host.textContent = text; };
+const results: any[] = [];
+(window as any).results = results;
+const wait = (ms = 60) => new Promise(done => setTimeout(done, ms));
+const assert = (value: any, message: string) => { if (!value) throw new Error(message); };
+const same = (actual: any, expected: any, message: string) => assert(JSON.stringify(actual) === JSON.stringify(expected), `${message}: ${JSON.stringify(actual)} != ${JSON.stringify(expected)}`);
+function button(name: string): HTMLButtonElement {
+  const found = [...document.querySelectorAll<HTMLButtonElement>('button')].find(node => node.isConnected && !node.closest('[hidden]') && (node.getAttribute('aria-label') === name || node.textContent === name));
+  assert(found, `缺少可用按钮「${name}」`); return found!;
+}
+async function test(name: string, run: () => Promise<void>) {
+  try { document.querySelectorAll('.ms-modal-bg,.ms-review-context-return').forEach(node => node.remove()); await run(); results.push({ name, passed: true }); }
+  catch (error) { results.push({ name, passed: false, error: String(error) }); }
+}
+async function fresh() {
+  let disk: any = {};
+  const files = new Map<string, string>();
+  const source = new TFile('synthetic.pdf');
+  const app: any = { vault: { getAbstractFileByPath: (path: string) => path === source.path ? source : null, getFiles: () => [source],
+    adapter: { exists: async (path: string) => files.has(path), mkdir: async (path: string) => files.set(path, ''),
+      write: async (path: string, value: string) => files.set(path, value), read: async (path: string) => files.get(path) } } };
+  const host: any = { app, loadData: async () => structuredClone(disk), saveData: async (value: any) => { disk = structuredClone(value); } };
+  const store = new Store(host); await store.load();
+  const set = store.createStudySet('学习集甲', ['synthetic.pdf']);
+  const canvasId = store.activeCanvasId!;
+  const cards = ['甲', '乙', '丙'].map((name, index) => ({ id: `a20-${index}`, docPath: 'synthetic.pdf', page: index + 1,
+    type: 'flashcard' as const, front: `问题${name}`, back: `答案${name}`, tags: index === 1 ? ['父/子'] : ['旧标签'],
+    links: [], favorite: index === 1, color: index === 1 ? 'red' : 'blue', createdAt: `2020-01-0${index + 1}T00:00:00.000Z` }));
+  for (const card of cards) store.addCard(card);
+  const deck = store.createReviewDeck('A20 卡组', set.id);
+  store.enqueueReviewInDeck(cards.map(card => card.id), deck.id, canvasId, new Date('2020-01-05T00:00:00Z'));
+  const navigations: any[] = [];
+  const plugin: any = { store, app, activeReader: null,
+    openDocument: async (file: any) => { navigations.push({ kind: 'document', path: file.path }); return { gotoSourcePage: (page: number) => navigations.push({ kind: 'page', page }) }; },
+    studyWorkspace: { revealReviewCardContext: async (cardId: string, scopeId: string) => { navigations.push({ kind: 'mindmap', cardId, scopeId }); return true; } } };
+  return { store, plugin, host, deck, set, canvasId, cards, navigations };
+}
+
+try {
+  await test('背面进入文档与脑图再返回，当前卡与会话游标逐字段不变', async () => {
+    const { store, plugin, deck, canvasId, navigations } = await fresh();
+    const originalCurrent = ReviewSession.prototype.current; let session: any;
+    ReviewSession.prototype.current = function (...args: any[]) { session = this; return originalCurrent.apply(this, args as []); };
+    try {
+      await startReview(plugin, { deckId: deck.id, presentation: 'score', order: 'added' }); await wait();
+      button('显示答案').click(); await wait(); document.querySelector<HTMLButtonElement>('.ms-grade.easy')!.click(); await wait();
+      button('显示答案').click(); await wait();
+      assert(session?.current()?.cardId === 'a20-1' && session.answered === 1, '未进入评分后的第二张卡');
+      const before = structuredClone(session), logs = structuredClone(store.reviewLogs), pending = structuredClone(store.reviewPending);
+      const comment = document.querySelector<HTMLTextAreaElement>('[aria-label="本次复习批注"]')!; comment.value = '未评分草稿';
+      for (const [entry, kind] of [['查看来源文档', 'document'], ['查看所在脑图', 'mindmap']]) {
+        const control = button(entry), bounds = control.getBoundingClientRect();
+        assert(bounds.width > 0 && bounds.height > 0 && document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2) === control, `${entry} 不可见或被遮挡`);
+        control.click(); await wait();
+        assert(navigations.some(item => item.kind === kind), `${kind} 未导航`);
+        assert(document.querySelector<HTMLElement>('.ms-review-score')?.closest<HTMLElement>('.ms-modal-bg')?.hidden, '复习未暂时让出上下文');
+        if (kind === 'mindmap') {
+          const nested = document.createElement('div'); nested.className = 'ms-modal-bg'; document.body.append(nested);
+          button('返回复习').click(); await wait();
+          assert(document.querySelector<HTMLElement>('.ms-review-score')?.closest<HTMLElement>('.ms-modal-bg')?.hidden, '上下文弹窗未关闭即返回复习'); nested.remove();
+        }
+        button('返回复习').click(); await wait();
+        assert(session.current()?.cardId === 'a20-1', '返回后当前卡变化');
+        same(structuredClone(session), before, '会话游标变化'); same(store.reviewLogs, logs, '返回改变了评分日志'); same(store.reviewPending, pending, '返回改变了待复习队列');
+        assert(document.querySelector<HTMLTextAreaElement>('[aria-label="本次复习批注"]')?.value === '未评分草稿', '返回后复习草稿丢失');
+        assert(!document.querySelector<HTMLButtonElement>('.ms-grade.easy')?.disabled, '返回后答案状态丢失');
+      }
+      assert(navigations.some(item => item.kind === 'page' && item.page === 2), '未定位来源页');
+      assert(navigations.some(item => item.kind === 'mindmap' && item.cardId === 'a20-1' && item.scopeId === canvasId), '未定位对应卡片及脑图');
+      plugin.openDocument = async () => { throw new Error('synthetic unavailable'); };
+      button('查看来源文档').click(); await wait();
+      assert(!document.querySelector<HTMLElement>('.ms-review-score')?.closest<HTMLElement>('.ms-modal-bg')?.hidden && !document.querySelector('.ms-review-context-return'), '回源失败后未恢复复习');
+      same(structuredClone(session), before, '回源失败改变会话');
+      button('结束复习').click();
+    } finally { ReviewSession.prototype.current = originalCurrent; }
+  });
+
+  await test('学习集范围及组合筛选关闭并重建 Store、view 后恢复，其他学习集互不覆盖', async () => {
+    const { store, plugin, host, deck, set } = await fresh();
+    await openReviewDeckBrowser(plugin, deck.id); await wait(); button('批注与工具').click();
+    const due = document.querySelector<HTMLInputElement>('[aria-label="仅浏览到期卡片"]')!; due.checked = true; due.dispatchEvent(new Event('change', { bubbles: true })); await wait();
+    const details = document.querySelector<HTMLDetailsElement>('.ms-review-filters')!; details.open = true;
+    const values: Record<string, any> = { '只看收藏卡片': true, '复习筛选标签': '父/子', '复习筛选文档': 'synthetic.pdf', '复习筛选颜色': 'red', '复习筛选评分': '0', '复习排序': 'text' };
+    for (const [label, value] of Object.entries(values)) {
+      const input = document.querySelector<HTMLInputElement | HTMLSelectElement>(`[aria-label="${label}"]`)!;
+      if (input instanceof HTMLInputElement && input.type === 'checkbox') input.checked = value; else input.value = value;
+    }
+    details.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await wait();
+    button('关闭浏览').click(); await store.flush();
+    const reopened = new Store(host); await reopened.load(); plugin.store = reopened;
+    await openReviewDeckBrowser(plugin, deck.id); await wait(); button('批注与工具').click();
+    assert(document.querySelector<HTMLInputElement>('[aria-label="仅浏览到期卡片"]')!.checked, '到期范围未恢复');
+    for (const [label, value] of Object.entries(values)) {
+      const input = document.querySelector<HTMLInputElement | HTMLSelectElement>(`[aria-label="${label}"]`)!;
+      const actual = input instanceof HTMLInputElement && input.type === 'checkbox' ? input.checked : input.value;
+      assert(actual === value, `${label} 未恢复: ${JSON.stringify(actual)}`);
+    }
+    assert(document.querySelector('[data-browse-card="a20-1"]'), '恢复的筛选未实际选中目标卡');
+    button('关闭浏览').click();
+    const persisted = structuredClone(reopened.studySets.find(item => item.id === set.id)?.reviewSettings);
+    reopened.addCard({ id: 'undo-test', docPath: '', type: 'flashcard', front: '撤销测试', tags: [], links: [], createdAt: '2020-01-01T00:00:00Z' });
+    reopened.setStudySetReviewSettings(set.id, { ...persisted, tags: ['父'] }); reopened.undoLibraryChange();
+    assert(reopened.studySets.find(item => item.id === set.id)?.reviewSettings?.tags?.[0] === '父', '无关撤销覆盖了后续筛选');
+    reopened.setStudySetReviewSettings(set.id, persisted);
+    const other = reopened.createStudySet('学习集乙', ['synthetic.pdf']); reopened.bindReviewDeck(deck.id, other.id);
+    const otherCard = { ...reopened.getCard('a20-1')!, id: 'other-set-card', docPath: '', sources: undefined, tags: ['其他学习集专属'] };
+    reopened.addCard(otherCard); reopened.enqueueReviewInDeck([otherCard.id], deck.id);
+    await openReviewDeckBrowser(plugin, deck.id); await wait(); button('批注与工具').click();
+    assert(!document.querySelector<HTMLInputElement>('[aria-label="仅浏览到期卡片"]')!.checked, '另一学习集继承了范围');
+    assert(!document.querySelector<HTMLInputElement>('[aria-label="复习筛选标签"]')!.value, '另一学习集继承了标签');
+    button('关闭浏览').click(); reopened.setActiveStudySet(set.id);
+    await openReviewDeckBrowser(plugin, deck.id); await wait(); button('批注与工具').click();
+    assert(document.querySelector<HTMLInputElement>('[aria-label="仅浏览到期卡片"]')!.checked && document.querySelector<HTMLInputElement>('[aria-label="复习筛选标签"]')!.value === '父/子', '切回学习集后设置丢失');
+    button('关闭浏览').click();
+    await startReview(plugin, { deckId: deck.id, presentation: 'score' }); await wait();
+    assert(document.querySelector('.ms-review-question-text')?.textContent?.includes('问题乙'), '直接评分入口未恢复学习集筛选');
+    assert(document.querySelector('.ms-review-identity')?.textContent?.includes('1 / 1'), '评分未使用恢复的范围');
+    button('结束复习').click();
+  });
+
+  await test('同一卡在两个卡组按各自上限调度，未设上限保持原算法', async () => {
+    const { store, plugin, host, deck, cards, canvasId } = await fresh();
+    const other = store.createReviewDeck('A20 长间隔'), unlimited = store.createReviewDeck('A20 无上限');
+    const now = new Date('2020-01-05T00:00:00Z');
+    store.enqueueReviewInDeck([cards[0].id], other.id, canvasId, now); store.enqueueReviewInDeck([cards[0].id], unlimited.id, canvasId, now);
+    openReviewDecks(plugin); await wait();
+    const picker = document.querySelector<HTMLSelectElement>('[aria-label="选择复习卡组"]')!; picker.value = deck.id; picker.dispatchEvent(new Event('change', { bubbles: true }));
+    const max = document.querySelector<HTMLInputElement>('[aria-label="卡组最长间隔（天）"]')!; max.value = '1'; max.closest('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); await wait();
+    assert(store.getReviewDeck(deck.id)?.maxInterval === 1, '卡组设置未保存'); button('关闭').click();
+    store.setReviewDeckMaxInterval(other.id, 2);
+    let rejected = false; try { store.setReviewDeckMaxInterval(other.id, 0); } catch { rejected = true; }
+    assert(rejected && store.getReviewDeck(other.id)?.maxInterval === 2, '无效上限未拒绝');
+    const questionA = store.deckQuestionsForCard(cards[0].id, deck.id)[0], questionB = store.deckQuestionsForCard(cards[0].id, other.id)[0], questionC = store.deckQuestionsForCard(cards[0].id, unlimited.id)[0];
+    for (const question of [questionA, questionB, questionC]) store.srs[question.id] = { ...store.getReviewState(cards[0].id, question.id),
+      due: now.toISOString(), interval: 60, reps: 8, stability: 60, difficulty: 5, state: 2,
+      lastReviewed: '2019-11-06T00:00:00.000Z', scheduledDays: 60, elapsedDays: 60, learningSteps: 0 };
+    await startReview(plugin, { deckId: deck.id, cardIds: [cards[0].id], presentation: 'score' }); await wait(); button('显示答案').click(); await wait();
+    assert(document.querySelector('.ms-grade.easy')?.textContent?.includes('1d'), '评分预览未显示卡组上限'); button('结束复习').click();
+    const originalB = structuredClone(store.getReviewState(cards[0].id, questionB.id));
+    const first = store.gradeCard(cards[0].id, 4, { questionId: questionA.id, deckId: deck.id, scopeId: canvasId, now });
+    same(store.getReviewState(cards[0].id, questionB.id), originalB, '评分甲影响乙的进度');
+    const second = store.gradeCard(cards[0].id, 4, { questionId: questionB.id, deckId: other.id, scopeId: canvasId, now });
+    const uncapped = store.gradeCard(cards[0].id, 4, { questionId: questionC.id, deckId: unlimited.id, scopeId: canvasId, now });
+    assert(first.interval === 1 && second.interval === 2 && uncapped.interval > 2, `上限未独立生效: ${first.interval}, ${second.interval}, ${uncapped.interval}`);
+    for (const [state, expected] of [[first, 1], [second, 2]] as const) {
+      assert(new Date(state.due).getTime() - now.getTime() === expected * 86400000, '到期时间与上限不一致');
+      assert(state.scheduledDays === expected, 'FSRS scheduledDays 与上限不一致');
+    }
+    same(store.getReviewState(cards[0].id, questionA.id), first, '评分乙影响甲的进度');
+    await store.flush(); const reopened = new Store(host); await reopened.load();
+    assert(reopened.getReviewDeck(deck.id)?.maxInterval === 1 && reopened.getReviewDeck(other.id)?.maxInterval === 2 && reopened.getReviewDeck(unlimited.id)?.maxInterval === undefined, '重开后上限变化');
+    reopened.setReviewDeckMaxInterval(deck.id, undefined); assert(reopened.getReviewDeck(deck.id)?.maxInterval === undefined && reopened.getReviewDeck(other.id)?.maxInterval === 2, '清除上限影响其他卡组');
+  });
+
+  await test('标签父路径命中自身和后代，完整子路径精确匹配，旧扁平标签可搜', async () => {
+    const { cards } = await fresh(), template = cards[0];
+    const tagged = ['父', '父/子', '父/子/孙', '父/其他', '父亲', '子', '旧标签'].map((tag, index) => ({ ...template, id: `tag-${index}`, tags: [tag] }));
+    const matching = (tag: string) => filterReviewCards(tagged, { tags: [tag] }).map(card => card.tags[0]);
+    same(matching('父'), ['父', '父/子', '父/子/孙', '父/其他'], '父标签未命中完整后代或错误命中相似前缀');
+    same(matching('父/子'), ['父/子'], '子标签完整路径未精确匹配');
+    same(matching('旧标签'), ['旧标签'], '旧扁平标签不能搜索');
+  });
+} catch (error) { (window as any).fatal = String(error); }
+(window as any).done = true;

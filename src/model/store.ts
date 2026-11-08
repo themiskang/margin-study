@@ -635,6 +635,7 @@ export class Store {
       for (const set of this.studySets) {
         const live = current.studySets?.find(item => item.id === set.id), prior = previous.data.studySets?.find(item => item.id === set.id);
         if (live && (set.reviewDeckId === prior?.reviewDeckId || live.reviewDeckId !== prior?.reviewDeckId)) set.reviewDeckId = live.reviewDeckId;
+        if (live && (same(set.reviewSettings, prior?.reviewSettings) || !same(live.reviewSettings, prior?.reviewSettings))) set.reviewSettings = clone(live.reviewSettings);
         if (set.reviewDeckId && !this.getReviewDeck(set.reviewDeckId)) delete set.reviewDeckId;
       }
       // Restore only template changes owned by this history entry. Unrelated
@@ -1195,6 +1196,10 @@ export class Store {
     const added = (patch.docPaths ?? []).filter(p => !set.docPaths.includes(p)); Object.assign(set, patch, { id }); set.docPaths = [...new Set(set.docPaths)];
     const first = this.canvases.find(c => c.studySetId === id); if (first && added.length) this.importUnassigned(added, first.id);
   }); }
+  setStudySetReviewSettings(id: string, settings: NonNullable<StudySet["reviewSettings"]>): void {
+    const set = this.studySets.find(item => item.id === id); if (!set || same(set.reviewSettings, settings)) return;
+    set.reviewSettings = clone(settings); this.save();
+  }
   private importUnassigned(paths: string[], canvasId: string): void {
     const ids = this.nodes.filter(n => !n.canvasId && n.docPath && paths.includes(n.docPath)).map(n => n.id);
     if (ids.length) this.pasteSubtree(this.copySubtree(ids), { canvasId, mode: "reference", offset: { x: 0, y: 0 } });
@@ -1283,6 +1288,15 @@ export class Store {
     const deck = this.getReviewDeck(id); if (!deck || !name.trim()) return;
     deck.name = name.trim(); deck.updatedAt = new Date().toISOString();
   }); }
+  setReviewDeckMaxInterval(id: string, maxInterval?: number): void {
+    if (maxInterval !== undefined && (!Number.isSafeInteger(maxInterval) || maxInterval < 1)) throw new Error("最长间隔须为大于等于 1 的整数天数");
+    const deck = this.getReviewDeck(id); if (!deck) throw new Error("复习卡组不存在");
+    if (deck.maxInterval === maxInterval) return;
+    this.mutate("设置复习卡组最长间隔", () => {
+      if (maxInterval === undefined) delete deck.maxInterval; else deck.maxInterval = maxInterval;
+      deck.updatedAt = new Date().toISOString();
+    });
+  }
   bindReviewDeck(deckId: string, studySetId: string): void { this.mutate("绑定复习卡组", () => {
     const deck = this.getReviewDeck(deckId), set = this.studySets.find(set => set.id === studySetId);
     if (!deck || !set) throw new Error("复习卡组或学习集不存在");
@@ -1448,7 +1462,7 @@ export class Store {
     const effectiveDeckId = options.deckId ?? pendingBefore?.deckId;
     const before = pendingBefore ? this.getReviewState(id, key) : freshState(this.settings.defaultEase, options.now);
     const present = Object.prototype.hasOwnProperty.call(this.srs, key), now = options.now ?? new Date();
-    const after = schedule(before, grade, now);
+    const after = schedule(before, grade, now, (deck ?? (effectiveDeckId ? this.getReviewDeck(effectiveDeckId) : undefined))?.maxInterval);
     const log: ReviewLog & { stateWasPresent: boolean; stateBefore?: CardState; pendingBefore?: ReviewPending } = {
       id: uid("review"), cardId: id, questionId: key, scopeId: options.scopeId, ...(effectiveDeckId && { deckId: effectiveDeckId }), rating: grade,
       reviewedAt: now.toISOString(), elapsedMs: Math.max(0, options.elapsedMs ?? 0), before, after: clone(after),

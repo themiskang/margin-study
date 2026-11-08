@@ -272,6 +272,7 @@ export interface StudySet {
   /** Absent in legacy data. Merely reading defaults never writes a migration. */
   scene?: StudySceneSelection;
   recallSettings?: { options: Record<RecallOptionKey, boolean>; coverAll: boolean; hintLanguage: "auto" | "zh" | "en"; mode?: "in-place" | "layered" };
+  reviewSettings?: import("./review/contracts").StudySetReviewSettings;
 }
 
 export interface FixedMindmapView {
@@ -292,6 +293,7 @@ export interface ReviewDeck {
   cardIds: string[];
   createdAt: string;
   updatedAt?: string;
+  maxInterval?: number;
   /** Compatibility decks retain old question keys; null denotes unscoped keys. */
   legacyScopeId?: string | null;
 }

@@ -8,7 +8,7 @@ export function filterReviewCards(cards: Card[], options: ReviewOptions): Card[]
   return cards.filter(card => !card.hidden && !card.groupId &&
     (!options.cardIds || options.cardIds.includes(card.id)) &&
     (!options.docPaths || options.docPaths.includes(card.docPath) || card.sources?.some(source => options.docPaths!.includes(source.docPath))) &&
-    (!options.favorite || card.favorite) && (!options.tags?.length || options.tags.every(tag => card.tags.includes(tag))) &&
+    (!options.favorite || card.favorite) && (!options.tags?.length || options.tags.every(tag => card.tags.some(candidate => candidate === tag || !tag.includes("/") && candidate.startsWith(tag + "/")))) &&
     (!options.colors?.length || options.colors.includes(card.color ?? "")));
 }
 

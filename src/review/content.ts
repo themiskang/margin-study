@@ -31,6 +31,18 @@ export function imageUrl(plugin: MarginStudyPlugin, path: string): string {
   return file instanceof TFile ? plugin.app.vault.getResourcePath(file) : path.startsWith("_marginstudy-media/") ? plugin.app.vault.adapter.getResourcePath(path) : path;
 }
 
+export async function openReviewCardDocument(plugin: MarginStudyPlugin, card: Card): Promise<void> {
+  const source = card.sources?.find(item => item.docPath) ?? card;
+  if (!source.docPath) throw new Error("这张卡片没有来源文档");
+  const file = plugin.app.vault.getAbstractFileByPath(source.docPath);
+  if (!(file instanceof TFile)) throw new Error("源文档不存在");
+  const reader = await plugin.openDocument(file);
+  const notebook = source.documentNotebookId ?? "default";
+  if ((reader as any).getDocumentNotebookId?.() !== notebook) await (reader as any).selectDocumentNotebook?.(notebook);
+  if (source.anchorAnnId) reader.flashAnnotation(source.anchorAnnId);
+  else if (source.page) { if (reader.gotoSourcePage) reader.gotoSourcePage(source.page); else reader.gotoPage?.(source.page); }
+}
+
 export function appendSources(container: HTMLElement, plugin: MarginStudyPlugin, card: Card): void {
   const sources = card.sources?.length ? card.sources : [{ docPath: card.docPath, anchorAnnId: card.anchorAnnId, page: card.page }];
   const row = el("div", { class: "ms-review-sources", style: "display:flex;flex-wrap:wrap;gap:6px;margin:8px 0" });

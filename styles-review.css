@@ -44,6 +44,10 @@
 /* Reference: MarginNote 4 Max, 1512 × 949 logical desktop pixels. */
 .ms-review-visually-hidden { position:absolute!important; width:1px!important; height:1px!important; padding:0!important; margin:-1px!important; overflow:hidden!important; clip:rect(0,0,0,0)!important; white-space:nowrap!important; border:0!important; }
 .ms-native-review-bg { background:rgba(0,0,0,.60)!important; }
+.ms-native-review-bg[hidden], .ms-review-context-actions[hidden] { display:none!important; }
+.ms-review-context-actions { position:absolute; left:50%; bottom:10px; transform:translateX(-50%); z-index:1; display:flex; gap:8px; flex-wrap:wrap; justify-content:center; width:max-content; max-width:95%; }
+.ms-native-review-paper.has-review-context-actions .ms-native-review-content { bottom:55px; }
+.ms-review-context-return { position:fixed; z-index:1100; top:16px; right:16px; box-shadow:0 2px 12px #0004; }
 .ms-modal.ms-native-review { --review-edge:10.7vw; --review-gap:clamp(12px,1.32vw,20px); --review-toolbar:#747b85; position:relative; width:100vw!important; height:100vh!important; max-height:none!important; max-width:none!important; padding:0!important; margin:0!important; border:0!important; border-radius:0!important; background:transparent!important; box-shadow:none!important; overflow:hidden!important; color:#111; font:16px/1.45 -apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif; }
 .ms-native-review-counter { position:absolute; top:3.2vh; left:0; width:100%; color:#fff; text-align:center; font-size:14px; line-height:22px; font-weight:500; }
 .ms-native-review-paper { position:absolute; left:var(--review-edge); right:var(--review-edge); top:8.45vh; bottom:10.5vh; margin:0; background:#fff; border-radius:8px; overflow:hidden; box-shadow:0 0 1px rgba(0,0,0,.15); }

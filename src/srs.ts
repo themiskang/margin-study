@@ -90,9 +90,13 @@ export function toFsrsCard(state: CardState, now = new Date()): FsrsCard {
 }
 
 /** 1=Again, 2=Hard, 3=Good, 4=Easy. Pure: preview and grading share this path. */
-export function schedule(state: CardState, rating: number, now = new Date()): CardState {
+export function schedule(state: CardState, rating: number, now = new Date(), maxInterval?: number): CardState {
   if (![1, 2, 3, 4].includes(rating)) throw new Error("评分必须为 1–4");
   const result = scheduler.next(toFsrsCard(state, now), now, rating as Grade).card;
+  if (maxInterval !== undefined && Number.isFinite(maxInterval) && maxInterval > 0 && result.due.getTime() - now.getTime() > maxInterval * DAY_MS) {
+    result.due = new Date(now.getTime() + maxInterval * DAY_MS);
+    result.scheduled_days = maxInterval;
+  }
   return {
     due: result.due.toISOString(),
     interval: Math.max(0, (result.due.getTime() - now.getTime()) / DAY_MS),
@@ -110,8 +114,8 @@ export function schedule(state: CardState, rating: number, now = new Date()): Ca
   } as CardState;
 }
 
-export function previewInterval(state: CardState, rating: number, now = new Date()): number {
-  return schedule(state, rating, now).interval;
+export function previewInterval(state: CardState, rating: number, now = new Date(), maxInterval?: number): number {
+  return schedule(state, rating, now, maxInterval).interval;
 }
 
 export function intervalLabel(days: number): string {

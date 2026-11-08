@@ -4,7 +4,7 @@ import { Notice } from "obsidian";
 import { el, clear } from "../utils/dom";
 import { createModal } from "../utils/modal";
 import { startReview, questionsForReview } from "./reviewView";
-import type { ReviewOptions } from "./contracts";
+import type { ReviewOptions, StudySetReviewSettings } from "./contracts";
 import { appendSources, cardImages, collapsibleCardComment, imageUrl } from "./content";
 import { createSpeechSession } from "../audio/speech";
 import { clozeForQuestion, renderMarkdown } from "../utils/markdown";
@@ -89,10 +89,10 @@ export function openReviewDecks(plugin: MarginStudyPlugin, options: DeckPickerOp
       }); actions.append(enroll);
     }
     const start = el("button", { class: "ms-btn primary", text: "开始到期复习" }) as HTMLButtonElement;
-    start.disabled = summary.due === 0; start.addEventListener("click", () => { use(); close(); startReview(plugin, { deckId: deck.id }); });
+    start.disabled = summary.due === 0; start.addEventListener("click", () => { use(); close(); startReview(plugin, { deckId: deck.id, studySetId }); });
     const cancel = el("button", { class: "ms-btn", text: "关闭" }); cancel.addEventListener("click", close);
     const browse = el("button", { class: "ms-btn", text: "浏览全部卡片" });
-    browse.addEventListener("click", () => { close(); openReviewDeckBrowser(plugin, deck.id); });
+    browse.addEventListener("click", () => { close(); openReviewDeckBrowser(plugin, deck.id, { studySetId }); });
     actions.append(choose, browse, start, cancel); body.append(actions);
 
     const members = el("details", { class: "ms-deck-members" }); members.append(el("summary", { text: `卡组成员 · ${deck.cardIds.length} 张` }));
@@ -110,6 +110,16 @@ export function openReviewDecks(plugin: MarginStudyPlugin, options: DeckPickerOp
     const rename = el("input", { class: "ms-search", type: "text", "aria-label": "卡组新名称" }) as HTMLInputElement; rename.value = deck.name;
     renameForm.append(rename, el("button", { class: "ms-btn", type: "submit", text: "重命名" }));
     renameForm.addEventListener("submit", event => { event.preventDefault(); store.renameReviewDeck(deck.id, rename.value); draw(); }); body.append(renameForm);
+    const intervalForm = el("form", { class: "ms-deck-create" });
+    const interval = el("input", { class: "ms-search", type: "number", min: "1", step: "1", placeholder: "留空使用默认调度", "aria-label": "卡组最长间隔（天）" }) as HTMLInputElement;
+    interval.value = deck.maxInterval?.toString() ?? "";
+    const intervalLabel = el("label", { class: "ms-review-field", text: "最长间隔（天）" }); intervalLabel.append(interval);
+    intervalForm.append(intervalLabel, el("button", { class: "ms-btn", type: "submit", text: "保存最长间隔" }));
+    intervalForm.addEventListener("submit", event => {
+      event.preventDefault();
+      try { store.setReviewDeckMaxInterval(deck.id, interval.value.trim() ? Number(interval.value) : undefined); new Notice("卡组最长间隔已保存"); }
+      catch (error) { new Notice(`无法保存最长间隔：${String(error)}`); }
+    }); body.append(intervalForm);
   };
   unsubscribe = store.subscribe(() => { if (!modal.isConnected) return; if (chosen && !store.getReviewDeck(chosen)) chosen = store.reviewDeckForStudySet(studySetId)?.id ?? (!studySetId ? store.reviewDecks[0]?.id : undefined); draw(); });
   draw();
@@ -129,15 +139,25 @@ export async function openReviewDeckBrowser(plugin: MarginStudyPlugin, deckId: s
   await plugin.store.flush();
   const store = plugin.store, deck = store.getReviewDeck(deckId); if (!deck) return;
   const speech = createSpeechSession("review-browser");
-  let unsubscribe = () => {}, index = 0, generation = 0, closed = false, dueOnly = options.presentation === "browse";
-  let selection: ReviewOptions = { ...options, deckId, order: options.order ?? "due", shuffleSeed: options.shuffleSeed ?? uid("shuffle") }, filtersOpen = false, toolsOpen = false;
+  const studySetId = options.studySetId ?? (options.scopeId ? store.canvases.find(canvas => canvas.id === options.scopeId)?.studySetId : undefined) ?? store.activeStudySetId;
+  const saved = store.studySets.find(set => set.id === studySetId)?.reviewSettings;
+  const { dueOnly: savedDueOnly, ...savedFilters } = saved ?? { dueOnly: undefined };
+  let unsubscribe = () => {}, index = 0, generation = 0, closed = false, dueOnly = savedDueOnly ?? options.presentation === "browse";
+  let selection: ReviewOptions = { ...savedFilters, ...options, studySetId, deckId, order: options.order ?? saved?.order ?? "due", shuffleSeed: options.shuffleSeed ?? saved?.shuffleSeed ?? uid("shuffle") }, filtersOpen = false, toolsOpen = false;
+  const saveSelection = () => {
+    if (!studySetId) return;
+    const settings: StudySetReviewSettings = { dueOnly, favorite: selection.favorite, tags: selection.tags, docPaths: selection.docPaths,
+      colors: selection.colors, ratings: selection.ratings, order: selection.order, shuffleSeed: selection.order === "random" ? selection.shuffleSeed : undefined };
+    store.setStudySetReviewSettings(studySetId, settings);
+  };
   const { modal, bg, close } = createModal(deck.name, () => { closed = true; generation++; unsubscribe(); speech.dispose(); });
   modal.classList.add("ms-review-modal", "ms-review-browser");
   const draw = async () => {
     if (closed) return; const current = ++generation; speech.stop(); clear(modal);
     const dueQuestions = questionsForReview(plugin, { ...selection, presentation: "score" });
     const dueIds = new Set(dueQuestions.map(question => question.cardId));
-    const deckCards = deck.cardIds.map(id => store.getCard(id)).filter((card): card is NonNullable<typeof card> => !!card && !card.hidden && !card.groupId);
+    const setCardIds = studySetId ? new Set(store.cardsForStudySet(studySetId).map(card => card.id)) : undefined;
+    const deckCards = deck.cardIds.map(id => store.getCard(id)).filter((card): card is NonNullable<typeof card> => !!card && !card.hidden && !card.groupId && (!setCardIds || setCardIds.has(card.id)));
     const filtered = filterReviewCards(deckCards, selection), byId = new Map(filtered.map(card => [card.id, card]));
     const ordered = filterAndOrderReviewQuestions(store, filtered.flatMap(card => store.deckQuestionsForCard(card.id, deck.id)), selection);
     let cards = [...new Set(ordered.map(question => question.cardId))].map(id => byId.get(id)!);
@@ -147,9 +167,9 @@ export async function openReviewDeckBrowser(plugin: MarginStudyPlugin, deckId: s
     stage.inspector.hidden = !toolsOpen; stage.notes.setAttribute("aria-expanded", String(toolsOpen));
     stage.notes.addEventListener("click", () => { toolsOpen = !stage.inspector.hidden; });
     const filter = el("label", { class: "ms-deck-bind" }), due = el("input", { type: "checkbox", "aria-label": "仅浏览到期卡片" }) as HTMLInputElement;
-    due.checked = dueOnly; due.addEventListener("change", () => { dueOnly = due.checked; index = 0; void draw(); }); filter.append(due, "仅到期");
+    due.checked = dueOnly; due.addEventListener("change", () => { dueOnly = due.checked; index = 0; saveSelection(); void draw(); }); filter.append(due, "仅到期");
     stage.inspector.append(filter);
-    const filters = reviewFilterControls(deckCards, selection, patch => { selection = { ...selection, ...patch, shuffleSeed: patch.order === "random" ? uid("shuffle") : selection.shuffleSeed }; index = 0; void draw(); });
+    const filters = reviewFilterControls(deckCards, selection, patch => { selection = { ...selection, ...patch, shuffleSeed: patch.order === "random" ? uid("shuffle") : selection.shuffleSeed }; index = 0; saveSelection(); void draw(); });
     filters.open = filtersOpen; filters.addEventListener("toggle", () => { if (filters.isConnected) filtersOpen = filters.open; }); stage.inspector.append(filters);
     const card = cards[index];
     if (card) {

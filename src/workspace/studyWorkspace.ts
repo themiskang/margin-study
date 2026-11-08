@@ -166,6 +166,17 @@ export class StudyWorkspaceView extends ItemView {
     return set ? set.name + " · MarginStudy" : "MarginStudy 学习工作区";
   }
   getReader(): ReaderLike | null { return this.reader; }
+  async revealReviewCardContext(cardId: string, scopeId?: string, studySetId?: string): Promise<boolean> {
+    const store = this.plugin.store;
+    const setId = studySetId ?? store.activeStudySetId ?? (scopeId ? store.canvases.find(canvas => canvas.id === scopeId)?.studySetId : undefined);
+    const candidates = store.nodes.filter(node => node.cardId === cardId && node.canvasId && store.canvases.some(canvas => canvas.id === node.canvasId && (!setId || canvas.studySetId === setId)));
+    const node = candidates.find(item => item.canvasId === scopeId) ?? candidates.find(item => item.canvasId === store.activeCanvasId) ?? candidates[0];
+    if (!node?.canvasId || this.closed) return false;
+    if (store.activeCanvasId !== node.canvasId) store.setActiveCanvas(node.canvasId);
+    this.dismissPopup(); this.state.mindmap = true; this.applyLayout(); this.refresh(true);
+    await this.app.workspace.revealLeaf(this.leaf); this.app.workspace.setActiveLeaf(this.leaf, { focus: true });
+    return this.renderer?.revealCard(cardId) ?? false;
+  }
   getState(): Record<string, unknown> {
     if(!this.closed)this.captureReader();
     if(this.research){this.state.researchUrl=this.research.currentUrl();this.state.researchSession=this.research.session();}

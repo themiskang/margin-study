@@ -64,7 +64,7 @@ async function fresh(saved?:any,hostOptions:{leftCollapsed?:boolean;rightCollaps
     adapter:{async exists(path:string){return writes.has(path)||sources.has(path)||folders.has(path);},async read(path:string){if(!writes.has(path))throw new Error('Missing synthetic adapter file '+path);return writes.get(path);},async write(path:string,value:string){writes.set(path,value);},async mkdir(path:string){folders.add(path);},async remove(path:string){writes.delete(path);},async rename(from:string,to:string){assert(writes.has(from)&&!writes.has(to),'invalid synthetic sidecar move');writes.set(to,writes.get(from)!);writes.delete(from);}}},
     metadataCache:{getFirstLinkpathDest:()=>null},workspace:{leftSplit:dock(hostOptions.leftCollapsed),rightSplit:dock(hostOptions.rightCollapsed),rootSplit:{},activeLeaf:null,centerLeaf:null,
       on(name:string,callback:any){const listeners=workspaceEvents.get(name)??new Set();listeners.add(callback);workspaceEvents.set(name,listeners);return{off:()=>listeners.delete(callback)};},offref(ref:any){ref.off();},onLayoutReady(callback:any){callback();},getMostRecentLeaf(){return this.centerLeaf;},
-      requestSaveLayout(){metrics.layoutSaves++;},getLeaf(){return{setViewState:async()=>{}};},openLinkText:async()=>{}}};
+      requestSaveLayout(){metrics.layoutSaves++;},getLeaf(){return{setViewState:async()=>{}};},openLinkText:async()=>{},revealLeaf:async()=>{},setActiveLeaf(next:any){this.activeLeaf=next;}}};
   const store=new Store({app,loadData:async()=>structuredClone(disk),saveData:async(value:any)=>{disk=structuredClone(value);}} as any);await store.load();
   const originalSubscribe=store.subscribe.bind(store),originalAnnotations=store.subscribeAnnotations.bind(store);
   store.subscribe=(callback:any)=>{metrics.subscriptions++;const unsubscribe=originalSubscribe(callback);let done=false;return()=>{if(!done){done=true;metrics.subscriptions--;unsubscribe();}};};
@@ -137,6 +137,14 @@ function morePane(p:any,name:string){button(p.root,'学习集更多设置').clic
 function mapInk(p:any){return p.root.querySelector('[aria-label="脑图手写画布"]') as SVGSVGElement;}
 
 try{
+  await test('A20 review context reveals the exact card in its source map and refuses another study set',async()=>{
+    const p=await fresh();const second=p.store.createCanvas(p.set.id,'另一个脑图');
+    p.store.addNode({id:'a20-context-node',cardId:'anchor-card',canvasId:second.id,parentId:null,title:'复习来源',x:120,y:120,collapsed:false});
+    assert(await p.view.revealReviewCardContext('anchor-card',second.id,p.set.id),'source map was not revealed');await frame();
+    assert(p.store.activeCanvasId===second.id&&mapCard(p,'a20-context-node'),'source card not rendered in selected map');
+    const other=p.store.createStudySet('其他学习集');
+    assert(!await p.view.revealReviewCardContext('anchor-card',second.id,other.id),'cross-study-set map was incorrectly selected');
+  });
   await test('A14 ink drawn on a card follows a 100-world-pixel drag',async()=>{
     const p=await fresh();await frame();const graph=p.root.querySelector<HTMLElement>('.ms-mindmap-root')!,node=mapCard(p,'beta-node'),world=p.root.querySelector<HTMLElement>('.ms-mindmap-world')!,scale=mindmapScale(world),bounds=node.getBoundingClientRect();
     button(graph,'脑图手写').click();const surface=graph.querySelector<SVGSVGElement>('[aria-label="脑图手写画布"]')!;

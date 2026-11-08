@@ -1637,3 +1637,24 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - 证据：evidence/acceptance-20261106/CC-A16-RESULT.md（含完整流程数值与 4 张前次 CC 截图）
 - 方法：真实 DOM click 打开详情与截图批注弹窗，canvas 上派发合成 pen PointerEvent 走产品 cardInkInput 监听器，未直接改 store
 - 路线 A 批次 A2（A15/A14/A16）全部完成
+
+## 2026-11-09 · A20 学习集式复习、层级标签与卡组设置
+
+- 评分背面新增来源文档和所在脑图入口；临时隐藏复习界面并保留同一个会话、答案状态、批注草稿及手绘，返回后继续。来源缺失或导航失败时恢复复习并提示；存在其他弹窗时先关闭其他弹窗再返回。脑图按学习集和来源画布定位卡片，不跨学习集猜测。
+- 到期/全部范围及收藏、标签、文档、颜色、评分、排序按学习集持久化；重建 Store/view、切换学习集及无关库操作撤销后保留。直接评分沿用保存的条件且仍只评分到期题。无学习集时选择仅保留在当前界面。
+- 标签以原字符串保存：无斜杠的父标签匹配自身及所有后代，带斜杠的完整路径精确匹配；旧扁平标签无需迁移。卡组管理支持可选最长间隔，单位为整数天；实际调度、到期时间、`scheduledDays` 和评分预览使用同一卡组上限，无上限卡组行为不变，已有排程不被回写。
+- 四项行为改前两次均真实失败：`/tmp/a20-before-1.log`、`/tmp/a20-before-2.log`，结果分别为 `/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-a20-ui-U4qc9h/results.json`、`/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-a20-ui-o4TAN6/results.json`。失败原因依次为缺少来源文档入口、到期范围未恢复、三组均算出 244 天而未受上限限制、父标签只匹配自身。前两项因入口或范围已失败，后续返回/筛选细节不能声称当时已执行；子路径与旧标签不是改前失败依据。
+- 四项行为改后两次均通过：`/tmp/a20-after-1.log`、`/tmp/a20-after-2.log`，结果分别为 `/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-a20-ui-ResNo1/results.json`、`/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-a20-ui-l93i0A/results.json`。测试使用真实复习 UI 与 Store、隔离 Chromium 和合成数据；文档/脑图宿主导航使用替身，另在真实工作区类的合成宿主中验证指定脑图定位与跨学习集拒绝。
+- `MARGINSTUDY_VERIFY_DIR=/tmp/a20-full-20261109 npm run verify` 全部 **34/34 套件通过**；A20 4/4、复习 UI 40 项、Workspace 316/316、Reader 224/224。`git diff --check` 通过。
+- 已将构建安装至桌面隔离库，构建与安装文件逐字节一致：`main.js` SHA-256 `3bfb14841ed75b202a76f8d67b3cdd3cc21da47705f672c4e950998cd7229b6a`；`styles.css` SHA-256 `68ad41c1e6f1f32897af829a73d748dac8651c5a95e1be771af40a445c15df8f`。隔离库 `data.json` 安装前后 SHA-256 均为 `92f9b6df1e1d2cbdbfd03940a0cf5049b40f4c2666169a55a78d17b68788174a`。未重载宿主，安装不代表宿主已加载新构建。
+- 宿主侧 UI 流程已由 CC 实机验收完成（见下条）；安装本身不代表安装时宿主已加载新构建。未操作 adb、真实库或既有 `evidence/**`，未提交。本包自动断言、完整验证、构建安装与登记完成。
+- CC 实机验收（2026-11-09，隔离库 `MarginStudy阶段一隔离库-20261026`，单实例串行，无后台工作流，截图 3 张）：Step 0 重载后生效 `plugin:margin-study` scriptId **228**，源码长度 5,092,917，命中原 `maxInterval` 22、`setReviewDeckMaxInterval` 2、`previewInterval` 2、`tagPathMatch` 2、`revealReviewCardContext` 2、`reviewSettings` 10；构建 `main.js` SHA-256 与安装文件均为 `3bfb14841ed75b202a76f8d67b3cdd3cc21da47705f672c4e950998cd7229b6a`。四项全部 **PASS**：① 背面文档/脑图往返后卡 ID `card-mv9qfgb6-w34mlh`、游标 `1 / 1`、草稿、pending 与 logs 均不变；② 组合筛选 `{due:true, tags:"法", doc:"l4-sample-alpha.pdf", color:"#ffd54f", rating:"0", order:"text"}` 关闭重开后逐项恢复；③ `A20-30` 预览 `Again 10m / Hard 30d / Good 30d / Easy 30d`、`A20-90` 预览 `Again 10m / Hard 90d / Good 90d / Easy 90d`，q30/q90 状态与两卡组上限互不影响；④ 搜索 `法` 命中 u2/u1/cell 共 3 张、`法/民法` 精确命中 u1、旧扁平标签 `旧标签` 仍命中 mito。报告：`evidence/acceptance-20261106/CC-A20-RESULT.md`，截图 `CC-A20-item2-filters-restored.png`、`CC-A20-item3-deck90-preview.png`、`CC-A20-item4-tag-hierarchy.png`。
+- CC 清理：临时卡组/标签、pending/srs/logs/reviewHistory 增量已恢复，最终 `data.json` 除 `revision`/`savedAt` 外与验收前备份逐键一致；备份 `/tmp/a20-data-before-20261109.json` SHA-256 `fb218b0e8bac72cfaffbeccdfbdaea1d3fe37655386dee916adbbd61346eb027`（revision 2519）。最终 revision **2540**：相对备份 +21，相对验收开始 2517 共 +23（含 Step 0 重载 +2、夹具 +3、交互 +16、清理 +2）。最终对象数：decks 2、srs 3、pending 3、logs 8、cards 22、studySets 5；回到学习集主页。未改产品代码、未提交、未改既有 evidence。
+
+## 2026-11-09 01:15 A20 完成（批次 A3 第一张）
+- 完成：A20 学习集式复习 / 层级标签 / 每卡组最长间隔，自动验收 4/4（改前两轮失败、改后两轮通过）、verify 34/34（Workspace 316/316、Reader 224/224、A20 4/4）
+- 结论：结论：CC 实机四项全 pass —— 背面经文档/脑图返回后当前卡 ID、游标、草稿、SRS 逐项不变；筛选六控件与 reviewSettings 关闭重开逐字段恢复；同卡在 30/90 天两组预览分别截断为 30d/90d（原始 358/556/989d）且互不影响；层级标签「法」命中 3 张后代、「法/民法」精确命中 1 张、旧扁平标签仍可搜
+- 前置：CC 用 Debugger.getScriptSource 核对运行时脚本（重载前 scriptId 188 缺 A20 符号，重载后 228 全命中），沿用 A23 教训
+- 证据：evidence/acceptance-20261106/CC-A20-RESULT.md（3 张截图 + 逐项数值）
+- 观察（非断言失败）：产品无「删除卡组」公开 API，清理用 Store mutate 按备份逐切片恢复；备份与终态逐键比较仅 revision/savedAt 不同
+- 下一步第一动作：批次 A3 下一张 A21（刷题范围/作答历史/订正）

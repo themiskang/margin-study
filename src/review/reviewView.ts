@@ -6,7 +6,7 @@ import { intervalLabel, isDue, previewInterval } from "../srs";
 import type { ReviewLog, ReviewOptions } from "./contracts";
 import { questionsForCard, questionWasWrong, ReviewSession } from "./questions";
 import type { ReviewQuestion } from "./questions";
-import { appendSources, questionText, renderQuestion } from "./content";
+import { appendSources, openReviewCardDocument, questionText, renderQuestion } from "./content";
 import { appendReviewDrawing, reviewDrawingInput } from "./drawing";
 import { handwritingPresetWidth, handwritingPresets } from "../annot/handwritingPresets";
 import { openReviewDecks, openReviewDeckBrowser, editReviewCard } from "./decks";
@@ -46,6 +46,13 @@ export function openReviewHistory(plugin: MarginStudyPlugin, cardId?: string, de
 
 export async function startReview(plugin: MarginStudyPlugin, options: ReviewOptions = {}): Promise<void> {
   await plugin.store.flush();
+  const studySetId = options.studySetId ?? (options.scopeId ? plugin.store.canvases.find(canvas => canvas.id === options.scopeId)?.studySetId : undefined) ?? plugin.store.activeStudySetId;
+  const saved = plugin.store.studySets.find(set => set.id === studySetId)?.reviewSettings;
+  if (studySetId) options = { ...options, studySetId };
+  if (saved && !options.wrong) {
+    const { dueOnly: _dueOnly, ...filters } = saved;
+    options = { ...filters, ...options, studySetId };
+  }
   if (options.order === "random" && !options.shuffleSeed) options = { ...options, shuffleSeed: uid("shuffle") };
   if (!options.scopeId && !options.deckId && !options.wrong && plugin.store.reviewDeckForStudySet && !plugin.store.reviewDeckForStudySet(options.studySetId) && (plugin.store.activeStudySetId || !plugin.store.activeReviewDeckId)) {
     openReviewDecks(plugin, { studySetId: options.studySetId, cardIds: options.cardIds }); return;
@@ -63,7 +70,9 @@ export function questionsForReview(plugin: MarginStudyPlugin, options: ReviewOpt
   const scopeSet = scopeId ? plugin.store.canvases.find(canvas => canvas.id === scopeId)?.studySetId : undefined;
   const deck = options.deckId ? plugin.store.getReviewDeck(options.deckId) : !options.scopeId ? plugin.store.reviewDeckForStudySet?.(options.studySetId ?? scopeSet) ?? (!plugin.store.activeStudySetId && plugin.store.activeReviewDeckId ? plugin.store.getReviewDeck(plugin.store.activeReviewDeckId) : undefined) : undefined;
   if (options.deckId && !deck) return [];
-  const cards = filterReviewCards(deck ? plugin.store.cards.filter(card => deck.cardIds.includes(card.id)) : plugin.store.cardsForStudySet(options.studySetId ?? scopeSet), options);
+  const setId = options.studySetId ?? (options.scopeId ? scopeSet : undefined);
+  const setCards = deck && !setId ? plugin.store.cards : plugin.store.cardsForStudySet(setId);
+  const cards = filterReviewCards(deck ? setCards.filter(card => deck.cardIds.includes(card.id)) : setCards, options);
   if (options.wrong) return filterAndOrderReviewQuestions(plugin.store, cards.flatMap(card => (deck ? plugin.store.deckQuestionsForCard(card.id, deck.id) : questionsForCard(card, scopeId)).filter(question => questionWasWrong(card, question, plugin.store.reviewLogs))), { ...options, deckId: deck?.id });
   const allowed = new Set(cards.map(card => card.id));
   return filterAndOrderReviewQuestions(plugin.store, (deck ? plugin.store.pendingQuestionsForDeck(deck.id) : plugin.store.pendingQuestions(scopeId)).filter(question => allowed.has(question.cardId) && isDue(plugin.store.getReviewState(question.cardId, question.id))), { ...options, deckId: deck?.id });
@@ -87,17 +96,33 @@ class ReviewModal {
   private clozeVisible = true;
   private speech = createSpeechSession("review");
   private unsubscribeSpeech = () => {};
+  private contextReturn?: HTMLElement;
 
   constructor(private plugin: MarginStudyPlugin, private questions: ReviewQuestion[], private options: ReviewOptions) { this.session = new ReviewSession(questions); }
 
   open(): void {
-    const result = createModal("复习", () => { this.closed = true; this.generation++; this.clearTimer(); this.unsubscribeSpeech(); this.speech.dispose(); });
+    const result = createModal("复习", () => { this.closed = true; this.generation++; this.clearTimer(); this.contextReturn?.remove(); this.unsubscribeSpeech(); this.speech.dispose(); });
     this.modal = result.modal; this.bg = result.bg; this.close = result.close;
     void this.render();
   }
 
   private clearTimer(): void { if (this.timer !== undefined) window.clearTimeout(this.timer); this.timer = undefined; }
   private latestLogId(): string | undefined { return this.plugin.store.getLatestReviewLog()?.id; }
+
+  private async openContext(open: () => Promise<void>): Promise<void> {
+    if (this.closed || this.contextReturn) return;
+    this.speech.stop(); this.bg.hidden = true;
+    const back = el("button", { class: "ms-btn primary ms-review-context-return", type: "button", text: "返回复习" });
+    this.contextReturn = back;
+    const resume = () => { back.remove(); this.contextReturn = undefined; if (!this.closed) this.bg.hidden = false; };
+    back.addEventListener("click", () => {
+      if ([...document.querySelectorAll<HTMLElement>(".ms-modal-bg")].some(layer => layer !== this.bg && !layer.hidden)) { new Notice("请先关闭当前弹窗，再返回复习"); return; }
+      resume();
+    });
+    document.body.append(back);
+    try { await open(); }
+    catch (error) { resume(); new Notice(`无法打开复习上下文：${String(error)}`); }
+  }
 
   private undoButton(): HTMLButtonElement {
     const button = el("button", { class: "ms-btn", text: "撤销上次评分" });
@@ -205,13 +230,23 @@ class ReviewModal {
     tools.append(clozeToggle, speak, pause, stop, rate); stage.inspector.append(tools);
     const reveal = el("button", { class: "ms-native-review-reveal", text: "显示答案" });
     const grades = el("div", { class: "ms-review-btns", style: "display:none" });
+    const context = el("div", { class: "ms-review-context-actions" }); context.hidden = true;
+    const documentButton = el("button", { class: "ms-btn", type: "button", text: "查看来源文档" });
+    documentButton.disabled = !card.docPath && !card.sources?.some(source => !!source.docPath);
+    documentButton.addEventListener("click", () => { void this.openContext(() => openReviewCardDocument(this.plugin, card)); });
+    const mindmapButton = el("button", { class: "ms-btn", type: "button", text: "查看所在脑图" });
+    mindmapButton.addEventListener("click", () => { void this.openContext(async () => {
+      const workspace = this.plugin.studyWorkspace ?? await this.plugin.openStudyWorkspace();
+      if (!await workspace.revealReviewCardContext(card.id, question.scopeId, this.options.studySetId)) throw new Error("当前学习集没有此卡片的脑图节点");
+    }); });
+    context.append(documentButton, mindmapButton); stage.paper.append(context);
     reveal.addEventListener("click", () => {
       revealed = true; this.speech.stop(); void renderContent(); clozeToggle.disabled = true;
-      reveal.disabled = true; reveal.hidden = true; grades.style.display = "grid"; stage.hideTools();
+      reveal.disabled = true; reveal.hidden = true; grades.style.display = "grid"; context.hidden = false; stage.paper.classList.add("has-review-context-actions"); stage.hideTools();
     });
     const state = this.plugin.store.getReviewState(card.id, question.id), previewAt = new Date();
     for (const rating of RATINGS) {
-      const interval = previewInterval(state, rating.grade, previewAt);
+      const interval = previewInterval(state, rating.grade, previewAt, deckId ? this.plugin.store.getReviewDeck(deckId)?.maxInterval : undefined);
       const intervalText = intervalLabel(interval).replace(" 分钟", "m").replace(" 小时", "h").replace(" 天", "d");
       const button = el("button", { class: `ms-grade ${rating.className}`, text: `${rating.label} ${intervalText}` });
       button.addEventListener("click", () => {

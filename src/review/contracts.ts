@@ -81,6 +81,17 @@ export interface ReviewOptions {
   shuffleSeed?: string;
 }
 
+export interface StudySetReviewSettings {
+  dueOnly: boolean;
+  favorite?: boolean;
+  tags?: string[];
+  docPaths?: string[];
+  colors?: string[];
+  ratings?: number[];
+  order?: ReviewOptions["order"];
+  shuffleSeed?: string;
+}
+
 export interface ReviewDeckSummary {
   cards: number;
   questions: number;
