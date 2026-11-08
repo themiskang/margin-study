@@ -1583,3 +1583,14 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - `MARGINSTUDY_VERIFY_DIR=/tmp/a15-resid-full-final-20261108 npm run verify` 全部 **32/32** 套件通过，Reader 224/224、Workspace 307/307；`git diff --check` 通过。
 - 构建并安装桌面隔离库，源与安装文件逐字节一致：`main.js` SHA-256 `9faad3435d2f7e23acfde598a4d39cdc30643d5ef649dbdf4389dfb3606b9bdf`；`styles.css` SHA-256 `8e3cbe002ad1cdbf382b7188b5b2c923470571caa27bbe4e0cbb3be772919fba`。隔离库插件 `data.json` 安装前后 SHA-256 均为 `86940ee4d1b321ad4960bb933d75185d421554d69e586ff50d25014c906749d7`。未重载宿主，安装不代表宿主已加载新构建；未操作 adb、真实库或 `evidence/**`，未提交。
 - 本卡实现、合成行为验收、完整验证与安装完成；唯一不满足的字面项是两条回归改前本已通过，无法提供真实改前失败证据。未执行物理掌触复验，不据此宣称真机验证通过。
+
+
+## 2026-11-08 · A15-RESID-01 真机复验（Hermes：冷却期丢包容差）
+
+- 设备 `9885dd6f`，构建 md5 `17e07b057fbf7d0c4a25b618ce7a04c5` / SHA-256 `9faad343…`（仓库与设备双侧一致）；隔离库 `…/Documents/MarginStudy-A30-Isolated`，文档 `A30-synthetic.pdf` 第 1 页；CDP `tcp:9412 → webview_devtools_remote_30909`。
+- 与任务书配方的差异（据实记录）：本状态下 4 s 真笔 `input stylus swipe` 走完整段**自然抬笔**（`pointerup` + `lostpointercapture`，无 `pointercancel`）；`PalmGuard.end()` 对 cancel/up/lostpointercapture 同置 `penEndedAt`，冷却期起点等价，故以 `pointerup` 为锚。
+- 丢包两轮（笔结束 +220 拒 → **+440 故意跳过** → +660 / +880 / +1100）：R1 到达 +228.4/+713.5/+870.3/+1109.7，R2 到达 +212.3/+661.5/+868.2/+1104.4；8/8 全被拒、均未冒泡到 document、**零指触笔迹**；两轮各留 1 条真笔笔迹（384 / 439 点）已按 id 删除。`discarded=[]`。
+- 回归 A：笔结束 5332 ms 后单 tap → 1 条 2 点笔迹（0.26,0.3002）；回归 B：`off→pen` 生成新 overlay、会话内 0 pen 事件、3 tap → 3 条 2 点笔迹（坐标与落点一一对应）。**A15-RESID-01 关闭**（最晚到达 +1109.7 ms，距 1200 ms 边界余量 90 ms）。
+- 作废遍：17:00–17:03 的前一份实例以 `pointercancel` 为锚、6/6 判 `no-pen-cancel`（且延迟标定混用页面/宿主时钟，`latencyMs=-517464`），`rounds=[]`、残留 6 条笔迹；其探测文件同时说明 cancel 来自「笔进行中插入输入」。判定改用 `a15-harness/fixpalm_dropout2.mjs`（页面绝对时钟排程），测量轮在 17:08 后单实例执行。
+- 收尾：逐 id 删除（R1/R2 22→23→22，回归 A/B 22→25→22），终态 **22 pen + 1 highlight**（createdAt 仅 2026-11-03/04）、手写 off（overlay 0）、无 modal/菜单、回 **A30-OPPO 主页**；cards 6 / nodes 5 / documents 4；`tcp:9412` 已移除（`54779`/`37395` 未动），未 kill-server/start-server；构建未重推，产品代码未改未提交。
+- 证据：`evidence/acceptance-20261106/HERMES-A15-RESULT.md` §11；`a15-resid-dropout2.json`（判定依据）、`a15-resid-diag.json`、`a15-resid-closeout.json`、`a15r-11/12-after-burst.png`、`a15r-99-final-home.png`、`a15-harness/fixpalm_dropout2.mjs`。
