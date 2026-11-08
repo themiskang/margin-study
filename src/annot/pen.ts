@@ -34,6 +34,7 @@ interface PenOptions {
   getWidth?: () => number;
   getOpacity?: () => number;
   onCommit: (strokes: Stroke[][], brush: "pen" | "highlight", width?: number, opacity?: number) => void;
+  onBegin?: () => void;
   isVanishPen?: () => boolean;
   vanishDelayMs?: number;
   getInk?: () => InkRecord[];
@@ -119,7 +120,7 @@ export class PenController {
       this.pointerId = event.pointerId; this.pointerType = event.pointerType; this.current = [normCoords(this.container, event)]; this.delta = { x: 0, y: 0 };
       this.snapshot = this.records().map((record) => ({ id: record.id, strokes: cloneStrokes(record.strokes) }));
       if (this.tool === "draw" || this.tool === "highlight") {
-        this.gesture = "draw"; this.clearSelection(); this.currentGroup = document.createElementNS(SVGNS, "g"); this.overlay.append(this.currentGroup);
+        this.gesture = "draw"; this.opts.onBegin?.(); this.clearSelection(); this.currentGroup = document.createElementNS(SVGNS, "g"); this.overlay.append(this.currentGroup);
         if (this.tool === "highlight") this.currentGroup.style.opacity = String(this.opts.getOpacity?.() ?? .32);
         else this.currentGroup.style.opacity = String(this.opts.getOpacity?.() ?? 1);
         if (this.tool !== "highlight") this.currentGroup.style.strokeWidth = String(this.opts.getWidth?.() ?? 2);

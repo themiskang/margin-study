@@ -1045,6 +1045,16 @@ export class ReaderView extends ItemView {
 
   getPageLayout(): { layout: PdfLayout; continuous: boolean } { return { layout: this.layout, continuous: this.continuous }; }
   getCurrentPage(): number { return this.currentPage; }
+  async restoreExactReadingPosition(page: number, top: number, left: number): Promise<boolean> {
+    if (!await this.navigateToReference(page, [], undefined, false)) return false;
+    this.scrollEl.scrollTo({ top, left, behavior: "instant" as ScrollBehavior });
+    const rec = this.pages.get(page); if (!rec) return false;
+    const bounds = rec.wrapper.getBoundingClientRect();
+    this.setCurrentPage(page);
+    this.lastLocation = { page, pageOffset: (this.scrollEl.getBoundingClientRect().top - bounds.top) / Math.max(1, bounds.height), left: this.scrollEl.scrollLeft };
+    this.locationAnchor = { page, top: this.scrollEl.scrollTop, left: this.scrollEl.scrollLeft, width: this.scrollEl.clientWidth, height: this.scrollEl.clientHeight, location: { ...this.lastLocation } };
+    this.saveReadingState(); return true;
+  }
 
   /** Reparent the existing page shells: annotations keep their original canvas coordinate system. */
   async setPageLayout(layout: PdfLayout, continuous: boolean): Promise<void> {

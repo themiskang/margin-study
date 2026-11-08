@@ -1594,3 +1594,15 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - 作废遍：17:00–17:03 的前一份实例以 `pointercancel` 为锚、6/6 判 `no-pen-cancel`（且延迟标定混用页面/宿主时钟，`latencyMs=-517464`），`rounds=[]`、残留 6 条笔迹；其探测文件同时说明 cancel 来自「笔进行中插入输入」。判定改用 `a15-harness/fixpalm_dropout2.mjs`（页面绝对时钟排程），测量轮在 17:08 后单实例执行。
 - 收尾：逐 id 删除（R1/R2 22→23→22，回归 A/B 22→25→22），终态 **22 pen + 1 highlight**（createdAt 仅 2026-11-03/04）、手写 off（overlay 0）、无 modal/菜单、回 **A30-OPPO 主页**；cards 6 / nodes 5 / documents 4；`tcp:9412` 已移除（`54779`/`37395` 未动），未 kill-server/start-server；构建未重推，产品代码未改未提交。
 - 证据：`evidence/acceptance-20261106/HERMES-A15-RESULT.md` §11；`a15-resid-dropout2.json`（判定依据）、`a15-resid-diag.json`、`a15-resid-closeout.json`、`a15r-11/12-after-burst.png`、`a15r-99-final-home.png`、`a15-harness/fixpalm_dropout2.mjs`。
+
+## 2026-11-08 · A14 手写绑定与附件书本回源
+
+- 脑图新笔迹在落笔命中卡片或焦点节点时记录目标身份和原始几何，渲染、拖动过程、缩放、套索、橡皮和 SVG/PNG 导出使用同一投影；未命中目标的旧笔迹保留原世界坐标。目标不存在时按原笔迹坐标显示，不迁移旧数据。新笔迹落笔时记录当前 PDF 的路径、文档 ID 和页码；PDF 本身的笔迹也在落笔时保存同样的快照。
+- 回源使用快照文档 ID 查找文档，按快照页码跳转；ID 不存在时拒绝按路径猜测。脑图套索选中单条带完整来源的笔迹后提供“笔迹回源”，PDF 笔迹菜单也提供入口；独立 Reader 暂不能直接执行该操作，会提示进入学习工作区。工作区提供“返回原阅读位置”，恢复跳转前文档、页码和滚动偏移；来源路径可随已登记文档 ID 的改名变化，但不替换快照值。
+- 改前 `/tmp/a14-before-20261108/workspace.log`：绑定卡片移动 100 世界像素后笔迹偏移误差为 100；附件书写快照字段缺失；回源按钮缺失导致返回流程无法启动。旧无绑定笔迹显示测试改前已通过，不能记成改前失败。原始结果：`/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-workspace-ui-cuTj1T/results.json`。
+- 改后 `/tmp/a14-full-20261108/workspace.log`：上述四项全部通过；另通过拖动中随动、目标尺寸变化、视图缩放、撤销重做、持久化重开、PDF 实际笔画快照、PDF 菜单回源、跨文档返回和缺失 ID 拒绝。脑图手写套件另外覆盖绑定笔迹移动后的套索、橡皮和 SVG 导出；这些均为隔离 Chromium 合成输入，不是物理笔测试。结果：`/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-workspace-ui-0V9Ft4/results.json`。
+- `MARGINSTUDY_VERIFY_DIR=/tmp/a14-full-20261108 npm run verify` 全部 32/32 套件通过，Reader 224/224、Workspace 315/315、脑图手写 81/81；`git diff --check` 通过。
+- 已安装桌面隔离库，构建与安装 SHA-256 一致：`main.js` `ba5b88977cd671f135b3fe734823d51a354bae34b7f02f13ec07b4ead5d00ead`；`styles.css` `7c265b2392e5496566af6bece5acd068ea1e81cecb375e2ad379f3d4d1c23c00`。隔离库插件 `data.json` 安装前后 SHA-256 均为 `86940ee4d1b321ad4960bb933d75185d421554d69e586ff50d25014c906749d7`。未重启宿主，安装不等于宿主已加载；未操作 adb、真实库或 `evidence/**`，未提交。
+- 本任务包开发、自动验收、构建和隔离安装完成。真机“笔 + 附件书本”复验按任务包留 Hermes，尚无本构建的真机证据，不宣称真机通过。后续首个动作：Hermes 使用允许的设备通道部署此 SHA-256 对应构建，在附件第 2 页真笔书写并记录快照，切换其他文档及页码后回源、逐字段核对 ID/页码，再返回核对原页和滚动偏移；同时测量绑定卡片移动 100 世界像素的偏移误差，并验证旧笔迹显示。
+- **独立第二遍（17:18–17:21，设备空闲后单实例）**：同配方（+220 拒 → 跳过 +440 → +660/+880/+1100）重跑 2 轮，到达 +258.1/+702.7/+911.2/+1113.8 与 +258.4/+693.3/+902.2/+1132.5，相邻间隔 434.9–444.6 ms（跨过旧 400 ms 窗口）；8/8 全被拒、零指触笔迹；回归 A（笔结束 5299 ms 后单 tap → 2 点笔迹 0.26,0.3002）与回归 B（3 tap → 3 条 2 点笔迹）通过；逐 id 删除 22→23→22 / 22→25→22，`baselinePreserved=true`，sidecar 复核 22 pen + 1 highlight。合并两遍：**4 轮 / 16 次落点全拒、0 条指触笔迹，最晚落点 1132.5 ms（余量 67.5 ms）**。结论不变：**A15-RESID-01 关闭**。证据：§11.8、`a15-resid-replicate.json`、`a15rh-01/02-round.png`、`a15rh-99-final-home.png`、`a15-resid-closeout-h.json`、`a15-harness/fixpalm_dropout_h.mjs` / `closeout_resid_h.mjs`。
+- 并发情况（据实记录）：17:00–17:12 有两个同任务 Hermes 实例在同机工作（本卡首遍判 `no-pen-cancel` 属该重叠期产物，已作废）；第二遍在另一实例收尾、设备无并发输入后单独执行，开工前用 `ps` 与 `adb forward --list` 确认。工作树另有 4 个与本卡无关的 src 改动（17:20–17:24，未进构建，`main.js` 未被修改）。

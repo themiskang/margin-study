@@ -24,9 +24,10 @@ import { OutlineRenderer } from "../outline/outlineRenderer";
 import { CardBoardRenderer } from "../board/cardBoardRenderer";
 import { reviewDrawingInput } from "../review/drawing";
 import { MindmapHandwritingController } from "./handwriting";
-import type { HandwritingMode } from "./handwritingContracts";
+import type { HandwritingMode, MindmapInkPoint, MindmapInkStroke } from "./handwritingContracts";
 import { cardClipboard } from "../study/cardClipboard";
 import { CARD_COLORS } from "../model/cardColors";
+import { handwritingSource } from "../documents/readingPosition";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const PINCH_WHEEL_EXPONENT = 0.01346909075675091;
@@ -195,6 +196,13 @@ export class MindmapRenderer {
         updateWidth: (mode, width) => this.updateMindmapHandwritingWidth(mode, width),
         undo: () => { this.plugin.store.undoLibraryChange(); this.render(); this.plugin.refreshSidebar(); },
         redo: () => { this.plugin.store.redoLibraryChange(); this.render(); this.plugin.refreshSidebar(); },
+        binding: point => this.inkBinding(point),
+        frame: stroke => this.inkTargetFrame(stroke),
+        source: stroke => {
+          const workspace = this.plugin.studyWorkspace;
+          if (!workspace) { new Notice("请在学习工作区中打开笔迹来源"); return; }
+          void workspace.jumpToHandwritingSource(stroke).catch(error => new Notice("无法跳转笔迹来源：" + String(error)));
+        },
       });
       this.handwriting.setMode(this.handwritingMode);
       if (this.options.nativeChrome) this.buildNativeChrome();
@@ -236,6 +244,25 @@ export class MindmapRenderer {
     const match = presets.find(preset => preset.id === activeId);
     if ((mode === "highlight") === (match?.type === "highlighter") && match) return match;
     return presets.find(preset => (mode === "highlight") === (preset.type === "highlighter"));
+  }
+
+  private inkTargetFrame(stroke: MindmapInkStroke): { x: number; y: number; width: number; height: number } | undefined {
+    const node = stroke.focusNodeId ? this.plugin.store.getNode(stroke.focusNodeId) : stroke.targetCardId ? this.scopedNodes().find(item => item.cardId === stroke.targetCardId) : undefined;
+    const element = node && this.nodeEls.get(node.id);
+    if (!node || !element || (stroke.targetCardId && node.cardId !== stroke.targetCardId)) return undefined;
+    return { x: node.x, y: node.y, width: element.offsetWidth, height: element.offsetHeight };
+  }
+
+  private inkBinding(point: MindmapInkPoint): Partial<MindmapInkStroke> {
+    const target = [...this.nodeEls.entries()].reverse().find(([, element]) => {
+      const left = element.offsetLeft, top = element.offsetTop;
+      return point.x >= left && point.x <= left + element.offsetWidth && point.y >= top && point.y <= top + element.offsetHeight;
+    });
+    const node = target ? this.plugin.store.getNode(target[0]) : undefined;
+    const frame = node ? this.inkTargetFrame({ focusNodeId: node.id } as MindmapInkStroke) : undefined;
+    const reader = this.plugin.activeReader, path = reader?.getFilePath(), page = reader?.getCurrentPage?.();
+    return { ...(node && frame ? { focusNodeId: node.id, ...(node.cardId ? { targetCardId: node.cardId } : {}), targetFrame: frame } : {}),
+      ...handwritingSource(this.plugin.store.documents, path ?? null, page) };
   }
 
   private updateMindmapHandwritingWidth(mode: "pen" | "highlight", width: number): void {
@@ -1352,6 +1379,7 @@ export class MindmapRenderer {
       div.classList.add("is-dragging");
       nextX = ox + (ev.clientX - startX) / dragScale; nextY = oy + (ev.clientY - startY) / dragScale;
       div.style.transform = `translate(${nextX - ox}px, ${nextY - oy}px)`;
+      this.handwriting?.moveTarget(n.id, n.cardId, nextX - ox, nextY - oy);
       if (!this.rafId) this.rafId = requestAnimationFrame(() => {
         this.rafId = 0;
         for (const edge of dragEdges) {
@@ -1374,6 +1402,7 @@ export class MindmapRenderer {
       div.style.transform = "";
       if (commit && this.dragged) { this.plugin.store.moveNode(n.id, nextX, nextY); this.drawEdgesFor(n.id); }
       else { div.style.left = `${ox}px`; div.style.top = `${oy}px`; this.drawEdgesFor(n.id); this.dragged = false; }
+      this.handwriting?.moveTarget(n.id, n.cardId, 0, 0); this.handwriting?.render();
       if (toolbarDisplay !== null && this.nodeToolbarEl) { this.nodeToolbarEl.style.display = toolbarDisplay; this.positionNodeToolbar(); }
       if (this.renderAfterDrag) { this.renderAfterDrag = false; this.render(); }
     };

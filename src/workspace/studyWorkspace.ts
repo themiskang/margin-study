@@ -31,6 +31,7 @@ import { createModal, openConfirm, openTextModal } from "../utils/modal";
 import { el } from "../utils/dom";
 import { hasDeviceRecallHintProvider, requestDeviceRecallHint } from "../recall/deviceProvider";
 import { uid } from "../utils/id";
+import type { HandwritingSource, ReaderReturnPosition } from "../documents/readingPosition";
 
 export const VIEW_TYPE_STUDY_WORKSPACE = "margin-study-workspace";
 type ChildReader = ReaderView | WordReaderView | DocumentReaderView;
@@ -124,6 +125,8 @@ export class StudyWorkspaceView extends ItemView {
     if (this.popup && !this.popup.classList.contains("ms-study-home-screen") && !this.popup.contains(event.target as Node) && !(event.target as HTMLElement).closest("[data-popup-trigger]")) this.dismissPopup();
   };
   private reader: ChildReader | null = null;
+  private handwritingReturn: ReaderReturnPosition | null = null;
+  private handwritingReturnButton: HTMLButtonElement | null = null;
   private openChain: Promise<unknown> = Promise.resolve();
   private pending = new Map<string, Promise<ReaderLike>>();
   private closed = true;
@@ -335,7 +338,38 @@ export class StudyWorkspaceView extends ItemView {
     await this.openChain.catch(() => {});
     await this.closeComparison();
     await this.releaseReader();
+    this.handwritingReturn = null; this.handwritingReturnButton?.remove(); this.handwritingReturnButton = null;
     this.renderer?.destroy(); this.renderer = null;
+  }
+  async jumpToHandwritingSource(source: Partial<HandwritingSource>): Promise<void> {
+    if (!source.sourceDocId || !source.sourceDocPath || !Number.isInteger(source.sourcePage) || source.sourcePage! < 1) throw new Error("笔迹缺少完整来源快照");
+    const document = this.plugin.store.documents.find(item => item.id === source.sourceDocId);
+    if (!document) throw new Error("来源文档 ID 已不存在");
+    const file = this.app.vault.getAbstractFileByPath(document.path);
+    if (!(file instanceof TFile)) throw new Error("来源文档不存在");
+    const current = this.reader, path = current?.getFilePath(), currentDocument = this.plugin.store.documents.find(item => item.path === path);
+    if (!current || !path || !currentDocument) throw new Error("当前阅读位置不可用");
+    const scroll = current.getScrollContainer();
+    const previous: ReaderReturnPosition = { path, documentId: currentDocument.id, page: current instanceof ReaderView ? current.getCurrentPage() : undefined, scrollTop: scroll.scrollTop, scrollLeft: scroll.scrollLeft };
+    this.handwritingReturn = previous;
+    if (!this.handwritingReturnButton) {
+      this.handwritingReturnButton = el("button", { type: "button", class: "ms-handwriting-return", text: "返回原阅读位置", "aria-label": "返回原阅读位置" });
+      this.handwritingReturnButton.addEventListener("click", () => { void this.returnFromHandwritingSource().catch(error => new Notice("无法恢复阅读位置：" + String(error))); });
+      this.readerPane.append(this.handwritingReturnButton);
+    }
+    const reader = await this.openFile(file);
+    if (!(reader instanceof ReaderView) || source.sourcePage! > (reader.getDoc()?.numPages ?? 0)) throw new Error("来源页码不存在");
+    if (!await reader.navigateToReference(source.sourcePage!, [], undefined, false)) throw new Error("来源页面未能打开");
+  }
+  private async returnFromHandwritingSource(): Promise<void> {
+    const position = this.handwritingReturn; if (!position) return;
+    const document = this.plugin.store.documents.find(item => item.id === position.documentId), file = document && this.app.vault.getAbstractFileByPath(document.path);
+    if (!(file instanceof TFile)) throw new Error("原阅读文档不存在");
+    const reader = await this.openFile(file);
+    if (position.page !== undefined && reader instanceof ReaderView) {
+      if (!await reader.restoreExactReadingPosition(position.page, position.scrollTop, position.scrollLeft)) throw new Error("原阅读页码不存在");
+    } else reader.getScrollContainer().scrollTo({ top: position.scrollTop, left: position.scrollLeft, behavior: "instant" as ScrollBehavior });
+    this.handwritingReturn = null; this.handwritingReturnButton?.remove(); this.handwritingReturnButton = null;
   }
   openFile(file: TFile): Promise<ReaderLike> {
     if (!supported(file)) return Promise.reject(new Error("不支持的文档格式：" + file.extension));

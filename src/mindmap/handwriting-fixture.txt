@@ -51,6 +51,16 @@ function withPalmClock(action:(setTime:(time:number)=>void)=>void){
  try{action(value=>{time=value;});}finally{if(original)Object.defineProperty(performance,'now',original);else delete (performance as any).now;}
 }
  try{
+ await test('A14 bound focus ink stays selectable and erasable at its moved position',async()=>{
+  const p=await fresh();p.store.addNode({id:'a14-focus',canvasId:p.canvasId,parentId:null,title:'Focus target',collapsed:false,x:100,y:100});p.view.render();p.view.setHandwritingMode('pen');gesture(p,[[120,115],[140,120],[160,125]]);const original=structuredClone(ink(p).layers[0].strokes[0]);assert(original.focusNodeId==='a14-focus'&&original.targetFrame,'focus binding was not saved');
+  p.store.moveNode('a14-focus',200,100);p.view.render();p.view.setHandwritingMode('lasso');gesture(p,[[210,105],[270,105],[270,145],[210,145],[210,105]]);assert(p.host.querySelector('[aria-label="已选中的脑图笔迹"]'),'lasso missed moved ink');gesture(p,[[240,120],[260,130]]);const moved=ink(p).layers[0].strokes[0];assert(Math.abs(moved.points[0].x-original.points[0].x-20)<.1,'lasso did not preserve local binding');
+  p.store.moveNode('a14-focus',300,100);p.view.render();p.view.setHandwritingMode('eraser');gesture(p,[[360,100],[360,150]]);assert(!ink(p),'eraser missed bound ink after target moved again');
+ });
+ await test('A14 export projects bound ink while preserving unbound legacy coordinates',async()=>{
+  const p=await fresh();p.store.addNode({id:'a14-export',canvasId:p.canvasId,parentId:null,title:'Export focus',collapsed:false,x:100,y:100});p.view.render();p.view.setHandwritingMode('pen');gesture(p,[[120,115],[150,120]]);gesture(p,[[500,400],[550,400]]);p.view.setHandwritingMode('off');p.store.moveNode('a14-export',200,100);p.view.render();
+  const blobs:Blob[]=[],create=URL.createObjectURL,revoke=URL.revokeObjectURL,click=HTMLAnchorElement.prototype.click;URL.createObjectURL=(blob:any)=>{blobs.push(blob);return 'blob:a14';};URL.revokeObjectURL=()=>{};HTMLAnchorElement.prototype.click=function(){};
+  try{await exportMindmapPng(p.plugin);button(document.querySelector('.ms-modal')!,'SVG 矢量').click();const xml=await blobs[0].text(),doc=new DOMParser().parseFromString(xml,'image/svg+xml'),saved=ink(p).layers[0].strokes;const bound=doc.querySelector(`[data-map-ink-stroke="${saved[0].id}"] path`)!.getAttribute('d')!,legacy=doc.querySelector(`[data-map-ink-stroke="${saved[1].id}"] path`)!.getAttribute('d')!;assert(bound.startsWith('M 220 115')&&legacy.startsWith('M 500 400'),'export lost projected or legacy coordinates '+bound+' / '+legacy);}finally{URL.createObjectURL=create;URL.revokeObjectURL=revoke;HTMLAnchorElement.prototype.click=click;}
+ });
  for(const name of ['document','map','card']){
   for(const end of ['pointercancel','pointerup','lostpointercapture']){
    await test('A15-RESID-01 '+name+' '+end+' rejects first touch at 440ms after a dropped tap',async()=>{

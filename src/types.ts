@@ -107,6 +107,9 @@ export interface Annotation {
   pdfCoordinateSpace?: "pdf" | "legacy-viewport";
   range?: DomRange; // HTML/Word 文字批注：字符偏移
   strokes?: Stroke[][]; // 手写：多条笔画，每条为点序列（归一化坐标）
+  sourceDocPath?: string;
+  sourceDocId?: string;
+  sourcePage?: number;
   inkLayerId?: string;
   inkBrush?: "pen" | "highlight";
   inkWidth?: number;

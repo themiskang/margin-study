@@ -9,6 +9,12 @@ export interface MindmapInkStroke {
   width: number;
   opacity?: number;
   points: MindmapInkPoint[];
+  targetCardId?: string;
+  focusNodeId?: string;
+  sourceDocPath?: string;
+  sourceDocId?: string;
+  sourcePage?: number;
+  targetFrame?: { x: number; y: number; width: number; height: number };
 }
 export interface MindmapInkLayer { id: string; name: string; strokes: MindmapInkStroke[]; }
 export interface MindmapHandwriting {
@@ -42,7 +48,12 @@ export function normalizeMindmapHandwriting(value: unknown): MindmapHandwriting 
       }
       if (!points.length) continue;
       if (points.length === 1) points.push({ ...points[0], x: points[0].x + .01 });
-      strokes.push({ id: uniqueId(stroke.id, `${id}-stroke-${strokeIndex + 1}`, strokeIds), tool: stroke.tool as "pen" | "highlight", color: typeof stroke.color === "string" && /^#(?:[\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})$/i.test(stroke.color) ? stroke.color : stroke.tool === "highlight" ? "#ffd54f" : "#30343b", width: bounded(stroke.width, .5, 64, stroke.tool === "highlight" ? 16 : 3), points, ...(typeof stroke.opacity === "number" && Number.isFinite(stroke.opacity) ? { opacity: bounded(stroke.opacity, 0, 1, 1) } : {}) });
+      const fields: Pick<MindmapInkStroke, "targetCardId" | "focusNodeId" | "sourceDocPath" | "sourceDocId" | "sourcePage" | "targetFrame"> = {};
+      for (const key of ["targetCardId", "focusNodeId", "sourceDocPath", "sourceDocId"] as const) if (typeof stroke[key] === "string" && stroke[key].length) fields[key] = stroke[key] as string;
+      if (Number.isInteger(stroke.sourcePage) && (stroke.sourcePage as number) > 0) fields.sourcePage = stroke.sourcePage as number;
+      const frame = object(stroke.targetFrame);
+      if (frame && [frame.x, frame.y, frame.width, frame.height].every(value => typeof value === "number" && Number.isFinite(value)) && (frame.width as number) > 0 && (frame.height as number) > 0) fields.targetFrame = frame as unknown as MindmapInkStroke["targetFrame"];
+      strokes.push({ id: uniqueId(stroke.id, `${id}-stroke-${strokeIndex + 1}`, strokeIds), tool: stroke.tool as "pen" | "highlight", color: typeof stroke.color === "string" && /^#(?:[\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})$/i.test(stroke.color) ? stroke.color : stroke.tool === "highlight" ? "#ffd54f" : "#30343b", width: bounded(stroke.width, .5, 64, stroke.tool === "highlight" ? 16 : 3), points, ...(typeof stroke.opacity === "number" && Number.isFinite(stroke.opacity) ? { opacity: bounded(stroke.opacity, 0, 1, 1) } : {}), ...fields });
     }
     layers.push({ id, name: typeof layer.name === "string" && layer.name.trim() ? layer.name.trim().slice(0, 120) : layerIndex ? `Sketch Layer ${layerIndex + 1}` : "Default", strokes });
   }

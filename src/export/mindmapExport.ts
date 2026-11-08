@@ -3,6 +3,7 @@ import type MarginStudyPlugin from "../main";
 import type { MindNode } from "../types";
 import { createModal } from "../utils/modal";
 import { createMindmapInkStroke, visibleMindmapInkLayers } from "../mindmap/handwritingSvg";
+import { projectBoundInk } from "../annot/penGeometry";
 import { buildCardFlowPdf } from "./cardFlow";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -79,8 +80,8 @@ export async function exportMindmapPng(plugin: MarginStudyPlugin): Promise<void>
 function buildExportSvg(plugin: MarginStudyPlugin): { svg: SVGSVGElement; width: number; height: number } | null {
   const all = plugin.store.getScopedNodes();
   const handwriting = plugin.store.canvases.find((canvas) => canvas.id === plugin.store.activeCanvasId)?.handwriting;
-  const inkLayers = visibleMindmapInkLayers(handwriting);
-  if (!all.length && !inkLayers.some((layer) => layer.strokes.some((stroke) => stroke.points.length))) return null;
+  const visibleInk = visibleMindmapInkLayers(handwriting);
+  if (!all.length && !visibleInk.some((layer) => layer.strokes.some((stroke) => stroke.points.length))) return null;
 
   // 尽量读取界面内实际渲染的节点尺寸（脑图节点为内容自适应宽高），让导出与屏幕一致；
   // 若当前脑图未打开（DOM 中无 .ms-node），回退到固定尺寸。
@@ -91,6 +92,11 @@ function buildExportSvg(plugin: MarginStudyPlugin): { svg: SVGSVGElement; width:
   });
   const sizeOf = (n: MindNode): { w: number; h: number } =>
     domSizes.get(n.id) ?? { w: NODE_W, h: NODE_H };
+  const inkLayers = visibleInk.map(layer => ({ ...layer, strokes: layer.strokes.map(stroke => {
+    const node = stroke.focusNodeId ? all.find(item => item.id === stroke.focusNodeId) : stroke.targetCardId ? all.find(item => item.cardId === stroke.targetCardId) : undefined;
+    const size = node && sizeOf(node), frame = node && size && (!stroke.targetCardId || stroke.targetCardId === node.cardId) ? { x: node.x, y: node.y, width: size.w, height: size.h } : undefined;
+    return { ...stroke, points: projectBoundInk(stroke.points, stroke.targetFrame, frame) };
+  }) }));
 
   // 计算整体包围盒
   let minX = Infinity;

@@ -1729,6 +1729,11 @@ export abstract class BaseAnnotationController {
       if(mapped)pop.append(mk("撤出脑图",()=>{if(this.plugin.store.removeExcerptFromMindmap(mapped.id)){this.plugin.refreshMindmap();new Notice("已撤出脑图，文档标注保留");}}));
     } else if (ann.type === "pen") {
       pop.append(mk("变成卡片", () => this.makeCard(ann, "excerpt")));
+      if (ann.sourceDocPath && ann.sourceDocId && ann.sourcePage) pop.append(mk("笔迹回源", () => {
+        const workspace = this.plugin.studyWorkspace;
+        if (!workspace) { new Notice("请在学习工作区中打开笔迹来源"); return; }
+        void workspace.jumpToHandwritingSource(ann).catch(error => new Notice("无法跳转笔迹来源：" + String(error)));
+      }));
     }
     pop.append(mk("删除", () => this.deleteAnn(ann)));
     document.body.append(pop);

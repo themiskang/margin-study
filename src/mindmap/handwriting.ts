@@ -1,6 +1,7 @@
 import { el } from "../utils/dom";
 import { uid } from "../utils/id";
-import { eraseInk, selectInk } from "../annot/penGeometry";
+import { eraseInk, projectBoundInk, selectInk, unprojectBoundInkDelta } from "../annot/penGeometry";
+import type { InkFrame } from "../annot/penGeometry";
 import { inkEndpoint, inkPoint, inkSamples, PalmGuard } from "../annot/penInput";
 import { openTextModal, openConfirm } from "../utils/modal";
 import type { HandwritingMode, MindmapHandwriting, MindmapInkPoint, MindmapInkStroke } from "./handwritingContracts";
@@ -25,6 +26,9 @@ interface CanvasInkOptions {
   updateWidth(mode: "pen" | "highlight", width: number): void;
   undo(): void;
   redo(): void;
+  binding(point: MindmapInkPoint): Partial<MindmapInkStroke>;
+  frame(stroke: MindmapInkStroke): InkFrame | undefined;
+  source(stroke: MindmapInkStroke): void;
 }
 
 /** Canvas ink owns pointer gestures and its palette; persistence stays behind the map adapter. */
@@ -44,6 +48,7 @@ export class MindmapHandwritingController {
   private editing: { kind: "erase" | "lasso" | "move"; canvasId: string; data: MindmapHandwriting; trail: MindmapInkPoint[] } | null = null;
   private selected = new Set<string>();
   private deleteButton = el("button", { type: "button", "aria-label": "删除选中笔迹", title: "删除选中笔迹", text: "×" });
+  private sourceButton = el("button", { type: "button", "aria-label": "笔迹回源", title: "笔迹回源", text: "↗" });
   private penColor = "#30343b";
   private penColorOverride = false;
   private highlightColor = "#ffd54f";
@@ -81,6 +86,11 @@ export class MindmapHandwritingController {
     });
     this.palette.append(this.colorInput, this.widthInput);
     this.deleteButton.hidden = true; this.deleteButton.addEventListener("click", () => this.deleteSelection()); this.palette.append(this.deleteButton);
+    this.sourceButton.hidden = true; this.sourceButton.addEventListener("click", () => {
+      const canvasId = this.options.canvasId(), data = canvasId ? this.options.read(canvasId) : undefined;
+      const stroke = data?.layers.find(layer => layer.id === data.activeLayerId)?.strokes.find(item => this.selected.has(item.id));
+      if (stroke?.sourceDocPath && stroke.sourceDocId && stroke.sourcePage) this.options.source(stroke);
+    }); this.palette.append(this.sourceButton);
     for (const [label, glyph, action] of [
       ["撤销脑图手写", "M8 5l-5 5 5 5M3 10h10a7 7 0 0 1 7 7", () => this.history(false)],
       ["重做脑图手写", "M16 5l5 5-5 5M21 10H11a7 7 0 0 0-7 7", () => this.history(true)],
@@ -131,7 +141,7 @@ export class MindmapHandwritingController {
     for (const layer of visibleMindmapInkLayers(data)) {
       const group = svg("g", { "data-map-ink-layer": layer.id });
       if (layer.id !== data.activeLayerId) group.setAttribute("opacity", ".55");
-      for (const stroke of layer.strokes) group.append(createMindmapInkStroke(stroke)); this.saved.append(group);
+      for (const stroke of layer.strokes) group.append(createMindmapInkStroke(this.project(stroke))); this.saved.append(group);
     }
     this.drawSelection();
     this.renderSettings();
@@ -140,11 +150,20 @@ export class MindmapHandwritingController {
   getExtent(): { right: number; bottom: number } {
     const id = this.options.canvasId(), data = id ? this.options.read(id) : undefined;
     let right = 0, bottom = 0;
-    for (const point of data?.layers.flatMap((layer) => layer.strokes.flatMap((stroke) => stroke.points)) ?? []) { right = Math.max(right, point.x); bottom = Math.max(bottom, point.y); }
+    for (const point of data?.layers.flatMap((layer) => layer.strokes.flatMap((stroke) => this.project(stroke).points)) ?? []) { right = Math.max(right, point.x); bottom = Math.max(bottom, point.y); }
     return { right, bottom };
   }
 
   dispose(): void { this.commitDrawing(); this.cancel(); this.closeSettings(); this.surface.remove(); this.palette.remove(); this.root.classList.remove("is-map-handwriting"); }
+
+  private project(stroke: MindmapInkStroke): MindmapInkStroke { return { ...stroke, points: projectBoundInk(stroke.points, stroke.targetFrame, this.options.frame(stroke)) }; }
+  moveTarget(nodeId: string, cardId: string | undefined, dx: number, dy: number): void {
+    const id = this.options.canvasId(), data = id ? this.options.read(id) : undefined;
+    for (const stroke of data?.layers.flatMap(layer => layer.strokes) ?? []) if (stroke.focusNodeId === nodeId || !stroke.focusNodeId && !!cardId && stroke.targetCardId === cardId) {
+      const group = Array.from(this.saved.querySelectorAll<SVGGElement>("[data-map-ink-stroke]")).find(element => element.dataset.mapInkStroke === stroke.id);
+      if (group) { if (dx || dy) group.setAttribute("transform", `translate(${dx} ${dy})`); else group.removeAttribute("transform"); }
+    }
+  }
 
   private closeSettings(): void { this.settings?.remove(); this.settings = null; this.editingLayers = false; }
   private changeData(label: string, action: (data: MindmapHandwriting) => void): void {
@@ -213,7 +232,7 @@ export class MindmapHandwritingController {
     const canvasId = this.options.canvasId();
     if (this.mode === "off" || this.pointerId !== null || !canvasId || event.button !== 0 || event.isPrimary === false) return;
     event.preventDefault(); event.stopPropagation(); this.surface.focus({ preventScroll: true }); this.pointerId = event.pointerId; this.pointerType = event.pointerType;
-    if (this.mode === "pen" || this.mode === "highlight") { this.clearSelection(); this.drawing = { canvasId, data: cloneInk(this.options.read(canvasId)), lineMode: this.lineMode, stroke: { id: uid("ink"), opacity: this.mode === "highlight" ? this.highlightOpacity : this.penOpacity, tool: this.mode, color: this.mode === "highlight" ? this.highlightColor : this.penColor, width: this.mode === "highlight" ? this.highlightWidth : this.penWidth, points: [this.point(event)] } }; }
+    if (this.mode === "pen" || this.mode === "highlight") { this.clearSelection(); const point = this.point(event); this.drawing = { canvasId, data: cloneInk(this.options.read(canvasId)), lineMode: this.lineMode, stroke: { id: uid("ink"), opacity: this.mode === "highlight" ? this.highlightOpacity : this.penOpacity, tool: this.mode, color: this.mode === "highlight" ? this.highlightColor : this.penColor, width: this.mode === "highlight" ? this.highlightWidth : this.penWidth, points: [point], ...this.options.binding(point) } }; }
     else if (this.mode === "eraser") { this.clearSelection(); this.editing = { kind: "erase", canvasId, data: cloneInk(this.options.read(canvasId)), trail: [this.point(event)] }; }
     else if (this.mode === "lasso") {
       const point = this.point(event), bounds = this.selectionBounds(), moving = bounds && point.x >= bounds.left - 8 && point.x <= bounds.right + 8 && point.y >= bounds.top - 8 && point.y <= bounds.bottom + 8;
@@ -244,7 +263,7 @@ export class MindmapHandwritingController {
       const layer = edit.data.layers.find((layer) => layer.id === edit.data.activeLayerId);
       const current = cloneInk(this.options.read(edit.canvasId)), target = current.layers.find((candidate) => candidate.id === edit.data.activeLayerId);
       if (layer && target) {
-        const records = layer.strokes.map((stroke) => ({ id: stroke.id, strokes: [stroke.points] }));
+        const records = layer.strokes.map((stroke) => ({ id: stroke.id, strokes: [this.project(stroke).points] }));
         if (edit.kind === "erase") {
           const removed = new Set(eraseInk(records, edit.trail, 1, 1).filter((change) => !change.after.length).map((change) => change.id));
           if (removed.size) { target.strokes = target.strokes.filter((stroke) => !removed.has(stroke.id)); this.options.write(edit.canvasId, current, "擦除脑图笔画"); }
@@ -252,7 +271,7 @@ export class MindmapHandwritingController {
         else {
           const delta = this.moveDelta(edit.trail);
           if (delta.x || delta.y) {
-            for (const stroke of target.strokes.filter((stroke) => this.selected.has(stroke.id))) stroke.points = stroke.points.map((point) => ({ ...point, x: point.x + delta.x, y: point.y + delta.y }));
+            for (const stroke of target.strokes.filter((stroke) => this.selected.has(stroke.id))) { const local = unprojectBoundInkDelta(delta, stroke.targetFrame, this.options.frame(stroke)); stroke.points = stroke.points.map((point) => ({ ...point, x: point.x + local.x, y: point.y + local.y })); }
             this.options.write(edit.canvasId, current, "移动脑图笔迹");
           }
         }
@@ -349,10 +368,12 @@ export class MindmapHandwritingController {
     preview.rendered = points.length;
   }
   private history(redo: boolean): void { this.commitDrawing(); this.cancel(); this.clearSelection(); if (redo) this.options.redo(); else this.options.undo(); this.render(); }
-  private clearSelection(): void { this.selected.clear(); this.selectionGroup.replaceChildren(); this.deleteButton.hidden = true; }
+  private clearSelection(): void { this.selected.clear(); this.selectionGroup.replaceChildren(); this.deleteButton.hidden = true; this.sourceButton.hidden = true; }
   private selectionBounds(): { left: number; right: number; top: number; bottom: number } | null {
     const id = this.options.canvasId(), data = id ? this.options.read(id) : undefined;
-    const points = data?.layers.find((layer) => layer.id === data.activeLayerId)?.strokes.filter((stroke) => this.selected.has(stroke.id)).flatMap((stroke) => stroke.points) ?? [];
+    const selected = data?.layers.find((layer) => layer.id === data.activeLayerId)?.strokes.filter((stroke) => this.selected.has(stroke.id)) ?? [];
+    this.sourceButton.hidden = selected.length !== 1 || !selected[0].sourceDocPath || !selected[0].sourceDocId || !selected[0].sourcePage;
+    const points = selected.flatMap((stroke) => this.project(stroke).points);
     if (!points.length) return null;
     const bounds = { left: Infinity, right: -Infinity, top: Infinity, bottom: -Infinity };
     for (const point of points) { bounds.left = Math.min(bounds.left, point.x); bounds.right = Math.max(bounds.right, point.x); bounds.top = Math.min(bounds.top, point.y); bounds.bottom = Math.max(bounds.bottom, point.y); }

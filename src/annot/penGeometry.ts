@@ -7,6 +7,16 @@ export interface InkChange { id: string; before: Stroke[][]; after: Stroke[][]; 
 export interface InkSelection { id: string; indexes: number[]; }
 export const cloneStrokes = (strokes: Stroke[][]): Stroke[][] => strokes.map((stroke) => stroke.map((point) => ({ ...point })));
 
+export interface InkFrame { x: number; y: number; width: number; height: number; }
+export function projectBoundInk<T extends Stroke>(points: T[], original?: InkFrame, current?: InkFrame): T[] {
+  if (!original || !current || original.width <= 0 || original.height <= 0) return points.map(point => ({ ...point }));
+  return points.map(point => ({ ...point, x: current.x + (point.x - original.x) * current.width / original.width, y: current.y + (point.y - original.y) * current.height / original.height }));
+}
+export function unprojectBoundInkDelta(delta: Stroke, original?: InkFrame, current?: InkFrame): Stroke {
+  if (!original || !current || current.width <= 0 || current.height <= 0) return delta;
+  return { x: delta.x * original.width / current.width, y: delta.y * original.height / current.height };
+}
+
 function distanceToSegment(point: Stroke, start: Stroke, end: Stroke): number {
   const dx = end.x - start.x, dy = end.y - start.y;
   const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / (dx * dx + dy * dy || 1)));

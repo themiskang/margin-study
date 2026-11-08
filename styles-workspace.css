@@ -103,6 +103,7 @@
 .ms-workspace-library-empty {font-size:12px;color:#8c8d95;padding:12px;line-height:1.7;}
 .ms-workspace-import-web {margin:8px;font-size:12px;white-space:normal;height:auto;min-height:32px;}
 .ms-workspace-reader,.ms-workspace-map {display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;}
+.ms-workspace-reader {position:relative;}
 .ms-workspace-map {position:relative;}
 .ms-fixed-views {position:absolute;right:19px;top:12px;z-index:8;width:38px;height:38px;pointer-events:none;}
 .ms-fixed-views-toggle {width:38px;height:38px;border-radius:50%;box-shadow:0 2px 9px #0002;background:var(--background-primary,#fff);}
@@ -704,3 +705,4 @@ body.ms-theme-dark .ms-study-workspace[data-reading-theme] :is(.ms-workspace-lib
 body.ms-theme-dark .ms-study-workspace[data-reading-theme] .ms-mindmap-root.is-native-chrome {--ms-map-canvas:#1c1f25;--ms-map-paper:#30343d;--ms-map-text:#e7e9ed;}
 body.ms-theme-dark .ms-study-workspace[data-reading-theme] .ms-mindmap-root .ms-node:not(.has-color) :is(.ms-node-header,.ms-node-heading) {background:#393f49;color:#e7e9ed;}
 body.ms-theme-dark .ms-study-workspace[data-reading-theme] .ms-workspace-tab>button[role=tab] {color:#e7e9ed;}
+.ms-handwriting-return{position:absolute;right:14px;top:64px;z-index:40;padding:6px 10px;border-radius:8px;background:var(--background-primary);box-shadow:0 2px 8px #0003}

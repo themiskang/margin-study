@@ -1,5 +1,13 @@
 export interface ReadingPosition { section?: string; sectionOffset?: number; block?: number; blockOffset?: number; ratio: number; }
 
+export interface HandwritingSource { sourceDocPath: string; sourceDocId: string; sourcePage: number; }
+export interface ReaderReturnPosition { path: string; documentId: string; page?: number; scrollTop: number; scrollLeft: number; }
+
+export function handwritingSource(documents: { id: string; path: string }[], path: string | null, page: number | undefined): HandwritingSource | undefined {
+  const document = path ? documents.find(item => item.path === path) : undefined;
+  return document && Number.isInteger(page) && page! > 0 ? { sourceDocPath: document.path, sourceDocId: document.id, sourcePage: page! } : undefined;
+}
+
 /** Keeps the last usable viewport when the host hides or detaches a reader. */
 export class ReadingPositionTracker {
   private scroll: HTMLElement | null = null;

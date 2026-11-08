@@ -17,6 +17,8 @@ import { boundedOverlayBox } from "../annot/overlay";
 import type { OverlayBox, OverlaySurface } from "../annot/overlay";
 import { projectPagePoint, sourcePagePoint, projectPageInk, sourcePageInk } from "./pageCrop";
 import { EditedPdfDocument, mapEditedPdfAnnotation } from "./editedDocument";
+import { handwritingSource } from "../documents/readingPosition";
+import type { HandwritingSource } from "../documents/readingPosition";
 
 type PenCommit = (strokes: Stroke[][]) => void;
 
@@ -324,12 +326,14 @@ export class AnnotationController extends BaseAnnotationController {
     const rec = this.reader.getPageRecord(num);
     if (!rec?.viewport || !rec.canvas.width) return;
     const layerId = this.getInkLayers().active, notebookId = this.getDocumentNotebookId(), crop = this.reader.getPageCrop(), rotation = this.reader.getPdfPageRotation(num);
+    let source: HandwritingSource | undefined;
     const pc = new PenController(rec.wrapper, {
       getColor: () => this.getHandwritingPreset().color,
       getWidth: () => handwritingPresetWidth(this.getHandwritingPreset(), "document"),
       getOpacity: () => this.getHandwritingPreset().opacity,
       isVanishPen: () => this.isVanishPen(),
-      onCommit: (strokes, brush, width, opacity) => this.createPenAnnotation(num, strokes, layerId, notebookId, brush, width, opacity),
+      onBegin: () => { source = handwritingSource(this.plugin.store.documents ?? [], this.docPath, num); },
+      onCommit: (strokes, brush, width, opacity) => this.createPenAnnotation(num, strokes, layerId, notebookId, brush, width, opacity, undefined, source),
       getInk: () => this.getPenRecords(num, layerId).map(record => ({ ...record, strokes: this.reader.projectAnnotationInk(num, record.strokes) })),
       onChange: (changes) => this.commitPenChanges(changes, { project: strokes => this.reader.projectAnnotationInk(num, strokes), unproject: strokes => this.reader.projectAnnotationInk(num, strokes, true) }),
       onUndo: () => this.undoPenChange(), onRedo: () => this.redoPenChange(),
@@ -348,7 +352,7 @@ export class AnnotationController extends BaseAnnotationController {
     this.penControllers.clear();
   }
 
-  private createPenAnnotation(pageNum: number, strokes: Stroke[][], layerId = this.getInkLayers().active, documentNotebookId = this.getDocumentNotebookId(), inkBrush: "pen" | "highlight" = "pen", inkWidth?: number, inkOpacity?: number, inkPreset?: HandwritingPresetId): void {
+  private createPenAnnotation(pageNum: number, strokes: Stroke[][], layerId = this.getInkLayers().active, documentNotebookId = this.getDocumentNotebookId(), inkBrush: "pen" | "highlight" = "pen", inkWidth?: number, inkOpacity?: number, inkPreset?: HandwritingPresetId, source = handwritingSource(this.plugin.store.documents ?? [], this.docPath, pageNum)): void {
     if (!this.docPath) return;
     const ann: Annotation = {
       id: uid("ann"),
@@ -367,6 +371,7 @@ export class AnnotationController extends BaseAnnotationController {
       inkPreset: inkPreset ?? this.getActiveHandwritingPreset(),
       inkLayerId: layerId,
       documentNotebookId,
+      ...source,
       createdAt: todayStr(),
     };
     this.pushAnnotation(ann);
