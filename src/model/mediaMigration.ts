@@ -15,6 +15,7 @@ function slots(data: any): Slot[] {
     add(card, "image");
     for (let index = 0; index < (card.images?.length ?? 0); index++) add(card.images, index);
     for (const key of ["commentMedia", "extendMedia", "excerptBlocks", "sources"]) for (const item of card[key] ?? []) add(item, "image");
+    for (const item of card.commentMedia ?? []) if (item.snapshot) add(item.snapshot, "image");
     for (const child of card.mergedCards ?? []) visitCard(child);
   };
   for (const card of data.cards ?? []) visitCard(card);

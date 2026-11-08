@@ -136,6 +136,13 @@
 .ms-native-card-icon.is-recording { color:#ef5350; }
 .ms-native-card-resize { position:absolute; bottom:4px; right:4px; width:10px; height:10px; border:solid #8b8b8b; border-width:0 2px 2px 0; border-bottom-right-radius:10px; cursor:nwse-resize; }
 .ms-native-card-advanced,.ms-native-card-handwriting { position:absolute; right:12px; bottom:44px; width:400px; max-width:calc(100% - 24px); max-height:calc(100% - 80px); overflow:auto; padding:14px; border:1px solid #d8d8d8; border-radius:10px; box-sizing:border-box; color:var(--text-normal); background:var(--background-primary); box-shadow:0 6px 26px rgba(0,0,0,.18); z-index:4; font:13px/1.5 -apple-system,BlinkMacSystemFont,sans-serif; }
+.ms-card-ink-editor { width:min(950px,95vw); max-height:92vh; display:flex; flex-direction:column; }
+.ms-card-ink-editor .ms-modal-actions { flex-wrap:wrap; flex-shrink:0; }
+.ms-card-ink-viewport { overflow:auto; min-height:180px; max-height:65vh; border:1px solid var(--background-modifier-border); background:#eee; }
+.ms-card-ink-paper { flex:none; }
+.ms-card-ink-comment summary { cursor:pointer; color:var(--text-muted); }
+.ms-card-ink-undo { position:fixed; right:16px; bottom:16px; z-index:10000; display:flex; gap:8px; align-items:center; padding:10px; border:1px solid var(--background-modifier-border); border-radius:8px; background:var(--background-primary); color:var(--text-normal); box-shadow:0 4px 18px #0003; }
+.ms-native-card-handwriting button[aria-label="整卡截图批注"],.ms-native-card-handwriting button[aria-label="空白手写"] { width:auto; font-size:12px; white-space:nowrap; }
 .ms-native-card-advanced { overscroll-behavior:contain; scroll-padding:14px; }
 .ms-native-card-advanced .ms-colorrow { gap:8px; }
 .ms-card-color-grid { display:grid; grid-template-columns:repeat(8,minmax(0,24px)); gap:6px; width:min(100%,234px); }

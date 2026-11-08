@@ -11,6 +11,7 @@ import { copySingleCard } from "./cardClipboard";
 import { cardUrl } from "./cardLink";
 import { extendTextFromCard } from "../pdf/extendCardText";
 import { CARD_COLORS } from "../model/cardColors";
+import { openCardInkComment } from "../cards/inkComment";
 
 export type NodeContentPart = "title" | "excerpt" | "note";
 
@@ -117,6 +118,9 @@ export function addCommonCardActions(menu: Menu, plugin: MarginStudyPlugin, node
     const current = plugin.store.getCard(card.id);
     if (current) openDetail(plugin, current, onChange);
   }));
+  for (const [mode, label] of [["snapshot", "整卡截图批注"], ["blank", "空白手写"]] as const) {
+    menu.addItem(item => item.setTitle(label).onClick(() => openCardInkComment(plugin, card.id, mode, onChange)));
+  }
   menu.addItem(item => item.setTitle("追加批注").onClick(() => {
     if (!plugin.store.getCard(card.id)) return;
     const { modal, close } = createModal("追加卡片批注");

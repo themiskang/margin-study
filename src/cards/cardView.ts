@@ -748,7 +748,7 @@ export function openDetail(plugin: MarginStudyPlugin, card: Card, onChanged?: ()
       linksEl
     );
   }
-  nativeEditor = mountNativeCardEditor(plugin, { modal, bg, card, title: titleInput, front, back: back!, save, tags: tagsInput });
+  nativeEditor = mountNativeCardEditor(plugin, { modal, bg, card, title: titleInput, front, back: back!, save, tags: tagsInput, onChanged });
 }
 
 function openQuestionRulePicker(plugin: MarginStudyPlugin, ids: string[], onChanged: () => void): void {

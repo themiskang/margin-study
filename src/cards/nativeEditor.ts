@@ -3,12 +3,12 @@ import type { Card } from "../types";
 import { Notice } from "obsidian";
 import { el } from "../utils/dom";
 import { uid } from "../utils/id";
-import { imageUrl } from "../review/content";
 import { renderMarkdown } from "../utils/markdown";
 import { VoiceRecorder, saveVoiceBlob, chooseVoiceInput } from "../audio/voice";
 import { reviewDrawingInput } from "../review/drawing";
 import { orderedCommentKeys } from "./commentOrder";
 import { handwritingPresetWidth, handwritingPresets } from "../annot/handwritingPresets";
+import { cardCommentImage, openCardInkComment } from "./inkComment";
 
 const ICONS: Record<string, string> = {
   pen: '<circle cx="12" cy="12" r="9.3"/><path d="m8 18 4-14 4 14M9.5 13h5M10 20l2-3 2 3"/>',
@@ -29,7 +29,7 @@ function iconButton(label: string, icon: string): HTMLButtonElement {
 /** Keeps editing operations on the same title/excerpt/note controls and save path. */
 export function mountNativeCardEditor(plugin: MarginStudyPlugin, options: {
   modal: HTMLElement; bg: HTMLElement; card: Card; title: HTMLInputElement; front: HTMLTextAreaElement;
-  back: HTMLTextAreaElement; save: HTMLButtonElement; tags: HTMLInputElement;
+  back: HTMLTextAreaElement; save: HTMLButtonElement; tags: HTMLInputElement; onChanged?: () => void;
 }): { typography(): Card["typography"]; commentMedia(): Card["commentMedia"]; extendText(): Card["extendText"]; commentOrder(): Card["commentOrder"]; dispose(): void } {
   const { modal, bg, card, title, front, back, save, tags } = options;
   const titleLabel = title.parentElement;
@@ -89,6 +89,7 @@ export function mountNativeCardEditor(plugin: MarginStudyPlugin, options: {
   const tools = el("div", { class: "ms-native-card-footer" });
   const pen = iconButton("手写批注", "pen"), camera = iconButton("插入图片", "camera"), mic = iconButton("录制语音批注", "mic"), tag = iconButton("编辑标签", "tag"), rich = iconButton("切换 Markdown / 预览", "rich"), more = iconButton("更多卡片操作", "more");
   let attached = (card.commentMedia ?? []).map(item => ({ ...item }));
+  let knownStored = new Set(attached.map(item => item.id));
   const attachedRoot = el("div", { class: "ms-card-attached-comments" }); sheet.append(attachedRoot);
   const comment = el("button", { class: "ms-native-card-comment", text: "Edit Comments", "aria-label": "编辑评论" }); comment.disabled = !hasText() && !comments.length && !attached.length;
   let editingComments = false, orderChanged=false;
@@ -117,7 +118,8 @@ export function mountNativeCardEditor(plugin: MarginStudyPlugin, options: {
     for(const item of sourceTexts)if(item.input.value.trim())rows.push({key:"extend-text:"+item.noteId,block:item.block,actions:item.actions,label:"来源留白文字"});
     for(const item of attached){
       const block=el("div",{class:"ms-card-extend-comment","data-card-comment":item.id});
-      block.append(el("img",{src:imageUrl(plugin,item.image),alt:item.name??(item.kind==="ink"?"手写评论":"图片评论"),"aria-label":"卡片附加图片",style:"display:block;width:120px;max-width:100%;max-height:160px;object-fit:contain;margin:auto"}));
+      const media=cardCommentImage(plugin,item,{alt:item.name??(item.kind==="ink"?"手写评论":"图片评论"),style:item.collapsed === undefined ? "display:block;width:120px;max-width:100%;max-height:160px;object-fit:contain;margin:auto" : "display:block;width:100%;height:auto;margin:8px auto"});
+      media.querySelector("img")?.setAttribute("aria-label","卡片附加图片"); if(media instanceof HTMLImageElement)media.setAttribute("aria-label","卡片附加图片"); block.append(media);
       const actions=el("div",{class:"ms-modal-actions"}),remove=el("button",{class:"ms-card-comment-remove",text:"⊖","aria-label":"移除图片评论",title:"移除图片评论"}),cancel=el("button",{class:"ms-btn",text:"取消移除图片"});cancel.hidden=true;let confirming=false;
       cancel.addEventListener("click",()=>{confirming=false;remove.textContent="⊖";remove.setAttribute("aria-label","移除图片评论");block.classList.remove("is-confirming");cancel.hidden=true;});
       remove.addEventListener("click",()=>{if(!confirming){confirming=true;remove.textContent="删除";remove.setAttribute("aria-label","删除图片评论");block.classList.add("is-confirming");cancel.hidden=false;return;}attached=attached.filter(value=>value.id!==item.id);drawAttached();});
@@ -164,6 +166,16 @@ export function mountNativeCardEditor(plugin: MarginStudyPlugin, options: {
   const addMedia = (image: string, kind: "image" | "ink", name?: string, strokes?: NonNullable<Card["commentMedia"]>[number]["strokes"]) => { attached.push({ id: uid("comment"), image, kind, name, ...(strokes ? { strokes } : {}) }); drawAttached(); attachedRoot.lastElementChild?.scrollIntoView({block:"nearest"}); };
   drawAttached();
   for(const input of [back,...sourceTexts.map(item=>item.input)])input.addEventListener("input", () => { comment.disabled = !editingComments && !hasText() && !comments.length && !attached.length; sizeComment(); });
+  const addInk = (mode: "snapshot" | "blank") => openCardInkComment(plugin, card.id, mode, () => {
+    const latest = plugin.store.getCard(card.id)?.commentMedia ?? [];
+    const latestIds = new Set(latest.map(item => item.id));
+    attached = [...attached.filter(item => !knownStored.has(item.id) || latestIds.has(item.id)), ...latest.filter(item => !knownStored.has(item.id) && !attached.some(value => value.id === item.id)).map(item => ({ ...item }))];
+    knownStored = latestIds;
+    drawAttached(); options.onChanged?.();
+  });
+  const snapshot = el("button", { class: "ms-native-card-icon", type: "button", text: "截图批注", "aria-label": "整卡截图批注", title: "整卡截图批注" });
+  const blank = el("button", { class: "ms-native-card-icon", type: "button", text: "空白", "aria-label": "空白手写", title: "空白手写" });
+  snapshot.addEventListener("click", () => addInk("snapshot")); blank.addEventListener("click", () => addInk("blank"));
   tools.append(pen, camera, mic, tag, rich, comment, more);
   const formatBar = el("div", { class: "ms-native-card-formatbar", "aria-label": "文字格式" }); formatBar.hidden=true;
   const markdown = el("button", { text: "Markdown", "aria-label": "切换 Markdown / 预览" });
@@ -249,7 +261,9 @@ export function mountNativeCardEditor(plugin: MarginStudyPlugin, options: {
   addDrawing.addEventListener("click", () => {
     const canvas = drawing.element.querySelector("canvas"); if (!canvas || !drawing.value()?.length) { new Notice("请先写下批注"); return; }
     addMedia(canvas.toDataURL("image/png"), "ink", "手写评论", drawing.vectorStrokes()); handwriting.hidden = true;
-  }); handwriting.append(drawing.element, addDrawing);
+  });
+  const inkEntries = el("div", { class: "ms-modal-actions" }); inkEntries.append(snapshot, blank);
+  handwriting.append(inkEntries, drawing.element, addDrawing);
   pen.addEventListener("click", () => { handwriting.hidden = !handwriting.hidden; });
   const recorder = new VoiceRecorder(); let stopping = false, recordingStarted = false;
   mic.addEventListener("click", () => {

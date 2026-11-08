@@ -9,6 +9,7 @@ import { validOcclusions } from "./questions";
 import { maskEmphasis } from "../study/reveal";
 import { createSpeechSession, speechTextFromMarkdown } from "../audio/speech";
 import { reviewMaterial } from "./presentation";
+import { cardCommentImage } from "../cards/inkComment";
 
 export function cardImages(card: Card): string[] {
   const composed=card.extendMedia?.some(media=>media.noteId===card.anchorAnnId&&media.composed);
@@ -17,6 +18,11 @@ export function cardImages(card: Card): string[] {
   const primary = card.excerptBlocks?.length ? sourceImages : [...new Set(sourceImages)];
   const extra = [...new Set([...(card.sources ?? []).map((source) => source.image), ...(card.extendMedia ?? []).map(item => item.image), ...(card.commentMedia ?? []).map(item => item.image)].filter((image): image is string => !!image))].filter(image => !primary.includes(image));
   return [...primary, ...extra];
+}
+
+export function collapsibleCardComment(card: Card, image: string): NonNullable<Card["commentMedia"]>[number] | undefined {
+  const source = [card.image, ...(card.images ?? []), ...(card.sources ?? []).map(value => value.image), ...(card.extendMedia ?? []).map(value => value.image)].includes(image);
+  return source ? undefined : card.commentMedia?.find(item => item.image === image && item.collapsed !== undefined);
 }
 
 export function imageUrl(plugin: MarginStudyPlugin, path: string): string {
@@ -77,7 +83,8 @@ export async function renderQuestion(container: HTMLElement, plugin: MarginStudy
     const imageWrap = el("div", { class: "ms-review-image", style: "position:relative;display:block;width:fit-content;max-width:100%;margin:10px 0" });
     const image = el("img", { src: imageUrl(plugin, images[i]), style: "display:block;max-width:100%;height:auto", alt: "卡片图片" }) as HTMLImageElement;
     image.draggable = false;
-    imageWrap.append(image);
+    const media = collapsibleCardComment(card, images[i]);
+    imageWrap.append(media ? cardCommentImage(plugin, media, { alt: "卡片图片", style: "display:block;max-width:100%;height:auto" }) : image);
     if (question.kind === "occlusion" && i === 0 && !revealed) {
       const mask = validOcclusions(card).find((item) => item.id === question.maskId);
       if (mask) {

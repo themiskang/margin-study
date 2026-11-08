@@ -1,0 +1,176 @@
+import { Store } from '__PROJECT__/src/model/store';
+import { MindmapRenderer } from '__PROJECT__/src/mindmap/mindmapRenderer';
+import { openDetail } from '__PROJECT__/src/cards/cardView';
+import { cardImages, collapsibleCardComment } from '__PROJECT__/src/review/content';
+import { openReviewDeckBrowser } from '__PROJECT__/src/review/decks';
+import { startReview } from '__PROJECT__/src/review/reviewView';
+import { MarkdownRenderer, TFile } from 'obsidian';
+
+(HTMLElement.prototype as any).empty = function () { this.replaceChildren(); };
+(MarkdownRenderer as any).render = async (_app: any, text: string, host: HTMLElement) => {
+  host.textContent = text;
+};
+const results: any[] = [];
+(window as any).results = results;
+const target = document.querySelector('#fixtures') as HTMLElement;
+const wait = (ms = 20) => new Promise(done => setTimeout(done, ms));
+function assert(value: any, message: string) { if (!value) throw new Error(message); }
+function button(root: ParentNode, name: string): HTMLButtonElement {
+  const found = [...root.querySelectorAll<HTMLButtonElement>('button')].find(node => node.getAttribute('aria-label') === name || node.textContent === name);
+  assert(found, `Missing button ${name}`); return found!;
+}
+async function test(name: string, run: () => Promise<void>) {
+  try { document.querySelectorAll('.ms-modal-bg,#test-menu,.ms-card-ink-undo').forEach(node => node.remove()); target.replaceChildren(); await run(); results.push({ name, passed: true }); }
+  catch (error) { results.push({ name, passed: false, error: String(error) }); }
+}
+async function fresh() {
+  let disk: any = {};
+  const files = new Map<string, string>();
+  const source = new TFile('synthetic.pdf');
+  const app: any = { vault: { getAbstractFileByPath: (path: string) => path === source.path ? source : null, getFiles: () => [source],
+    adapter: { exists: async (path: string) => files.has(path), mkdir: async (path: string) => files.set(path, ''),
+      write: async (path: string, value: string) => files.set(path, value), read: async (path: string) => files.get(path) } } };
+  const host: any = { app, loadData: async () => structuredClone(disk), saveData: async (value: any) => { disk = structuredClone(value); } };
+  const store = new Store(host); await store.load();
+  const plugin: any = { store, app, activeReader: null, refreshSidebar() {}, refreshMindmap() {}, sidebar: null };
+  const red = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"><rect width="80" height="40" fill="red"/></svg>');
+  store.addCard({ id: 'a16-card', docPath: 'synthetic.pdf', page: 1, type: 'excerpt', title: '标题 A16', front: '正文 A16', back: '答案 A16', image: red,
+    commentMedia: [{ id: 'legacy', kind: 'image', image: red, name: '旧评论' }], tags: [], links: [], createdAt: '2026-01-01T00:00:00Z' });
+  return { store, plugin, app, host, disk: () => disk };
+}
+async function editor() {
+  for (let attempt = 0; attempt < 150; attempt++) {
+    const root = document.querySelector<HTMLElement>('[data-card-ink-editor]');
+    if (root?.querySelector('canvas') && !root.querySelector<HTMLButtonElement>('[data-save-card-ink]')?.disabled) return root;
+    await wait();
+  }
+  throw new Error('批注编辑器未就绪');
+}
+async function imagePixels(source: string) {
+  const image = new Image(); image.src = source; await image.decode();
+  const canvas = document.createElement('canvas'); canvas.width = image.naturalWidth; canvas.height = image.naturalHeight;
+  const context = canvas.getContext('2d')!; context.drawImage(image, 0, 0);
+  return { width: canvas.width, height: canvas.height, pixels: context.getImageData(0, 0, canvas.width, canvas.height).data };
+}
+function write(root: HTMLElement) {
+  const canvas = root.querySelector<HTMLCanvasElement>('canvas')!, rect = canvas.getBoundingClientRect();
+  const send = (type: string, x: number, y: number, pressure: number) => canvas.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 71, pointerType: 'pen', button: 0, buttons: type === 'pointerup' ? 0 : 1, pressure, clientX: rect.left + rect.width * x, clientY: rect.top + rect.height * y }));
+  send('pointerdown', .03, .15, .4); send('pointermove', .06, .25, .6); send('pointerup', .08, .35, 0);
+}
+async function save(root: HTMLElement) { button(root, '保存批注').click(); await wait(80); }
+function visible(node: HTMLElement) { const bounds = node.getBoundingClientRect(); return bounds.width > 0 && bounds.height > 0 && getComputedStyle(node).visibility !== 'hidden'; }
+async function detailEntry(plugin: any, store: Store) {
+  openDetail(plugin, store.getCard('a16-card')!); button(document, '手写批注').click(); const entry = button(document, '整卡截图批注');
+  assert(visible(entry), '详情截图入口不可见'); entry.click(); return editor();
+}
+function item(store: Store) { return store.getCard('a16-card')!.commentMedia!.find(media => media.id !== 'legacy')!; }
+try {
+  await test('整卡快照保存只增加一条评论，字段不变，笔迹相对快照归一化，一次撤销精确恢复', async () => {
+    const { plugin, store } = await fresh(), before = structuredClone(store.getCard('a16-card'));
+    const root = await detailEntry(plugin, store); write(root); await save(root);
+    const after = store.getCard('a16-card')!, added = item(store);
+    assert(after.commentMedia!.length === before!.commentMedia!.length + 1, '评论数不是 +1');
+    for (const key of ['title','front','back'] as const) assert(after[key] === before![key], `${key} 被修改`);
+    assert(added.collapsed === true && added.kind === 'ink', '评论未默认折叠');
+    assert(added.strokes?.length === 1 && added.strokes[0].points.length === 3, '笔画点数不一致');
+    assert(added.strokes![0].points[0].x < 0 && Math.abs(added.strokes![0].points[0].pressure! - .4) < .001, '坐标未相对快照归一化或压力丢失');
+    const snapshot = await imagePixels(added.snapshot!.image), composite = await imagePixels(added.image);
+    let red = 0, dark = 0, ink = 0;
+    for (let index = 0; index < snapshot.pixels.length; index += 4) {
+      const [r,g,b] = snapshot.pixels.slice(index, index + 3); if (r > 200 && g < 70 && b < 70) red++; if (r < 100 && g < 100 && b < 100) dark++;
+    }
+    for (let index = 0; index < composite.pixels.length; index += 4) {
+      const [r,g,b] = composite.pixels.slice(index, index + 3), pixel = index / 4, x = pixel % composite.width;
+      if (x < added.snapshot!.x * composite.width && (r < 220 || g < 220 || b < 220)) ink++;
+    }
+    assert(red > 1000 && dark > 30 && ink > 10, `快照未包含文字、图片或边界笔迹 red=${red} dark=${dark} ink=${ink}`);
+    button(document, '撤销批注').click();
+    assert(JSON.stringify(store.getCard('a16-card')) === JSON.stringify(before), '撤销未逐字段恢复原卡');
+    button(document, '保存').click(); assert(JSON.stringify(store.getCard('a16-card')) === JSON.stringify(before), '关闭详情时复活了已撤销评论');
+  });
+  await test('新评论折叠、旧评论仍展开；展开后图片加载且笔迹点数一致', async () => {
+    const { plugin, store } = await fresh(), root = await detailEntry(plugin, store); write(root); await save(root);
+    const saved = item(store); document.querySelectorAll('.ms-modal-bg').forEach(node => node.remove()); openDetail(plugin, store.getCard('a16-card')!);
+    const legacy = document.querySelector('[data-card-comment="legacy"]')!, addedRow = document.querySelector(`[data-card-comment="${saved.id}"]`)!;
+    assert(legacy.querySelector('img') && !legacy.querySelector('details:not([open])'), '旧评论未按原样展开');
+    const details = addedRow.querySelector<HTMLDetailsElement>('details')!; assert(details && !details.open, '新评论没有折叠');
+    details.open = true; const image = details.querySelector<HTMLImageElement>('img')!; await image.decode();
+    assert(image.naturalWidth > 0 && saved.strokes![0].points.length === 3, '展开后图片或笔迹缺失');
+  });
+  await test('旧评论没有 collapsed 字段时仍按原样展开', async () => {
+    const { plugin, store } = await fresh(); openDetail(plugin, store.getCard('a16-card')!);
+    const legacy = document.querySelector('[data-card-comment="legacy"]')!;
+    assert(legacy.querySelector('img') && !legacy.querySelector('details:not([open])'), '旧评论未按原样展开');
+  });
+  await test('空白手写不包含源卡快照，并保存一条折叠评论', async () => {
+    const { plugin, store } = await fresh(); openDetail(plugin, store.getCard('a16-card')!);
+    button(document, '手写批注').click(); const entry = button(document, '空白手写'); assert(visible(entry), '空白手写入口不可见'); entry.click(); const root = await editor(); write(root); await save(root);
+    const added = item(store); assert(added?.collapsed === true && added.strokes?.[0].points.length === 3 && !added.snapshot, '空白手写未按要求保存');
+  });
+  await test('保存的空白手写不改变既有遮挡图片目标', async () => {
+    const { plugin, store } = await fresh(), old = store.getCard('a16-card')!, original = old.image!;
+    store.updateCard(old.id, { image: undefined, commentMedia: [{ id: 'legacy', kind: 'image', image: original }], occlusions: [{ id: 'mask', x: .1, y: .1, width: .2, height: .2 }] });
+    openDetail(plugin, store.getCard(old.id)!); button(document, '手写批注').click(); button(document, '空白手写').click(); const root = await editor(); write(root); await save(root);
+    assert(cardImages(store.getCard(old.id)!)[0] === original, '新增批注改变首张遮挡图片');
+    const shared = { ...store.getCard(old.id)!, image: original, commentMedia: [{ id: 'same', kind: 'ink' as const, image: original, collapsed: true }] };
+    assert(!collapsibleCardComment(shared, original), '相同图片的源摘录被当作折叠评论');
+  });
+  await test('详情未保存草稿与历史冲突不会被批注覆盖或错误撤销', async () => {
+    const { plugin, store } = await fresh(); openDetail(plugin, store.getCard('a16-card')!);
+    const source = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const file = document.querySelector<HTMLInputElement>('[aria-label="选择卡片图片"]')!, transfer = new DataTransfer();
+    transfer.items.add(new File([await (await fetch(source)).blob()], 'draft.png', { type: 'image/png' })); file.files = transfer.files; file.dispatchEvent(new Event('change'));
+    await wait(80); button(document, '手写批注').click(); button(document, '整卡截图批注').click(); const root = await editor(); write(root); await save(root);
+    button(document, '保存').click(); assert(store.getCard('a16-card')!.commentMedia!.length === 3, '批注覆盖未保存图片草稿');
+    button(document, '撤销批注').click(); assert(store.getCard('a16-card')!.commentMedia!.length === 3, '历史变化后撤销了错误操作');
+  });
+  await test('批注编辑期间卡片变化时拒绝保存', async () => {
+    const { plugin, store } = await fresh(), root = await detailEntry(plugin, store); write(root); store.updateCard('a16-card', { title: '其他位置修改' }); await save(root);
+    assert(store.getCard('a16-card')!.commentMedia!.length === 1 && root.isConnected, '过期快照错误保存');
+  });
+  await test('评论、快照与矢量笔迹保存重载后保持一致', async () => {
+    const { plugin, store, host } = await fresh(), root = await detailEntry(plugin, store); write(root); await save(root);
+    const before = structuredClone(item(store)); await store.flush(); const reopened = new Store(host); await reopened.load();
+    const after = reopened.getCard('a16-card')!.commentMedia!.find(value => value.id === before.id)!;
+    assert(JSON.stringify(after) === JSON.stringify(before) && after.collapsed === true && after.strokes![0].points.length === 3, '保存重载后评论丢失或改变');
+  });
+  await test('空笔迹及不可读取图片不会产生半成品评论', async () => {
+    const { plugin, store } = await fresh(); let root = await detailEntry(plugin, store); await save(root);
+    assert(root.isConnected && store.getCard('a16-card')!.commentMedia!.length === 1, '空笔迹被保存');
+    button(root, '取消').click(); store.updateCard('a16-card', { image: 'missing-synthetic-image.png' });
+    button(document, '整卡截图批注').click(); await wait(400); root = document.querySelector('[data-card-ink-editor]')!;
+    assert(root.textContent!.includes('画布准备失败') && root.querySelector<HTMLButtonElement>('[data-save-card-ink]')!.disabled && store.getCard('a16-card')!.commentMedia!.length === 1, '图片读取失败仍允许保存');
+  });
+  await test('脑图节点入口能生成折叠快照评论', async () => {
+    const { plugin, store } = await fresh(); store.addNode({ id: 'a16-node', cardId: 'a16-card', canvasId: store.activeCanvasId!, parentId: null, title: '', collapsed: false, x: 100, y: 100 });
+    target.style.height = '700px'; const renderer = new MindmapRenderer(plugin); renderer.mount(target); await wait();
+    button(target, '卡片更多操作').click(); button(document, '整卡截图批注').click(); const root = await editor(); write(root); await save(root);
+    assert(item(store)?.collapsed === true, '脑图入口未保存折叠评论'); renderer.render();
+    const node = target.querySelector('[data-id="a16-node"]')!; assert(node.querySelector('details:not([open])'), '脑图未折叠新评论');
+    renderer.destroy();
+  });
+  await test('多块摘录快照保留顺序及所有图片', async () => {
+    const { plugin, store } = await fresh(), source = store.getCard('a16-card')!.image!;
+    const blue = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="80" height="40"><rect width="80" height="40" fill="blue"/></svg>');
+    store.updateCard('a16-card', { image: source, images: [blue], excerptBlocks: [{ id: 'block1', image: source, text: '一段' }, { id: 'block2', image: blue, text: '二段' }] });
+    const root = await detailEntry(plugin, store); write(root); await save(root); const snap = await imagePixels(item(store).snapshot!.image);
+    let redY = 0, blueY = 0, reds = 0, blues = 0, redMin = Infinity, blueMin = Infinity;
+    for (let index = 0; index < snap.pixels.length; index += 4) {
+      const [r,g,b] = snap.pixels.slice(index, index + 3), y = Math.floor(index / 4 / snap.width);
+      if (r > 200 && g < 70 && b < 70) { reds++; redY += y; redMin = Math.min(redMin, y); } if (b > 200 && r < 70 && g < 70) { blues++; blueY += y; blueMin = Math.min(blueMin, y); }
+    }
+    assert(reds > 1000 && blues > 1000 && redMin < blueMin, `多块快照图片缺失或顺序错误 red=${reds},${redMin} blue=${blues},${blueMin}`);
+  });
+  await test('复习浏览入口能生成折叠快照评论', async () => {
+    const { plugin, store } = await fresh(), deck = store.createReviewDeck('A16'); store.enqueueReviewInDeck(['a16-card'], deck.id);
+    await openReviewDeckBrowser(plugin, deck.id); await wait(80); button(document, '批注与工具').click(); button(document, '整卡截图批注').click();
+    const root = await editor(); write(root); await save(root); assert(item(store)?.collapsed === true, '复习浏览入口未保存折叠评论');
+    await wait(100); const panel = document.querySelector('.ms-review-browser')!; assert(panel.querySelector('details:not([open])'), '复习浏览未折叠新评论');
+  });
+  await test('复习评分入口能生成折叠快照评论', async () => {
+    const { plugin, store } = await fresh(), deck = store.createReviewDeck('A16'); store.enqueueReviewInDeck(['a16-card'], deck.id);
+    await startReview(plugin, { deckId: deck.id, presentation: 'score' }); await wait(80); button(document, '批注与工具').click(); button(document, '整卡截图批注').click();
+    const root = await editor(); write(root); await save(root); assert(item(store)?.collapsed === true, '复习评分入口未保存折叠评论');
+  });
+} catch (error) { (window as any).fatal = String(error); }
+(window as any).done = true;

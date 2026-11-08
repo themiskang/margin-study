@@ -5,7 +5,7 @@ import { el, clear } from "../utils/dom";
 import { createModal } from "../utils/modal";
 import { startReview, questionsForReview } from "./reviewView";
 import type { ReviewOptions } from "./contracts";
-import { appendSources, cardImages, imageUrl } from "./content";
+import { appendSources, cardImages, collapsibleCardComment, imageUrl } from "./content";
 import { createSpeechSession } from "../audio/speech";
 import { clozeForQuestion, renderMarkdown } from "../utils/markdown";
 import { filterReviewCards, filterAndOrderReviewQuestions } from "./selection";
@@ -13,6 +13,7 @@ import { reviewFilterControls } from "./filters";
 import { uid } from "../utils/id";
 import { reviewMaterial } from "./presentation";
 import { nativeReviewStage, reviewIconButton, setReviewFavorite } from "./nativeStage";
+import { cardCommentImage, openCardInkComment } from "../cards/inkComment";
 
 type CardEditor = (plugin: MarginStudyPlugin, card: Card, onChanged?: () => void) => void;
 let cardEditor: CardEditor | undefined;
@@ -154,6 +155,10 @@ export async function openReviewDeckBrowser(plugin: MarginStudyPlugin, deckId: s
     if (card) {
       if (card.typography) { stage.content.style.fontFamily = card.typography.fontFamily; stage.content.style.fontSize = `${card.typography.fontSize}px`; }
       const toolbar = el("div", { class: "ms-review-tools" });
+      for (const [mode, label] of [["snapshot", "整卡截图批注"], ["blank", "空白手写"]] as const) {
+        const entry = el("button", { class: "ms-btn", text: label });
+        entry.addEventListener("click", () => openCardInkComment(plugin, card.id, mode)); toolbar.append(entry);
+      }
       stage.edit.addEventListener("click", () => { editReviewCard(plugin, card, () => { void draw(); }); });
       setReviewFavorite(stage.favorite, !!card.favorite);
       stage.favorite.addEventListener("click", () => store.updateCard(card.id, { favorite: !card.favorite }));
@@ -170,7 +175,10 @@ export async function openReviewDeckBrowser(plugin: MarginStudyPlugin, deckId: s
       if (closed || current !== generation) return;
       if (material.back && material.back !== material.front) { const back = el("div", { class: "ms-review-browser-answer", "data-review-browser-face": "answer" }); await renderMarkdown(plugin.app, clozeForQuestion(material.back, 0, true), back, card.docPath); page.append(back); }
       if (closed || current !== generation) return;
-      for (const image of cardImages(card)) page.append(el("img", { src: imageUrl(plugin, image), alt: "卡片图片", style: "display:block;max-width:100%;height:auto;margin-top:12px" }));
+      for (const image of cardImages(card)) {
+        const media = collapsibleCardComment(card, image);
+        page.append(media ? cardCommentImage(plugin, media, { alt: "卡片图片", style: "display:block;max-width:100%;height:auto;margin-top:12px" }) : el("img", { src: imageUrl(plugin, image), alt: "卡片图片", style: "display:block;max-width:100%;height:auto;margin-top:12px" }));
+      }
       stage.content.append(page);
     } else { stage.edit.disabled = true; stage.favorite.disabled = true; stage.content.append(el("p", { class: "ms-muted", text: dueOnly ? "当前没有到期卡片。取消「仅到期」可浏览卡组中的全部卡片。" : "卡组还没有可浏览的卡片。请从卡片盒或脑图显式加入。" })); }
     const actions = stage.footer; actions.classList.add("ms-review-browser-actions");

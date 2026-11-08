@@ -14,6 +14,7 @@ import { createSpeechSession, speechTextFromMarkdown } from "../audio/speech";
 import { filterReviewCards, filterAndOrderReviewQuestions } from "./selection";
 import { uid } from "../utils/id";
 import { nativeReviewStage, reviewIconButton, setReviewFavorite } from "./nativeStage";
+import { openCardInkComment } from "../cards/inkComment";
 
 export function completedReviewHistory(logs: ReviewLog[], cardId?: string, scopeId?: string): ReviewLog[] {
   return logs.filter(log => !log.initialization && (!cardId || log.cardId === cardId) && log.scopeId === scopeId)
@@ -181,6 +182,10 @@ class ReviewModal {
     const drawing = reviewDrawingInput(cardPen ? { color: cardPen.color, width: handwritingPresetWidth(cardPen, "card"), opacity: cardPen.opacity } : {});
     const response = el("section", { class: "ms-review-response" }); response.append(comment, drawing.element); stage.inspector.append(response);
     const tools = el("div", { class: "ms-review-tools" });
+    for (const [mode, label] of [["snapshot", "整卡截图批注"], ["blank", "空白手写"]] as const) {
+      const entry = el("button", { class: "ms-btn", text: label });
+      entry.addEventListener("click", () => openCardInkComment(this.plugin, card.id, mode, () => { void renderContent(); })); tools.append(entry);
+    }
     const speak = el("button", { class: "ms-btn", text: "朗读当前内容" });
     speak.addEventListener("click", () => { void this.speech.start(speechTextFromMarkdown(content.textContent || questionText(card, question, revealed, this.clozeVisible))).then(started => { if (!started && this.speech.state.error) new Notice(this.speech.state.error); }); });
     const pause = el("button", { class: "ms-btn", text: "暂停朗读" });

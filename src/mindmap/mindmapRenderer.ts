@@ -13,8 +13,9 @@ import { renderMarkdown, hasCloze, clozeHint } from "../utils/markdown";
 import { exportMindmapPng } from "../export/mindmapExport";
 import { nodeContent } from "../study/nodeContent";
 import { cardCommentItems } from "../cards/commentOrder";
+import { cardCommentImage } from "../cards/inkComment";
 import { notebookMeta } from "../annot/documentNotebooks";
-import { appendSources, imageUrl } from "../review/content";
+import { appendSources, collapsibleCardComment, imageUrl } from "../review/content";
 import { addCommonCardActions, closeCardActionMenu, detachNode, openNodeSplit, showNodeActions, stopCardActionSpeech, trackCardActionMenu } from "../study/nodeActions";
 import { ReaderView } from "../pdf/readerView";
 import { maskEmphasis, revealAt } from "../study/reveal";
@@ -1176,7 +1177,10 @@ export class MindmapRenderer {
         const masks = firstImage && card && !this.revealedIds.has(n.id) && this.isRecallHierarchyActive() && this.root?.closest<HTMLElement>(".ms-study-workspace")?.hasAttribute("data-recall-mask-emphasis-images") ? validOcclusions(card) : [];
         {
           const frame = el("div", { class: "ms-node-image-frame", style: "position:relative;width:fit-content;max-width:100%" });
-          frame.append(img);
+          const media = card && collapsibleCardComment(card, image);
+          const display = media ? cardCommentImage(this.plugin, media, { className: "ms-node-img", alt: "卡片图片" }) : img;
+          if (media) display.querySelector("img")?.addEventListener("click", event => { event.stopPropagation(); openImageLightbox(source); });
+          frame.append(display);
           for (const mask of masks) {
             const key = `${n.id}:${mask.id}`, shown = this.revealedImageMasks.has(key);
             const button = el("button", { type: "button", class: "ms-node-image-mask", "data-image-mask": mask.id, "aria-pressed": String(shown), "aria-label": shown ? "重新遮回图片区域" : "揭开图片区域" });

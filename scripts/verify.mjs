@@ -27,6 +27,7 @@ const allSuites=[
   ["study","src/study/acceptance.mjs"],
   ["study-ui","src/study/l3-ui-acceptance.mjs"],
   ["study-observed-ui","src/study/l4-ui-acceptance.mjs"],
+  ["card-ink-ui","src/study/a16-ui-acceptance.mjs"],
   ["organize-ui","src/study/organize-ui-acceptance.mjs"],
   ["review-ui","src/review/ui-acceptance.mjs"],
   ["reader","src/documents/acceptance.mjs"],

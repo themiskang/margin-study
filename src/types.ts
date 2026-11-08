@@ -161,8 +161,8 @@ export interface Card {
   extendMedia?: { noteId: string; image: string; composed?: boolean }[];
   /** Reader text kept separate when the source card already has an independent note. */
   extendText?: { noteId: string; text: string }[];
-  /** Media added in the card editor; never written back into Reader Extend content. */
-  commentMedia?: { id: string; image: string; kind: "image" | "ink"; name?: string; strokes?: import("./mindmap/handwritingContracts").MindmapInkStroke[] }[];
+  /** Media added to the card; snapshot coordinates use the composite frame and strokes use the snapshot frame. */
+  commentMedia?: { id: string; image: string; kind: "image" | "ink"; name?: string; collapsed?: boolean; snapshot?: { image: string; x: number; y: number; width: number; height: number }; strokes?: import("./mindmap/handwritingContracts").MindmapInkStroke[] }[];
   /** Explicit comment order; missing/stale keys leave legacy content and identities intact. */
   commentOrder?: string[];
   sources?: CardSource[];
