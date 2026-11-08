@@ -1549,7 +1549,7 @@ export class StudyWorkspaceView extends ItemView {
     if(kind==="research"){this.research=mountResearchBrowser(this.auxiliary,this.plugin,{initialUrl:this.state.researchUrl,session:this.state.researchSession,onSessionChanged:session=>{this.state.researchSession=session;this.state.researchUrl=session.entries[session.index];this.saveLayout();},selection:this.selection??undefined,selectionRoot:this.root,onClose:close,onNewWindow:url=>{void this.plugin.openResearchBrowser(url,true);},onPdfSaved:file=>{this.refresh(true);void this.openFile(file);}});return;}
     if(kind==="ai"){
       if(this.ai)this.ai.resume(this.auxiliary);
-      else this.ai=mountAiPanel(this.auxiliary,this.plugin,{context:this.selectedContext(),getContext:()=>this.selectedContext(),onClose:close,onExternalView:()=>{if(this.focusedStage)this.toggleFocus();},onSaved:()=>this.refresh(true)});
+      else this.ai=mountAiPanel(this.auxiliary,this.plugin,{context:this.selectedContext(),getContext:()=>this.selectedContext(),getSelectedNodeId:()=>this.renderer?.selectedViewNode()?.id,onClose:close,onExternalView:()=>{if(this.focusedStage)this.toggleFocus();},onSaved:()=>this.refresh(true)});
       return;
     }
     if(kind==="cards"){

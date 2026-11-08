@@ -37,6 +37,7 @@ const allSuites=[
   ["mindmap-ink-export","src/mindmap/handwriting-acceptance.mjs"],
   ["card-flow","src/export/cardFlow-acceptance.mjs"],
   ["ai","src/ai/acceptance.mjs"],
+  ["ai-a23","src/ai/a23-acceptance.mjs"],
   ["ai-condense","src/ai/condense-acceptance.mjs"],
   ["claudian","src/ai/claudian-acceptance.mjs"],
   ["ai-ui","src/ai/ui-acceptance.mjs"],

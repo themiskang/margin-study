@@ -1,3 +1,22 @@
+## 2026-11-08（CC-A23-FINAL · A23 第 2–5 项实机验收，只读串行）
+
+- 前置断言：`Debugger.getScriptSource` 取 `plugin:margin-study` 运行时源码，活跃 scriptId **335**（sha `b3e26d69b495`、5 044 691 字符）内 `addAnswerActions` 命中 **3** 次、`saveAnswerBranch` 2 次；188（`bcb44f8d56fa`）命中 0 为旧构建残留。前置满足，本轮**未重载插件**。
+- 送答链路：`.ms-native-side-tools button[aria-label="AI 学习助手"]` 点击开面板 → `.ms-ai-service=custom`（已绑定，未重新握手）→ mode=chat / task=Ask → 页内包装 `require('node:http').request` 的本地 SSE 桩（仅匹配 `ms-a23-stub`，其余放行，并计数 fetch/xhr/ws/realPass）→ 气泡原文 `# 根\n## 子一\n### 孙\n## 子二`，四按钮齐全。
+- 四项结论 **全部 pass**：① 层级转分支 4 节点，titles `根/子一/孙/子二`，`parentId=[null, id0, id1, id0]`，深度 `[0,1,2,1]`，rootCount 1、**无额外总标题根**，cards 22→26 / nodes 18→22；② 转换前后 `stubHits/realPass/fetch/xhr/ws` 增量全 **0**（`libraryHistoryRevision` 0→1 一次事务，revision 2500→2501 为异步保存）；③ 带守卫（`undoLabel==="回答转脑图分支"` 才点，避免 DEF-A23-2）点 `title="撤销回答转脑图分支"`（`.ms-tb-btn`）一次后 cards 22/nodes 18 **逐字段深比较 identical**（added/missing/changedFields 均空、nodeComments 0→0、非空 card.back 3→3、title 多重集合相等、A23 标题残留空）；④ 桩返回 3 空格 → 气泡文本 `"   "`、按钮可用，点击后 Notice 逐字 `转换失败，请检查回答内容后手动重试。`（+150ms/+750ms 均在），`noNewObjects=true`、未新增事务、失败按钮不禁用。
+- 过程如实登记：第 4 项首次误点上一条已 `disabled` 的按钮（空操作，store 与计数零变化），改定位最后一条气泡后取数。
+- 交付：`evidence/acceptance-20261106/CC-A23-FINAL.md`（前置命中数 + 四项逐条 pass/fail + 原始读数值）。截图 **0 张提交**：`Page.captureScreenshot` 返回 `eaef5d654215`（278 076 B），与 DEF 轮登记的陈旧帧**字节相同**，窗口遮挡期间 Chromium 不产帧，不作证据；临时 PNG 只留 `/tmp/cc-a23-final/`。
+- 收尾：撤销已把本轮 4 卡 4 节点完全回退，终检 `leftoverNode/Card = 0`；页内桩与 `fetch/XHR/WebSocket` 全部还原（`stubGone=true`）并删除 `window.__ccA23*`；侧栏关闭、回学习集主页 `A17-验收-B`。最终读数 **revision 2502**（本轮基线 2499，+3 为写计数器偏移，如实登记）、cards 22 / nodes 18 / edges 2 / comments 0 / canvases 9 / studySets 5 与基线逐字段一致。未改产品代码、未提交、未改既有 evidence。
+- 首个下一步（总控/执行席）：A23 宿主 UI 验收项已闭合，整卡再审时仍须处理 PROGRESS 2026-11-08 A23 小节登记的「改前红灯证据」缺口；DEF-A23-1 按上一轮建议改判为「环境错位（未重载）」，A23 验收脚本已把「运行时 `addAnswerActions` 命中」固化为第 0 步前置断言。
+
+## 2026-11-08（CC-A23-DEF · DEF-A23-1 最小判定）
+
+- 完成：只读判定 DEF-A23-1。结论「按钮真没进 DOM」成立、「上一轮检索口径错」不成立，但**不是产品缺陷**——宿主 Obsidian 进程 02:18:38 启动时载入的是 A23 之前的构建（`plugin:margin-study` scriptId 188，sha `bcb44f8d56fa…`，包内 `addAnswerActions`/`saveAnswerBranch`/标签出现次数均为 0），磁盘 `0ff1fc4d…` 构建 03:08:01 装入后从未重载。破案点是 append 探针抓到的栈号 `submit (plugin:margin-study:101530)` 与磁盘行号 101614 不符。
+- 正向确认：`disablePlugin/enablePlugin` 重载后同一条本地 SSE 桩链路一次通过，气泡子节点为 `[text, 制作卡片预览, 回答转脑图分支, 选段写评论, 选段设标题]`，append 探针 3 次命中 `addAnswerActions (101456/101471)`，按钮 rect 非零且 `display=inline-flex`（也排除「进 DOM 但被隐藏」）。上一轮四项「已排除因素」都是对磁盘包的核对，据此判产品缺陷是错的。
+- 交付：`evidence/acceptance-20261106/CC-A23-DEF.md` + `CC-A23-DEF-raw-olddom.json` + `CC-A23-DEF-raw-reloaded.json`。截图通道故障如实登记（`Page.captureScreenshot` 三次返回字节相同的陈旧帧、cua CGWindow 截图同样未画出侧栏，窗口被全遮挡期间 Chromium 不产帧），故本轮不提交图片证据，已删除误名 PNG。
+- 收尾：append monkey patch 已移除、上一轮遗留的 http/https 桩一并还原为 `_http_client.request` 原生实现（`httpRestored=true`）、侧栏关闭、回学习集主页 `A17-验收-B`。读数 revision 2492→2499，cards/nodes/edges 22/18/2 逐字段未变，未点击任何 A23 按钮、未新建对象；未改产品代码、未提交。
+- 方法学建议（已写入交付件）：验收前置必须核对**运行时脚本身份**（`Debugger.getScriptSource` 比对 sha 或栈行号与磁盘行号一致性），磁盘装入时间晚于宿主启动即先重载插件。
+- 完成定义：判定二值结论 + 三类 dump 证据 + 一句话根因指向均已交付并登记。首个下一步：执行席按 A23 卡补测第 2～5 项（现已有实机可达入口）。
+
 ## 2026-11-07（手写预览视口定位）
 
 - 完成：预览 canvas 挂到所属 document 的 body，避开 `.workspace-leaf` 的 `contain: strict`；保持 fixed、z-index 35 和原有逐帧重投影及抬笔交接。按脑图可视区裁剪，并挖除工具栏和设置面板区域，避免跨层遮挡；canvas 不接收指针事件。
@@ -1470,4 +1489,28 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - ① 源哈希：l4-sample-alpha.pdf 区域折页前后宿主 sha256 均为 `007d7527a5207605098c900285fc97db6a0fb1c1b4f001ab71b3b74f3417658f`；第 1 页显示高 869→859 px（−10 px）。② 章节折页入口 `折叠章节 L4/candidates` 存在，四页高度 869/869/671/869→34，revision 2467→2468，展开恢复 2469。③ 插目录 2461→2462、重排 [1,2,3,4]→[2,1,3,4] 2471→2473 撤销 2475 恢复、移除 3 页 2477 后撤销恢复 4 页，revision 单调不减。④ 临时副本重排 [2,1,3,4] 导出 PDF 4 页，pdfjs 文本序 = 源页 2/1/3/4，与虚拟页集合一致。⑤ 目录转脑图 cards 22→24、nodes 18→20（2 个 kind=toc），L4 根、candidates 的 parentId=L4 节点；单次撤销全部恢复。⑥ 临时副本/导出/目录项/脑图对象/设置全部清理，A17-验收-B 界面模式恢复 scenes，回学习集主页。
 - 隔离库收尾：cards 22、nodes 18、canvases 9、documents 34、studySets 5、tabs 7、docPaths 7，与验收开始基线一致；`data.json` 无 `A12-临时重组` 引用；l4 目录空、无折页、标注 6 条、源哈希不变。revision 2452→2491（单调计数器，未回写；对象与设置已还原，撤销历史仍在库内）。
 - 未改产品代码、未提交、未改既有 evidence。本卡完成。
+### A23 AI 回答转换（2026-11-08，进行中）
 
+用户要求先记录三条断言的改前失败测试，再实现、全量 verify、构建并安装桌面隔离库。不得读取 Claudian 历史、修改 `evidence/**`、真实库或提交。
+
+现状：`draftFromPastedReply` 已能把普通文本转单卡草稿，且能把 Markdown 标题或列表解析为目录；`saveLibraryDraft` 用一次 `libraryTransaction` 保存目录，但会额外创建总标题根节点。AI 回答界面目前仅提供“制作卡片预览”，尚无回答转分支及选段写评论/标题的完整入口。`Store` 的 `libraryTransaction` 与 `undoLibraryChange` 已有快照机制；卡片评论主要存于 `back`，节点另有 `comments`。
+
+尚未编写改前测试、修改功能、执行 verify 或安装。下一步第一动作：查看 `studyWorkspace.ts` 的 `selectedContext` 和现有 AI 测试夹具，确定可追踪目标卡片/节点的公开接口；先补三个独立行为测试并保留各自失败输出到 `/tmp`，再实施与验证。宿主侧 UI 流程须列为 CC 实机验收项。
+
+#### A23 本轮实现与证据（2026-11-08）
+
+- 新增回答转脑图、选段写节点评论、选段设节点标题入口，整答转单卡沿用已有可编辑预览。脑图使用回答首标题或首个内容块作为根；转换和节点编辑各使用一次库事务，失败回滚；UI 失败提示手动重试。
+- 新增 `src/ai/a23-acceptance.mjs` 并接入 `verify`。合成 Store 下，transport、三层层级及父子关系、cards/nodes 深比较撤销、解析及中途写入失败回滚各两次通过，日志为 `/tmp/a23-after-{transport,hierarchy,undo,failure}-{1,2}.log`。transport 测试拦截 `DesktopChatTransport.stream`，尚未覆盖宿主 UI 的全部外部传输路径。
+- 改前六次记录 `/tmp/a23-before-{transport,hierarchy,undo}-{1,2}.log` 均因新模块不存在而在构建阶段失败，未运行到行为断言；不能充当要求的三条断言各两次真实红灯证据。此项未完成，不能标记整卡通过。
+- 旧的目录解析和保存代码未改动，其原有 `ai` 与 `claudian` 合成套件均通过，日志在 `/tmp/marginstudy-a23-baseline-existing/`。这说明已有部分行为本来可用，不能把新增入口的缺失当成每条旧行为必然失败。
+- `MARGINSTUDY_VERIFY_DIR=/tmp/marginstudy-a23-full-20261108 npm run verify` 全部 31 个套件通过；第一次沙箱内运行在 `study-ui` 监听 localhost 时 EPERM，已在授权环境重跑通过。
+- 已构建并安装桌面隔离库：`main.js` SHA256 `0ff1fc4d378ddddb1ca4d73157c396b7d713ce2a99b61b9de4150c65ce3c0439`；`styles.css` SHA256 `8e3cbe002ad1cdbf382b7188b5b2c923470571caa27bbe4e0cbb3be772919fba`；安装文件与构建文件一致。未触碰真实库、adb 或 `evidence/**`。
+- 下一步第一动作：在隔离的改前代码副本中建立可执行的用户行为测试，确认缺失入口导致的真实断言结果；若原行为本来通过，应记录实际结果，不伪造失败。之后由 CC 执行宿主 UI 流程。
+
+## 2026-11-08 · CC-A23 实机验收（精简版，串行无后台）
+- 交付：`evidence/acceptance-20261106/CC-A23-RESULT.md` + 截图 3 张（shot1 面板、shot2 回复气泡主证、shot3 收尾）。
+- 结论：**不通过（实机被阻断）**。真实 Send 链路（本地 SSE 桩，绑定握手 Mini/Normal 文本+图片+tool_calls+结果回传全通过）渲染 Ask 回复后，`.ms-ai-message-assistant` 只有「制作卡片预览」，`回答转脑图分支 / 选段写评论 / 选段设标题` 在 document 中命中 0，两次独立复跑一致 → **DEF-A23-1**。因此第 2～5 项（层级父子与无多余总根、转换 0 请求、一次撤销逐字段、空内容 Notice）**实机未能执行**，只给出源码层与单元层证据（`node src/ai/a23-acceptance.mjs` → PASS transport/hierarchy/undo/failure，4/4）。
+- 入口门槛实测：`自动接收下一条 Claudian 回复` 实机 hidden（`claudianBridge.ts:52` 锁 realclaudian **2.3.30**，本机 **2.3.21**，`api.read=undefined`）；`粘贴 AI 回复` 不调用 `addAnswerActions`，故当前构建下三按钮唯一前置是真发一次 AI 请求。
+- 全程外发网络 `realPass/fetch/xhr/ws = 0`，本地桩请求 14 次；页内 http/https hook 已还原（`httpRestored=true`）。
+- 副作用登记 **DEF-A23-2**：脚本在无转换可撤时点了撤销，回退既有「编辑学习集」事务（已用重做复原 2 笔）。收尾读数 cards 22 / nodes 18 / edges 2 / comments 0/0（等于基线），revision 2492（基线≈2491，计数器层面存在偏移，未写成完全回到基线）；临时对象 leftover 0，侧栏已关，已回学习集主页 `A17-验收-B`。
+- 仍缺：A23 三按钮在实机的可达性（需产品侧修复后补测第 2～5 项断言）。

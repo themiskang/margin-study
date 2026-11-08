@@ -7,6 +7,8 @@ import { createModal } from "../utils/modal";
 import { buildClaudianPrompt, claudianAvailability, supportsClaudianRequest, supportsClaudianImages, openClaudian, subscribeClaudianReplies } from "./claudianBridge";
 import { requestClaudian } from "./claudianRequest";
 import { draftFromPastedReply } from "./resultImport";
+import { Notice } from "obsidian";
+import { saveAnswerBranch, writeAnswerSelection } from "./a23";
 
 const services = new WeakMap<object, AiService>();
 export function aiServiceFor(host: AiHost): AiService {
@@ -70,6 +72,7 @@ export interface AiPanelOptions {
   initialText?: string;
   context?: AiContext;
   getContext?: () => AiContext | undefined | Promise<AiContext | undefined>;
+  getSelectedNodeId?: () => string | undefined;
   onClose?: () => void;
   onExternalView?: () => void;
   onSaved?: (result: { kind: AiDraft["kind"]; ids?: string[]; path?: string }) => void;
@@ -227,6 +230,25 @@ export function mountAiPanel(container: HTMLElement, host: AiHost, options: AiPa
     replySubscription.dispose(); replySubscription = null; refresh();
     if (announce && !disposed) status.textContent = "已停止同步 Claudian 回复。";
   };
+  const addAnswerActions = (message: HTMLElement, reply: string, sourceDocPath?: string) => {
+    const branch = el("button", { type: "button", text: "回答转脑图分支" });
+    branch.addEventListener("click", () => {
+      try { const ids = saveAnswerBranch(host, reply, sourceDocPath); branch.disabled = true; options.onSaved?.({ kind: "outline", ids }); }
+      catch { new Notice("转换失败，请检查回答内容后手动重试。"); }
+    });
+    message.append(branch);
+    for (const [kind, label] of [["comment", "选段写评论"], ["title", "选段设标题"]] as const) {
+      const button = el("button", { type: "button", text: label });
+      button.addEventListener("mousedown", event => event.preventDefault());
+      button.addEventListener("click", () => {
+        const selection = document.getSelection();
+        const text = selection && message.contains(selection.anchorNode) && message.contains(selection.focusNode) ? selection.toString() : "";
+        try { writeAnswerSelection(host, options.getSelectedNodeId?.() ?? "", text, kind); options.onSaved?.({ kind: "outline" }); }
+        catch { new Notice("请选择回答文字和一个脑图节点后手动重试。"); }
+      });
+      message.append(button);
+    }
+  };
   syncReplies.addEventListener("click", () => {
     if (replySubscription) { stopReplySync(true); return; }
     const sourceDocPath = context?.docPath;
@@ -238,6 +260,7 @@ export function mountAiPanel(container: HTMLElement, host: AiHost, options: AiPa
         const preview = el("button", { type: "button", class: "ms-ai-response-to-card", text: "制作卡片预览" });
         preview.addEventListener("click", () => { if (preview.disabled) return; draftView({ kind: "cards", cards: [{ title: "", excerpt: reply, note: "", tags: [] }] }, sourceDocPath); preview.disabled = true; });
         replyMessage.append(preview);
+        addAnswerActions(replyMessage, reply, sourceDocPath);
       } else {
         try { draftView(draftFromPastedReply(task.value as AiDraft["kind"], reply), sourceDocPath); }
         catch { status.textContent = "Claudian 回复已回流；内容未能解析为所选预览类型，请切换到 Ask 查看原文。"; }
@@ -299,6 +322,7 @@ export function mountAiPanel(container: HTMLElement, host: AiHost, options: AiPa
         if (result.text && selectedTask === "chat") {
           const previewCard = el("button", { type: "button", class: "ms-ai-response-to-card", text: "制作卡片预览" });
           previewCard.addEventListener("click", () => { if (previewCard.disabled) return; draftView({ kind: "cards", cards: [{ title: "", excerpt: result.text, note: "", tags: [] }] }, selectedContext?.docPath); previewCard.disabled = true; }); reply.append(previewCard);
+          addAnswerActions(reply, result.text, selectedContext?.docPath);
         }
         status.textContent = "";
       }
