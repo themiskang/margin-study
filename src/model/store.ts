@@ -6,7 +6,7 @@ import {
   MindmapFragment, PasteOptions, CardSource, DocumentRecord, ReviewDeck, HandwritingPresetSpec, StudySceneId, StudySceneSelection, StudySceneTemplate,
 } from "../types";
 import { freshState, schedule, todayStr, normalizeState, isDue, fmtDate } from "../srs";
-import type { ReviewLog, ReviewPending, CardTemplate, GradeOptions, ReviewDeckSummary } from "../review/contracts";
+import type { ReviewLog, ReviewPending, CardTemplate, GradeOptions, ReviewDeckSummary, PracticeAttempt, PracticeAttemptInput } from "../review/contracts";
 import { uid } from "../utils/id";
 import { questionsForCard, ReviewQuestion } from "../review/questions";
 import { mergePreservingVersions, reviewEventId, effectiveReviewCounts } from "./conflicts";
@@ -83,6 +83,7 @@ export class Store {
   docMeta: Record<string, DocMeta> = {};
   reviewHistory: Record<string, number> = {};
   reviewLogs: ReviewLog[] = [];
+  practiceAttempts: PracticeAttempt[] = [];
   reviewPending: ReviewPending[] = [];
   reviewDecks: ReviewDeck[] = [];
   activeReviewDeckId?: string;
@@ -145,7 +146,7 @@ export class Store {
   private validateData(data: any): asserts data is PluginData {
     if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("数据必须是对象");
     if (data.schemaVersion != null && (!Number.isInteger(data.schemaVersion) || data.schemaVersion > 2)) throw new Error("数据来自较新版本，请先更新插件");
-    for (const key of ["cards", "nodes", "edges", "studySets", "canvases", "reviewLogs", "reviewPending", "reviewDecks", "cardTemplates", "documents"]) {
+    for (const key of ["cards", "nodes", "edges", "studySets", "canvases", "reviewLogs", "practiceAttempts", "reviewPending", "reviewDecks", "cardTemplates", "documents"]) {
       if (data[key] != null && !Array.isArray(data[key])) throw new Error(key + " 格式无效");
     }
     for (const key of ["settings", "srs", "docMeta", "reviewHistory", "workspaceState"]) {
@@ -173,6 +174,11 @@ export class Store {
       }
     }
     for (const deck of data.reviewDecks ?? []) if (typeof deck.name !== "string" || !Array.isArray(deck.cardIds) || deck.cardIds.some((id: unknown) => typeof id !== "string") || !Array.isArray(deck.studySetIds) || deck.studySetIds.some((id: unknown) => typeof id !== "string")) throw new Error("复习卡组格式无效");
+    const attempts = new Set<string>();
+    for (const attempt of data.practiceAttempts ?? []) {
+      if (!attempt || typeof attempt.id !== "string" || !attempt.id || attempts.has(attempt.id) || typeof attempt.cardId !== "string" || typeof attempt.studySetId !== "string" || typeof attempt.at !== "string" || typeof attempt.answer !== "string" || !["correct", "wrong", "partial"].includes(attempt.verdict) || (attempt.mistake !== undefined && typeof attempt.mistake !== "string") || (attempt.correctionOf !== undefined && typeof attempt.correctionOf !== "string")) throw new Error("练习记录格式无效");
+      attempts.add(attempt.id);
+    }
   }
 
   private applyData(data: Partial<PluginData>): void {
@@ -187,6 +193,7 @@ export class Store {
     this.docMeta = data.docMeta ?? {};
     this.reviewHistory = data.reviewHistory ?? {};
     this.reviewLogs = data.reviewLogs ?? [];
+    this.practiceAttempts = data.practiceAttempts ?? [];
     // Legacy schedules are retained as enrolled questions. New ordinary cards are
     // not enrolled until the user asks; presence of a fresh state is not enrollment.
     const knownCards = new Set(cardsIncludingMembers(this.cards).map(card => card.id));
@@ -217,7 +224,7 @@ export class Store {
     return clone({ schemaVersion: 2, revision: this.revision, writerId: this.writerId,
       settings: this.settings, cards: this.cards, nodes: this.nodes, edges: this.edges,
       srs: this.srs, docMeta: this.docMeta, reviewHistory: this.reviewHistory,
-      reviewLogs: this.reviewLogs, reviewPending: this.reviewPending, cardTemplates: this.cardTemplates,
+      reviewLogs: this.reviewLogs, practiceAttempts: this.practiceAttempts, reviewPending: this.reviewPending, cardTemplates: this.cardTemplates,
       reviewDecks: this.reviewDecks, activeReviewDeckId: this.activeReviewDeckId,
       ...(this.sceneTemplates !== undefined ? { sceneTemplates: this.sceneTemplates } : {}),
       studySets: this.studySets, canvases: this.canvases,
@@ -599,6 +606,7 @@ export class Store {
       // Library undo cannot rewind reviews or settings made since that edit.
       this.settings = current.settings;
       this.reviewLogs = current.reviewLogs ?? [];
+      this.practiceAttempts = current.practiceAttempts ?? [];
       this.reviewPending = clone(current.reviewPending ?? []);
       const currentPending = new Map(this.reviewPending.map(p => [p.questionId,p]));
       const targetPending = new Map((snapshot.data.reviewPending ?? []).map(p => [p.questionId,p]));
@@ -636,6 +644,7 @@ export class Store {
         const live = current.studySets?.find(item => item.id === set.id), prior = previous.data.studySets?.find(item => item.id === set.id);
         if (live && (set.reviewDeckId === prior?.reviewDeckId || live.reviewDeckId !== prior?.reviewDeckId)) set.reviewDeckId = live.reviewDeckId;
         if (live && (same(set.reviewSettings, prior?.reviewSettings) || !same(live.reviewSettings, prior?.reviewSettings))) set.reviewSettings = clone(live.reviewSettings);
+        if (live && (same(set.practiceSettings, prior?.practiceSettings) || !same(live.practiceSettings, prior?.practiceSettings))) set.practiceSettings = clone(live.practiceSettings);
         if (set.reviewDeckId && !this.getReviewDeck(set.reviewDeckId)) delete set.reviewDeckId;
       }
       // Restore only template changes owned by this history entry. Unrelated
@@ -1199,6 +1208,24 @@ export class Store {
   setStudySetReviewSettings(id: string, settings: NonNullable<StudySet["reviewSettings"]>): void {
     const set = this.studySets.find(item => item.id === id); if (!set || same(set.reviewSettings, settings)) return;
     set.reviewSettings = clone(settings); this.save();
+  }
+  setStudySetPracticeSettings(id: string, settings: NonNullable<StudySet["practiceSettings"]>): void {
+    const set = this.studySets.find(item => item.id === id); if (!set || same(set.practiceSettings, settings)) return;
+    set.practiceSettings = clone(settings); this.save();
+  }
+  addPracticeAttempt(input: PracticeAttemptInput): PracticeAttempt {
+    if (!this.studySets.some(set => set.id === input.studySetId) || !this.cardsForStudySet(input.studySetId).some(card => card.id === input.cardId)) throw new Error("卡片不在所选学习集中");
+    if (typeof input.answer !== "string" || !input.answer.trim() || !["correct", "wrong", "partial"].includes(input.verdict)) throw new Error("请填写答案并选择判定结果");
+    if (input.correctionOf) {
+      const original = this.practiceAttempts.find(attempt => attempt.id === input.correctionOf);
+      if (!original || original.cardId !== input.cardId || original.studySetId !== input.studySetId || original.questionId !== input.questionId || original.verdict === "correct") throw new Error("原作答不存在或无法订正");
+    }
+    let id: string;
+    do { id = uid("attempt"); } while (this.practiceAttempts.some(attempt => attempt.id === id));
+    const attempt: PracticeAttempt = { id, cardId: input.cardId, studySetId: input.studySetId, at: new Date().toISOString(), answer: input.answer,
+      verdict: input.verdict, ...(input.mistake && { mistake: input.mistake }), ...(input.correctionOf && { correctionOf: input.correctionOf }),
+      ...(input.questionId && { questionId: input.questionId }), ...(input.questionKind && { questionKind: input.questionKind }) };
+    this.practiceAttempts.push(attempt); this.save(); return clone(attempt);
   }
   private importUnassigned(paths: string[], canvasId: string): void {
     const ids = this.nodes.filter(n => !n.canvasId && n.docPath && paths.includes(n.docPath)).map(n => n.id);

@@ -26,6 +26,7 @@ import { openWebImport } from "./import/webImport";
 import { ResearchView, VIEW_TYPE_RESEARCH } from "./research/view";
 import { updatePageCollectionSourcePath } from "./documents/pageCollection";
 import { openReviewDecks } from "./review/decks";
+import { openPractice } from "./review/practice";
 import { SourceRecoveryPrompts } from "./documents/recoveryPrompts";
 import { openCardLink } from "./study/cardLink";
 import { aiServiceFor } from "./ai/panel";
@@ -209,6 +210,7 @@ export default class MarginStudyPlugin extends Plugin {
       name: "开始复习（到期的卡）",
       callback: () => startReview(this),
     });
+    this.addCommand({ id: "start-practice", name: "刷题练习（不改变复习进度）", callback: () => openPractice(this) });
 
     this.addCommand({
       id: "open-sidebar",

@@ -34,6 +34,29 @@ export interface ReviewLog {
   initialization?: boolean;
 }
 
+export type PracticeVerdict = "correct" | "wrong" | "partial";
+
+export interface PracticeAttempt {
+  id: string;
+  cardId: string;
+  studySetId: string;
+  at: string;
+  answer: string;
+  verdict: PracticeVerdict;
+  mistake?: string;
+  correctionOf?: string;
+  questionId?: string;
+  questionKind?: "basic" | "cloze" | "occlusion";
+}
+
+export interface PracticeAttemptInput extends Omit<PracticeAttempt, "id" | "at"> {}
+
+export interface StudySetPracticeSettings {
+  deckId?: string;
+  tags?: string[];
+  favorite?: boolean;
+}
+
 export interface GradeOptions {
   questionId?: string;
   elapsedMs?: number;

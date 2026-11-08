@@ -6,10 +6,10 @@ import { reviewDecksForData } from "./reviewDecks";
 
 /** Several retained card versions can refer to the same historical review event. */
 type RetainedReviewLog = ReviewLog & { conflictEventId?: string };
-type Collection = "cards" | "nodes" | "studySets" | "canvases" | "documents" | "cardTemplates" | "sceneTemplates" | "reviewLogs" | "reviewPending" | "reviewDecks";
+type Collection = "cards" | "nodes" | "studySets" | "canvases" | "documents" | "cardTemplates" | "sceneTemplates" | "reviewLogs" | "practiceAttempts" | "reviewPending" | "reviewDecks";
 type RecordWithId = { id: string; [field: string]: unknown };
 type IdMaps = Record<Collection, Map<string, string>>;
-const collections: Collection[] = ["cards", "nodes", "studySets", "canvases", "documents", "cardTemplates", "sceneTemplates", "reviewLogs", "reviewPending", "reviewDecks"];
+const collections: Collection[] = ["cards", "nodes", "studySets", "canvases", "documents", "cardTemplates", "sceneTemplates", "reviewLogs", "practiceAttempts", "reviewPending", "reviewDecks"];
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 
 // Object insertion order has no bearing on a conflict; list order still does.
@@ -132,6 +132,8 @@ export function mergePreservingVersions(local: PluginData, remote: PluginData): 
     if (collection === "studySets") {
       if (Array.isArray(item.cardIds)) item.cardIds = (item.cardIds as string[]).map(id => mapped("cards", id));
       if (item.reviewDeckId) item.reviewDeckId = mapped("reviewDecks", item.reviewDeckId as string);
+      const practice = item.practiceSettings as { deckId?: string } | undefined;
+      if (practice?.deckId) practice.deckId = mapped("reviewDecks", practice.deckId);
       const scene = item.scene as { templateId?: string } | undefined;
       if (scene && typeof scene.templateId === "string") scene.templateId = mapped("sceneTemplates", scene.templateId);
       const destination = item.excerptDestination as { canvasId?: string; nodeId?: string } | undefined;
@@ -156,6 +158,11 @@ export function mergePreservingVersions(local: PluginData, remote: PluginData): 
       if (saved.pendingBefore) saved.pendingBefore = { ...saved.pendingBefore, cardId: mapped("cards", saved.pendingBefore.cardId), questionId: questionId(saved.pendingBefore.questionId), scopeId: saved.pendingBefore.scopeId ? mapped("canvases", saved.pendingBefore.scopeId) : undefined,
         ...(saved.pendingBefore.deckId && { deckId: mapped("reviewDecks", saved.pendingBefore.deckId) }) };
       if (item.id !== original.id) log.conflictEventId = reviewEventId(original as unknown as ReviewLog);
+    } else if (collection === "practiceAttempts") {
+      if (typeof item.cardId === "string") item.cardId = mapped("cards", item.cardId);
+      if (typeof item.studySetId === "string") item.studySetId = mapped("studySets", item.studySetId);
+      if (typeof item.questionId === "string") item.questionId = questionId(item.questionId);
+      if (typeof item.correctionOf === "string") item.correctionOf = mapped("practiceAttempts", item.correctionOf);
     } else if (collection === "reviewPending") {
       const pending = item as unknown as ReviewPending;
       pending.cardId = mapped("cards", pending.cardId); pending.questionId = questionId(pending.questionId);

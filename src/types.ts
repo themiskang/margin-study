@@ -273,6 +273,7 @@ export interface StudySet {
   scene?: StudySceneSelection;
   recallSettings?: { options: Record<RecallOptionKey, boolean>; coverAll: boolean; hintLanguage: "auto" | "zh" | "en"; mode?: "in-place" | "layered" };
   reviewSettings?: import("./review/contracts").StudySetReviewSettings;
+  practiceSettings?: import("./review/contracts").StudySetPracticeSettings;
 }
 
 export interface FixedMindmapView {
@@ -584,6 +585,7 @@ export interface PluginData {
   writerId?: string;
   savedAt?: string;
   reviewLogs?: import("./review/contracts").ReviewLog[];
+  practiceAttempts?: import("./review/contracts").PracticeAttempt[];
   reviewPending?: import("./review/contracts").ReviewPending[];
   reviewDecks?: ReviewDeck[];
   activeReviewDeckId?: string;

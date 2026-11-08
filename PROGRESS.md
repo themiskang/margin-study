@@ -1658,3 +1658,22 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - 证据：evidence/acceptance-20261106/CC-A20-RESULT.md（3 张截图 + 逐项数值）
 - 观察（非断言失败）：产品无「删除卡组」公开 API，清理用 Store mutate 按备份逐切片恢复；备份与终态逐键比较仅 revision/savedAt 不同
 - 下一步第一动作：批次 A3 下一张 A21（刷题范围/作答历史/订正）
+
+## 2026-11-09 · A21 刷题范围、作答历史与订正
+
+- 完成定义：四项原卡断言各两轮改前失败、改后通过；全量 verify；构建安装桌面隔离库并核对 SHA-256；宿主 UI 交 CC 前注明运行时脚本身份核对。
+- 改前合成 Chromium 两轮均 0/4：四项均因缺少独立刷题入口失败，结果分别为 `/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-a21-ui-f9jPeL/results.json`、`/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-a21-ui-yH05Vf/results.json`。这证明入口缺失，不单独证明每个底层不变量失败。
+- 实现独立 Attempt、学习集筛选、刷题与订正 UI，并覆盖问答、填空、图片遮挡；库撤销及冲突合并保留记录。四项原卡断言改后两轮均通过，扩展检查各 9/9：`/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-a21-ui-KmH8m7/results.json`、`/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-a21-ui-FaWugb/results.json`。
+- 全量 `MARGINSTUDY_VERIFY_DIR=/tmp/a21-full-20261109 npm run verify` 通过 35/35 套件：A21 9/9、A20 4/4、Reader 224/224、Workspace 316/316、脑图手写 81/81；结果见 `/tmp/a21-full-20261109/results.json`。`git diff --check` 通过。
+- 已构建并安装桌面隔离库，源与安装文件逐字节一致：`main.js` SHA-256 `a428ce1b4d6b4fad9202ff33c3e0c8605f84823f90d9871122637d84b0a09de0`；`styles.css` SHA-256 `579654e132e4483dbac685b16ddbca719572afa494733efbfba09897f90a29e3`。隔离库 `data.json` 安装前后 SHA-256 均为 `202d466f7f239253fe8a79d3cb56fbdfb2866469d4e79c4af1996c230db2fb82`。未重载宿主，安装不代表运行时已加载此构建。
+- 宿主 UI 留 CC 实机验：验收前在隔离库单实例确认插件已重载，用 `Debugger.getScriptSource` 对当前 `plugin:margin-study` 脚本核对 `openPractice`、`addPracticeAttempt`、`setStudySetPracticeSettings`、`data-correct-attempt`，并核对安装文件 `main.js` 上述 SHA-256；旧脚本未命中新符号时不得把旧结果当成 A21。使用合成卡片，验证三次作答、第二次订正、FSRS/日志/待复习隔离、学习集筛选关闭重开及与 A20 互不覆盖，并清理合成数据后比对原数据。
+- 证据边界：改前四项两轮均因独立入口不存在而失败，不能据此宣称底层隔离不变量单独红灯；改后使用隔离 Chromium、内存 Store 和宿主替身，不能宣称真实 Obsidian UI 已验收。未操作 adb、真实库或 `evidence/**`，未提交。
+- 本包自动验收、构建安装及登记完成；唯一未覆盖项为已明确留给 CC 的宿主实机 UI 流程。下一步第一动作：CC 按上述脚本身份前置验证隔离宿主，再执行合成数据验收与清理。
+
+## 2026-11-09 02:00 A21 完成（批次 A3 第二张）
+- 完成：A21 刷题范围/作答历史/订正，自动验收 4/4（改前两轮失败、改后两轮通过）、扩展验收各 9/9、verify 35/35（Workspace 316/316、Reader 224/224）
+- 结论：结论：CC 实机四项全 pass —— 同卡 3 次作答产生 3 个唯一 Attempt；订正追加 1 条且原 Attempt 深比较不变；srs 全对象/reviewLogs/reviewPending/reviewHistory 逐字段相同（FSRS 隔离）；练习范围四控件重开逐项恢复且与 A20 复习筛选互不覆盖、跨学习集不继承
+- 前置：CC 用 Debugger.getScriptSource 核对运行时脚本（重载前 scriptId 228 为 A20 构建缺 A21 符号，重载后 264 全命中）
+- 口径限制（Codex 如实登记）：改前两轮失败均因「独立刷题入口不存在」，**不代表已单独证明底层隔离不变量在改前失败**；改后实机的 FSRS 隔离项才给出正向证据
+- 证据：evidence/acceptance-20261106/CC-A21-RESULT.md（3 张截图 + 逐项数值 + 清理后逐键比对仅 revision/savedAt 不同）
+- 下一步第一动作：判断 A22 补（APKG 媒体/模板/失败路径）是否已由既有的 apkg 9/9 套件满足；若满足则 A3 收官，进入 A4（A26/A27）

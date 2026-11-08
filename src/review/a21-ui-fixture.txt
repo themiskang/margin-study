@@ -1,0 +1,202 @@
+import { Store } from '__PROJECT__/src/model/store';
+import * as review from '__PROJECT__/src/review/reviewView';
+import { mergePreservingVersions } from '__PROJECT__/src/model/conflicts';
+import { MarkdownRenderer } from 'obsidian';
+
+(HTMLElement.prototype as any).empty = function () { this.replaceChildren(); };
+(MarkdownRenderer as any).render = async (_app: any, text: string, host: HTMLElement) => { host.textContent = text; };
+const results: any[] = [];
+(window as any).results = results;
+const wait = (ms = 60) => new Promise(done => setTimeout(done, ms));
+const assert = (value: any, message: string) => { if (!value) throw new Error(message); };
+const same = (actual: any, expected: any, message: string) => assert(JSON.stringify(actual) === JSON.stringify(expected), `${message}: ${JSON.stringify(actual)} != ${JSON.stringify(expected)}`);
+const field = <T extends HTMLElement>(label: string): T => {
+  const found = document.querySelector<T>(`[aria-label="${label}"]`);
+  assert(found, `缺少字段「${label}」`); return found!;
+};
+function button(name: string): HTMLButtonElement {
+  const found = [...document.querySelectorAll<HTMLButtonElement>('button')].find(node => node.isConnected && !node.closest('[hidden]') && (node.getAttribute('aria-label') === name || node.textContent === name));
+  assert(found, `缺少按钮「${name}」`); return found!;
+}
+async function test(name: string, run: () => Promise<void>) {
+  try { document.querySelectorAll('.ms-modal-bg').forEach(node => node.remove()); await run(); results.push({ name, passed: true }); }
+  catch (error) { results.push({ name, passed: false, error: String(error) }); }
+}
+async function fresh() {
+  let disk: any = {};
+  const files = new Map<string, string>();
+  const app: any = { vault: { getAbstractFileByPath: () => null, getFiles: () => [], adapter: {
+    exists: async (path: string) => files.has(path), mkdir: async (path: string) => files.set(path, ''),
+    write: async (path: string, value: string) => files.set(path, value), read: async (path: string) => files.get(path),
+  } } };
+  const host: any = { app, loadData: async () => structuredClone(disk), saveData: async (value: any) => { disk = structuredClone(value); } };
+  const store = new Store(host); await store.load();
+  const set = store.createStudySet('学习集甲', ['a21.pdf']);
+  const cards = ['甲', '乙', '丙'].map((name, index) => ({ id: `a21-${index}`, docPath: 'a21.pdf', page: index + 1,
+    type: 'flashcard' as const, front: `问题${name}`, back: `答案${name}`, tags: index === 1 ? ['法律/民法'] : ['其他'],
+    links: [], favorite: index === 1, createdAt: `2020-01-0${index + 1}T00:00:00.000Z` }));
+  for (const card of cards) store.addCard(card);
+  const deck = store.createReviewDeck('A21 卡组', set.id);
+  store.enqueueReviewInDeck(cards.map(card => card.id), deck.id, store.activeCanvasId, new Date('2020-01-05T00:00:00Z'));
+  const plugin: any = { store, app };
+  return { store, plugin, host, set, deck, cards };
+}
+async function open(plugin: any) {
+  assert(typeof (review as any).openPractice === 'function', '缺少独立刷题入口');
+  await (review as any).openPractice(plugin); await wait();
+}
+async function submit(answer: string, verdict: string, mistake = '') {
+  field<HTMLTextAreaElement>('练习答案').value = answer;
+  field<HTMLTextAreaElement>('练习错因').value = mistake;
+  button('提交答案').click(); await wait(); button(verdict).click(); await wait();
+}
+
+try {
+  await test('断言1：同一卡连续三次作答生成唯一 Attempt', async () => {
+    const { store, plugin, set, cards, host } = await fresh(); await open(plugin);
+    await submit('第一次', '判为正确'); button('再做一次').click(); await wait();
+    await submit('第二次', '判为错误', '误读'); button('再做一次').click(); await wait();
+    await submit('第三次', '判为部分正确');
+    const attempts = (store as any).practiceAttempts;
+    assert(attempts.length === 3, `Attempt 数不是 3: ${attempts.length}`);
+    assert(new Set(attempts.map((item: any) => item.id)).size === 3, 'Attempt ID 不唯一');
+    assert(attempts.every((item: any) => item.cardId === cards[0].id && item.studySetId === set.id), '卡片或学习集 ID 不一致');
+    same(attempts.map((item: any) => [item.answer, item.verdict]), [['第一次', 'correct'], ['第二次', 'wrong'], ['第三次', 'partial']], '作答或判定未独立记录');
+    await store.flush(); const reopened = new Store(host); await reopened.load(); same((reopened as any).practiceAttempts, attempts, '重开后作答记录变化');
+  });
+
+  await test('断言2：订正追加并保持第2条记录逐字段不变', async () => {
+    const { store, plugin } = await fresh(); await open(plugin);
+    await submit('第一次', '判为正确'); button('再做一次').click(); await wait();
+    await submit('第二次', '判为错误', '概念混淆'); button('再做一次').click(); await wait();
+    await submit('第三次', '判为部分正确');
+    const original = structuredClone((store as any).practiceAttempts[1]);
+    const correction = document.querySelector<HTMLButtonElement>(`[data-correct-attempt="${original.id}"]`);
+    assert(correction, '缺少第2次作答的订正入口'); correction!.click(); await wait();
+    await submit('第二次订正', '判为正确');
+    const attempts = (store as any).practiceAttempts;
+    assert(attempts.length === 4 && attempts[3].correctionOf === original.id, '订正没有追加或指向错误记录');
+    same(attempts[1], original, '第2条原记录被修改');
+    assert(attempts[3].id !== original.id && attempts[3].answer === '第二次订正', '订正内容或 ID 错误');
+  });
+
+  await test('断言3：作答判定与订正不改变 FSRS、复习日志和待复习', async () => {
+    const { store, plugin, host } = await fresh();
+    const before = structuredClone({ srs: store.srs, logs: store.reviewLogs, pending: store.reviewPending, history: store.reviewHistory });
+    const check = (stage: string) => same({ srs: store.srs, logs: store.reviewLogs, pending: store.reviewPending, history: store.reviewHistory }, before, `${stage}改变复习状态`);
+    await open(plugin); check('打开练习');
+    field<HTMLTextAreaElement>('练习答案').value = '错误答案'; field<HTMLTextAreaElement>('练习错因').value = '粗心';
+    button('提交答案').click(); await wait(); check('提交答案'); button('判为错误').click(); await wait(); check('判定错误');
+    const id = (store as any).practiceAttempts[0].id;
+    document.querySelector<HTMLButtonElement>(`[data-correct-attempt="${id}"]`)!.click(); await wait(); check('进入订正');
+    field<HTMLTextAreaElement>('练习答案').value = '修正答案'; button('提交答案').click(); await wait(); check('提交订正');
+    button('判为正确').click(); await wait(); check('判定订正');
+    assert((store as any).practiceAttempts.length === 2, '未完成作答和订正');
+    await store.flush(); const reopened = new Store(host); await reopened.load();
+    same({ srs: reopened.srs, logs: reopened.reviewLogs, pending: reopened.reviewPending, history: reopened.reviewHistory }, before, '重开后复习状态变化');
+  });
+
+  await test('断言4：学习集练习范围筛选重开恢复，与复习筛选独立', async () => {
+    const { store, plugin, host, set, deck } = await fresh();
+    const other = store.createStudySet('学习集乙', ['b21.pdf']);
+    store.addCard({ id: 'b21-card', docPath: 'b21.pdf', type: 'flashcard', front: '乙集问题', back: '乙集答案', tags: [], links: [], createdAt: '2020-01-01T00:00:00Z' });
+    store.enqueueReviewInDeck(['b21-card'], deck.id); store.setActiveStudySet(set.id);
+    const reviewSettings = { dueOnly: true, tags: ['其他'], favorite: false, order: 'text' as const };
+    store.setStudySetReviewSettings(set.id, reviewSettings); await open(plugin);
+    field<HTMLSelectElement>('练习卡组范围').value = deck.id;
+    field<HTMLInputElement>('练习筛选标签').value = '法律';
+    field<HTMLInputElement>('练习只看收藏').checked = true;
+    button('应用练习范围').click(); await wait();
+    assert(document.querySelector('[data-practice-card="a21-1"]'), '卡组、父标签、收藏筛选未共同生效');
+    button('关闭练习').click(); await store.flush();
+    const reopened = new Store(host); await reopened.load(); plugin.store = reopened; await open(plugin);
+    assert(field<HTMLSelectElement>('练习卡组范围').value === deck.id, '卡组范围未恢复');
+    assert(field<HTMLInputElement>('练习筛选标签').value === '法律', '标签筛选未恢复');
+    assert(field<HTMLInputElement>('练习只看收藏').checked, '收藏筛选未恢复');
+    assert(document.querySelector('[data-practice-card="a21-1"]'), '重建后筛选没有生效');
+    same(reopened.studySets.find(item => item.id === set.id)?.reviewSettings, reviewSettings, '练习覆盖复习筛选');
+    const practiceSettings = structuredClone((reopened.studySets.find(item => item.id === set.id) as any)?.practiceSettings);
+    reopened.setStudySetReviewSettings(set.id, { ...reviewSettings, tags: ['另一复习筛选'] });
+    same((reopened.studySets.find(item => item.id === set.id) as any)?.practiceSettings, practiceSettings, '复习覆盖练习筛选');
+    field<HTMLSelectElement>('练习学习集').value = other.id; field<HTMLSelectElement>('练习学习集').dispatchEvent(new Event('change', { bubbles: true })); await wait();
+    assert(field<HTMLSelectElement>('练习学习集').value === other.id, '未切换到其他学习集');
+    assert(!field<HTMLInputElement>('练习筛选标签').value && !field<HTMLInputElement>('练习只看收藏').checked, '其他学习集继承了练习筛选');
+    assert(document.querySelector('[data-practice-card="b21-card"]') && !document.querySelector('[data-practice-card="a21-1"]'), '学习集范围未隔离');
+    field<HTMLSelectElement>('练习学习集').value = set.id; field<HTMLSelectElement>('练习学习集').dispatchEvent(new Event('change', { bubbles: true })); await wait();
+    assert(field<HTMLInputElement>('练习筛选标签').value === '法律' && field<HTMLInputElement>('练习只看收藏').checked, '切回学习集未恢复筛选');
+  });
+
+  await test('填空与图片遮挡按题型展示问题和参考答案，可分别记录', async () => {
+    const { store, plugin, cards } = await fresh();
+    const image = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="red"/></svg>');
+    store.updateCard(cards[0].id, { front: '填空 {{c1::细胞}} 和 {{c2::器官}}', image,
+      occlusions: [{ id: 'mask', x: 0.1, y: 0.1, width: 0.5, height: 0.5 }] });
+    await open(plugin);
+    const panel = () => document.querySelector<HTMLElement>('[data-practice-card]')!;
+    assert(panel().textContent?.includes('填空题') && !panel().querySelector('.ms-review-question-text')?.textContent?.includes('细胞'), '首个填空未遮住对应答案');
+    field<HTMLTextAreaElement>('练习答案').value = '细胞'; button('提交答案').click(); await wait();
+    assert(field<HTMLElement>('参考答案').textContent?.includes('细胞'), '填空参考答案未揭示'); button('判为正确').click(); await wait();
+    button('下一题').click(); await wait();
+    assert(panel().textContent?.includes('填空题') && !panel().querySelector('.ms-review-question-text')?.textContent?.includes('器官'), '第二个填空未独立遮住答案');
+    await submit('器官', '判为部分正确'); button('下一题').click(); await wait();
+    assert(panel().textContent?.includes('图片遮挡题') && panel().querySelector('[aria-label="待回忆的遮挡区域"]'), '图片遮挡题未显示遮罩');
+    await submit('图片区域', '判为错误', '不认识');
+    const attempts = (store as any).practiceAttempts;
+    same(attempts.map((item: any) => item.questionKind), ['cloze', 'cloze', 'occlusion'], '题型未记录');
+    assert(new Set(attempts.map((item: any) => item.questionId)).size === 3, '不同题目未保留独立题目身份');
+  });
+
+  await test('空答案不能提交，判定前可修改且不会提前写入记录', async () => {
+    const { store, plugin } = await fresh(); await open(plugin); button('提交答案').click(); await wait();
+    assert((store as any).practiceAttempts.length === 0 && !document.querySelector('[aria-label="参考答案"]'), '空答案被接受');
+    field<HTMLTextAreaElement>('练习答案').value = '草稿'; button('提交答案').click(); await wait();
+    assert((store as any).practiceAttempts.length === 0, '尚未判定就写入 Attempt');
+    button('修改答案').click(); await wait(); assert(field<HTMLTextAreaElement>('练习答案').value === '草稿', '修改答案丢失草稿');
+    await submit('最终答案', '判为正确'); assert((store as any).practiceAttempts[0].answer === '最终答案', '未记录最终答案');
+  });
+
+  await test('库撤销和重做不抹掉之后的练习记录与筛选', async () => {
+    const { store, plugin, set, host } = await fresh();
+    store.addCard({ id: 'undo-a21', docPath: '', type: 'flashcard', front: '撤销测试', tags: [], links: [], createdAt: '2020-01-01T00:00:00Z' });
+    await open(plugin); field<HTMLInputElement>('练习筛选标签').value = '其他'; button('应用练习范围').click(); await wait();
+    await submit('独立记录', '判为错误', '误读');
+    const attempts = structuredClone((store as any).practiceAttempts), settings = structuredClone((store.studySets.find(item => item.id === set.id) as any).practiceSettings);
+    store.undoLibraryChange(); same((store as any).practiceAttempts, attempts, '撤销抹掉练习历史');
+    same((store.studySets.find(item => item.id === set.id) as any).practiceSettings, settings, '撤销抹掉练习筛选');
+    store.redoLibraryChange(); same((store as any).practiceAttempts, attempts, '重做抹掉练习历史');
+    same((store.studySets.find(item => item.id === set.id) as any).practiceSettings, settings, '重做抹掉练习筛选');
+    await store.flush(); const reopened = new Store(host); await reopened.load(); same((reopened as any).practiceAttempts, attempts, '撤销重做后重开丢失历史');
+  });
+
+  await test('重开后可从历史订正，不覆盖原错答', async () => {
+    const { store, plugin, host } = await fresh(); await open(plugin); await submit('首次错误', '判为错误', '旧错因');
+    const original = structuredClone((store as any).practiceAttempts[0]); button('关闭练习').click(); await store.flush();
+    const reopened = new Store(host); await reopened.load(); plugin.store = reopened; await open(plugin);
+    const correction = document.querySelector<HTMLButtonElement>(`[data-correct-attempt="${original.id}"]`);
+    assert(correction && !correction.disabled, '重开后没有可用订正入口'); correction!.click(); await wait();
+    await submit('重开后订正', '判为正确'); same((reopened as any).practiceAttempts[0], original, '重开后订正改变原记录');
+    assert((reopened as any).practiceAttempts[1].correctionOf === original.id, '重开后订正未关联原作答');
+  });
+
+  await test('冲突合并保留双方作答并重映射卡片、学习集、订正及卡组', async () => {
+    const { store, plugin, host, set, deck } = await fresh(); await open(plugin);
+    await submit('原作答', '判为错误', '误读'); const original = (store as any).practiceAttempts[0];
+    document.querySelector<HTMLButtonElement>(`[data-correct-attempt="${original.id}"]`)!.click(); await wait(); await submit('原订正', '判为部分正确');
+    (store as any).setStudySetPracticeSettings(set.id, { deckId: deck.id, tags: ['其他'] }); await store.flush();
+    const local = await host.loadData(), remote = structuredClone(local);
+    remote.cards.find((card: any) => card.id === original.cardId).front = '外部版本题目';
+    remote.studySets.find((item: any) => item.id === set.id).name = '外部版本学习集';
+    remote.reviewDecks.find((item: any) => item.id === deck.id).name = '外部版本卡组';
+    remote.practiceAttempts[0].answer = '外部作答'; remote.practiceAttempts[1].answer = '外部订正';
+    const merged = mergePreservingVersions(local, remote);
+    assert(merged.practiceAttempts?.length === 4, '冲突合并丢失作答');
+    const remoteOriginal = merged.practiceAttempts!.find(item => item.answer === '外部作答')!;
+    const remoteCorrection = merged.practiceAttempts!.find(item => item.answer === '外部订正')!;
+    assert(remoteOriginal.id !== original.id && remoteCorrection.correctionOf === remoteOriginal.id, '订正链未重映射');
+    assert(remoteOriginal.cardId !== original.cardId && remoteOriginal.studySetId !== set.id, '卡片或学习集未重映射');
+    const remoteSet = merged.studySets!.find(item => item.id === remoteOriginal.studySetId)!;
+    assert(remoteSet.practiceSettings?.deckId !== deck.id && merged.reviewDecks!.some(item => item.id === remoteSet.practiceSettings?.deckId), '练习卡组未重映射');
+    assert(remoteCorrection.cardId === remoteOriginal.cardId && remoteCorrection.questionId?.startsWith(remoteOriginal.cardId), '订正题目指向错误卡片');
+  });
+} catch (error) { (window as any).fatal = String(error); }
+(window as any).done = true;

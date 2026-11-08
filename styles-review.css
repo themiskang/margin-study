@@ -39,6 +39,23 @@
 .ms-review-question-settings { margin:16px 0; padding:12px; border:1px solid var(--background-modifier-border); border-radius:8px; }
 .ms-review-question-settings>select { margin-bottom:10px; }
 .ms-review-question-preview { margin:10px 0; padding:12px; min-height:48px; border-left:3px solid var(--interactive-accent); background:var(--background-secondary); }
+.ms-modal.ms-practice-modal { width:min(900px,94vw); max-height:90vh; overflow:auto; }
+.ms-practice-scope { padding:14px; border:1px solid var(--background-modifier-border); border-radius:8px; }
+.ms-practice-scope-fields { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); align-items:end; gap:10px; margin-bottom:12px; }
+.ms-practice-scope-fields .ms-search { margin:0; }
+.ms-practice-scope p { margin:8px 0 0; }
+.ms-practice-header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.ms-practice-question { padding:16px; border:1px solid var(--background-modifier-border); border-radius:8px; }
+.ms-practice-response { display:grid; gap:12px; margin-top:18px; }
+.ms-practice-response textarea { width:100%; min-height:64px; box-sizing:border-box; resize:vertical; }
+.ms-practice-response>button { justify-self:start; }
+.ms-practice-verdicts { display:flex; flex-wrap:wrap; gap:8px; }
+.ms-practice-reference { padding:12px; background:var(--background-secondary); border-left:3px solid var(--interactive-accent); }
+.ms-practice-correction { color:var(--text-accent); }
+.ms-practice-history { margin:16px 0; }
+.ms-practice-history summary { cursor:pointer; font-weight:600; }
+.ms-practice-history-row { padding:12px 0; border-bottom:1px solid var(--background-modifier-border); overflow-wrap:anywhere; }
+.ms-practice-history-row p { margin:6px 0; }
 @media(max-width:600px) { .ms-deck-summary { grid-template-columns:repeat(2,1fr); } .ms-review-navigation { gap:4px; } .ms-review-btns .ms-grade { min-width:45%; } }
 
 /* Reference: MarginNote 4 Max, 1512 × 949 logical desktop pixels. */

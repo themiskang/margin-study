@@ -14,6 +14,7 @@ import { uid } from "../utils/id";
 import { reviewMaterial } from "./presentation";
 import { nativeReviewStage, reviewIconButton, setReviewFavorite } from "./nativeStage";
 import { cardCommentImage, openCardInkComment } from "../cards/inkComment";
+import { openPractice } from "./practice";
 
 type CardEditor = (plugin: MarginStudyPlugin, card: Card, onChanged?: () => void) => void;
 let cardEditor: CardEditor | undefined;
@@ -60,6 +61,7 @@ export function openReviewDecks(plugin: MarginStudyPlugin, options: DeckPickerOp
     const deck = chosen ? store.getReviewDeck(chosen) : undefined;
     if (!deck) {
       body.append(el("p", { class: "ms-muted", text: set ? "当前学习集尚未选择复习卡组。请选择现有卡组或新建，确认后再使用。" : "先建立卡组，再将学习卡片加入其中；复习进度会按卡组分别保存。" }));
+      const practice = el("button", { class: "ms-btn", text: "刷题练习" }); practice.addEventListener("click", () => { close(); openPractice(plugin, { studySetId }); }); body.append(practice);
       const cancel = el("button", { class: "ms-btn", text: "关闭" }); cancel.addEventListener("click", close); body.append(cancel); return;
     }
     const summary = store.reviewDeckSummary(deck.id);
@@ -93,7 +95,8 @@ export function openReviewDecks(plugin: MarginStudyPlugin, options: DeckPickerOp
     const cancel = el("button", { class: "ms-btn", text: "关闭" }); cancel.addEventListener("click", close);
     const browse = el("button", { class: "ms-btn", text: "浏览全部卡片" });
     browse.addEventListener("click", () => { close(); openReviewDeckBrowser(plugin, deck.id, { studySetId }); });
-    actions.append(choose, browse, start, cancel); body.append(actions);
+    const practice = el("button", { class: "ms-btn", text: "刷题练习" }); practice.addEventListener("click", () => { close(); openPractice(plugin, { studySetId }); });
+    actions.append(choose, browse, start, practice, cancel); body.append(actions);
 
     const members = el("details", { class: "ms-deck-members" }); members.append(el("summary", { text: `卡组成员 · ${deck.cardIds.length} 张` }));
     for (const id of deck.cardIds) {

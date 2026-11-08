@@ -10,6 +10,8 @@
 - 收藏、标签、来源、颜色、最后评分可交集筛选；支持加入顺序、文档位置、文本与稳定随机排序。
 - 评分背面可进入来源文档或所属学习集的脑图，并返回原题；当前会话、已评分进度和未提交批注保持不变。来源不可用时恢复复习并提示。
 - 浏览范围（全部或仅到期）及筛选、排序按学习集保存。无学习集时沿用临时选择，不会自动写入其他学习集；评分仍仅包含到期题。
+- 「刷题练习」独立于到期复习，可在命令面板、复习侧栏或卡组管理进入。按学习集、卡组、标签和收藏筛选；练习设置与复习设置各自按学习集保存。
+- 问答、填空和图片遮挡题提交后由使用者对照参考答案自判正确、错误或部分正确；错误和部分正确可记录错因并从历史追加订正，不修改原作答。练习不改变 FSRS、待复习队列和复习历史。
 - 标签使用原有字符串保存完整路径，不迁移旧标签。搜索无斜杠的父标签可匹配自身及后代；带斜杠的完整路径只匹配该路径。
 - 卡组管理可设最长间隔，单位为整数天，留空使用原有调度。评分预览与实际到期时间使用同一卡组上限，不修改其他卡组及历史排程。
 - 原始内容与复习问题分别保存。标题、强调内容、全文和手写自定义问题只改变复习投影；批量设置默认保留已有自定义问题。
@@ -39,6 +41,7 @@ node src/review/acceptance.mjs --audit
 node src/review/pending-acceptance.mjs
 node src/review/deck-acceptance.mjs
 node src/review/a20-acceptance.mjs
+node src/review/a21-acceptance.mjs
 node src/review/ui-acceptance.mjs --output-dir src/review/acceptance-evidence
 node src/review/ui-acceptance.mjs --native-only --output-dir src/review/native-acceptance-evidence
 npx tsc --noEmit

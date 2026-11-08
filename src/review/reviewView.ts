@@ -15,6 +15,7 @@ import { filterReviewCards, filterAndOrderReviewQuestions } from "./selection";
 import { uid } from "../utils/id";
 import { nativeReviewStage, reviewIconButton, setReviewFavorite } from "./nativeStage";
 import { openCardInkComment } from "../cards/inkComment";
+export { openPractice } from "./practice";
 
 export function completedReviewHistory(logs: ReviewLog[], cardId?: string, scopeId?: string): ReviewLog[] {
   return logs.filter(log => !log.initialization && (!cardId || log.cardId === cardId) && log.scopeId === scopeId)

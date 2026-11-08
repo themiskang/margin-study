@@ -7,6 +7,7 @@ import { OutlineRenderer } from "../outline/outlineRenderer";
 import { CardBoardRenderer } from "../board/cardBoardRenderer";
 import { MindmapRenderer } from "../mindmap/mindmapRenderer";
 import { renderStudyControls } from "../study/studyControls";
+import { openPractice } from "../review/practice";
 
 export const VIEW_TYPE_SIDEBAR = "margin-study-sidebar";
 
@@ -197,6 +198,8 @@ export class SidebarView extends ItemView {
     const btn = el("button", { class: "ms-btn primary", text: "开始复习", style: "margin:10px 0;width:100%" });
     btn.addEventListener("click", () => startReview(this.plugin));
     this.bodyEl.append(btn);
+    const practice = el("button", { class: "ms-btn", text: "刷题练习", style: "margin:0 0 10px;width:100%" });
+    practice.addEventListener("click", () => openPractice(this.plugin)); this.bodyEl.append(practice);
 
     if (!reviewable.length) {
       this.bodyEl.append(
