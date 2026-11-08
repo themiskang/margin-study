@@ -730,7 +730,7 @@ try{
     const cards=p.store.cards.length,anns=(await p.store.loadAnnotations(p.alpha.path)).length;
     button(dock,'块选择').click();await until(()=>p.root.querySelectorAll('[aria-label^="辅助摘录图片"]').length===2,'images missing');
     const text=p.root.querySelector<HTMLButtonElement>('[aria-label^="辅助摘录文字"]')!,images=[...p.root.querySelectorAll<HTMLButtonElement>('[aria-label^="辅助摘录图片"]')];text.click();images[1].click();button(p.root,'块选择：更多').click();button(p.root,'块选择：浓缩').click();
-    const modal=document.querySelector<HTMLElement>('.ms-modal')!,level=modal.querySelector<HTMLSelectElement>('[aria-label="浓缩档位"]')!;assert([...level.options].map(o=>o.textContent).join(',')==='一句话,要点清单,详述','tier labels incorrect');button(modal,'关闭').click();
+    const modal=document.querySelector<HTMLElement>('.ms-modal')!,level=modal.querySelector<HTMLSelectElement>('[aria-label="浓缩档位"]')!;assert([...level.options].map(o=>o.textContent).join(',')==='一句话,要点清单,脉络','tier labels incorrect');button(modal,'关闭').click();
     const action=button(p.root,'块选择：文本');action.click();action.click();await p.store.flush();const added=p.store.cards.slice(cards),source=(await p.store.loadAnnotations(p.alpha.path)).slice(anns);
     assert(added.length===1&&source.length===1&&source[0].type==='region'&&added[0].anchorAnnId===source[0].id,'mixed submission did not create one linked card');
     assert(added[0].front.includes('Mixed source text.')&&added[0].image===a&&added[0].images?.length===1&&added[0].images[0]===b,'mixed submission lost text or images');

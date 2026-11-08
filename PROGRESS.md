@@ -1,3 +1,12 @@
+## 2026-11-08（CC-A24 · 三档浓缩四项＋失败提示实机验收，只读串行）
+
+- 前置：磁盘 `main.js` sha `8d162634…0373` 与任务书一致；`disablePlugin/enablePlugin` 重载后 `Debugger.getScriptSource` 取活跃脚本（5 048 776 B，sha `4d7252014fb2…`），完整包含指定构建（offset 90，仅差 Obsidian 外壳包装）；`condense` 与 `SHA-256` 缓存键命中，`configVersion` 本构建不存在、由 `profile.revision` 承担（如实登记）；重载后业务对象逐字段不变。
+- 链路：既有本地桩绑定 `127.0.0.1:9`（非本次改动），页内临时包装 `AiService.request`/`DesktopChatTransport.stream`/`http.request` 三层计数，仅拦桩端点、其余放行（全程 `nonTargetHttp=0`）；面板从真实入口打开（块选择→选既有文字块→更多→浓缩）。
+- 四项**全 PASS**：① 同档两次 `provider/transport/stub`=1/1/1 不变、第二次「缓存命中」逐字同输出；② 切「要点」+1（2/2/2，cache 1→2）、切回「一句话」+0、补「脉络」+1 再回「一句话」+0；③ 清缓存联网 1 次（2→3）后 offline 断连再请求同档 **+0** 同输出；④ 样式普通↔引用↔普通三轮 3/3/3 不变、引用态 `> ` 前缀切换正确。失败提示 PASS：桩返 HTTP 503 → 状态行「AI 服务返回 HTTP 503，请检查地址、模型和密钥。」、输出空、失败不写缓存、手动重试仍显示同一失败（无自动重试/伪造成功）。
+- 收尾：面板与块选择关闭、回学习集主页；桩三层还原（`http.request` 描述符原生一致、profile/settings 逐字段不变、cache 清空）；测试 globalThis 已删。终读 revision 2504、cards 22/nodes 18/edges 2/documents 34/studySets 5/canvases 9/comments 0，与基线唯一差异 `canvases[8].lastDocumentPath`（本轮打开文档的界面状态，业务对象数全不变）。
+- 交付：`evidence/acceptance-20261106/CC-A24-RESULT.md` + 截图 3 张（CC-A24-01-cache / 02-failure / 03-home）；过程 JSON 在 `/tmp/ms-a24-cc-4bwzdh/`。未改产品代码、未提交、未改既有 evidence。
+- 首个下一步（总控/执行席）：A24 四项原断言自此有隔离宿主实机证据（此前仅合成层）；A24 父卡是否关闭仍须再审全部原验收依据（MN5 侧三档已有结果与原设置证据仍缺，沿用既有边界）。
+
 ## 2026-11-08（CC-A23-FINAL · A23 第 2–5 项实机验收，只读串行）
 
 - 前置断言：`Debugger.getScriptSource` 取 `plugin:margin-study` 运行时源码，活跃 scriptId **335**（sha `b3e26d69b495`、5 044 691 字符）内 `addAnswerActions` 命中 **3** 次、`saveAnswerBranch` 2 次；188（`bcb44f8d56fa`）命中 0 为旧构建残留。前置满足，本轮**未重载插件**。
@@ -1514,3 +1523,12 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - 全程外发网络 `realPass/fetch/xhr/ws = 0`，本地桩请求 14 次；页内 http/https hook 已还原（`httpRestored=true`）。
 - 副作用登记 **DEF-A23-2**：脚本在无转换可撤时点了撤销，回退既有「编辑学习集」事务（已用重做复原 2 笔）。收尾读数 cards 22 / nodes 18 / edges 2 / comments 0/0（等于基线），revision 2492（基线≈2491，计数器层面存在偏移，未写成完全回到基线）；临时对象 leftover 0，侧栏已关，已回学习集主页 `A17-验收-B`。
 - 仍缺：A23 三按钮在实机的可达性（需产品侧修复后补测第 2～5 项断言）。
+
+## 2026-11-08 · A24 三档浓缩
+
+- 原卡四项行为改前已经成立，无法如实提供四项改前失败证据，因此本卡的红灯交付条件未满足。改前独立测试两次均通过：`/tmp/a24-independent-before-1.log`、`/tmp/a24-independent-before-2.log`；分别覆盖同档一次、切换只补缺档、缓存命中时模拟服务离线。显示样式的真实界面测试两次均通过：`/tmp/a24-before-ui-1/workspace.log`、`/tmp/a24-before-ui-2/workspace.log`（各 305/305，包含样式变化后调用次数不变）。
+- 改后上述三项独立测试两次通过：`/tmp/a24-independent-after-1.log`、`/tmp/a24-independent-after-2.log`；界面测试两次通过：`/tmp/a24-after-ui-1/workspace.log`、`/tmp/a24-verify-20261108/workspace.log`。测试另覆盖文本、档位、语言、模型各自变化导致新请求；旧测试覆盖失败后用户手动重试及取消。
+- 缓存键为 `SHA-256(JSON.stringify([trim(text), images, level, trim(language), profile.id, profile.revision, profile.endpoint, profile.normalModel]))`，保留图片内容隔离；只缓存完整成功结果，合并并发同键请求。请求期间配置比较增加 endpoint 和 normalModel 检查；档位标签改为“脉络”，每次生成前刷新实际服务信息。已有失败提示对 `AiError` 显示分类原因，对未知异常保留通用提示，避免泄漏任意服务端内容。
+- `MARGINSTUDY_VERIFY_DIR=/tmp/a24-verify-20261108 npm run verify` 全部 32 个套件通过，Reader 222/222、Workspace 305/305。首次沙箱测试监听 localhost 报 EPERM，授权环境运行通过。
+- 已构建安装桌面隔离库，构建与安装 SHA-256 一致：`main.js` `8d1626348ef1c408d56adc2b401d424545be268e3aba125a891a2fa907ab0373`；`styles.css` `8e3cbe002ad1cdbf382b7188b5b2c923470571caa27bbe4e0cbb3be772919fba`。隔离库 `data.json` 安装前后均为 `5e89b7f2de146887412f787d0cf28bc1a9734971a7be46dafcf3488a3a2c011e`。未改真实库、`evidence/**`，未提交。
+- 未覆盖：真实桌面宿主中三档切换、样式、服务状态及失败提示的实际交互，交 CC 验收。下一步第一动作：验收方决定是否接受四项改前已通过的真实基线代替改前失败；CC 在隔离宿主复核实际界面与服务行为。

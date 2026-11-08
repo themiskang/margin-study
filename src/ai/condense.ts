@@ -12,6 +12,9 @@ const instructions: Record<CondenseLevel,string> = {
 };
 const canceled = () => new AiError("aborted", "已取消浓缩。");
 function serviceName(endpoint:string):string { try{return new URL(endpoint).host||"自定义服务";}catch{return "自定义服务";} }
+function sameConfiguration(left: ReturnType<AiService["configuration"]>, right: ReturnType<AiService["configuration"]>): boolean {
+  return left.id===right.id&&left.revision===right.revision&&left.endpoint===right.endpoint&&left.normalModel===right.normalModel;
+}
 
 /** Cache only completed results; display style never enters the request or cache key. */
 export class CondenseService {
@@ -34,7 +37,7 @@ export class CondenseService {
     if (input.signal?.aborted) throw canceled();
     const key=Array.from(new Uint8Array(digest),value=>value.toString(16).padStart(2,"0")).join("");
     const current=this.ai.configuration();
-    if(current.id!==profile.id||current.revision!==profile.revision||!this.ai.isBound())throw new AiError("changed","AI 配置已变化，请重新发起浓缩。");
+    if(!sameConfiguration(current,profile)||!this.ai.isBound())throw new AiError("changed","AI 配置已变化，请重新发起浓缩。");
     const hit=this.cache.get(key);if(hit)return {...hit,cached:true};
     let pending=this.pending.get(key);
     if(!pending){
@@ -42,7 +45,7 @@ export class CondenseService {
       const promise=this.ai.request({task:"condense",tier:"normal",text:`${instructions[input.level]} 输出语言：${language}。`,context:{text},images,signal:controller.signal}).then(response=>{
         if(controller.signal.aborted)throw canceled();
         const latest=this.ai.configuration();
-        if(latest.id!==profile.id||latest.revision!==profile.revision||!this.ai.isBound())throw new AiError("changed","AI 配置已变化，请重新发起浓缩。");
+        if(!sameConfiguration(latest,profile)||!this.ai.isBound())throw new AiError("changed","AI 配置已变化，请重新发起浓缩。");
         const result={text:response.text.trim(),cached:false,model:profile.normalModel,service:serviceName(profile.endpoint)};
         if(!result.text)throw new AiError("empty-result","服务未返回浓缩结果。");
         this.cache.set(key,result);return result;

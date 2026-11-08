@@ -249,7 +249,7 @@ export abstract class BaseAnnotationController {
         const {modal,close}=createModal('浓缩',()=>{closed=true;request?.abort();request=null;this.closeBlockCondense=null;});
         this.closeBlockCondense=close;
         const level=el('select',{'aria-label':'浓缩档位'}) as HTMLSelectElement;
-        for(const [value,label] of [['sentence','一句话'],['points','要点清单'],['outline','详述']] as const)level.append(el('option',{value,text:label}));
+        for(const [value,label] of [['sentence','一句话'],['points','要点清单'],['outline','脉络']] as const)level.append(el('option',{value,text:label}));
         const language=el('select',{'aria-label':'浓缩语言'}) as HTMLSelectElement;
         for(const [value,label] of [['简体中文','简体中文'],['English','English']] as const)language.append(el('option',{value,text:label}));
         const style=el('select',{'aria-label':'浓缩显示样式'}) as HTMLSelectElement;
@@ -260,7 +260,7 @@ export abstract class BaseAnnotationController {
         let result='';style.addEventListener('change',()=>{output.value=result&&style.value==='quote'?result.split('\n').map(line=>'> '+line).join('\n'):result;});
         const clearResult=()=>{result='';output.value='';status.textContent='选择档位后，点击生成。';};level.addEventListener('change',clearResult);language.addEventListener('change',clearResult);
         stop.addEventListener('click',()=>{result='';output.value='';request?.abort();});done.addEventListener('click',close);
-        generate.addEventListener('click',()=>{if(request)return;result='';output.value='';if(JSON.stringify(condenseSource())!==sourceKey){status.textContent='选区已变化，请重新选择。';return;}const controller=new AbortController(),requestedLevel=level.value as CondenseLevel;request=controller;generate.disabled=true;stop.disabled=false;level.disabled=language.disabled=true;status.textContent='正在浓缩…';
+        generate.addEventListener('click',()=>{if(request)return;result='';output.value='';if(JSON.stringify(condenseSource())!==sourceKey){status.textContent='选区已变化，请重新选择。';return;}try{const info=service.status();provider.textContent=`服务：${info.service} · ${info.model||'未配置模型'} · ${info.bound?'已绑定':'未绑定'}`;}catch(error){provider.textContent=aiErrorText(error);status.textContent=aiErrorText(error);return;}const controller=new AbortController(),requestedLevel=level.value as CondenseLevel;request=controller;generate.disabled=true;stop.disabled=false;level.disabled=language.disabled=true;status.textContent='正在浓缩…';
           void service.request({...source,level:requestedLevel,language:language.value,signal:controller.signal}).then(value=>{if(closed||request!==controller)return;if(JSON.stringify(condenseSource())!==sourceKey){status.textContent='选区已变化，请重新选择。';return;}result=value.text;output.value=style.value==='quote'?result.split('\n').map(line=>'> '+line).join('\n'):result;status.textContent=`${value.cached?'缓存命中':'生成完成'} · ${value.service} · ${value.model} · ${level.selectedOptions[0]?.textContent??''}`;}).catch(error=>{if(!closed&&request===controller)status.textContent=aiErrorText(error);}).finally(()=>{if(!closed&&request===controller){request=null;generate.disabled=false;stop.disabled=true;level.disabled=language.disabled=false;}});
         });
         modal.append(provider,level,language,style,status,output,generate,stop,done);
