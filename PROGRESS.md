@@ -1574,3 +1574,12 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - 收尾：按 id 精确删除（R1/R2/R3 各 22→23→22，回归 22→25→22），终态 **22 pen + 1 highlight**、createdAt 仅 2026-11-03/04（今日新增 0）、`rev 667`、`libraryHistoryRevision 0`、`mainDirty=false`、手写 off（`.ms-pen-overlay` 0）、回 **A30-OPPO 主页**、无 modal/菜单；cards 6 / nodes 5 / documents 4 / studySets [A30-OPPO]。
 - 构建未重推、产品代码未改未提交。adb 未 kill-server/start-server；转发 `tcp:9412` 已移除，原有 `tcp:54779`、`tcp:37395` 未动；中途转发掉线 1 次，重试 1 次（重建同一 pid 的 localabstract 转发）后恢复。
 - 证据：`evidence/acceptance-20261106/HERMES-A15-RESULT.md` §10；`a15-item1c-chain4.json`（判定依据）、`a15-item1c-chain.json`/`chain2.json`（作废遍）、`a15-regression-chain.json`、`a15chain-99-final-home.png`、`a15-harness/fixpalm_chain4.mjs`。
+
+## 2026-11-08 · A15-RESID-01 掌触窗口容差
+
+- 共享 `PalmGuard` 在匹配的笔 `pointercancel`、`pointerup` 或 `lostpointercapture` 后启动固定 1200ms 冷却期：Hermes 真机到达最晚为取消后 1145ms，1200ms 留 55ms 余量，并覆盖 4×220ms 的节奏。保留原有 400ms 链式窗口；每次拒绝 touch 续期 400ms，而不改变固定冷却期的结束时刻，因此冷却期内末次拒绝可能让抑制延续到冷却期结束之后。无笔会话及笔、鼠输入不受冷却影响。
+- 改前行为测试 `/tmp/a15-resid-before-20261108/mindmap-ink-export.log`：文档、脑图、卡片三处 × 三种结束事件，440ms 首次 touch 均错误成笔，300ms/1100ms 序列均错误成笔；共 18 项失败。取消/丢失捕获的序列笔迹数为 `[0,1]`，抬笔序列为 `[1,2]`。>1200ms 单次触摸和无笔连续触摸改前本已通过，不能如实记为改前失败；这是任务书「四条改前失败」与回归现状的差异。
+- 改后完整验收覆盖三处输入、三种结束事件、440ms 丢包、300ms/1100ms 连续触摸、1200ms 边界、>1200ms 恢复、无笔连续触摸、400ms 链式续期、非主触点及跨期 move、指针 ID 不匹配、笔与鼠回归：脑图手写 **79/79**。均为隔离 Chromium 合成事件及受控时钟，不代表真机验证。
+- `MARGINSTUDY_VERIFY_DIR=/tmp/a15-resid-full-final-20261108 npm run verify` 全部 **32/32** 套件通过，Reader 224/224、Workspace 307/307；`git diff --check` 通过。
+- 构建并安装桌面隔离库，源与安装文件逐字节一致：`main.js` SHA-256 `9faad3435d2f7e23acfde598a4d39cdc30643d5ef649dbdf4389dfb3606b9bdf`；`styles.css` SHA-256 `8e3cbe002ad1cdbf382b7188b5b2c923470571caa27bbe4e0cbb3be772919fba`。隔离库插件 `data.json` 安装前后 SHA-256 均为 `86940ee4d1b321ad4960bb933d75185d421554d69e586ff50d25014c906749d7`。未重载宿主，安装不代表宿主已加载新构建；未操作 adb、真实库或 `evidence/**`，未提交。
+- 本卡实现、合成行为验收、完整验证与安装完成；唯一不满足的字面项是两条回归改前本已通过，无法提供真实改前失败证据。未执行物理掌触复验，不据此宣称真机验证通过。

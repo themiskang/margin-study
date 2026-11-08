@@ -72,8 +72,7 @@ export function reviewDrawingInput(options: Partial<DrawingStyle> = {}): { eleme
     current.push(...inkSamples(event).map(point)); paint(canvas, strokes, style);
   });
   const finish = (event: PointerEvent) => {
-    palm.end(event);
-    if (event.type !== "pointerup") palm.cancel(event, pointerType, pointerId ?? null);
+    palm.end(event, pointerType, pointerId ?? null);
     if (pointerId !== event.pointerId) return;
     if (event.type === "pointerup" && current?.length) {
       const endpoint = inkEndpoint(event, point(event), current[current.length - 1]);

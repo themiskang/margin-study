@@ -146,7 +146,7 @@ export class PenController {
       if (this.gesture === "move") { const last = this.current[this.current.length - 1]; this.delta = { x: last.x - this.current[0].x, y: last.y - this.current[0].y }; this.drawSelection(); }
     });
     this.overlay.addEventListener("pointerup", (event: PointerEvent) => {
-      this.palm.end(event);
+      this.palm.end(event, this.pointerType, this.pointerId);
       if (event.pointerId !== this.pointerId) return;
       const last = this.current[this.current.length - 1], endpoint = last && inkEndpoint(event, normCoords(this.container, event), last);
       if (endpoint) {
@@ -161,7 +161,7 @@ export class PenController {
       } else if (gesture === "move") this.opts.onChange?.(transformSelectedInk(this.snapshot, this.selection, this.delta));
       this.flush();
     });
-    const cancel = (event: PointerEvent) => { this.palm.end(event); this.palm.cancel(event, this.pointerType, this.pointerId); if (event.pointerId === this.pointerId) this.flush(); };
+    const cancel = (event: PointerEvent) => { this.palm.end(event, this.pointerType, this.pointerId); if (event.pointerId === this.pointerId) this.flush(); };
     this.overlay.addEventListener("pointercancel", cancel); this.overlay.addEventListener("lostpointercapture", cancel);
     this.overlay.addEventListener("keydown", (event: KeyboardEvent) => {
       if (!this.active) return;

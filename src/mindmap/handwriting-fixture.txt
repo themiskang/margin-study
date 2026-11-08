@@ -26,7 +26,7 @@ function button(root:ParentNode,label:string):HTMLButtonElement{
 }
 const pause=()=>new Promise<void>(resolve=>setTimeout(resolve,0));
 const surface=(p:any)=>p.host.querySelector('[aria-label="脑图手写画布"]') as SVGSVGElement;
-function pointer(node:Element,type:string,x:number,y:number,extra:any={}){node.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,pointerId:17,button:0,isPrimary:true,clientX:x,clientY:y,...extra}));}
+function pointer(node:Element,type:string,x:number,y:number,extra:any={}){const event=new PointerEvent(type,{bubbles:true,cancelable:true,pointerId:17,button:0,isPrimary:true,clientX:x,clientY:y,...extra});node.dispatchEvent(event);return event;}
 function gesture(p:any,points:number[][],extra:any={}){const node=surface(p),rect=node.getBoundingClientRect(),world=p.host.querySelector('.ms-mindmap-world') as HTMLElement,scale=rect.width/world.offsetWidth;points.forEach((point,index)=>pointer(node,index===0?'pointerdown':index===points.length-1?'pointerup':'pointermove',rect.left+point[0]*scale,rect.top+point[1]*scale,extra));}
 function ink(p:any){return (p.store.canvases.find((canvas:any)=>canvas.id===p.canvasId) as any)?.handwriting;}
 async function test(name:string,action:()=>any){try{for(const view of mounted.splice(0))view.dispose();target.replaceChildren();document.querySelectorAll('.ms-modal-bg,#test-menu').forEach(node=>node.remove());await action();results.push({name,passed:true});}catch(error){results.push({name,passed:false,error:String(error),stack:(error as any).stack});}}
@@ -44,7 +44,7 @@ async function palmInput(name:string){
  const pen=new PenController(host,{getColor:()=>'black',onCommit:strokes=>saved.push(strokes[0])});pen.setActive(true);
  const overlay=host.querySelector('svg')!,drawing=reviewDrawingInput();host.append(drawing.element);(drawing.element as HTMLDetailsElement).open=true;const card=drawing.element.querySelector('canvas')!;
  const node=name==='document'?overlay:name==='map'?surface(p):card,rect=node.getBoundingClientRect();
- return {send:(type:string,id:number,pointerType:string)=>pointer(node,type,rect.left+30+id,rect.top+30,{pointerId:id,pointerType,pressure:.5}),count:()=>name==='document'?saved.length:name==='map'?(ink(p)?.layers[0].strokes.length??0):drawing.vectorStrokes().length,dispose:()=>{pen.destroy();host.remove();}};
+ return {node,send:(type:string,id:number,pointerType:string,extra:any={})=>pointer(node,type,rect.left+30+id,rect.top+30,{pointerId:id,pointerType,pressure:.5,...extra}),count:()=>name==='document'?saved.length:name==='map'?(ink(p)?.layers[0].strokes.length??0):drawing.vectorStrokes().length,dispose:()=>{pen.destroy();host.remove();}};
 }
 function withPalmClock(action:(setTime:(time:number)=>void)=>void){
  const original=Object.getOwnPropertyDescriptor(performance,'now');let time=0;Object.defineProperty(performance,'now',{configurable:true,value:()=>time});
@@ -52,12 +52,38 @@ function withPalmClock(action:(setTime:(time:number)=>void)=>void){
 }
  try{
  for(const name of ['document','map','card']){
+  for(const end of ['pointercancel','pointerup','lostpointercapture']){
+   await test('A15-RESID-01 '+name+' '+end+' rejects first touch at 440ms after a dropped tap',async()=>{
+    const input=await palmInput(name);
+    try{withPalmClock(setTime=>{
+     const {send,count}=input;send('pointerdown',1,'pen');send(end,1,'pen');const baseline=count();
+     setTime(440);send('pointerdown',2,'touch');send('pointerup',2,'touch');
+     assert(count()===baseline,name+' '+end+' created a touch stroke at 440ms');
+    });}finally{input.dispose();}
+   });
+   await test('A15-RESID-01 '+name+' '+end+' rejects touches at 300ms and 1100ms',async()=>{
+    const input=await palmInput(name);
+    try{withPalmClock(setTime=>{
+     const {send,count}=input;send('pointerdown',1,'pen');send(end,1,'pen');const baseline=count(),observed:number[]=[];
+     for(const [time,id] of [[300,2],[1100,3]]){setTime(time);send('pointerdown',id,'touch');send('pointerup',id,'touch');observed.push(count()-baseline);}
+     assert(JSON.stringify(observed)==='[0,0]',name+' '+end+' stroke counts at 300/1100ms: '+JSON.stringify(observed));
+    });}finally{input.dispose();}
+   });
+   await test('A15-RESID-01 '+name+' '+end+' permits touch after 1200ms without rejected contacts',async()=>{
+    const input=await palmInput(name);
+    try{withPalmClock(setTime=>{
+     const {send,count}=input;send('pointerdown',1,'pen');send(end,1,'pen');const baseline=count();
+     setTime(1201);send('pointerdown',2,'touch');send('pointerup',2,'touch');
+     assert(count()===baseline+1,name+' '+end+' did not permit touch at 1201ms');
+    });}finally{input.dispose();}
+   });
+  }
   await test('A15 '+name+' chains rejected touches after pen cancel and restores finger writing',async()=>{
    const input=await palmInput(name);
    try{withPalmClock(setTime=>{
     const {send,count}=input;send('pointerdown',1,'pen');send('pointercancel',1,'pen');const baseline=count(),observed:number[]=[];
-    for(const [time,id] of [[300,2],[600,3],[900,4],[2000,5],[2001,6]]){setTime(time);send('pointerdown',id,'touch');send('pointerup',id,'touch');observed.push(count()-baseline);}
-    assert(JSON.stringify(observed)==='[0,0,0,1,2]',name+' stroke counts at 300/600/900/2000/2001ms: '+JSON.stringify(observed));
+    for(const [time,id] of [[300,2],[600,3],[900,4],[2000,5],[2400,6],[2401,7]]){setTime(time);send('pointerdown',id,'touch');send('pointerup',id,'touch');observed.push(count()-baseline);}
+    assert(JSON.stringify(observed)==='[0,0,0,1,2,3]',name+' stroke counts at 300/600/900/2000/2400/2401ms: '+JSON.stringify(observed));
    });}finally{input.dispose();}
   });
   await test('A15 '+name+' allows consecutive touch strokes without a pen session',async()=>{
@@ -67,12 +93,53 @@ function withPalmClock(action:(setTime:(time:number)=>void)=>void){
     assert(JSON.stringify(observed)==='[1,2,3]',name+' touch-only stroke counts: '+JSON.stringify(observed));
    });}finally{input.dispose();}
   });
-  await test('A15 '+name+' renews on active-pen palm rejection and expires at 400ms',async()=>{
+  await test('A15 '+name+' active-pen rejection and fixed cooldown renew the 400ms chain',async()=>{
    const input=await palmInput(name);
    try{withPalmClock(setTime=>{
     const {send,count}=input;send('pointerdown',1,'pen');setTime(10);send('pointerdown',2,'touch');send('pointerup',2,'touch');setTime(20);send('pointerup',1,'pen');const baseline=count(),observed:number[]=[];
-    for(const [time,id] of [[409,3],[809,4],[810,5]]){setTime(time);send('pointerdown',id,'touch');send('pointerup',id,'touch');observed.push(count()-baseline);}
-    assert(JSON.stringify(observed)==='[0,1,2]',name+' stroke counts at 399/400ms after last rejection: '+JSON.stringify(observed));
+    for(const [time,id] of [[1219,3],[1618,4],[2018,5],[2019,6]]){setTime(time);send('pointerdown',id,'touch');send('pointerup',id,'touch');observed.push(count()-baseline);}
+    assert(JSON.stringify(observed)==='[0,0,1,2]',name+' stroke counts through cooldown and 399/400ms chain: '+JSON.stringify(observed));
+   });}finally{input.dispose();}
+  });
+  await test('A15-RESID-01 '+name+' fixed cooldown expires at 1200ms without contacts',async()=>{
+   const input=await palmInput(name);
+   try{withPalmClock(setTime=>{
+    const {send,count}=input;send('pointerdown',1,'pen');send('pointercancel',1,'pen');const baseline=count();
+    setTime(1200);send('pointerdown',2,'touch');send('pointerup',2,'touch');
+    assert(count()===baseline+1,name+' cooldown did not expire at 1200ms');
+   });}finally{input.dispose();}
+  });
+  await test('A15-RESID-01 '+name+' mismatched end leaves active pen and preserves cooldown',async()=>{
+   const input=await palmInput(name);
+   try{withPalmClock(setTime=>{
+    const {send,count}=input;send('pointerdown',1,'pen');send('pointercancel',9,'pen');setTime(100);send('pointerdown',2,'touch');send('pointerup',2,'touch');
+    setTime(500);send('pointerup',1,'pen');const baseline=count();setTime(1610);send('pointerdown',3,'touch');send('pointerup',3,'touch');
+    assert(count()===baseline,name+' mismatched end interrupted pen or cooldown');
+   });}finally{input.dispose();}
+  });
+  await test('A15-RESID-01 '+name+' rejects nonprimary touch and its moves past cooldown',async()=>{
+   const input=await palmInput(name);let leaked=0;const listener=(event:Event)=>{if((event as PointerEvent).pointerType==='touch')leaked++;};input.node.parentElement!.addEventListener('pointerdown',listener);input.node.parentElement!.addEventListener('pointermove',listener);
+   try{withPalmClock(setTime=>{
+    const {send,count}=input;send('pointerdown',1,'pen');send('pointercancel',1,'pen');const baseline=count();
+    setTime(1190);const down=send('pointerdown',2,'touch',{isPrimary:false,width:1,height:1,button:2});
+    setTime(1201);const move=send('pointermove',2,'touch',{isPrimary:false,width:1,height:1,button:2});send('pointerup',2,'touch',{isPrimary:false});
+    assert(down.defaultPrevented&&move.defaultPrevented&&leaked===0&&count()===baseline,name+' nonprimary touch escaped palm suppression');
+   });}finally{input.dispose();}
+  });
+  await test('A15-RESID-01 '+name+' pen down without end does not start cooldown',async()=>{
+   const input=await palmInput(name);
+   try{withPalmClock(setTime=>{
+    const {send,count}=input;send('pointerdown',8,'touch');send('pointerdown',1,'pen');send('pointerup',8,'touch');const baseline=count();
+    setTime(100);send('pointerdown',2,'touch');send('pointerup',2,'touch');
+    assert(count()===baseline+1,name+' started cooldown for an inactive pen');
+   });}finally{input.dispose();}
+  });
+  await test('A15-RESID-01 '+name+' allows pen and mouse during touch cooldown',async()=>{
+   const input=await palmInput(name);
+   try{withPalmClock(setTime=>{
+    const {send,count}=input;send('pointerdown',1,'pen');send('pointercancel',1,'pen');const baseline=count();
+    setTime(100);send('pointerdown',2,'pen');send('pointerup',2,'pen');setTime(200);send('pointerdown',3,'mouse');send('pointerup',3,'mouse');
+    assert(count()===baseline+2,name+' rejected pen or mouse during touch cooldown');
    });}finally{input.dispose();}
   });
  }
@@ -89,7 +156,7 @@ function withPalmClock(action:(setTime:(time:number)=>void)=>void){
     const count=()=>name==='document'?saved.length:name==='map'?(ink(p)?.layers[0].strokes.length??0):drawing.vectorStrokes().length;
     const baseline=count();send('pointerdown',2,'touch');send('pointermove',2,'touch');send('pointerup',2,'touch');
     assert(count()===baseline,name+' touch after cancel created a stroke');assert(leaked===0,name+' active pen touch move bubbled');
-    await new Promise(resolve=>setTimeout(resolve,430));send('pointerdown',3,'touch');send('pointermove',3,'touch');send('pointerup',3,'touch');
+    await new Promise(resolve=>setTimeout(resolve,1230));send('pointerdown',3,'touch');send('pointermove',3,'touch');send('pointerup',3,'touch');
     assert(count()===baseline+1,name+' finger writing after window failed');node.parentElement!.removeEventListener('pointermove',listener);
    }
   }finally{pen.destroy();host.remove();}

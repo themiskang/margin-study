@@ -18,20 +18,24 @@ export function rejectPalm(event: PointerEvent, activePointerType: string | null
 
 // Real-device touch down arrived 289 ms after pen cancellation; 400 ms leaves margin.
 export const PALM_REJECTION_WINDOW_MS = 400;
+export const PEN_COOLDOWN_MS = 1200;
 
 export class PalmGuard {
   private lastPenAt = -Infinity;
+  private penEndedAt = -Infinity;
   private rejected = new Set<number>();
 
-  cancel(event: PointerEvent, activePointerType: string | null, activePointerId: number | null): void {
+  end(event: PointerEvent, activePointerType: string | null, activePointerId: number | null): void {
+    this.rejected.delete(event.pointerId);
     if (activePointerType === "pen" && event.pointerId === activePointerId) {
-      this.lastPenAt = performance.now();
+      this.penEndedAt = this.lastPenAt = performance.now();
     }
   }
 
   down(event: PointerEvent, activePointerType: string | null): boolean {
-    if (rejectPalm(event, activePointerType) || (event.pointerType === "touch" && performance.now() - this.lastPenAt < PALM_REJECTION_WINDOW_MS && rejectPalm(event, "pen"))) {
-      this.lastPenAt = performance.now(); this.rejected.add(event.pointerId); return true;
+    const now = performance.now();
+    if (rejectPalm(event, activePointerType) || (event.pointerType === "touch" && (now - this.lastPenAt < PALM_REJECTION_WINDOW_MS || now - this.penEndedAt < PEN_COOLDOWN_MS) && rejectPalm(event, "pen"))) {
+      this.lastPenAt = now; this.rejected.add(event.pointerId); return true;
     }
     return false;
   }
@@ -39,8 +43,6 @@ export class PalmGuard {
   move(event: PointerEvent, activePointerType: string | null): boolean {
     return rejectPalm(event, this.rejected.has(event.pointerId) ? "pen" : activePointerType);
   }
-
-  end(event: PointerEvent): void { this.rejected.delete(event.pointerId); }
 }
 
 export function inkEndpoint(event: PointerEvent, point: Stroke, previous: Stroke): Stroke | null {

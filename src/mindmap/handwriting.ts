@@ -91,7 +91,7 @@ export class MindmapHandwritingController {
     this.surface.addEventListener("pointerdown", (event) => this.down(event));
     this.surface.addEventListener("pointermove", (event) => this.move(event));
     this.surface.addEventListener("pointerup", (event) => this.up(event));
-    const cancel = (event: PointerEvent) => { this.palm.end(event); this.palm.cancel(event, this.pointerType, this.pointerId); if (event.pointerId === this.pointerId) this.cancel(); };
+    const cancel = (event: PointerEvent) => { this.palm.end(event, this.pointerType, this.pointerId); if (event.pointerId === this.pointerId) this.cancel(); };
     this.surface.addEventListener("pointercancel", cancel);
     this.surface.addEventListener("lostpointercapture", cancel);
     this.surface.addEventListener("dblclick", (event) => { if (this.mode !== "off") { event.preventDefault(); event.stopPropagation(); } });
@@ -232,7 +232,7 @@ export class MindmapHandwritingController {
     this.drawLive();
   }
   private up(event: PointerEvent): void {
-    this.palm.end(event);
+    this.palm.end(event, this.pointerType, this.pointerId);
     if (event.pointerId !== this.pointerId) return;
     if (this.drawing) {
       const previous = this.drawing.stroke.points[this.drawing.stroke.points.length - 1], point = inkEndpoint(event, this.point(event), previous);
