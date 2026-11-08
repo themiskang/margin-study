@@ -1677,3 +1677,12 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - 口径限制（Codex 如实登记）：改前两轮失败均因「独立刷题入口不存在」，**不代表已单独证明底层隔离不变量在改前失败**；改后实机的 FSRS 隔离项才给出正向证据
 - 证据：evidence/acceptance-20261106/CC-A21-RESULT.md（3 张截图 + 逐项数值 + 清理后逐键比对仅 revision/savedAt 不同）
 - 下一步第一动作：判断 A22 补（APKG 媒体/模板/失败路径）是否已由既有的 apkg 9/9 套件满足；若满足则 A3 收官，进入 A4（A26/A27）
+
+## 2026-11-09 02:05 A22 补判定：已满足，跳过（批次 A3 收官）
+- 依据 `ROUTE-A-PLAN.md` 批次 A3 的「A22 补：若已满足则跳过」
+- 核对 `src/export/apkg-acceptance.mjs`（apkg 9/9 套件）已覆盖原 A22 三条断言：
+  1. APKG 由独立 SQLite 读取：`report.ok / integrity / ver=11 / counts`，python 报告复核
+  2. 卡片/模板/媒体引用数 = 导出清单：`manifest.noteCount=5, cardCount=6, modelCount=3, mediaCount=2`，与 `report.counts` 逐项一致
+  3. 任一媒体缺失导出失败且不留下伪成功文件：`assert.throws(buildApkg…)` + `exportAnkiApkg` reject 且错误含「媒体缺失」
+- 结论：A22 补无需新增工作；**批次 A3（A20/A21/A22补）全部完成**
+- 下一步第一动作：批次 A4 的 A26（模板库与外刊生词）
