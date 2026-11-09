@@ -16,7 +16,7 @@ import { reviewDecksForData } from "./reviewDecks";
 import { validateAnnotationCollection } from "./annotationValidation";
 import { mindmapHasHandwriting, normalizeMindmapHandwriting } from "../mindmap/handwritingContracts";
 import { clampHandwritingWidth } from "../annot/handwritingPresets";
-import { builtinSceneTemplates, defaultStudyScene, isSupportedSceneTemplate } from "../workspace/scenes";
+import { builtinSceneTemplates, defaultStudyScene, installableSceneTemplateIds, isSupportedSceneTemplate } from "../workspace/scenes";
 import { syncCardColor } from "./cardColors";
 import { editedExcerptBlocks } from "../cards/excerptBlocks";
 import { applyMediaReplacements, externalizeMedia, hasInlineMedia } from "./mediaMigration";
@@ -236,12 +236,35 @@ export class Store {
 
   getWorkspaceState(): Record<string, unknown> | undefined { return clone(this.workspaceState); }
   getSceneTemplates(): StudySceneTemplate[] {
-    const builtins = builtinSceneTemplates(), ids = new Set(builtins.map(template => template.id));
+    const builtins = builtinSceneTemplates().filter(template => !installableSceneTemplateIds.some(id => id === template.id)), ids = new Set(builtins.map(template => template.id));
     const personal = Array.isArray(this.sceneTemplates) ? this.sceneTemplates.filter(template => {
       if (!isSupportedSceneTemplate(template) || ids.has(template.id)) return false;
       ids.add(template.id); return true;
     }) : [];
     return [...builtins, ...clone(personal)];
+  }
+  installBuiltinSceneTemplate(id: string): StudySceneTemplate {
+    const source = builtinSceneTemplates().find(template => template.id === id && installableSceneTemplateIds.some(item => item === id));
+    if (!source) throw new Error("内置模板不存在");
+    if (this.cardTemplates.some(template => template.id === id)) throw new Error("模板 ID 已被其他卡片模板占用");
+    const installed = this.getSceneTemplates().find(template => template.id === id);
+    if (installed) {
+      if (!same(installed, source)) throw new Error("模板 ID 已被其他模板占用");
+      return installed;
+    }
+    if ((this.sceneTemplates ?? []).some(template => template.id === id)) throw new Error("模板 ID 已被无效模板占用");
+    this.mutate("安装内置模板", () => { this.sceneTemplates = [...(this.sceneTemplates ?? []), clone(source)]; });
+    return clone(source);
+  }
+  getCardTemplates(): CardTemplate[] {
+    const personal = clone(this.cardTemplates), ids = new Set(personal.map(template => template.id));
+    for (const template of this.getSceneTemplates()) {
+      if (template.cardTemplate && !ids.has(template.id)) {
+        personal.push({ id: template.id, name: template.name, type: "flashcard", ...clone(template.cardTemplate) });
+        ids.add(template.id);
+      }
+    }
+    return personal;
   }
   copySceneTemplate(templateId: string): StudySceneTemplate {
     const source = this.getSceneTemplates().find(template => template.id === templateId);

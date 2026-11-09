@@ -168,6 +168,7 @@ export interface Card {
   sources?: CardSource[];
   occlusions?: import("./review/contracts").ImageOcclusion[];
   templateId?: string;
+  vocabulary?: { lemma: string; sense: string; studySetId?: string };
   updatedAt?: string;
   hidden?: boolean;
   occluded?: boolean;
@@ -254,6 +255,7 @@ export interface StudySceneTemplate {
   excerptPopup?: boolean;
   textSelectionMenuActions?: string[];
   handwritingPresets?: HandwritingPresetSpec[];
+  cardTemplate?: { front: string; back: string; fields: string[] };
 }
 
 export interface StudySet {

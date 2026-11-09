@@ -18,12 +18,12 @@ export function mountTemplateControls(container: HTMLElement, plugin: MarginStud
   const fill = () => {
     const current = select.value;
     clear(select); select.append(el("option", { value: "", text: "选择保存的模板…" }));
-    for (const template of plugin.store.cardTemplates) select.append(el("option", { value: template.id, text: template.name }));
+    for (const template of plugin.store.getCardTemplates()) select.append(el("option", { value: template.id, text: template.name }));
     select.value = current;
   };
   const use = el("button", { class: "ms-btn", text: "应用模板" });
   use.addEventListener("click", () => {
-    const template = plugin.store.cardTemplates.find((item) => item.id === select.value);
+    const template = plugin.store.getCardTemplates().find((item) => item.id === select.value);
     if (!template) { new Notice("先选择一个模板"); return; }
     const result = applyTemplate(template, { ...card, front: front.value, back: back?.value });
     front.value = result.front; if (back) back.value = result.back;
@@ -41,7 +41,7 @@ export function mountTemplateControls(container: HTMLElement, plugin: MarginStud
   const edit = el("button", { class: "ms-btn", text: "编辑模板" });
   edit.addEventListener("click", () => {
     const template = plugin.store.cardTemplates.find((item) => item.id === select.value);
-    if (!template) { new Notice("先选择一个模板"); return; }
+    if (!template) { new Notice("场景内置卡片模板请先复制场景后编辑"); return; }
     const { modal, close } = createModal("编辑卡片模板");
     const name = el("input", { class: "ms-search", type: "text", "aria-label": "模板名称" }) as HTMLInputElement; name.value = template.name;
     const templateFront = el("textarea", { "aria-label": "模板正面" }) as HTMLTextAreaElement; templateFront.value = template.front;
@@ -57,6 +57,7 @@ export function mountTemplateControls(container: HTMLElement, plugin: MarginStud
   remove.addEventListener("click", () => {
     const template = plugin.store.cardTemplates.find((item) => item.id === select.value);
     if (template) openConfirm("删除模板", `删除「${template.name}」？已创建的卡片内容会保留。`, () => { plugin.store.removeCardTemplate(template.id); fill(); });
+    else if (select.value) new Notice("场景内置卡片模板不能从这里删除");
   });
   row.append(select, use, save, edit, remove); fill(); select.value = card.templateId ?? ""; container.append(row);
 }

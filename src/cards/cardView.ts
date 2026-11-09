@@ -11,6 +11,7 @@ import { questionsForCard, questionWasWrong, validOcclusions } from "../review/q
 import { cardImages, imageUrl, appendSources, speakCardText, stopCardSpeech } from "../review/content";
 import { openOcclusionEditor } from "../review/occlusionEditor";
 import { mountTemplateControls } from "../review/templates";
+import { openVocabularyLookup } from "../vocabulary/view";
 import { enrollCardsForReview, openReviewDecks, registerReviewCardEditor } from "../review/decks";
 import { renderMarkdown, parseCloze, hasCloze, clozeHint } from "../utils/markdown";
 import { ReaderView, VIEW_TYPE_READER } from "../pdf/readerView";
@@ -106,7 +107,7 @@ export function renderCardList(container: HTMLElement, plugin: MarginStudyPlugin
     style: "display:flex;justify-content:space-between;align-items:center;margin-bottom:8px",
   });
   const count = el("span", { class: "ms-chip", text: `${plugin.store.cardsForStudySet().length} 张` });
-  const right = el("div", { style: "display:flex;gap:6px" });
+  const right = el("div", { style: "display:flex;flex-wrap:wrap;justify-content:flex-end;gap:6px" });
   const batchBtn = el("button", { class: "ms-btn", text: "批量" });
   const enroll = el("button", { class: "ms-btn", text: "加入复习", title: "将所选卡片加入学习集绑定的复习卡组；未选择时使用筛选结果。再次加入会立即到期。" });
   enroll.addEventListener("click", () => {
@@ -121,11 +122,13 @@ export function renderCardList(container: HTMLElement, plugin: MarginStudyPlugin
     const card: Card = { id: `card-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, docPath: plugin.activeReader?.getFilePath() ?? "", type: "flashcard", front: "", back: "", reviewQuestion: { mode: "title" }, links: [], tags: [], createdAt: new Date().toISOString() };
     openDetail(plugin, card, () => { count.textContent = `${plugin.store.cardsForStudySet().length} 张`; draw(); });
   });
+  const vocabulary = el("button", { class: "ms-btn", text: "外刊生词" });
+  vocabulary.addEventListener("click", () => openVocabularyLookup(plugin, "", plugin.activeReader?.getFilePath() ?? ""));
   const decks = el("button", { class: "ms-btn", text: "复习卡组" });
   decks.addEventListener("click", () => openReviewDecks(plugin, { onEnrolled: draw }));
   const questionRule = el("button", { class: "ms-btn", text: "提取问题" });
   questionRule.addEventListener("click", () => openQuestionRulePicker(plugin, selected.size ? [...selected] : filtered().map(card => card.id), draw));
-  right.append(create, batchBtn, questionRule, enroll, decks, reviewBtn);
+  right.append(create, vocabulary, batchBtn, questionRule, enroll, decks, reviewBtn);
   header.append(count, right);
 
   const search = el("input", {

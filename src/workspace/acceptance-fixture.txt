@@ -2723,6 +2723,39 @@ try{
     button(p.root,'场景模板：标准').click();
     assert(!p.root.querySelector('[aria-label="StudySet - More"]')?.textContent?.includes('场景模板：'+template.name),'template remains in chooser');
   });
+  await test('A26 installs built-in field templates through A05 and applies them in a card',async()=>{
+    const p=await fresh();p.store.setStudyInterface(p.set.id,'scenes');p.view.refresh(true);await frame();
+    button(p.root,'场景模板：标准').click();button(p.root,'管理场景模板…').click();
+    const manager=()=>p.root.querySelector<HTMLElement>('[aria-label="场景模板管理"]')!;
+    for(const name of ['刷题卡片','外刊生词'])for(let count=0;count<3;count++)button(manager(),'安装'+name).click();
+    const fields=(id:string)=>p.store.getCardTemplates().find(item=>item.id===id)?.fields?.join('|');
+    assert(fields('practice-cards')==='问题|答案|解析|错因'&&fields('foreign-vocabulary')==='词|原形|音标|释义|例句','installed fields missing');
+    for(const id of ['practice-cards','foreign-vocabulary'])assert(p.store.getSceneTemplates().filter(item=>item.id===id).length===1,'repeated installation duplicated '+id);
+    button(manager(),'复制刷题卡片').click();const editor=p.root.querySelector<HTMLElement>('[aria-label="编辑场景模板"]')!;
+    const fieldInput=editor.querySelector<HTMLInputElement>('[aria-label="卡片字段（逗号分隔）"]')!;assert(fieldInput.value.includes('错因'),'copied fields are not editable');
+    fieldInput.value='问题, 答案, 解析, 错因, 来源';button(editor,'保存模板').click();
+    const copy=p.store.getCardTemplates().find(item=>item.name==='刷题卡片 副本');assert(copy?.fields?.includes('来源'),'edited fields not available to cards');
+    const cardList=document.createElement('div');document.body.append(cardList);renderCardList(cardList,p.plugin);
+    button(cardList,'新建闪卡').click();const modal=document.querySelector<HTMLElement>('.ms-modal')!;
+    const picker=modal.querySelector<HTMLSelectElement>('[aria-label="卡片模板"]')!;assert([...picker.options].some(option=>option.value==='practice-cards'),'installed template absent in card editor');
+    picker.value='practice-cards';button(modal,'应用模板').click();
+    assert([...modal.querySelectorAll('textarea')].some(area=>area.value.includes('解析：')&&area.value.includes('错因：')),'applying template did not populate actual card fields');cardList.remove();
+  });
+  await test('A26 vocabulary UI performs offline lookup and writes only the selected sense',async()=>{
+    const p=await fresh();let network=0;const originalFetch=window.fetch;window.fetch=(()=>{network++;throw new Error('network forbidden');}) as typeof fetch;
+    try{
+      morePane(p,'外刊生词 · 离线查询…');const modal=document.querySelector<HTMLElement>('.ms-modal')!;
+      const input=modal.querySelector<HTMLInputElement>('[aria-label="查询英文单词"]')!,example=modal.querySelector<HTMLTextAreaElement>('[aria-label="词卡例句"]')!;
+      input.value='running';example.value='She is running.';button(modal,'查询').click();
+      const result=modal.querySelector<HTMLElement>('[data-vocabulary-results]')!;assert(result.textContent?.includes('原形：run')&&result.textContent.includes('/rʌn/'),'offline result missing lemma or phonetic');
+      const before=p.store.cards.length;button(result,'写入词卡：跑').click();button(result,'写入词卡：跑').click();
+      assert(p.store.cards.length===before+1,'repeated sense created more than one card');
+      const card=p.store.cards.find(item=>item.vocabulary?.lemma==='run');assert(card?.back?.includes('释义：跑')&&card.back.includes('She is running.')&&card.docPath===p.alpha.path,'selected sense, example or source missing');
+      input.value='notawordzzzz';button(modal,'查询').click();assert(result.textContent?.includes('未收录'),'missing word lacks offline feedback');
+      button(modal,'词表与许可证').click();assert([...document.querySelectorAll('.ms-modal')].some(item=>item.textContent?.includes('Permission is hereby granted, free of charge')),'license not readable in plugin');
+      assert(network===0,'lookup used fetch');
+    }finally{window.fetch=originalFetch;}
+  });
   await test('MN5 scene shell renders one standard four-scene bar and restores the selected scene without business side effects',async()=>{
     const p=await fresh();p.store.setStudyInterface(p.set.id,'scenes');p.view.refresh(true);await frame();
     const dock=()=>p.root.querySelector<HTMLElement>('[aria-label="学习场景工具栏"]');assert(dock(),'scene interface did not render its named bottom bar');

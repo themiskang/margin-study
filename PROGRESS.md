@@ -1686,3 +1686,34 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
   3. 任一媒体缺失导出失败且不留下伪成功文件：`assert.throws(buildApkg…)` + `exportAnkiApkg` reject 且错误含「媒体缺失」
 - 结论：A22 补无需新增工作；**批次 A3（A20/A21/A22补）全部完成**
 - 下一步第一动作：批次 A4 的 A26（模板库与外刊生词）
+
+## 2026-11-09 · A26 模板库与外刊生词
+
+- 实现：通过 A05 场景模板管理安装「刷题卡片」「外刊生词」；卡片编辑器使用安装后的字段模板，复制场景后可编辑字段及正反面格式。同 ID 重装直接返回，ID 被其他模板占用时拒绝覆盖；场景模板及词卡学习集引用在冲突合并时正确映射。
+- 离线词典：独立编写 330 个原形、1,012 个索引词形；不含 ECDICT 数据，不下载 ECDICT 或任何 MN 插件。词表按 `word / lemma / phonetic / senses` 返回；只支持已登记词形，未收录时提示且不联网。测试词：`running → run`、`studies → study`、`went → go`、`books → book`、`climate → climate`、`evidence → evidence`。
+- 写卡：选择一条释义新建一张闪卡，包含词、原形、音标、所选释义、可选例句及来源路径。同一学习集内「原形 + 释义」重复选择保留原卡，不覆盖修改；不同释义和学习集可分别建卡。卡片不会自动进入待复习队列。
+- 许可：`LICENSE-ECDICT.txt` 说明 ECDICT 的 MIT 许可及本项目独立词表来源，并附本项目词表 MIT 全文；同文嵌入构建，可在离线查询的「词表与许可证」中查看。独立文件与界面内许可证逐字节一致。
+- 四条断言改前均失败两次：`/tmp/a26-before-1.log`、`/tmp/a26-before-2.log`，两轮均 0/4；第一、二条均因离线查询入口缺失而中断，不能据此声称改前已独立执行去重细节；第三条因安装入口缺失，第四条因许可证文件缺失。原始结果分别为 `/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-a26-A2p85M/results.json`、`/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-a26-ee4Fz4/results.json`。
+- 最终构建后四条断言均通过两次：`/tmp/a26-after-installed-1.log`、`/tmp/a26-after-installed-2.log`，各 4/4；对应结果 `/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-a26-VF962A/results.json`、`/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-a26-HALMj4/results.json`。查询期间拦截 `fetch`、`http`、`https`，计数 0；写卡 0→1→1，重开后仍 1，不同释义和学习集分别建卡；两种模板各连续安装三次、重开后 ID 数均为 1；许可证在构建及安装路径可读。额外覆盖冲突合并后的学习集与模板引用，以及用户模板 ID 冲突不覆盖。
+- `MARGINSTUDY_VERIFY_DIR=/tmp/a26-full-final-20261109 npm run verify` **36/36** 套件通过，A26 核心 4/4、Workspace 318/318、Reader 224/224、脑图手写 81/81；结果 `/tmp/a26-full-final-20261109/results.json`。Workspace 两个 A26 场景使用隔离 Chromium、合成 Store 和宿主替身，验证实际安装入口、复制编辑、模板应用、离线查询、重复写卡和许可证窗口，不代表真实宿主 UI 验收。`git diff --check` 通过。
+- 构建并安装桌面隔离库，构建与安装文件逐字节一致：`main.js` SHA-256 `327332bec0ea45296575d2de1d80459323afc09f76fc5761f7a1b80015a416f4`，`styles.css` `579654e132e4483dbac685b16ddbca719572afa494733efbfba09897f90a29e3`，`LICENSE-ECDICT.txt` `3a755eb3e734b088f9d9a332add3510d703d6d108f27348d659278898f84d335`。隔离库 `data.json` 安装前后均为 `164ef8ca195077eef49adb34922f73cb1fdf08c122e167843a7f549197b781e2`。
+- 包体积按 `main.js + styles.css + pdf.worker.js + manifest.json + LICENSE-ECDICT.txt` 统计，9,050,727 → 9,088,413 字节，增加 **37,686 字节**（其中 `main.js` +36,041 字节，独立许可 +1,645 字节）。未重载宿主，安装不代表宿主已加载新构建；未操作 adb、真实库或 `evidence/**`，未提交。
+- 宿主侧 UI 按任务包留 CC 实机验，当前不宣称通过。CC 首个动作：在桌面隔离库单实例核对并重载上述 `main.js` SHA-256，再以合成学习集依次验证 A05 两模板连续安装 3 次、卡片编辑器字段应用、断网查询六个词、两次选择同一释义卡数 0→1→1、许可窗口及安装目录许可；清理合成数据并记录结果。自动断言、全量验证、构建安装和登记已完成。
+
+## 2026-11-09 · CC-A26 实机验收（模板库与外刊生词，只读串行）
+
+- 前置：磁盘 `main.js` SHA-256 `327332bec0ea45296575d2de1d80459323afc09f76fc5761f7a1b80015a416f4` 与任务卡一致；重载前 `plugin:margin-study` 活跃脚本 scriptId 264（5,114,957 B，`9548f8c3…`）对 `lookupVocabulary/saveVocabularySense/installBuiltinSceneTemplate/vocabularyLicense` 命中均为 **0**；`disablePlugin/enablePlugin` 后 scriptId 275/281，最终 `Page.reload` 后活跃 scriptId 508（5,150,998 B，`8fd57035…`），四项命中 **3/2/2/3**，运行时源码在 offset 90 完整包含磁盘构建（仅 Obsidian `PluginScript` 外壳 +129 B）。如实登记：采集脚本首次取错 `params.scriptId` 导致两次误重载，已修正并从 508 取数。
+- 四项**全 PASS**：① 6 词 running/studies/went/books/climate/evidence 均返回 lemma/phonetic/senses（3/2/2/2/1/1），逐词区间 `fetch/xhr/ws/http/https` 计数全 0；② 选「跑」建卡 22→23（学习集 4→5、词卡 0→1），重复同条仍 23/1 且同 ID，状态「已存在词卡…未覆盖原内容」；③ 可见入口「场景模板：标准 → 管理场景模板…」各安装「刷题卡片」「外刊生词」3 次，Notice 逐次命中，原始/合并视图同 ID 均 1、无重复；④ `LICENSE-ECDICT.txt` 1,645 B、SHA-256 `3a755eb3…`，含 MIT 3 处与完整 MIT 授权/免责句，`main.js` 内嵌同一授权句，界面内许可证 1,645 字符。
+- 收尾：删除词卡、过滤两个安装模板并 `flush()`，`Page.reload` 还原页内 fetch/XHR/WebSocket/http/https 计数包装（均恢复 native），回 L4SampleSet 学习集主页。最终 revision **2556**（备份 2548，+8：两次 Step 0 重载/加载保存 +3、写卡落盘 +1、两模板安装 +2、清理 +1、最终 reload +1）；cards 22 / nodes 18 / edges 2 / documents 34 / studySets 5 / canvases 9，`sceneTemplates` 仅剩 `scene-template-mvxznkp9-z56fbh`，词卡 0。与验收前备份逐键深比较仅 `revision`/`savedAt`/`writerId` 不同（writerId 因重载重新生成，非业务对象），业务对象零差异。
+- 交付：`evidence/acceptance-20261106/CC-A26-RESULT.md` + 截图 3 张（CC-A26-01-vocabulary / 02-templates / 03-license）；过程数据在 `/tmp/cc-a26/`。未改产品代码、未提交、未改既有 evidence。
+- 首个下一步：A26 宿主 UI 四项至此有隔离库实机证据，整卡关闭仍须总控再审原验收依据；按路线下一张 A27。
+
+## 2026-11-09 11:30 A26 完成（批次 A4 第一张）
+- 完成：A26 模板库与外刊生词，自动验收 4/4（改前两轮 0/4、改后两轮 4/4）、verify 36/36（Workspace 318/318、Reader 224/224）
+- 结论：结论：CC 实机四项全 pass —— 断网下 6 词（含 4 变形词）全部返回 lemma/phonetic/senses 且 fetch/xhr/ws/http/https 计数全 0；选释义首次写卡 22→23、重复点同条保持 23 且不覆盖；两模板各装 3 次同 ID 数均为 1；LICENSE-ECDICT.txt 1645B 含 MIT 授权句，界面与 main.js 同源
+- 词表：330 原形 / 1012 索引词形，随包附带、不联网抓取（遵守原卡禁止项）；包体积 +37,686 字节
+- 前置：CC 用 Debugger.getScriptSource 核对运行时脚本（重载前 264 为 A21 构建缺 A26 符号，重载后 508 全命中）
+- 口径限制（Codex 如实登记）：改前「写卡去重」断言因查询入口缺失而中断，不能单独证明当时去重行为失败；重复选不覆盖的正向证据来自改后实机
+- CC 如实登记两次作废尝试：脚本 scriptId 参数取错导致误判重载（275/281 同 SHA）、隐藏主页按钮导致安装点击不可见；均非产品缺陷
+- 证据：evidence/acceptance-20261106/CC-A26-RESULT.md（3 张截图 + 逐项数值 + 清理后业务对象逐字段一致，仅 revision/savedAt/writerId 不同）
+- 下一步第一动作：批次 A4 第二张 A27（桌面本地 CLI 连接）

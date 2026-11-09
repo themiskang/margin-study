@@ -1,6 +1,7 @@
 import { ItemView, Menu, Notice, Scope, TFile, WorkspaceLeaf, setIcon, Platform } from "obsidian";
 import { setNativeIcon } from "./nativeIcons";
-import { builtinSceneTemplates } from "./scenes";
+import { builtinSceneTemplates, installableSceneTemplateIds } from "./scenes";
+import { openVocabularyLookup } from "../vocabulary/view";
 import { clearOcrBuffer } from "../ocr/ocr";
 import { useStudySidebarSpace } from "./hostSidebars";
 import { DocumentNavigation, documentNavigationTabs } from "./documentNavigation";
@@ -1133,6 +1134,7 @@ export class StudyWorkspaceView extends ItemView {
     action("全局搜索…","search",()=>openGlobalSearch(this.plugin));
     action("管理复习卡组…","clipboard-list",()=>openReviewDecks(this.plugin));
     action("导入网页 / 微信文章…","download",()=>openWebImport(this.plugin));
+    action("外刊生词 · 离线查询…","book-open",()=>openVocabularyLookup(this.plugin,this.selectedContext()?.text?.trim()??"",this.state.activePath??""));
     const studySetId=this.plugin.store.activeStudySetId;
     action("切换界面模式","layout-template",()=>this.toggleInterfaceMode());
     action("固定视图…","pin",()=>{this.fixedViewsOpen=!this.fixedViewsOpen;this.drawFixedViews();});
@@ -1145,6 +1147,10 @@ export class StudyWorkspaceView extends ItemView {
     pane.append(el("p",{text:"复制模板后可编辑；从学习集复制会带入当前颜色。"}));
     const setId=store.activeStudySetId;
     if(setId){const copy=el("button",{text:"从当前学习集复制"});copy.addEventListener("click",()=>this.editSceneTemplate(store.copyStudySetSceneTemplate(setId)));pane.append(copy);}
+    for(const template of builtinSceneTemplates().filter(item=>installableSceneTemplateIds.some(id=>id===item.id))){
+      const install=el("button",{text:`安装${template.name}`,"data-install-template":template.id});
+      install.addEventListener("click",()=>{try{store.installBuiltinSceneTemplate(template.id);new Notice(`已安装${template.name}`);this.openSceneTemplateManager();}catch(error){new Notice("安装失败："+String(error));}});pane.append(install);
+    }
     for(const template of store.getSceneTemplates()){
       const row=el("div",{class:"ms-scene-template-row"});row.append(el("span",{text:template.name}));
       const copy=el("button",{text:"复制"+template.name});copy.addEventListener("click",()=>this.editSceneTemplate(store.copySceneTemplate(template.id)));row.append(copy);
@@ -1167,6 +1173,14 @@ export class StudyWorkspaceView extends ItemView {
     const pane=this.popover("编辑场景模板"),draft:StudySceneTemplate=JSON.parse(JSON.stringify(template));
     pane.append(el("p",{text:"修改名称、场景工具及颜色，保存后可在场景模板菜单中使用。"}));
     const name=el("input",{type:"text","aria-label":"模板名称"}) as HTMLInputElement;name.value=draft.name;pane.append(name);
+    let cardFields:HTMLInputElement|undefined,cardFront:HTMLTextAreaElement|undefined,cardBack:HTMLTextAreaElement|undefined;
+    if(draft.cardTemplate){
+      const group=el("fieldset");group.append(el("legend",{text:"卡片字段配置"}));
+      cardFields=el("input",{type:"text","aria-label":"卡片字段（逗号分隔）"});cardFields.value=draft.cardTemplate.fields.join(", ");
+      cardFront=el("textarea",{"aria-label":"卡片模板正面"});cardFront.value=draft.cardTemplate.front;
+      cardBack=el("textarea",{"aria-label":"卡片模板答案"});cardBack.value=draft.cardTemplate.back;
+      group.append(cardFields,cardFront,cardBack,el("p",{text:"正面和答案支持 {{front}}、{{back}}、{{source}}、{{date}}。"}));pane.append(group);
+    }
     for(const scene of draft.scenes){
       const group=el("fieldset");group.append(el("legend",{text:scene.label}));
       const choices=[...new Set([...builtinSceneTemplates().flatMap(item=>item.scenes.filter(source=>source.id===scene.id).flatMap(source=>source.tools)),...scene.tools])];
@@ -1180,7 +1194,7 @@ export class StudyWorkspaceView extends ItemView {
     let menuChanged=false;const menuOptions=[["copy","复制"],["fold","折叠"],["extend-ink","手写留白"],["extend-text","文字留白"],["ask","向 AI 提问"],["research","研究"],["speech","朗读"]] as const;const menuInputs=menuOptions.map(([id,label])=>{const box=el("input",{type:"checkbox","aria-label":"选区菜单："+label}) as HTMLInputElement;box.checked=menuIds.includes(id);box.addEventListener("change",()=>{menuChanged=true;});const row=el("label",{text:label});row.prepend(box);menuGroup.append(row);return{id,box};});pane.append(menuGroup);
     const presets=JSON.parse(JSON.stringify(draft.handwritingPresets??handwritingPresets(this.plugin.store.settings))) as HandwritingPresetSpec[];
     const penInputs=presets.map(preset=>{const row=el("div"),label=el("input",{type:"text","aria-label":"笔名称 "+preset.id}) as HTMLInputElement,color=el("input",{type:"color","aria-label":"笔颜色 "+preset.id}) as HTMLInputElement,width=el("input",{type:"number",min:"0.5",max:preset.type==="highlighter"?"64":"24",step:"0.1","aria-label":"笔宽 "+preset.id}) as HTMLInputElement;label.value=preset.label;color.value=preset.color;width.value=String(preset.width);row.append(label,color,width);pane.append(row);return{preset,label,color,width};});
-    const save=el("button",{class:"ms-scene-template-save",text:"保存模板"});save.addEventListener("click",()=>{try{draft.name=name.value.trim();draft.colors=colors.value.split(",").map(value=>value.trim());draft.excerptPopup=popup.checked;if(menuChanged||draft.textSelectionMenuActions)draft.textSelectionMenuActions=[...menuInputs.filter(item=>item.box.checked).map(item=>item.id),...menuIds.filter(id=>!menuOptions.some(option=>option[0]===id))];draft.handwritingPresets=penInputs.map(({preset,label,color,width})=>({...preset,label:label.value.trim(),color:color.value,width:Number(width.value),...(Number(width.value)===preset.width?{}:{documentWidth:Number(width.value),mindmapWidth:Number(width.value),cardWidth:Number(width.value)})}));this.plugin.store.saveSceneTemplate(draft);this.reader?.refreshSceneSettings?.();this.drawToolbar();new Notice("模板已保存");this.openSceneTemplateManager();}catch(error){new Notice("保存失败："+String(error));}});pane.append(save);
+    const save=el("button",{class:"ms-scene-template-save",text:"保存模板"});save.addEventListener("click",()=>{try{draft.name=name.value.trim();draft.colors=colors.value.split(",").map(value=>value.trim());draft.excerptPopup=popup.checked;if(cardFields&&cardFront&&cardBack)draft.cardTemplate={fields:cardFields.value.split(/[,，]/).map(value=>value.trim()).filter(Boolean),front:cardFront.value,back:cardBack.value};if(menuChanged||draft.textSelectionMenuActions)draft.textSelectionMenuActions=[...menuInputs.filter(item=>item.box.checked).map(item=>item.id),...menuIds.filter(id=>!menuOptions.some(option=>option[0]===id))];draft.handwritingPresets=penInputs.map(({preset,label,color,width})=>({...preset,label:label.value.trim(),color:color.value,width:Number(width.value),...(Number(width.value)===preset.width?{}:{documentWidth:Number(width.value),mindmapWidth:Number(width.value),cardWidth:Number(width.value)})}));this.plugin.store.saveSceneTemplate(draft);this.reader?.refreshSceneSettings?.();this.drawToolbar();new Notice("模板已保存");this.openSceneTemplateManager();}catch(error){new Notice("保存失败："+String(error));}});pane.append(save);
   }
   private toggleFocus(restoreReader = true): void {
     const reader=this.reader, state=restoreReader?reader?.getState():null;

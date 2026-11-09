@@ -73,6 +73,7 @@ export interface CardTemplate {
   name: string;
   front: string;
   back?: string;
+  fields?: string[];
   type?: CardType;
   createdAt?: string;
 }

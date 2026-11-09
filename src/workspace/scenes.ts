@@ -24,7 +24,16 @@ const templates: StudySceneTemplate[] = [
     { id: "writing", label: "书写", tools: ["excerpt.text", "excerpt.rectangle", "excerpt.extend", "continuous-excerpt", "pen.1", "pen.2", "highlighter", "pen.more", "lasso", "eraser", "hand", "undo", "redo", "more"] },
     { id: "recall", label: "回忆", tools: ["hierarchy", "recall-reset", "ai-hint", "recall-settings", "ink", "auto-review"] },
   ] },
+  { id: "practice-cards", version: 1, name: "刷题卡片", scenes: [
+    { id: "recall", label: "回忆", tools: ["hierarchy", "recall-reset", "ai-hint", "recall-settings", "ink", "auto-review", "review", "more"] },
+  ], cardTemplate: { fields: ["问题", "答案", "解析", "错因"], front: "问题：{{front}}", back: "答案：{{back}}\n解析：\n错因：" } },
+  { id: "foreign-vocabulary", version: 1, name: "外刊生词", scenes: [
+    { id: "reading", label: "阅读", tools: ["theme", "title-links", "block-selection", "more"] },
+    { id: "recall", label: "回忆", tools: ["hierarchy", "recall-reset", "ai-hint", "recall-settings", "ink", "auto-review", "review", "more"] },
+  ], cardTemplate: { fields: ["词", "原形", "音标", "释义", "例句"], front: "词：{{front}}", back: "原形：\n音标：\n释义：{{back}}\n例句：" } },
 ];
+
+export const installableSceneTemplateIds = ["practice-cards", "foreign-vocabulary"] as const;
 
 /** Callers may edit their copy without mutating a built-in or another studyset. */
 export function builtinSceneTemplates(): StudySceneTemplate[] {
@@ -43,6 +52,7 @@ export function isSupportedSceneTemplate(value: unknown): value is StudySceneTem
   if (item.colors !== undefined && (!Array.isArray(item.colors) || !item.colors.length || item.colors.length > 32 || !item.colors.every(color => typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color)))) return false;
   if (item.excerptPopup !== undefined && typeof item.excerptPopup !== "boolean") return false;
   if (item.textSelectionMenuActions !== undefined && (!Array.isArray(item.textSelectionMenuActions) || item.textSelectionMenuActions.length > 40 || !item.textSelectionMenuActions.every(id => typeof id === "string" && id.length > 0 && id.length < 100))) return false;
+  if (item.cardTemplate !== undefined && (!item.cardTemplate || typeof item.cardTemplate.front !== "string" || typeof item.cardTemplate.back !== "string" || !Array.isArray(item.cardTemplate.fields) || !item.cardTemplate.fields.length || item.cardTemplate.fields.length > 20 || !item.cardTemplate.fields.every(field => typeof field === "string" && field.trim().length > 0 && field.length <= 100) || new Set(item.cardTemplate.fields).size !== item.cardTemplate.fields.length)) return false;
   if (item.handwritingPresets !== undefined && (!Array.isArray(item.handwritingPresets) || !item.handwritingPresets.length || item.handwritingPresets.length > 32 || !item.handwritingPresets.every(p => p && typeof p.id === "string" && p.id.length > 0 && typeof p.label === "string" && p.label.length > 0 && ["ballpoint","fountain","pencil","highlighter"].includes(p.type) && /^#[0-9a-f]{6}$/i.test(p.color) && Number.isFinite(p.width) && p.width >= .5 && p.width <= (p.type === "highlighter" ? 64 : 24) && Number.isFinite(p.opacity) && p.opacity >= 0 && p.opacity <= 1 && [p.documentWidth,p.mindmapWidth,p.cardWidth].every(width => width === undefined || Number.isFinite(width) && width >= .5 && width <= (p.type === "highlighter" ? 64 : 24))))) return false;
   if (item.handwritingPresets && new Set(item.handwritingPresets.map(p => p.id)).size !== item.handwritingPresets.length) return false;
   if (item.handwritingPresets?.some(p => p.recallPurpose !== undefined && !["mask","highlight"].includes(p.recallPurpose))) return false;

@@ -105,7 +105,9 @@ export function mergePreservingVersions(local: PluginData, remote: PluginData): 
     item.links = (original.links ?? []).map(id => mapped("cards", id));
     if (original.groupId) item.groupId = mapped("cards", original.groupId);
     if (original.sourceCardId) item.sourceCardId = mapped("cards", original.sourceCardId);
-    if (original.templateId) item.templateId = mapped("cardTemplates", original.templateId);
+    if (original.templateId) item.templateId = rows(remote, "sceneTemplates").some(template => template.id === original.templateId && template.cardTemplate)
+      ? mapped("sceneTemplates", original.templateId) : mapped("cardTemplates", original.templateId);
+    if (original.vocabulary?.studySetId) item.vocabulary = { ...original.vocabulary, studySetId: mapped("studySets", original.vocabulary.studySetId) };
     if (original.mergedCards) item.mergedCards = original.mergedCards.map(card);
     if (original.mergedReviewStates) item.mergedReviewStates = states(original.mergedReviewStates);
     if (original.mergeArchive) item.mergeArchive = {
