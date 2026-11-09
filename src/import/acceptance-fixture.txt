@@ -96,10 +96,11 @@ try {
     await rejects(() => importWebArticle(write.plugin, { url: url('/article') }, { signal: writeController.signal }), /AbortError|取消/);
     assert(write.store.documents.length === 0 && write.binary.size === 0 && ![...write.text.keys()].some(path => path.endsWith('.html')), 'cancelled write left partial import');
   });
-  await test('Storage registration failures identify the saved path; reader failures return explicit partial success', async () => {
-    const p = await fresh(); const flush = p.store.flush.bind(p.store); p.store.flush = async () => { throw new Error('Synthetic metadata disk failure'); };
-    const error = await rejects(() => importWebArticle(p.plugin, { html: '<p>Saved source remains recoverable after metadata failure.</p>' }), /文件已保存.*登记未完成/);
-    assert(error instanceof WebImportError && error.savedPath && p.text.has(error.savedPath) && p.opened.length === 0, 'metadata failure hid or lost its saved path'); p.store.flush = flush;
+  await test('Storage registration failures roll back files and metadata; reader failures return explicit partial success', async () => {
+    const p = await fresh(); const before = JSON.stringify({ sets: p.store.studySets, documents: p.store.documents }); const flush = p.store.flush.bind(p.store); let count = 0;
+    p.store.flush = async () => { if (++count === 2) throw new Error('Synthetic metadata disk failure'); return flush(); };
+    await rejects(() => importWebArticle(p.plugin, { html: '<p>Metadata failure must roll back this synthetic article.</p>' }), /metadata disk failure/);
+    assert(JSON.stringify({ sets: p.store.studySets, documents: p.store.documents }) === before && ![...p.text.keys()].some(path => path.endsWith('.html')) && p.opened.length === 0, 'metadata failure left a partial article or registration'); p.store.flush = flush;
     const q = await fresh(); q.failOpen(); const result = await importWebArticle(q.plugin, { html: '<p>This article saves even when the reader cannot open it.</p>' });
     assert(!result.opened && q.text.has(result.file.path) && result.warnings.some(item => item.includes('已保存，但未能打开')), 'reader failure falsely reported a fully opened import');
   });

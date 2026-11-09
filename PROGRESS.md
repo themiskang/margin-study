@@ -1769,3 +1769,58 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - 口径限制（CC 如实登记）：外部改动由宿主 adapter 直接改写 data.json 触发，等价外部写入但非真实跨端 Sync；云端仅验文案与不接入行为；保留了 3 个含合成对象的恢复记录文件（已登记）
 - 证据：evidence/acceptance-20261106/CC-A28-RESULT.md（3 张截图 + 逐项数值 + 清理后业务对象与合成前基线零差异）
 - 下一步第一动作：批次 A5 第二张 A29（通用资料导入与学习集复用）
+
+## 2026-11-09 · A29 通用资料导入与学习集复用（自动执行完成，宿主留 CC）
+
+- 完成定义：五项合成断言各两次改前失败、改后通过；完整 `npm run verify` 全绿；构建安装至桌面隔离库并记录 SHA-256；首页成员管理及真实导入/复用留 CC 实机验。本轮不操作 adb、真实库、异常验收库或 `evidence/**`，不提交、不导入 `.marginpkg` 或 MN3/MN4 数据库。
+- 实现：成员管理支持跨来源批量勾选、移出、筛选全选、Markdown 和 `.msref`；从首页「文档」进入，可将勾选成员复用到其他学习集，或把首页「文档」按钮拖到另一学习集复用全部成员；单个成员有拖动入口。跨集复用只追加同一文档路径，不复制源文件。成员管理可从电脑多选导入指定学习集；同名时明确选择拒绝、复用已有路径或重命名，复用不按内容判等、不改既有文件。
+- 批量本地导入先检查全部格式与数据库文件头，暂存新文件并在登记前原子改名，写入或登记失败清理本次拥有的文件；网页导入改用同一登记事务。成员与 `DocumentRecord` 一次事务登记并持久化，失败恢复前态与历史，一次撤销/重做整批成员及登记，撤销保留导入的源文件。目标变更时拒绝旧成员界面覆盖。若保存接口先写入再报错、回滚持久化又失败，磁盘状态无法保证恢复；保留可能已登记的源文件并报告保存冲突，不能声称磁盘回滚成功。
+- 改前：`/tmp/a29-before-1.log`、`/tmp/a29-before-2.log` 两轮均 **0/5**，分别为 `/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-a29-8wOnMx/results.json`、`/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-a29-t9Dxvt/results.json`。五项均因新事务入口不存在而失败；旧实现并未在该基线中逐项执行到底，不能把这些结果解释为旧行为的五项底层不变量均已实测失败。
+- 最终改后：`/tmp/a29-final-1.log`、`/tmp/a29-final-2.log` 两轮均 **5/5**，扩展安全项各 **2/2**，结果分别为 `/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-a29-Y82YYs/results.json`、`/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-a29-fhql5Y/results.json`。真实临时文件系统验证两集共享一条记录/一个文件/哈希不变、移出不删源、复用零新文件、拒绝零改动、部分写入后报错及 adapter 失败时逐字段恢复、批量添加和移出各一次撤销。额外覆盖禁导包/数据库/伪装 SQLite、重命名、批内重名预检、旧界面冲突、保存结果不确定时保留源文件。
+- 最终完整 `MARGINSTUDY_VERIFY_DIR=/tmp/a29-full-final-20261109 npm run verify` **40/40 套件通过**；Workspace **319/319**、Reader **224/224**、网页导入 **9/9**、A29 **5/5**；`git diff --check` 通过。合成浏览器覆盖首页入口、勾选复用和拖放，不等于 Obsidian 宿主实机。中间首次 Workspace 为 316/319，原因是额外拖动按钮使窄屏卡片高 4px；改为复用既有「文档」按钮作为拖动手柄后，定向及最终全量均为 319/319。
+- 已安装桌面隔离库，开发构建与安装文件逐字节相同：`main.js` SHA-256 `14f63f9f2f3a65f84d7972470c46f92d36a17107549f4728e5d6d17d1b013e45`；`styles.css` `5a22fdb417014ccbf9ddfcbb1e082944cf6f831a9fdb2052b23dbdf1d438dcd2`。隔离库 `data.json` 安装前后均为 `187317a4ac80857a4e5bdafec6e015bd4d737faab357d11b619406285ff25e96`。未重载宿主，安装不代表运行时已加载。
+- CC 宿主验收第一动作：核对安装哈希，重载桌面隔离库插件并确认运行脚本含 `changeStudySetDocuments`、`importLocalDocuments`；只使用合成文件与临时学习集，验证首页入口、批量导入/移出/一次撤销、同名复用与拒绝、跨集勾选/拖放复用及文件数量和哈希；结束清理临时对象并核对业务对象。宿主实机仍未验收，不冒称通过。
+
+## 2026-11-09 · A29 CC 实机验收（1–4 pass；5 成员管理 pass、导入新文件 FAIL）
+
+- 前置：重载后运行时 `scriptId 726`（源码 5,203,095 字符，SHA-256 `50527e14…`）；A29 符号命中 `changeStudySetDocuments` 7、`importLocalDocuments` 2、`documentCommitPending` 8、`DocumentCommitRollbackError` 5、`expectedPaths` 3、`studyDocumentDragType` 5、`MarginStudyImports` 7；转义中文界面串全部命中（复用勾选文档/拒绝覆盖/复用既有文件/重命名新文件/从电脑导入多份文档/拖动复用等）。前置 PASS。
+- 五项：1 PASS（合成 md 经真实 UI 加入 A、复用到 B；两集 docPaths 均含该路径，documents 记录 1 条，磁盘同名文件 1 个、SHA-256 `c1c8e5d0…` 前后不变）；2 PASS（从 B 移出后 A 不受影响，源文件 26 B、哈希不变）；3 PASS（同名导入「复用既有」零新文件、哈希不变；「拒绝覆盖」studySets/documents 深比较 equal=true，零改动）；4 PASS（页面包装 `plugin.saveData` 注入一次失败，内存与磁盘 studySets/documents 深比较均 equal=true，revision 2571→2572）；5 PASS（成员管理一次批量加入 second+third，documents 35→37，一次撤销命令恢复成员与两条 DocumentRecord，源文件保留）。
+- **附加发现（发布阻断）**：真实宿主 Obsidian 1.15.0 对点号隐藏路径 `vault.createBinary` 返回 null、`getAbstractFileByPath` 返回 null（普通路径正常返回 TFile）。`importLocalDocuments` 使用 `MarginStudyImports/.import-<uid>/` 隐藏暂存目录，导致 `rename(null, target)` 抛 `TypeError: Cannot read properties of null (reading 'path')`，从电脑导入新文件必失败；复用/拒绝两路不写新文件故仍通过。最小复现已写入 CC 结果；失败导入遗留的 4 个 `.import-*` 暂存目录与 2 个探针文件已清理。
+- 收尾：临时学习集 A/B、合成文件 shared/second/third、失败暂存目录与探针文件全部删除；业务对象回到 22/34/5/18/2/9/1/0/2/8/3/3；active L4SampleSet、workspaceState tabs/activePath 已恢复；`revision` 2565→**2577**，`localEvents` 44→**72**（账本只增不删）；`data.json` SHA-256 `74025e99…`，与基线逐字段深比较（排除 revision/writerId/savedAt/localEvents）**diffKeys=[]**。未改产品代码、未提交、未改既有 evidence、未操作 adb/真实库。
+- 证据：`evidence/acceptance-20261106/CC-A29-RESULT.md` + 3 张截图（两学习集复用 / 同名处理对话框 / 收尾主页）；过程数据 `/tmp/cc-a29/`。
+- 下一步第一动作：修复 `importLocalDocuments` 的隐藏暂存目录（改用可被 Vault 索引的非隐藏暂存路径，或在 adapter 写入后用 `getAbstractFileByPath` 轮询取 TFile），再自动重跑导入用例并在宿主重验第 3/5 项。
+
+## 2026-11-09 16:40 A29 真机发现发布阻断级缺陷（DEF-A29-1）
+- 事实（CC 实机）：Obsidian 1.15.0 中 `app.vault.createBinary("MarginStudyImports/.import-<uid>/x.md", bytes)` 返回 **null**，`getAbstractFileByPath` 也返回 null；普通路径正常。`importLocalDocuments` 用隐藏暂存目录 → `vault.rename(null, target)` 抛 `TypeError: Cannot read properties of null (reading 'path')`，**从电脑导入新文件必然失败**
+- 影响面：复用既有文件 / 拒绝覆盖两路不写新文件，第 3 项仍通过；第 5 项若以「从电脑导入新文件」为载体则 FAIL/未测成
+- 已验通过的部分：多学习集复用磁盘仅一份、移出不删源文件、同名冲突两路、失败回滚、成员管理批量加入一次撤销（均 PASS）
+- 下一步第一动作：把暂存目录改为非隐藏路径（或改走 adapter.write 并校验），补断言后由 CC 重跑「从电脑导入新文件」第 3/5 项
+- 证据：evidence/acceptance-20261106/CC-A29-RESULT.md「附加发现」节
+
+## 2026-11-09 · DEF-A29-1 隐藏暂存目录修复（自动验收完成，真机留 CC）
+
+- 完成定义：合成宿主重现隐藏路径返回 null，修复前后分别运行断言；验证文件哈希、成员和 DocumentRecord、三种冲突策略、失败回滚及批量一次撤销；全量 `npm run verify` 全绿；安装桌面隔离库并登记哈希。真机从电脑导入两个新文件、零暂存残留和一次撤销由 CC 复验；不操作 adb、真实库、`evidence/**`，不提交。
+- 选用首选方案：暂存目录为 `MarginStudyImports/import-<uid>/`，确认 `createBinary` 返回 `TFile` 后才重命名；跟踪创建文件，失败时清理已移动文件及暂存目录。目录未被 Vault 索引时使用 adapter 删除；部分创建和单次清理失败也经合成故障覆盖。登记继续走一次 `changeStudySetDocuments` 事务；一次撤销恢复成员和记录，保留已导入的源文件，维持 A29 原语义。
+- 改前两轮 `/tmp/def-a29-1-before-1.log`、`/tmp/def-a29-1-before-2.log` 均 **0/5**：隐藏目录引发 `rename(null)` TypeError，文件系统深比较还显示 `.import-*` 残留。多数成功路径因同一上游故障提前中止，不能解释为旧实现的每项底层断言均已独立运行失败。
+- 改后两轮 `/tmp/def-a29-1-final-1.log`、`/tmp/def-a29-1-final-2.log` 均 **5/5**；A29 原断言各 **5/5**、扩展项各 **5/5**。真实临时文件系统验证源文件与目标 SHA-256 一致、记录数 +1、学习集成员包含路径；`createBinary` 写后返回 null/抛错、`rename` 移动前/更新索引后抛错及未索引暂存目录均恢复内存和持久化成员/记录及磁盘文件树；两份新文件一次导入、一次撤销恢复，文件保留。拒绝/复用/重命名策略均通过。
+- 安全限制：若系统删除本身持续失败，无法保证零残留，会报告未清理路径；若 `rename` 已在磁盘移动但抛错前尚未更新 `TFile.path`，来源所有权无法可靠区分，会保留目标并报错，不误删可能并发出现的他人文件。已有 `DocumentCommitRollbackError`（写入结果不确定且回滚落盘失败）同样保留可能已登记的源文件并报告，不冒称完全回滚；这些异常不在本卡指定的 null / 常规 rename 故障模型内，扩展测试验证了保留及提示。
+- 全量 `MARGINSTUDY_VERIFY_DIR=/tmp/def-a29-1-verify-final-20261109 npm run verify` **40/40 套件通过**，其中 DEF **5/5**、A29 **5/5**、Workspace **319/319**、Reader **224/224**；`git diff --check` 通过。首次沙箱内运行在 `review-a20` 本地监听遇 `EPERM`，随后按权限要求重跑全量通过。
+- 已安装桌面隔离库，源与安装文件逐字节一致：`main.js` SHA-256 `10395e31ced64c34cb773f452dc7cdb5c4edadca61f9e59370c8c8ab9a9908e1`；`styles.css` `5a22fdb417014ccbf9ddfcbb1e082944cf6f831a9fdb2052b23dbdf1d438dcd2`。隔离库 `data.json` 安装前后均为 `74025e999862ad3166fe93a6fe43871eb52874fe44b2ae42431c34ca8e48714e`。未重载宿主，不代表运行时已加载新构建。
+- CC 复验第一动作：核对上述安装哈希并重载隔离库插件，使用临时学习集和两份新的合成文件，从电脑批量导入；核对两份文件 SHA-256、两条 DocumentRecord、成员路径和 `import-*` 暂存目录零残留，再执行一次撤销并核对成员/记录恢复且导入源文件仍保留。结束清理合成对象并核对业务数据。真机复验尚未执行，不宣称通过。
+
+## 2026-11-09 · DEF-A29-1 CC 修复复验（PASS，缺陷关闭）
+
+- 前置：运行时重载前为旧构建（运行时源码 SHA-256 `50527e14…`，非隐藏暂存断言 `nonHiddenCandidate=false`）；`disablePlugin/enablePlugin` 后 `scriptId 788`，运行时源码 5,204,466 字符 / SHA-256 `7ed26e2f45e3a176610b3681278feb90d6459459af29c7ffe65d749fc880bacb`；`.import-` 命中 **0**、非隐藏 `candidate = \`${dir}/${uid("import")}\`` 存在；磁盘 `main.js` SHA-256 `10395e31…` 与任务卡一致。前置 PASS。
+- 四项：1 PASS（真实 UI「从电脑导入多份文档」批量导入 alpha 39 B / beta 50 B；L4 `docPaths` 8→10、`documents` 34→36，库内 SHA-256 分别与源文件一致、同名文件各 1，无 `Cannot read properties of null (reading 'path')`）；2 PASS（`.import-*` / `import-*` 残留每步与收尾均 0）；3 PASS（一次 `margin-study:undo-library` 返回 true；`docPaths` 回 8、`documents` 回 34，`studySets`/`documents` 与基线深比较 equal=true；导入源文件保留，SHA-256 不变）；4 PASS（同名 v2 45 B：拒绝覆盖 Notice「目标已有同名文件，已拒绝覆盖」且零改动；复用既有 34→35、零新文件、库内哈希不变；重命名生成 `cc-a29-fix-alpha (1).md` 45 B，哈希等于外部 v2）。
+- 收尾：删除 3 份合成文件及成员/记录；恢复 workspace 8 标签、`activePath=l4-sample-alpha.pdf`、L4 主页；复原测试副作用（`L4SampleSet.cardIds` 15→17→15、canvas `lastDocumentPath` 回 `l4-sample-alpha.pdf`）；最终 `revision` **2585**、`localEvents` **93**，对象数 22/34/5/18/2/9/1/0/2/8/3/3，`data.json` SHA-256 `92a7c12b68f6dde0f70ea48afd3c342fb00bf7f8b5fb3a7fdc88d25ce1285602`，与基线逐字段深比较（排除 revision/writerId/savedAt/localEvents）**diffKeys=[]**；`cc-a29-fix` 与暂存残留 0。
+- 结论：**DEF-A29-1 关闭（PASS）**。证据：`evidence/acceptance-20261106/CC-A29-RESULT.md` § 修复复验 + 2 张截图；过程数据 `/tmp/cc-a29-fix/`。未改产品代码、未提交、未操作 adb/真实库/异常验收库。
+- 下一步第一动作：总控按本结果关闭 DEF-A29-1，并把 A29 的「从电脑导入新文件」载体补记为 PASS；后续任务卡继续。
+
+## 2026-11-09 17:10 A29 完成、批次 A5 收官（含 DEF-A29-1 修复）
+- 完成：A29 通用资料导入与学习集复用，自动验收 5/5（改前 0/5 因事务入口缺失、改后 5/5）、verify 40/40（Workspace 319/319）
+- 结论：结论：CC 实机前四项全 pass —— 多学习集复用磁盘仅一份且 sha256 不变、移出不删源文件、同名冲突三路成立、注入失败后内存与磁盘 studySets/documents 逐字段回原；第 5 项以成员管理批量加入验证一次事务一次撤销 PASS
+- **发布阻断级缺陷 DEF-A29-1（已修并关闭）**：真实宿主 Obsidian 1.15.0 的 `vault.createBinary` 对点号开头隐藏路径返回 null，`importLocalDocuments` 用 `.import-<uid>` 暂存目录导致 `rename(null)` 抛 TypeError，从电脑导入新文件必然失败。改为非隐藏 `import-<uid>` 目录 + TFile 校验 + 失败清理；CC 修复复验四项全 pass（两份新 md 导入成功、库内 sha256 与源文件一致、暂存残留 0、一次撤销回滚、同名三路回归）
+- 边界（Codex 如实登记）：若 rename 已在磁盘完成但索引更新前抛错，目标归属无法确认；为避免误删并发文件，程序保留目标并报错，不能保证此异常下零残留
+- 前置：CC 两轮均用 Debugger.getScriptSource 核对运行时脚本（A29 初验 709→726、修复复验 726→788）
+- 证据：evidence/acceptance-20261106/CC-A29-RESULT.md（初验 3 张 + 修复复验 2 张截图 + 逐项数值 + 清理后业务对象与基线零差异）
+- 路线 A 批次 A5（A28/A29）全部完成；下一步第一动作：批次 A6 的 A18（子脑图/分支/卡片显示）

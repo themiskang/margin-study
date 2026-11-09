@@ -36,6 +36,7 @@ const allSuites=[
   ["review-ui","src/review/ui-acceptance.mjs"],
   ["reader","src/documents/acceptance.mjs"],
   ["web-import","src/import/acceptance.mjs"],
+  ["import-a29","src/import/a29-acceptance.mjs"],
   ["workspace","src/workspace/acceptance.mjs"],
   ["workspace-scenes","src/workspace/scene-acceptance.mjs"],
   ["workspace-a26","src/workspace/a26-acceptance.mjs"],

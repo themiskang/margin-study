@@ -2891,9 +2891,23 @@ try{
     button(p.root,'学习集与文档').click();await frame();button(p.root,`管理文档：${p.set.name}`).click();await frame();
     const dialog=document.querySelector<HTMLElement>('.ms-modal')!;assert(dialog,'document membership dialog missing');
     const local=dialog.querySelector('[data-document-source="local"]'),web=dialog.querySelector('[data-document-source="web"]');assert(local?.textContent?.includes('Delta.pdf')&&web?.textContent?.includes('Beta.md'),'document sources were not grouped');
-    const labels=[...dialog.querySelectorAll('label')];for(const name of ['Delta.pdf','Gamma.docx']){const target=labels.find(label=>label.textContent?.includes(name));assert(target,`target document missing: ${name}`);target!.querySelector<HTMLInputElement>('input[type=checkbox]')!.click();}button(dialog,'保存文档成员').click();await frame();
+    const labels=[...dialog.querySelectorAll('label')];for(const name of ['Delta.pdf','Gamma.docx']){const target=labels.find(label=>label.textContent?.includes(name));assert(target,`target document missing: ${name}`);target!.querySelector<HTMLInputElement>('input[type=checkbox]')!.click();}button(dialog,'保存文档成员').click();await until(()=>!document.body.contains(dialog),'membership save did not finish');
     assert(JSON.stringify(p.store.studySets.find((set:any)=>set.id===p.set.id))!==before,'membership was not changed');
     assert(p.store.undoLibraryChange(),'membership undo unavailable');assert(JSON.stringify(p.store.studySets.find((set:any)=>set.id===p.set.id))===before,'membership undo did not restore every field');
+  });
+  await test('A29 home reuses checked documents and drag-copies all members without copying sources',async()=>{
+    const p=await fresh(),source=p.store.studySets.find((set:any)=>set.id===p.set.id)!,paths=[...source.docPaths],other=p.store.createStudySet('A29 destination');p.store.setActiveStudySet(source.id);p.view.refresh(true);await frame();
+    const files=[...p.sources.keys()].sort().join('|');button(p.root,'学习集与文档').click();await frame();button(p.root,`管理文档：${source.name}`).click();
+    const dialog=document.querySelector<HTMLElement>('.ms-modal')!,selection=dialog.querySelector<HTMLSelectElement>('[aria-label="复用到学习集"]')!;selection.value=other.id;button(dialog,'复用勾选文档').click();
+    await until(()=>!button(dialog,'复用勾选文档').disabled,'checked document reuse did not finish');
+    assert(p.store.studySets.find((set:any)=>set.id===other.id)!.docPaths.length===paths.length,'checked document reuse failed');
+    assert(JSON.stringify(p.store.studySets.find((set:any)=>set.id===source.id)!.docPaths)===JSON.stringify(paths)&&[...p.sources.keys()].sort().join('|')===files,'reuse changed source membership or files');
+    button(dialog,'取消').click();await p.store.changeStudySetDocuments(other.id,[]);button(p.root,'学习集与文档').click();await frame();
+    const home=p.root.querySelector<HTMLElement>('[aria-label="StudySet"]')!,drag=button(home,`管理文档：${source.name}`),destination=home.querySelector<HTMLElement>(`[data-study-cover="${other.id}"]`)!,transfer=new DataTransfer();
+    drag.dispatchEvent(new DragEvent('dragstart',{bubbles:true,cancelable:true,dataTransfer:transfer}));destination.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));
+    await until(()=>p.store.studySets.find((set:any)=>set.id===other.id)!.docPaths.length===paths.length,'cross-set drag did not append documents');await p.store.flush();
+    assert(JSON.stringify(p.store.studySets.find((set:any)=>set.id===source.id)!.docPaths)===JSON.stringify(paths)&&[...p.sources.keys()].sort().join('|')===files,'drag copied files or changed source');
+    assert(p.store.undoLibraryChange()&&p.store.studySets.find((set:any)=>set.id===other.id)!.docPaths.length===0,'drag was not one undo');
   });
   await test('continuous excerpt entry follows PDF tool state and keyboard toggle',async()=>{
     const p=await fresh();p.store.setStudyInterface(p.set.id,'scenes');await p.view.openFile(p.alpha);p.view.refresh(true);await frame();

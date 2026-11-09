@@ -3,6 +3,7 @@ import type MarginStudyPlugin from "../main";
 import type { MindCanvas } from "../types";
 import { clear, el } from "../utils/dom";
 import { createModal, openTextModal } from "../utils/modal";
+import { isStudyDocumentPath } from "../documents/formats";
 
 const CANVAS_KINDS = { study: "学习脑图", document: "文档脑图", review: "复习脑图" } as const;
 
@@ -116,14 +117,15 @@ export function renderStudyControls(container: HTMLElement, plugin: MarginStudyP
   container.append(details, options);
 }
 
-export function editDocuments(plugin: MarginStudyPlugin, studySetId: string, onChange: () => void): void {
+export function editDocuments(plugin: MarginStudyPlugin, studySetId: string, onChange: () => void, onImport?: () => void): void {
   const set = plugin.store.studySets.find((candidate) => candidate.id === studySetId);
   if (!set) return;
+  const originalPaths = [...set.docPaths];
   const paths = new Set(set.docPaths);
-  const files = plugin.app.vault.getFiles().filter((file) => /\.(pdf|docx|html?|epub)$/i.test(file.path));
+  const files = plugin.app.vault.getFiles().filter((file) => isStudyDocumentPath(file.path) && !file.path.startsWith("MarginStudyBackups/") && !file.path.startsWith("_marginstudy-recovery/"));
   const allPaths = [...new Set([...set.docPaths, ...files.map((file) => file.path)])].sort();
   const { modal, close } = createModal(`学习集文档 · ${set.name}`);
-  modal.append(el("p", { class: "ms-muted", text: "勾选多份文档，卡片与复习会一起纳入当前学习集。每张脑图保留独立结构，移出文档不会删除已经整理到脑图中的卡片。" }));
+  modal.append(el("p", { class: "ms-muted", text: "勾选或取消勾选多份文档后一起保存；移出不会删除源文件或已整理的卡片。可将勾选的文档复用到其他学习集，不复制文件。" }));
   const search = el("input", { class: "ms-search", type: "search", placeholder: "筛选文档路径…" });
   const list = el("div", { style: "max-height:45vh;overflow:auto" });
   const draw = () => {
@@ -159,6 +161,16 @@ export function editDocuments(plugin: MarginStudyPlugin, studySetId: string, onC
         }
       });
       row.append(open);
+      if (set.docPaths.includes(path)) {
+        const drag = el("button", { type: "button", class: "ms-btn", draggable: "true", text: "拖动复用", "aria-label": `拖动文档：${path}` });
+        drag.addEventListener("dragstart", event => {
+          if (!event.dataTransfer) return;
+          event.dataTransfer.effectAllowed = "copy";
+          event.dataTransfer.setData("application/x-marginstudy-document-paths", JSON.stringify({ setId: studySetId, paths: [path] }));
+          close();
+        });
+        row.append(drag);
+      }
       group.append(row);
     }
     }
@@ -168,13 +180,36 @@ export function editDocuments(plugin: MarginStudyPlugin, studySetId: string, onC
   const actions = el("div", { class: "ms-modal-actions" });
   const save = el("button", { class: "ms-btn primary", text: "保存文档成员" });
   save.addEventListener("click", () => {
-    plugin.store.updateStudySet(studySetId, { docPaths: [...paths] });
-    close();
-    onChange();
+    save.disabled = true;
+    void plugin.store.changeStudySetDocuments(studySetId, [...paths], { expectedPaths: originalPaths }).then(() => {
+      close(); onChange();
+    }).catch(error => { save.disabled = false; new Notice("保存文档成员失败：" + String(error), 10000); });
   });
   const cancel = el("button", { class: "ms-btn", text: "取消" });
   cancel.addEventListener("click", close);
+  const destination = el("select", { class: "ms-select", "aria-label": "复用到学习集" }) as HTMLSelectElement;
+  destination.append(el("option", { value: "", text: "选择复用目标学习集" }));
+  for (const other of plugin.store.studySets.filter(candidate => candidate.id !== studySetId)) destination.append(el("option", { value: other.id, text: other.name }));
+  const reuse = el("button", { class: "ms-btn", text: "复用勾选文档" });
+  reuse.addEventListener("click", () => {
+    if (!destination.value || !paths.size) { new Notice("请选择目标学习集并勾选文档。"); return; }
+    reuse.disabled = true;
+    void plugin.store.changeStudySetDocuments(destination.value, [...paths], { mode: "append" }).then(() => {
+      new Notice("已复用勾选的文档，源文件未复制。"); onChange();
+    }).catch(error => new Notice("复用文档失败：" + String(error), 10000)).finally(() => { reuse.disabled = false; });
+  });
+  const selection = el("div", { class: "ms-study-row ms-row", style: "flex-wrap:wrap" });
+  const selectAll = el("button", { class: "ms-btn", text: "勾选筛选结果" });
+  selectAll.addEventListener("click", () => { const query = search.value.trim().toLowerCase(); for (const path of allPaths) if (!query || path.toLowerCase().includes(query)) paths.add(path); draw(); });
+  const deselectAll = el("button", { class: "ms-btn", text: "取消筛选结果" });
+  deselectAll.addEventListener("click", () => { const query = search.value.trim().toLowerCase(); for (const path of allPaths) if (!query || path.toLowerCase().includes(query)) paths.delete(path); draw(); });
+  selection.append(selectAll, deselectAll, destination, reuse);
+  if (onImport) {
+    const load = el("button", { class: "ms-btn", text: "从电脑导入多份文档" });
+    load.addEventListener("click", () => { close(); onImport(); });
+    selection.append(load);
+  }
   actions.append(cancel, save);
-  modal.append(search, list, actions);
+  modal.append(search, selection, list, actions);
   draw();
 }

@@ -16,6 +16,7 @@ import { openNewNotebook } from "../documents/notebook";
 import { ReaderView } from "../pdf/readerView";
 import { WordReaderView } from "../word/wordReader";
 import { DocumentReaderView } from "../documents/documentReader";
+import { isStudyDocumentPath } from "../documents/formats";
 import { MindmapRenderer } from "../mindmap/mindmapRenderer";
 import { jumpToCardSource, openDetail, renderCardList, startReview } from "../cards/cardView";
 import { openReviewDeckBrowser, openReviewDecks } from "../review/decks";
@@ -24,7 +25,8 @@ import { mountResearchBrowser, researchSession } from "../research/browser";
 import type { ResearchHandle, ResearchSession } from "../research/browser";
 import { mountAiPanel, openAiSettings } from "../ai";
 import type { AiPanelHandle, AiContext } from "../ai";
-import { openWebImport } from "../import/webImport";
+import { importLocalDocuments, openWebImport } from "../import/webImport";
+import type { ImportConflictPolicy } from "../import/webImport";
 import { openGlobalSearch } from "../search/globalSearch";
 import { openSettingAndReveal } from "../search/featureSearch";
 import { toggleStudyInterface } from "./scenes";
@@ -57,7 +59,8 @@ const defaults = (): WorkspaceState => ({
   libraryWidth: 206, auxiliaryWidth: 320, auxiliaryWidths:{cards:320,review:320,research:440,ai:440}, linkMode: "both", placement: "left", tabLimit: 7, showTabs: true, documentNavigation: false, documentNavigationTab: "contents",
   bottomMode: "reading", bottomCollapsed: false,
 });
-const supported = (file: TFile) => ["pdf", "msref", "docx", "epub", "html", "htm", "md"].includes(file.extension.toLowerCase());
+const supported = (file: TFile) => isStudyDocumentPath(file.path);
+const studyDocumentDragType = "application/x-marginstudy-document-paths";
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
 const readingThemes: {id: ReadingTheme; label: string}[] = [
   {id:"white",label:"White"},{id:"sepia",label:"Sepia"},{id:"gray",label:"Gray"},{id:"dark",label:"Dark"},{id:"green",label:"Green"},
@@ -1286,6 +1289,17 @@ export class StudyWorkspaceView extends ItemView {
     const sorted=[...store.studySets].sort((a,b)=>store.settings.studyHomeSort==="name"?a.name.localeCompare(b.name,"zh-CN"):b.createdAt.localeCompare(a.createdAt));
     const drawSet=(set:typeof store.studySets[number],target:HTMLElement)=>{
       const card=el("article",{class:"ms-study-home-card","data-study-cover":set.id});
+      card.addEventListener("dragover",event=>{if(event.dataTransfer?.types.includes(studyDocumentDragType)){event.preventDefault();event.dataTransfer.dropEffect="copy";}});
+      card.addEventListener("drop",event=>{
+        if(!event.dataTransfer?.types.includes(studyDocumentDragType))return;
+        event.preventDefault();event.stopPropagation();
+        try {
+          const payload=JSON.parse(event.dataTransfer.getData(studyDocumentDragType)) as {setId?:unknown;paths?:unknown};
+          const source=store.studySets.find(item=>item.id===payload.setId);
+          if(!source||!Array.isArray(payload.paths)||payload.paths.some(path=>typeof path!=="string"||!source.docPaths.includes(path)))throw new Error("拖动来源已变化，请重新选择文档。");
+          void store.changeStudySetDocuments(set.id,payload.paths,{mode:"append"}).then(()=>{new Notice("文档已复用，源文件未复制。");this.openStudyMenu();}).catch(error=>new Notice("复用文档失败："+String(error),10000));
+        } catch(error) {new Notice("复用文档失败："+String(error),10000);}
+      });
       const cover=el("div",{class:"ms-study-home-cover"});
       const docCount=new Set(set.docPaths).size;
       const docs=el("div",{class:"ms-study-home-cover-doc","data-cover-documents":"true","data-document-count":String(docCount)});
@@ -1307,7 +1321,8 @@ export class StudyWorkspaceView extends ItemView {
       row.addEventListener("contextmenu",event=>{event.preventDefault();event.stopPropagation();openConfirm("移除学习集",`移除「${set.name}」及其脑图？关联卡片内容会保留。`,()=>{store.removeStudySet(set.id);this.dismissPopup();this.refresh(true);this.saveLayout();},"移除学习集");});
       const pin=el("button",{type:"button",class:"ms-study-home-pin","aria-label":`${set.pinned?"取消置顶":"置顶"}学习集：${set.name}`,"aria-pressed":String(!!set.pinned),text:set.pinned?"★":"☆"}) as HTMLButtonElement;
       pin.addEventListener("click",()=>{store.updateStudySet(set.id,{pinned:!set.pinned});this.openStudyMenu();});group.append(pin);
-      const members=el("button",{type:"button",class:"ms-study-home-members","aria-label":`管理文档：${set.name}`,text:"文档"});members.addEventListener("click",()=>{this.dismissPopup();editDocuments(this.plugin,set.id,()=>this.refresh(true));});group.append(members);
+      const members=el("button",{type:"button",class:"ms-study-home-members",draggable:"true","aria-label":`管理文档：${set.name}`,title:"点击管理文档；拖到其他学习集复用全部文档",text:"文档"});members.addEventListener("click",()=>{this.dismissPopup();editDocuments(this.plugin,set.id,()=>this.refresh(true),()=>this.importFiles(set.id));});
+      members.addEventListener("dragstart",event=>{if(!event.dataTransfer||!set.docPaths.length){event.preventDefault();return;}event.dataTransfer.effectAllowed="copy";event.dataTransfer.setData(studyDocumentDragType,JSON.stringify({setId:set.id,paths:set.docPaths}));});group.append(members);
       const category=el("input",{type:"text",class:"ms-study-home-category","data-home-category-for":set.id,"aria-label":`学习集分类：${set.name}`,placeholder:"分类"}) as HTMLInputElement;category.value=set.category??"";
       category.addEventListener("change",()=>{const old=set.category;store.updateStudySet(set.id,{category:category.value.trim()||undefined});if(old&&store.settings.studyHomeCategory===old&&!store.studySets.some(item=>item.category===old)){store.settings.studyHomeCategory="";store.save();}this.openStudyMenu();});group.append(category);card.append(group);target.append(card);
     };
@@ -1557,6 +1572,8 @@ export class StudyWorkspaceView extends ItemView {
     if (!files.length) this.libraryList.append(el("p", { class: "ms-workspace-library-empty", text: this.libraryQuery ? "没有匹配的文档" : "点击 + 添加学习资料" }));
   }
   private chooseDocument(): void {
+    const set = this.plugin.store.studySets.find(candidate => candidate.id === this.plugin.store.activeStudySetId);
+    if (set) { editDocuments(this.plugin, set.id, () => this.refresh(true), () => this.importFiles(set.id)); return; }
     const {modal,close} = createModal("添加学习文档");
     const query = el("input", { type: "search", class: "ms-search", placeholder: "按名称查找库内文档", "aria-label": "按名称查找库内文档" });
     const list = el("div", { class: "ms-workspace-file-picker" });
@@ -1565,35 +1582,31 @@ export class StudyWorkspaceView extends ItemView {
       const files = this.app.vault.getFiles().filter(supported).filter(file => file.path.toLocaleLowerCase().includes(query.value.toLocaleLowerCase()));
       for (const file of files) {
         const button = el("button", { class: "ms-workspace-picker-row", text: file.path });
-        button.addEventListener("click", () => { this.attachDocument(file); close(); void this.openPath(file.path); }); list.append(button);
+        button.addEventListener("click", () => { void this.plugin.store.changeStudySetDocuments(undefined,[file.path]).then(()=>{close();return this.openPath(file.path);}).catch(error=>new Notice("添加文档失败："+String(error),10000)); }); list.append(button);
       }
       if (!files.length) list.append(el("p", { text: "没有找到文档，可从电脑导入。" }));
     };
     const load = el("button", { class: "ms-btn", text: "从电脑导入文档" }); load.addEventListener("click", () => { close(); this.importFiles(); });
     query.addEventListener("input",draw); modal.append(query,list,load); draw(); query.focus();
   }
-  private attachDocument(file: TFile): void {
-    this.plugin.store.registerDocument(file.path);
-    const set = this.plugin.store.studySets.find(set => set.id === this.plugin.store.activeStudySetId);
-    if (set && !set.docPaths.includes(file.path)) this.plugin.store.updateStudySet(set.id,{docPaths:[...set.docPaths,file.path]});
-  }
-  private importFiles(): void {
+  private importFiles(studySetId: string | null = this.plugin.store.activeStudySetId ?? null): void {
     const input = el("input", { type: "file", multiple: "true", accept: ".pdf,.msref,.docx,.epub,.html,.htm,.md" });
-    input.addEventListener("change", () => { if(input.files?.length) void this.importFileList([...input.files]); }); input.click();
+    input.addEventListener("change", () => { if(input.files?.length) void this.importFileList([...input.files], studySetId); }); input.click();
   }
-  private async importFileList(files: File[]): Promise<void> {
-    let latest: TFile | undefined;
-    try {
-      const dir = "MarginStudyImports"; if (!await this.app.vault.adapter.exists(dir)) await this.app.vault.createFolder(dir);
-      for (const input of files) {
-        if (!/\.(pdf|msref|docx|epub|html?|md)$/i.test(input.name)) { new Notice("跳过不支持的文件：" + input.name); continue; }
-        const name = input.name.replace(/[\\/:*?"<>|]/g,"_"), dot = name.lastIndexOf("."), stem = name.slice(0,dot), extension = name.slice(dot);
-        let path = dir + "/" + name, count = 1;
-        while (await this.app.vault.adapter.exists(path)) path = dir + "/" + stem + " (" + count++ + ")" + extension;
-        latest = await this.app.vault.createBinary(path,await input.arrayBuffer()); this.attachDocument(latest);
-      }
-      this.refresh(true); if (latest) await this.openFile(latest);
-    } catch(error) { new Notice("导入未完成：" + String(error),10000); }
+  private async importFileList(files: File[], setId: string | null = this.plugin.store.activeStudySetId ?? null): Promise<void> {
+    const run = async (conflict: ImportConflictPolicy) => {
+      try {
+        const imported = await importLocalDocuments(this.plugin, files, { studySetId: setId, conflict });
+        this.refresh(true); const latest = imported[imported.length - 1];
+        if (latest && setId === (this.plugin.store.activeStudySetId ?? null)) try { await this.openFile(latest); } catch (error) { new Notice("文档已导入，但打开失败：" + String(error), 10000); }
+        else if (latest) new Notice("文档已导入目标学习集。");
+      } catch(error) { new Notice("导入未完成：" + String(error),10000); }
+    };
+    const {modal,close}=createModal("导入文档 · 同名处理");
+    modal.append(el("p",{text:`将导入 ${files.length} 份文档。目标已有同名文件时请选择处理方式；不会覆盖原文件。`}));
+    const actions=el("div",{class:"ms-modal-actions"});
+    for(const [label,policy] of [["拒绝覆盖","reject"],["复用既有文件","reuse"],["重命名新文件","rename"]] as const){const button=el("button",{class:"ms-btn",text:label});button.addEventListener("click",()=>{close();void run(policy);});actions.append(button);}
+    const cancel=el("button",{class:"ms-btn",text:"取消"});cancel.addEventListener("click",close);actions.append(cancel);modal.append(actions);
   }
   private drawAuxiliary(): void {
     const kind=this.state.auxiliary;

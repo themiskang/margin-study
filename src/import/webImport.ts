@@ -2,6 +2,8 @@ import { Notice, TFile, requestUrl } from "obsidian";
 import { Readability } from "@mozilla/readability";
 import type MarginStudyPlugin from "../main";
 import { sanitizeStaticHtml } from "../documents/content";
+import { isStudyDocumentPath } from "../documents/formats";
+import { DocumentCommitRollbackError } from "../model/store";
 import { el } from "../utils/dom";
 import { createModal } from "../utils/modal";
 import { uid } from "../utils/id";
@@ -179,6 +181,106 @@ async function ensureFolder(host: ImportHost, path: string): Promise<void> {
   catch (error) { if (!(await vault.adapter.exists(path))) throw error; }
 }
 
+export type ImportConflictPolicy = "reject" | "reuse" | "rename";
+export interface LocalImportOptions { studySetId?: string | null; conflict: ImportConflictPolicy; }
+
+export async function importLocalDocuments(host: ImportHost, inputs: File[], options: LocalImportOptions): Promise<TFile[]> {
+  if (!inputs.length) return [];
+  const setId = options.studySetId === null ? undefined : options.studySetId ?? host.store.activeStudySetId;
+  if (setId && !host.store.studySets.some(set => set.id === setId)) throw new Error("目标学习集已不存在。");
+  if (!["reject", "reuse", "rename"].includes(options.conflict)) throw new Error("请选择同名文件处理方式。");
+  const vault = host.app.vault, dir = "MarginStudyImports", reserved = new Set<string>();
+  const planned: { path: string; input?: File; existing?: TFile }[] = [];
+  for (const input of inputs) {
+    if (!isStudyDocumentPath(input.name)) throw new Error("不支持的文件格式：" + input.name);
+    const name = input.name.replace(/[\u0000-\u001f\\/:*?"<>|]/g, "_").replace(/^\.+|[. ]+$/g, "");
+    if (!name || !isStudyDocumentPath(name)) throw new Error("无效的文件名：" + input.name);
+    const dot = name.lastIndexOf("."), stem = name.slice(0, dot), extension = name.slice(dot);
+    let path = `${dir}/${name}`, count = 1;
+    while (reserved.has(path) || await vault.adapter.exists(path)) {
+      if (options.conflict === "reject") throw new Error("目标已有同名文件，已拒绝覆盖：" + path);
+      if (options.conflict === "reuse") {
+        const existing = vault.getAbstractFileByPath(path);
+        if (!(existing instanceof TFile)) throw new Error("同名目标不是可复用的既有文档：" + path);
+        if (existing.stat.size >= 16) {
+          const existingBytes = await vault.readBinary(existing);
+          if (new TextDecoder().decode(existingBytes.slice(0, 16)) === "SQLite format 3\u0000") throw new Error("不复用数据库文件：" + path);
+        }
+        planned.push({ path, existing }); break;
+      }
+      path = `${dir}/${stem} (${count++})${extension}`;
+    }
+    if (!planned.some(item => item.path === path)) { reserved.add(path); planned.push({ path, input }); }
+  }
+  const created: { file: TFile; target: string }[] = [], files: TFile[] = [];
+  let createdFolder = false, stagingPath: string | undefined;
+  const removeStaging = async (path: string): Promise<void> => {
+    if (!await vault.adapter.exists(path)) return;
+    const staging = vault.getAbstractFileByPath(path);
+    if (staging) await vault.delete(staging, true);
+    else await vault.adapter.rmdir(path, true);
+    if (await vault.adapter.exists(path)) throw new Error(`暂存目录仍然存在：${path}`);
+  };
+  const removeCreated = async ({ file, target }: { file: TFile; target: string }): Promise<void> => {
+    if (file.path !== target) {
+      if (await vault.adapter.exists(file.path)) {
+        await vault.delete(file, true);
+        if (await vault.adapter.exists(file.path)) throw new Error(`暂存文件仍然存在：${file.path}`);
+      } else if (await vault.adapter.exists(target)) {
+        throw new Error(`无法确认目标文件是否属于本次导入：${target}`);
+      }
+      return;
+    }
+    if (await vault.adapter.exists(target)) await vault.delete(file, true);
+    if (await vault.adapter.exists(target)) throw new Error(`导入文件仍然存在：${target}`);
+  };
+  try {
+    for (const input of inputs) {
+      const signature = new TextDecoder().decode(await input.slice(0, 16).arrayBuffer());
+      if (signature === "SQLite format 3\u0000") throw new Error("不导入数据库文件：" + input.name);
+    }
+    if (planned.some(item => item.input) && !await vault.adapter.exists(dir)) { await vault.createFolder(dir); createdFolder = true; }
+    if (planned.some(item => item.input)) {
+      let candidate: string;
+      do { candidate = `${dir}/${uid("import")}`; } while (await vault.adapter.exists(candidate));
+      stagingPath = candidate;
+      try { await vault.createFolder(candidate); }
+      catch (error) {
+        if (message(error).toLowerCase().includes("already exists")) stagingPath = undefined;
+        throw error;
+      }
+    }
+    for (const item of planned) {
+      if (item.existing) files.push(item.existing);
+      else {
+        const temporaryPath = `${stagingPath}/${item.path.split("/").pop()}`;
+        const file = await vault.createBinary(temporaryPath, await item.input!.arrayBuffer());
+        if (!(file instanceof TFile)) throw new Error(`无法创建暂存文件：${temporaryPath}`);
+        if (await vault.adapter.exists(item.path)) throw new Error("目标已有同名文件，已拒绝覆盖：" + item.path);
+        created.push({ file, target: item.path });
+        await vault.rename(file, item.path);
+        files.push(file);
+      }
+    }
+    if (stagingPath) { await removeStaging(stagingPath); stagingPath = undefined; }
+    await host.store.changeStudySetDocuments(setId, files.map(file => file.path), { mode: "append" });
+    return files;
+  } catch (error) {
+    if (error instanceof DocumentCommitRollbackError) throw new Error(`${message(error)}；为避免删除可能已登记的来源，保留新文件：${created.map(item => item.file.path).join("、")}`);
+    const failures: string[] = [];
+    for (const item of created.reverse()) try { await removeCreated(item); } catch (cleanupError) { failures.push(`${item.target}（${message(cleanupError)}）`); }
+    if (stagingPath) try { await removeStaging(stagingPath); } catch { failures.push(stagingPath); }
+    if (createdFolder && !failures.length) {
+      try {
+        const contents = await vault.adapter.list(dir);
+        if (!contents.files.length && !contents.folders.length) await removeStaging(dir);
+      } catch { failures.push(dir); }
+    }
+    if (failures.length) throw new Error(`导入失败：${message(error)}；未能清理新建文件：${failures.join("、")}`);
+    throw error;
+  }
+}
+
 /** Fetch/extract first, write only local static content, then register and open the saved file. */
 export async function importWebArticle(host: ImportHost, input: WebImportInput, options: WebImportOptions = {}): Promise<WebImportResult> {
   const origin = sourceUrl(input.url);
@@ -225,7 +327,7 @@ export async function importWebArticle(host: ImportHost, input: WebImportInput, 
   const folder = `MarginStudyImports/${filename(article.title)}-${uid("web")}`;
   const path = `${folder}/${filename(article.title)}.html`;
   const documentHtml = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>${escaped(article.title)}</title></head><body><article><h1>${escaped(article.title)}</h1>${origin ? `<p><a href="${escaped(origin)}" target="_blank" rel="noopener noreferrer">原文链接</a></p>` : ""}${body}</article></body></html>`;
-  let registered = false, created = false;
+  let created = false;
   let file: TFile;
   try {
     aborted(options.signal); if (setId && !targetSet()) throw new WebImportError("目标学习集已不存在，请重新选择。");
@@ -236,12 +338,9 @@ export async function importWebArticle(host: ImportHost, input: WebImportInput, 
     for (const image of imageFiles) { aborted(options.signal); await host.app.vault.createBinary(`${folder}/${image.path}`, image.bytes); }
     aborted(options.signal); file = await host.app.vault.create(path, documentHtml);
     aborted(options.signal); if (setId && !targetSet()) throw new WebImportError("目标学习集已不存在，本次导入已取消。");
-    registered = !!host.store.registerDocument(file.path, origin);
-    if (!registered) throw new WebImportError("无法登记导入的文档。");
-    const set = targetSet(); if (set) host.store.updateStudySet(set.id, { docPaths: [...set.docPaths, file.path] });
-    host.store.save(); await host.store.flush();
+    await host.store.changeStudySetDocuments(setId, [file.path], { mode: "append", sourceUrls: origin ? { [file.path]: origin } : undefined });
   } catch (error) {
-    if (registered) throw new WebImportError(`文件已保存至 ${path}，但文档登记未完成：${message(error)}`, path);
+    if (error instanceof DocumentCommitRollbackError) throw new WebImportError(`${message(error)}；为避免删除可能已登记的来源，保留导入目录 ${folder}。`, folder);
     if (created) {
       const owned = host.app.vault.getAbstractFileByPath(folder);
       try { if (owned) await host.app.vault.delete(owned, true); }

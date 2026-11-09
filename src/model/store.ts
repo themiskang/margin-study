@@ -21,6 +21,7 @@ import { syncCardColor } from "./cardColors";
 import { editedExcerptBlocks } from "../cards/excerptBlocks";
 import { applyMediaReplacements, externalizeMedia, hasInlineMedia } from "./mediaMigration";
 import { ProtectedObject, ProtectionSnapshot, ProtectionSnapshotInfo, protectedCollections, protectedObjects, protectedAnnotations, signProtectionSnapshot, validateProtectionSnapshot } from "./localProtection";
+import { isStudyDocumentPath } from "../documents/formats";
 
 interface StoreHost {
   app: App;
@@ -29,6 +30,12 @@ interface StoreHost {
 }
 type LibrarySnapshot = { data: PluginData; annotations: [string, Annotation[]][] };
 type HistoryEntry = { label: string; before: LibrarySnapshot; after: LibrarySnapshot } | { label: string; nodeMove: { id: string; before: {x:number;y:number}; after: {x:number;y:number} } };
+export class DocumentCommitRollbackError extends Error {
+  constructor(error: unknown, rollbackError: unknown) {
+    super(`文档操作失败：${String(error)}；内存已回滚，但恢复后的数据尚未保存：${String(rollbackError)}`);
+    this.name = "DocumentCommitRollbackError";
+  }
+}
 type BackupFile = { path: string; storedPath: string; sha256: string; bytes: number };
 type BackupManifest = { format: "margin-study-backup"; version: 2; createdAt: string; dataSha256: string; files: BackupFile[]; missingFiles?: string[] };
 const clone = <T>(value: T): T => value == null ? value : JSON.parse(JSON.stringify(value));
@@ -125,6 +132,8 @@ export class Store {
   private future: HistoryEntry[] = [];
   private libraryHistoryRevision = 0;
   private transactionDepth = 0;
+  private documentCommitPending = false;
+  private documentCommitOwner = false;
   private pendingConflict: { local: PluginData; remote: PluginData } | null = null;
   private localEvents: LocalEvent[] = [];
   private protectionSnapshots: ProtectionSnapshotInfo[] = [];
@@ -870,8 +879,12 @@ export class Store {
       for (const set of this.studySets) {
         const live = current.studySets?.find(item => item.id === set.id), prior = previous.data.studySets?.find(item => item.id === set.id);
         if (live && (set.reviewDeckId === prior?.reviewDeckId || live.reviewDeckId !== prior?.reviewDeckId)) set.reviewDeckId = live.reviewDeckId;
-        if (live && (same(set.reviewSettings, prior?.reviewSettings) || !same(live.reviewSettings, prior?.reviewSettings))) set.reviewSettings = clone(live.reviewSettings);
-        if (live && (same(set.practiceSettings, prior?.practiceSettings) || !same(live.practiceSettings, prior?.practiceSettings))) set.practiceSettings = clone(live.practiceSettings);
+        if (live && (same(set.reviewSettings, prior?.reviewSettings) || !same(live.reviewSettings, prior?.reviewSettings))) {
+          if (live.reviewSettings === undefined) delete set.reviewSettings; else set.reviewSettings = clone(live.reviewSettings);
+        }
+        if (live && (same(set.practiceSettings, prior?.practiceSettings) || !same(live.practiceSettings, prior?.practiceSettings))) {
+          if (live.practiceSettings === undefined) delete set.practiceSettings; else set.practiceSettings = clone(live.practiceSettings);
+        }
         if (set.reviewDeckId && !this.getReviewDeck(set.reviewDeckId)) delete set.reviewDeckId;
       }
       // Restore only template changes owned by this history entry. Unrelated
@@ -907,6 +920,7 @@ export class Store {
     this.save();
   }
   private mutate<T>(label: string, action: () => T): T {
+    if (this.documentCommitPending && !this.documentCommitOwner && !this.transactionDepth) throw new Error("文档操作正在保存，请稍后重试。");
     if (this.transactionDepth) return action();
     const before = this.snapshot();
     this.transactionDepth++;
@@ -930,9 +944,9 @@ export class Store {
     return {canUndo:this.history.length>0,canRedo:this.future.length>0,undoLabel:this.history[this.history.length-1]?.label,redoLabel:this.future[this.future.length-1]?.label,revision:this.libraryHistoryRevision};
   }
   getRevision(): number { return this.revision; }
-  undoLibraryChange(): boolean { const item = this.history.pop(); if (!item) return false; this.future.push(item); this.libraryHistoryRevision++; if ('nodeMove' in item) { const node=this.getNode(item.nodeMove.id); if(node) Object.assign(node,item.nodeMove.before); this.save(); } else { this.restoreSnapshot(item.before, item.after); this.restoreCardAnchors(); } return true; }
+  undoLibraryChange(): boolean { if (this.documentCommitPending) throw new Error("文档操作正在保存，请稍后重试。"); const item = this.history.pop(); if (!item) return false; this.future.push(item); this.libraryHistoryRevision++; if ('nodeMove' in item) { const node=this.getNode(item.nodeMove.id); if(node) Object.assign(node,item.nodeMove.before); this.save(); } else { this.restoreSnapshot(item.before, item.after); this.restoreCardAnchors(); } return true; }
   libraryTransaction<T>(label: string, action: () => T): T { return this.mutate(label, action); }
-  redoLibraryChange(): boolean { const item = this.future.pop(); if (!item) return false; this.history.push(item); this.libraryHistoryRevision++; if ('nodeMove' in item) { const node=this.getNode(item.nodeMove.id); if(node) Object.assign(node,item.nodeMove.after); this.save(); } else { this.restoreSnapshot(item.after, item.before); this.restoreCardAnchors(); } return true; }
+  redoLibraryChange(): boolean { if (this.documentCommitPending) throw new Error("文档操作正在保存，请稍后重试。"); const item = this.future.pop(); if (!item) return false; this.history.push(item); this.libraryHistoryRevision++; if ('nodeMove' in item) { const node=this.getNode(item.nodeMove.id); if(node) Object.assign(node,item.nodeMove.after); this.save(); } else { this.restoreSnapshot(item.after, item.before); this.restoreCardAnchors(); } return true; }
   private restoreCardAnchors(): void {
     for (const c of this.cards.filter(c => !c.groupId)) for (const source of this.sources(c)) {
       if (!source.anchorAnnId) continue;
@@ -1441,6 +1455,41 @@ export class Store {
     const added = (patch.docPaths ?? []).filter(p => !set.docPaths.includes(p)); Object.assign(set, patch, { id }); set.docPaths = [...new Set(set.docPaths)];
     const first = this.canvases.find(c => c.studySetId === id); if (first && added.length) this.importUnassigned(added, first.id);
   }); }
+  async changeStudySetDocuments(id: string | undefined, paths: string[], options: { mode?: "append" | "replace"; sourceUrls?: Record<string, string>; expectedPaths?: string[] } = {}): Promise<void> {
+    if (this.documentCommitPending) throw new Error("另一项文档操作正在保存，请稍后重试。");
+    this.documentCommitPending = true;
+    let before: LibrarySnapshot | undefined, after: LibrarySnapshot | undefined;
+    let oldHistory: HistoryEntry[] = [], oldFuture: HistoryEntry[] = [], oldRevision = 0;
+    try {
+      await this.flush();
+      const set = id ? this.studySets.find(item => item.id === id) : undefined;
+      if (id && !set) throw new Error("目标学习集已不存在。");
+      if (set && options.expectedPaths && !same(set.docPaths, options.expectedPaths)) throw new Error("学习集文档已发生变化，请重新打开成员管理。");
+      const next = [...new Set(options.mode === "append" && set ? [...set.docPaths, ...paths] : paths)];
+      const added = id ? next.filter(path => !set!.docPaths.includes(path)) : next;
+      for (const path of added) {
+        if (!isStudyDocumentPath(path) || !(this.host.app.vault.getAbstractFileByPath(path) instanceof TFile)) throw new Error("文档不存在或格式不受支持：" + path);
+      }
+      before = this.snapshot(); oldHistory = [...this.history]; oldFuture = [...this.future]; oldRevision = this.libraryHistoryRevision;
+      this.documentCommitOwner = true;
+      try {
+        this.mutate("管理学习集文档", () => {
+          for (const path of added) if (!this.documents.some(document => document.path === path)) this.registerDocument(path, options.sourceUrls?.[path]);
+          if (set && !same(set.docPaths, next)) this.updateStudySet(set.id, { docPaths: next });
+        });
+        after = this.snapshot();
+      } finally { this.documentCommitOwner = false; }
+      await this.flush();
+    } catch (error) {
+      if (before) {
+        this.history = oldHistory; this.future = oldFuture; this.libraryHistoryRevision = oldRevision;
+        this.restoreSnapshot(before, after);
+        try { await this.flush(); }
+        catch (rollbackError) { throw new DocumentCommitRollbackError(error, rollbackError); }
+      }
+      throw error;
+    } finally { this.documentCommitPending = false; }
+  }
   setStudySetReviewSettings(id: string, settings: NonNullable<StudySet["reviewSettings"]>): void {
     const set = this.studySets.find(item => item.id === id); if (!set || same(set.reviewSettings, settings)) return;
     set.reviewSettings = clone(settings); this.save();
@@ -1774,6 +1823,10 @@ export class Store {
   registerDocument(path: string, sourceUrl?: string): DocumentRecord | undefined {
     if (!path) return undefined;
     let doc = this.documents.find(d => d.path === path);
+    if (this.documentCommitPending && !this.documentCommitOwner && !this.transactionDepth) {
+      if (doc && !doc.missing && (!sourceUrl || sourceUrl === doc.sourceUrl)) return doc;
+      throw new Error("文档操作正在保存，请稍后重试。");
+    }
     if (!doc) { doc = { id: uid("doc"), path, kind: path.split(".").pop()?.toLowerCase() ?? "", createdAt: new Date().toISOString(), sourceUrl }; this.documents.push(doc); }
     if (sourceUrl) doc.sourceUrl = sourceUrl; doc.missing = false; return doc;
   }
