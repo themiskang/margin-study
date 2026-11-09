@@ -1,5 +1,5 @@
 import type MarginStudyPlugin from "../main";
-import { Notice } from "obsidian";
+import { Notice, Platform } from "obsidian";
 import { el, clear } from "../utils/dom";
 import { createModal } from "../utils/modal";
 
@@ -67,6 +67,12 @@ export const FEATURE_INDEX: FeatureEntry[] = [
   command("resolve-save-conflict", "处理保存冲突", "查看并合并学习库与批注的保存冲突", ["冲突", "conflict", "合并"]),
   command("undo-library", "撤销最近一次学习库操作", "撤销上一次学习库级变更", ["撤销", "undo"]),
   command("redo-library", "重做最近一次学习库操作", "重做被撤销的学习库变更", ["重做", "redo"]),
+  ...(!Platform.isMobile ? [
+    setting("settings.local-cli", "本地 CLI 连接", "启用或关闭仅限本机的 CLI 连接", ["本地连接", "cli", "127.0.0.1"]),
+    setting("settings.local-cli-status", "本地连接状态", "查看本地连接状态和端口", ["本地状态", "端口"]),
+    setting("settings.local-cli-token", "本地令牌", "复制或重新生成本地连接令牌", ["本地令牌", "token"]),
+    setting("settings.local-cli-write", "允许本地写入", "允许本机持令牌的程序整理卡片", ["本地写入", "整理"]),
+  ] : []),
   setting("settings.colors", "标注颜色", "编辑可选的标注颜色列表", ["标注颜色", "颜色", "colors"]),
   setting("settings.default-color", "默认标注颜色", "选择新标注使用的默认颜色", ["默认颜色", "默认标注颜色"]),
   setting("settings.scale", "默认缩放", "调整新打开 PDF 的默认缩放比例", ["缩放", "scale", "默认缩放"]),

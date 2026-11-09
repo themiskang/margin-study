@@ -717,6 +717,7 @@ export class Store {
   getLibraryHistoryState(): {canUndo:boolean;canRedo:boolean;undoLabel?:string;redoLabel?:string;revision:number} {
     return {canUndo:this.history.length>0,canRedo:this.future.length>0,undoLabel:this.history[this.history.length-1]?.label,redoLabel:this.future[this.future.length-1]?.label,revision:this.libraryHistoryRevision};
   }
+  getRevision(): number { return this.revision; }
   undoLibraryChange(): boolean { const item = this.history.pop(); if (!item) return false; this.future.push(item); this.libraryHistoryRevision++; if ('nodeMove' in item) { const node=this.getNode(item.nodeMove.id); if(node) Object.assign(node,item.nodeMove.before); this.save(); } else { this.restoreSnapshot(item.before, item.after); this.restoreCardAnchors(); } return true; }
   libraryTransaction<T>(label: string, action: () => T): T { return this.mutate(label, action); }
   redoLibraryChange(): boolean { const item = this.future.pop(); if (!item) return false; this.history.push(item); this.libraryHistoryRevision++; if ('nodeMove' in item) { const node=this.getNode(item.nodeMove.id); if(node) Object.assign(node,item.nodeMove.after); this.save(); } else { this.restoreSnapshot(item.after, item.before); this.restoreCardAnchors(); } return true; }

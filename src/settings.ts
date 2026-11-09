@@ -1,4 +1,4 @@
-import { App, PluginSettingTab, Setting, Notice } from "obsidian";
+import { App, PluginSettingTab, Setting, Notice, Platform } from "obsidian";
 import type MarginStudyPlugin from "./main";
 import { BRANCH_STYLES, ACCENTS, ThemeMode } from "./types";
 import { applyTheme } from "./theme";
@@ -15,6 +15,45 @@ export class MarginStudySettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     const s = this.plugin.store.settings;
+
+    if (!Platform.isMobile) {
+      const state = this.plugin.localCli?.getState();
+      new Setting(containerEl)
+        .setName("本地 CLI 连接")
+        .setDesc("仅允许本机 127.0.0.1 访问。默认关闭；插件重载后需重新启用。")
+        .addToggle(toggle => toggle.setValue(state?.enabled ?? false).onChange(async enabled => {
+          toggle.setDisabled(true);
+          try {
+            if (enabled) await this.plugin.enableLocalCli();
+            else await this.plugin.localCli?.stop();
+          } catch { new Notice("本地连接未能启动或停止，请检查本机端口权限。"); }
+          this.display();
+        }));
+      new Setting(containerEl)
+        .setName("本地连接状态")
+        .setDesc(state?.enabled ? `已启用：127.0.0.1:${state.port}` : "已关闭，无监听端口");
+      const token = new Setting(containerEl)
+        .setName("本地令牌")
+        .setDesc(state?.token ?? "启用后显示；请勿分享给不信任的程序。");
+      if (state?.token) {
+        token.descEl.style.userSelect = "text";
+        token.addButton(button => button.setButtonText("复制").onClick(() => {
+          void navigator.clipboard.writeText(state.token!).then(() => new Notice("本地令牌已复制。"), () => new Notice("复制失败，请手动选择令牌。"));
+        }));
+        token.addButton(button => button.setButtonText("重新生成").onClick(() => {
+          try { this.plugin.localCli?.rotateToken(); this.display(); }
+          catch { new Notice("请先启用本地连接。"); }
+        }));
+      }
+      new Setting(containerEl)
+        .setName("允许本地写入")
+        .setDesc("仅对当前服务会话生效。打开后，本机持有令牌的程序可以整理卡片；每次命令可撤销。")
+        .addToggle(toggle => toggle.setValue(state?.allowWrites ?? false).setDisabled(!state?.enabled).onChange(enabled => {
+          try { this.plugin.localCli?.setWriteEnabled(enabled); }
+          catch { new Notice("请先启用本地连接。"); }
+          this.display();
+        }));
+    }
 
     new Setting(containerEl)
       .setName("标注颜色")

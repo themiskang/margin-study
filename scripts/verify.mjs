@@ -43,6 +43,7 @@ const allSuites=[
   ["ai","src/ai/acceptance.mjs"],
   ["ai-a23","src/ai/a23-acceptance.mjs"],
   ["ai-a24","src/ai/a24-acceptance.mjs"],
+  ["ai-a27","src/ai/a27-acceptance.mjs"],
   ["ai-condense","src/ai/condense-acceptance.mjs"],
   ["claudian","src/ai/claudian-acceptance.mjs"],
   ["ai-ui","src/ai/ui-acceptance.mjs"],

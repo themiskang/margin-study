@@ -1717,3 +1717,34 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - CC 如实登记两次作废尝试：脚本 scriptId 参数取错导致误判重载（275/281 同 SHA）、隐藏主页按钮导致安装点击不可见；均非产品缺陷
 - 证据：evidence/acceptance-20261106/CC-A26-RESULT.md（3 张截图 + 逐项数值 + 清理后业务对象逐字段一致，仅 revision/savedAt/writerId 不同）
 - 下一步第一动作：批次 A4 第二张 A27（桌面本地 CLI 连接）
+
+## 2026-11-09 · A27 桌面本地 CLI 连接
+
+- 完成定义：五项断言各两轮改前失败、改后通过；记录真实回环绑定结果；全量 verify；构建安装桌面隔离库并核对 SHA-256。设置界面、真实宿主 curl 与撤销按任务包留 CC 实机验。
+- 实现桌面会话级本地连接：默认关闭，手动启用后只绑定 `127.0.0.1` 的系统分配端口，随机 256 位令牌仅保存在内存并显示在本机设置界面；可复制、重新生成。关闭、插件重载或重新启用会清除旧令牌和写入授权，不持久化端口、令牌或开关。移动端不初始化服务器模块，也不显示本地连接设置。
+- `GET /status`、`/documents`、`/cards` 使用 Bearer 令牌，只读当前本机 Store。拒绝非 `127.0.0.1` 的 Host 或来源，以及浏览器 Origin、代理转发头；缺失或错误令牌返回 401。`POST /organize` 默认拒绝，显式开写后支持对已有卡片批量添加标签；整批预校验，一次命令使用一个 Store 事务，可一次撤销。接口没有 AI 调用或自动外发。用法及安全边界见 `src/ai/LOCAL-CLI.md`。
+- 改前两轮五项均 0/5：`/tmp/a27-before-1.log`、`/tmp/a27-before-2.log`，结果分别为 `/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-a27-SPDIxc/results.json`、`/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-a27-dF0F9z/results.json`。失败均因桌面本地服务入口不存在，不代表分别执行到了底层地址、写入、revision 或移动端不变量。
+- 改后两轮均 5/5：`/tmp/a27-after-1.log`、`/tmp/a27-after-2.log`，结果分别为 `/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-a27-MYvuBf/results.json`、`/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-a27-aJrcia/results.json`。注入 transport 驱动产品 handler 和合成 Store：20 次读取 revision 12→12；两张卡批量加标签产生一条历史，一次撤销逐字段恢复；移动端注入 `Platform.isMobile=true` 后实际执行插件 `onload` 和设置渲染，桌面服务器模块初始化 0 次。另覆盖错误令牌、关写、令牌轮换、请求中途关闭写入或轮换令牌、无效卡片整体拒绝、启停竞争、Host/来源及 Origin 限制。
+- 网络层证据：沙箱内真实 `http.createServer` 监听 `127.0.0.1` 报 `EPERM`；授权后最终代码用真实 Node HTTP 和合成 Store 绑定成功，结果 `/tmp/a27-real-final2-20261109.log`、`/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-a27-RbiLTK/results.json`。真实 `127.0.0.1` 返回 200，`::1` 连接拒绝，本机 LAN 地址连接拒绝，另一本机虚拟地址超时；20 次真实读取 revision 不变，真实 POST 后一次撤销恢复，停止后新连接 `ECONNREFUSED`。该测试不等于 Obsidian 宿主 curl 验收。
+- 原断言「`0.0.0.0` 发起连接被拒」存在操作系统语义限制：本机真实 Node HTTP 测试中，目的地址 `0.0.0.0` 被系统路由为 `127.0.0.1`，TCP 连接可建立；产品通过 `Host: 0.0.0.0:端口` 返回 403，未绑定通配地址。实测客户端连接 `0.0.0.0` 但发送 `Host: 127.0.0.1:端口` 返回 200：服务器只能看到回环目标，无法区分其原始连接参数。故不能把该字面 TCP 拒绝项记作已通过；其余地址/Host 安全限制及真实绑定有上述证据。
+- 全量 `MARGINSTUDY_VERIFY_DIR=/tmp/a27-full-final-20261109 npm run verify` 通过 **37/37** 套件：A27 5/5、Workspace 318/318、Reader 224/224、功能搜索 10/10、脑图手写 81/81；`git diff --check` 通过。首次沙箱全量因 `review-a20` 的真实回环监听 `EPERM` 中断；授权全量首次因设置夹具未包含新增设置项而在 `search-features` 失败，补充功能索引和夹具后定向通过，随后完整重跑全绿。
+- 已构建并安装至桌面隔离库，源和安装文件一致：`main.js` SHA-256 `54484aefa63daf63a9cc81d4857db4aa565ecedf482a488ace5db5300dd6741c`；`styles.css` `579654e132e4483dbac685b16ddbca719572afa494733efbfba09897f90a29e3`；`LOCAL-CLI.md` `e76ea371800a1ae23d2e1c90f3e31cef4a8743b1b7acf534b89830573383c205`。隔离库 `data.json` 安装前后均为 `b21b56d0aa4df4b82f06d5d9038ebac71c57e1de7b65494088fbd43bebc9e9aa`。未重载宿主，不代表运行时已加载该构建。
+- 宿主实机留 CC：在桌面隔离库单实例核对上述安装哈希，重载并用 `Debugger.getScriptSource` 确认当前脚本包含 `createLocalCliServer`、`enableLocalCli`、`allowWrites`；不记录令牌明文。用合成卡片验证设置的启停、复制/轮换和写开关；从本机 curl 核对正确/错误令牌、非回环 Host、20 次读取 revision 和写入一次撤销，停止后连接失败；清理合成数据并比对业务对象。不能把合成网络测试或安装本身冒充宿主验收。
+- 未操作 adb、真实库或 `evidence/**`，未提交。本包自动实现、合成断言、全量验证和隔离库安装完成；`0.0.0.0` 的字面 TCP 拒绝不成立，须由任务总控按上述事实处理断言口径；CC 宿主侧尚未验收。下一步第一动作：CC 核对脚本身份并执行上述隔离宿主验收。
+
+## 2026-11-09 · CC-A27 实机验收（桌面本地 CLI 连接，只读串行）
+
+- 前置：隔离库 `main.js` SHA-256 `54484aefa63daf63a9cc81d4857db4aa565ecedf482a488ace5db5300dd6741c` 与任务卡一致。重载前活跃脚本 scriptId 508（5,150,998 B，`8fd57035…`）为 A26 构建，A27 符号全 0；`disablePlugin/enablePlugin` 后 scriptId 519（5,164,757 B，`f8e2a7b5…`），`createLocalCliServer` 6 / `enableLocalCli` 2 / `allowWrites` 10 / `rotateToken` 2 / `本地 CLI 连接` 3 / `本地令牌` 4 / `允许本地写入` 2 / `/organize` 1 / `127.0.0.1` 8，前置断言通过。如实登记首次采集取错 `params.scriptId` 导致一次额外重载。
+- 五项全 PASS：① 设置启用后 `lsof` 仅 `127.0.0.1:60201`；`Host: 0.0.0.0` → 403；LAN `10.30.82.33` 与 IPv6 `[::1]` 均 curl exit 7；`198.18.0.1` exit 28。平台把 `0.0.0.0` 路由到回环，TCP 可连，Host `0.0.0.0` 403 / Host 回环 200，未把字面 TCP 拒绝记为通过。② 启用前无插件监听；无令牌/错令牌 401、正确令牌 200、写开关默认关 POST 403；停用后端口消失。③ 20 次 `GET /cards` 全 200，revision 2557→2557。④ 写开关开 → `POST /organize` 200 `changed:1`，卡 tags `[]→["cc-a27-temp"]`；一次 `undoLibraryChange()` 返回 true，tags 回 `[]`，13 个业务字段深比较 equal=true、diffKeys=[]；计数 22/34/5/18/2/9/1/0/2/8/3/3。⑤ 真实宿主 CDP 断点在 `enableLocalCli` 调用帧注入 `Platform.isMobile=true`，`enableLocalCli` 拒绝「移动端不支持本地 CLI 连接。」，`createServer/listen` 计数 0/0，设置页隐藏本地 CLI 四行；恢复后四行重现；全新移动启动夹具 `desktopServerInitializations=0`、`portRequired=false`、`pluginLoaded=true`。
+- 收尾：服务停用、令牌 null、写开关关、端口关闭；撤销本轮写入；回 L4SampleSet 学习集主页。最终 revision **2558**；`data.json` SHA-256 `6414ba5d…`（验收前 `b21b56d0…`，revision 2556），逐键比较仅 `revision`/`writerId`/`savedAt` 不同，业务对象零差异。
+- 证据：`evidence/acceptance-20261106/CC-A27-RESULT.md` + 2 张截图（设置页令牌已遮盖 / 收尾主页）；过程数据 `/tmp/cc-a27/`。未改产品代码、未提交、未改既有 evidence。
+- 下一步第一动作：总控按本结果关闭 A27 任务卡，并复核 `0.0.0.0` 字面 TCP 拒绝的调整口径是否已在验收依据中登记。
+
+## 2026-11-09 12:30 A27 完成、批次 A4 收官
+- 完成：A27 桌面本地 CLI 连接，自动验收 5/5（改前两轮因入口不存在失败、改后注入通道两轮 5/5）、verify 37/37（Workspace 318/318）
+- 结论：结论：CC 实机五项全 pass —— 仅绑 127.0.0.1:60201（lsof 实证）、非回环 Host 403、LAN/IPv6 连接 refused；未启用无监听、错令牌 401、写开关关时 POST /organize 403；20 次 GET /cards 后 revision 2557 不变；一次写入+一次撤销 13 业务字段深比较 equal=true；移动端注入 Platform.isMobile 后 enableLocalCli 拒绝且 createServer/listen 计数 0
+- **口径调整（重要，已单列 A27-PLATFORM-01 = unknown）**：本机把 `0.0.0.0` 路由到 `127.0.0.1`，TCP 可建立；原卡字面「非回环地址连接失败」对 `0.0.0.0` 不成立。产品用「非回环 Host 403 + 仅绑回环」防护，CC/Codex 均未把字面拒绝记为通过
+- 安全约束核对：默认关闭、随机令牌、写动作需显式开启、不绑 0.0.0.0/::、不联网对外发数据、移动端不加载服务器
+- 前置：CC 用 Debugger.getScriptSource 核对运行时脚本（重载前 508 为 A26 构建缺 A27 符号，重载后 519 全命中）
+- 证据：evidence/acceptance-20261106/CC-A27-RESULT.md（2 张截图 + 逐项数值 + 清理后业务对象逐字段一致，仅 revision/writerId/savedAt 不同）
+- 路线 A 批次 A4（A26/A27）全部完成；下一步第一动作：批次 A5 的 A28（Obsidian 同步状态与本地保护）

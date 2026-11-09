@@ -1,4 +1,4 @@
-import { Plugin, WorkspaceLeaf, TFile, TFolder, Notice, Menu } from "obsidian";
+import { Plugin, WorkspaceLeaf, TFile, TFolder, Notice, Menu, Platform } from "obsidian";
 import { Store } from "./model/store";
 import { ReaderView, VIEW_TYPE_READER } from "./pdf/readerView";
 import { WordReaderView, VIEW_TYPE_WORD } from "./word/wordReader";
@@ -31,6 +31,7 @@ import { SourceRecoveryPrompts } from "./documents/recoveryPrompts";
 import { openCardLink } from "./study/cardLink";
 import { aiServiceFor } from "./ai/panel";
 import { condenseServiceFor } from "./ai/condense";
+import type { LocalCliService } from "./ai/contracts";
 
 /** 视图间事件回调（侧边栏大纲需要监听阅读器翻页） */
 export interface ViewEvents {
@@ -42,6 +43,9 @@ export interface ViewEvents {
 export default class MarginStudyPlugin extends Plugin {
   condenseService() { return condenseServiceFor(aiServiceFor(this)); }
   store!: Store;
+  localCli: LocalCliService | null = null;
+  private localCliLoading: Promise<LocalCliService> | null = null;
+  private localCliUnloaded = false;
   viewEvents: ViewEvents = {};
   activeReader: ReaderLike | null = null;
   sidebar: SidebarView | null = null;
@@ -62,6 +66,7 @@ export default class MarginStudyPlugin extends Plugin {
   }, text => { new Notice(text, 10000); });
 
   async onload(): Promise<void> {
+    this.localCliUnloaded = false;
     await initPdfWorker(this.app);
     this.store = new Store(this);
     await this.store.load();
@@ -348,11 +353,24 @@ export default class MarginStudyPlugin extends Plugin {
   }
 
   onunload(): void {
+    this.localCliUnloaded = true;
+    void this.localCli?.stop().catch(() => {});
     this.recoveryPrompts.dispose();
     if (this.layoutTimer !== null) window.clearTimeout(this.layoutTimer);
     if (this.refreshTimer !== null) window.clearTimeout(this.refreshTimer);
     // A rename may still be updating references when Obsidian unloads the views.
     void this.documentRenames.then(() => this.store?.flush()).catch(() => {});
+  }
+
+  async enableLocalCli(): Promise<void> {
+    if (Platform.isMobile) throw new Error("移动端不支持本地 CLI 连接。");
+    if (this.localCliUnloaded) throw new Error("插件已卸载。");
+    if (!this.localCliLoading) this.localCliLoading = import("./ai/localCliServer").then(({ createLocalCliServer }) => createLocalCliServer(this.store)).catch(error => { this.localCliLoading = null; throw error; });
+    const service = await this.localCliLoading;
+    if (this.localCliUnloaded) throw new Error("插件已卸载。");
+    this.localCli = service;
+    await service.start();
+    if (this.localCliUnloaded) { await service.stop(); throw new Error("插件已卸载。"); }
   }
 
   private isReaderFile(file: TFile): boolean { return ["pdf", "msref", "docx", "epub", "html", "htm"].includes(file.extension.toLowerCase()); }

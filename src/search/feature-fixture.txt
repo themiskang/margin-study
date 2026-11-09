@@ -96,7 +96,7 @@ check("every settings feature names an existing rendered setting", () => {
   tab.display();
   settingHost.append(tab.containerEl);
   const names = [...settingHost.querySelectorAll(".setting-item-name")].map((node) => (node as HTMLElement).textContent!.trim());
-  assert(names.length === 14, "expected 14 settings, got " + names.length + ": " + names.join(","));
+  assert(names.length === 18, "expected 18 desktop settings, got " + names.length + ": " + names.join(","));
   const settingEntries = FEATURE_INDEX.filter((entry) => entry.kind === "setting");
   assert(settingEntries.length === names.length, "settings entries " + settingEntries.length + " != rendered " + names.length);
   for (const entry of settingEntries) assert(names.includes(entry.setting!), "setting missing: " + entry.setting);

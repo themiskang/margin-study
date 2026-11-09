@@ -5,6 +5,15 @@ export type ModelTier = "mini" | "normal";
 export type AiTask = "chat" | "cards" | "outline" | "markdown" | "condense";
 export interface AiContext { text: string; label?: string; docPath?: string; }
 export interface AiHost { app: App; store: Store; }
+export interface LocalCliState { enabled: boolean; port: number | null; token: string | null; allowWrites: boolean; }
+export interface LocalCliService {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  getState(): LocalCliState;
+  rotateToken(): string;
+  setWriteEnabled(enabled: boolean): void;
+}
+export interface LocalCliOrganizeRequest { action: "add-tags"; cardIds: string[]; tags: string[]; }
 export interface AiProfile {
   id: string;
   endpoint: string;
