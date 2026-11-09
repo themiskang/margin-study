@@ -339,6 +339,22 @@ export interface DocumentRecord {
   byteSize?: number;
 }
 
+export type LocalEventKind = "loaded" | "pending" | "saved" | "file-missing" | "object-deleted" | "conflict-detected" | "conflict-merged" | "external-applied" | "restored";
+export interface LocalEvent {
+  id: string;
+  at: string;
+  kind: LocalEventKind;
+  objectIds: string[];
+  detail: string;
+}
+
+export interface SyncStatusItem {
+  key: "local" | "missing" | "conflict" | "deleted" | "activity" | "cloud";
+  text: string;
+  evidenceEventIds: string[];
+  action?: "find-source" | "show-deletions" | "resolve-conflict" | "save-local";
+}
+
 // ===== 设置 =====
 export type ThemeMode = "light" | "dark" | "auto";
 export type ReadingTheme = "white" | "sepia" | "gray" | "dark" | "green";
@@ -600,6 +616,7 @@ export interface PluginData {
   activeCanvasId?: string;
   documents?: DocumentRecord[];
   workspaceState?: Record<string, unknown>;
+  localEvents?: LocalEvent[];
 }
 
 export interface AnnotationSidecar {

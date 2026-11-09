@@ -1261,7 +1261,7 @@ export class StudyWorkspaceView extends ItemView {
     pane.append(el("p",{text:"MarginStudy 学习库备份"}));
     const commands=(this.app as unknown as {commands:{executeCommandById(id:string):boolean}}).commands;
     const backup=el("button",{class:"ms-native-menu-row",text:"立即备份"});backup.addEventListener("click",()=>{this.dismissPopup();void commands.executeCommandById("margin-study:backup-data");});pane.append(backup);
-    const restore=el("button",{class:"ms-native-menu-row",text:"恢复完整学习库备份"});restore.addEventListener("click",()=>{this.dismissPopup();void commands.executeCommandById("margin-study:restore-backup");});pane.append(restore);
+    const restore=el("button",{class:"ms-native-menu-row",text:"从备份恢复选定对象"});restore.addEventListener("click",()=>{this.dismissPopup();void commands.executeCommandById("margin-study:restore-backup");});pane.append(restore);
   }
   private openStudyMenu(): void {
     const homeScreen=!!this.popup?.classList.contains("ms-study-home-screen");

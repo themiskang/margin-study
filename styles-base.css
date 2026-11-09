@@ -1207,6 +1207,16 @@ body.ms-theme-dark .ms-heat-cell[data-lvl="3"] { background: rgba(140,150,255,0.
 .ms-document-toc-entry { text-align: left; white-space: normal; }
 .ms-conflict-options { padding: 8px 0; border-top: 1px solid var(--ms-line); display: flex; flex-wrap: wrap; gap: 8px; }
 .ms-conflict-options h4 { width: 100%; margin: 4px 0; }
+.ms-modal.ms-sync-status { width: min(620px, calc(100vw - 32px)); max-height: 85vh; overflow: auto; }
+.ms-sync-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 0; border-bottom: 1px solid var(--ms-line); overflow-wrap: anywhere; }
+.ms-sync-row > div { flex: 1 1 260px; }
+.ms-sync-row small { flex-basis: 100%; color: var(--text-muted); }
+.ms-sync-history, .ms-sync-snapshot { padding: 10px 0; }
+.ms-sync-history p { color: var(--text-muted); overflow-wrap: anywhere; }
+.ms-sync-snapshot { border-bottom: 1px solid var(--ms-line); }
+.ms-sync-snapshot h4 { margin: 0 0 8px; }
+.ms-sync-object { display: flex; align-items: flex-start; gap: 8px; padding: 4px 0; overflow-wrap: anywhere; }
+.ms-sync-object input { flex: none; }
 
 /* ===== 子脑图徽章（折叠为子脑图后，点击在浮动视图打开子树） ===== */
 .ms-node.is-submap { border-style: dashed; border-color: var(--interactive-accent); }

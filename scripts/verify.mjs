@@ -25,6 +25,8 @@ const allSuites=[
   ["drag-save","src/model/drag-save-acceptance.mjs"],
   ["media-migration","src/model/media-migration-acceptance.mjs"],
   ["model-additive","src/model/additive-acceptance.mjs"],
+  ["model-a28","src/model/a28-acceptance.mjs"],
+  ["status-a28-ui","src/documents/a28-ui-acceptance.mjs"],
   ["mobile-sha256","src/model/sha256-acceptance.mjs"],
   ["study","src/study/acceptance.mjs"],
   ["study-ui","src/study/l3-ui-acceptance.mjs"],

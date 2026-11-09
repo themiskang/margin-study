@@ -1,0 +1,79 @@
+import { Store } from "__PROJECT__/src/model/store";
+import { openSyncStatusPanel } from "__PROJECT__/src/documents/recoveryPrompts";
+
+const results: { name: string; passed: boolean; error?: string }[] = [];
+const check = async (name: string, action: () => void | Promise<void>) => {
+  try { await action(); results.push({ name, passed: true }); }
+  catch (error) { results.push({ name, passed: false, error: String((error as Error)?.stack ?? error) }); }
+};
+const assert = (condition: unknown, message: string) => { if (!condition) throw new Error(message); };
+const click = (root: ParentNode, text: string) => {
+  const button = [...root.querySelectorAll("button")].find(item => item.textContent?.trim() === text);
+  if (!button) throw new Error("button missing: " + text);
+  button.click();
+};
+const wait = async (predicate: () => unknown) => {
+  for (let index = 0; index < 100; index++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 10)); }
+  throw new Error("condition did not become true");
+};
+const stamp = "2020-01-01T00:00:00.000Z";
+let disk: any = { revision: 1, cards: [
+  { id: "one", type: "excerpt", docPath: "fixture.pdf", front: "原文一", tags: [], links: [], createdAt: stamp },
+  { id: "two", type: "excerpt", docPath: "fixture.pdf", front: "原文二", tags: [], links: [], createdAt: stamp },
+  { id: "three", type: "excerpt", docPath: "fixture.pdf", front: "待删除", tags: [], links: [], createdAt: stamp },
+], nodes: [], edges: [], srs: {}, documents: [{ id: "doc", path: "fixture.pdf", kind: "pdf", createdAt: stamp }], studySets: [], canvases: [] };
+const files = new Map<string, string>(), dirs = new Set<string>();
+const adapter = { exists: async (path: string) => files.has(path) || dirs.has(path), mkdir: async (path: string) => { dirs.add(path); },
+  read: async (path: string) => { const value = files.get(path); if (value === undefined) throw new Error("missing fixture file"); return value; },
+  write: async (path: string, content: string) => { files.set(path, content); },
+  list: async (path: string) => ({ files: [...files.keys()].filter(value => value.startsWith(path + "/")), folders: [] }) };
+const store = new Store({ app: { vault: { adapter, getFiles: () => [] } } as any, loadData: async () => structuredClone(disk), saveData: async (value: any) => { disk = structuredClone(value); } });
+let sourceCalls = 0, conflictCalls = 0; const notices: string[] = [];
+try {
+  await store.load(); store.updateCard("one", { front: "本地版本" });
+  const external = structuredClone(disk); external.cards[0].front = "外部版本"; disk = external;
+  try { await store.flush(); } catch {}
+  store.markDocumentMissing("fixture.pdf"); store.removeCard("three");
+  openSyncStatusPanel(store, { findSource: () => { sourceCalls++; }, resolveConflict: () => { conflictCalls++; }, backupPaths: () => [], notify: text => notices.push(text) });
+  await check("all visible status rows carry real event IDs and honest cloud text", () => {
+    const ids = new Set(store.getLocalEvents().map(event => event.id)), rows = [...document.querySelectorAll<HTMLElement>("[data-status]")];
+    assert(rows.length === 6, "status row count");
+    for (const row of rows) {
+      const evidence = row.dataset.evidenceEventIds?.split(",") ?? [];
+      assert(evidence.length > 0 && evidence.every(id => ids.has(id)), "status evidence missing: " + row.dataset.status);
+    }
+    assert(document.querySelector('[data-status="cloud"]')?.textContent?.includes("无法确认（本插件不接入云端）"), "cloud text");
+    assert(!/已上传|已同步云端|已同步到云端/.test(document.body.textContent ?? ""), "false cloud claim");
+  });
+  await check("missing, deletion, conflict and save actions are distinct", () => {
+    const modal = document.querySelector(".ms-sync-status")!;
+    assert(modal.querySelector('[data-status="missing"]')?.textContent?.includes("文件缺失"), "missing text");
+    assert(modal.querySelector('[data-status="deleted"]')?.textContent?.includes("对象已删除"), "deleted text");
+    click(modal, "查找或重定位来源文件"); click(modal, "处理冲突");
+    assert(sourceCalls === 1 && conflictCalls === 1, "wrong status action");
+    assert(!![...modal.querySelectorAll("button")].find(item => item.textContent === "立即保存"), "save action missing");
+  });
+  await store.resolveDataConflict("merge");
+  store.updateCard("one", { front: "恢复前修改" }); store.updateCard("two", { front: "保留的后续修改" }); await store.flush();
+  await check("snapshot picker restores only the checked object", async () => {
+    const modal = document.querySelector(".ms-sync-status")!; click(modal, "查看保护快照");
+    await wait(() => document.querySelectorAll(".ms-sync-status").length === 2);
+    const picker = [...document.querySelectorAll<HTMLElement>(".ms-sync-status")][1];
+    const label = [...picker.querySelectorAll("label")].find(item => item.textContent?.includes("cards：one"));
+    assert(label, "selected object missing from picker");
+    const checkbox = label!.querySelector("input")!; checkbox.checked = true;
+    const untouched = JSON.stringify(store.getCard("two"));
+    click(picker, "恢复选中对象");
+    await wait(() => notices.some(text => text.includes("已恢复并保存")));
+    assert(store.getCard("one")?.front === "本地版本", "selected card not restored");
+    assert(JSON.stringify(store.getCard("two")) === untouched, "other card changed");
+    assert(disk.localEvents.some((event: any) => event.kind === "restored" && event.objectIds.join() === "one"), "recovery event missing on disk");
+  });
+  await check("panel updates when local state changes", async () => {
+    store.updateCard("two", { front: "再次编辑" }); await Promise.resolve();
+    assert(document.querySelector('[data-status="local"]')?.textContent?.includes("待保存"), "pending not rendered");
+    await store.flush(); await Promise.resolve();
+    assert(document.querySelector('[data-status="local"]')?.textContent?.includes("已保存"), "saved not rendered");
+  });
+} catch (error) { (window as any).fatal = String((error as Error)?.stack ?? error); }
+(window as any).results = results; (window as any).done = true;

@@ -405,22 +405,24 @@ try {
         assert.ok(await store.backupData(true)); const second = await store.backupData(true); assert.ok(second);
         const manifest = JSON.parse(await memory.adapter.read(second));
         assert.ok(!manifest.files.some((file) => file.path.startsWith("MarginStudyBackups/")), "backup includes an older backup's sidecar, which restore explicitly rejects");
-        await store.restoreBackup(second);
+        const snapshot = await store.prepareBackupRecovery(second);
+        assert.ok(snapshot.scope.some(item => item.id === card.id));
+        assert.ok(snapshot.scope.some(item => item.id === annotation.id));
+        await assert.rejects(store.restoreBackup(second), /选择要恢复的对象/);
       });
-      await audit("a failed restore must roll back cleanly and permit a later normal flush", async () => {
+      await audit("an unselected full restore must leave current data intact and permit a later normal flush", async () => {
         const { store, memory } = await makeStore();
         const annotation = { id: "a", docPath: card.docPath, docKind: "pdf", page: 1, type: "highlight", rects: [], text: "original", color: "#ffd54f", createdAt: "2026-10-15" };
         memory.text(card.docPath, "synthetic PDF bytes"); memory.text(`${card.docPath}.mstudy.json`, JSON.stringify({ annotations: [annotation] }));
         const backup = await store.backupData(true); const annotations = await store.loadAnnotations(card.docPath);
         annotations[0].text = "current before restore"; store.saveAnnotationsDebounced(card.docPath, annotations); await store.flush();
         store.updateCard(card.id, { front: "current before restore" }); await store.flush();
-        let once = true; memory.hooks.saveMain = async () => { if (once) { once = false; throw new Error("simulated disk failure"); } };
-        await assert.rejects(store.restoreBackup(backup));
+        await assert.rejects(store.restoreBackup(backup), /选择要恢复的对象/);
         assert.equal(store.getCard(card.id).front, "current before restore");
         assert.equal((await store.loadAnnotations(card.docPath))[0].text, "current before restore");
         await store.flush();
       });
-      await audit("external sidecar conflict must provide a recovery route without blocking backup restore", async () => {
+      await audit("external sidecar conflict must be resolved before selected backup annotation restore", async () => {
         const { store, memory } = await makeStore();
         const annotation = { id: "a", docPath: card.docPath, docKind: "pdf", page: 1, type: "highlight", rects: [], text: "original", color: "#ffd54f", createdAt: "2026-10-15" };
         memory.text(card.docPath, "synthetic PDF bytes");
@@ -430,7 +432,10 @@ try {
         memory.text(`${card.docPath}.mstudy.json`, JSON.stringify({ annotations: [{ ...annotation, text: "external content" }] }));
         annotations[0].text = "local content"; store.saveAnnotationsDebounced(card.docPath, annotations);
         await assert.rejects(store.flush());
-        await store.restoreBackup(backup);
+        const snapshot = await store.prepareBackupRecovery(backup);
+        await assert.rejects(store.restoreProtectionSnapshot(snapshot.path, [annotation.id]), /批注冲突/);
+        await store.resolveAnnotationConflict(card.docPath, "local");
+        await store.restoreProtectionSnapshot(snapshot.path, [annotation.id]); await store.flush();
         assert.equal((await store.loadAnnotations(card.docPath))[0].text, "original");
       });
     } finally {

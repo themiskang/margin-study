@@ -27,7 +27,7 @@ import { ResearchView, VIEW_TYPE_RESEARCH } from "./research/view";
 import { updatePageCollectionSourcePath } from "./documents/pageCollection";
 import { openReviewDecks } from "./review/decks";
 import { openPractice } from "./review/practice";
-import { SourceRecoveryPrompts } from "./documents/recoveryPrompts";
+import { SourceRecoveryPrompts, openSyncStatusPanel } from "./documents/recoveryPrompts";
 import { openCardLink } from "./study/cardLink";
 import { aiServiceFor } from "./ai/panel";
 import { condenseServiceFor } from "./ai/condense";
@@ -131,7 +131,7 @@ export default class MarginStudyPlugin extends Plugin {
         && !file.path.startsWith("MarginStudyBackups/") && !file.path.startsWith("_marginstudy-recovery/")) void this.recoverMissingSources(file.path);
     }));
     this.registerEvent(this.app.vault.on("delete", (file) => {
-      if (file instanceof TFile && this.isReaderFile(file)) this.store.markDocumentMissing(file.path);
+      if (file instanceof TFile && this.isSupportedDocument(file)) this.store.markDocumentMissing(file.path);
     }));
     this.register(this.store.subscribe(change => {
       if (change) { this.mindmapView?.updateMovedNodes(change.movedNodeIds); return; }
@@ -182,6 +182,7 @@ export default class MarginStudyPlugin extends Plugin {
       else if (!toggleStudyInterface(this.store)) new Notice("请先选择学习集");
     } });
     this.addCommand({ id: "recover-document-sources", name: "处理待恢复的原文档来源", callback: () => this.recoveryPrompts.openPending() });
+    this.addCommand({ id: "local-sync-status", name: "查看本地状态与保护快照", callback: () => this.showLocalStatus() });
     this.addCommand({ id: "import-web-article", name: "导入网页 / 微信文章", callback: () => openWebImport(this) });
     this.addCommand({id:"open-research-browser",name:"打开研究浏览器",callback:()=>{void this.openResearchBrowser();}});
     this.addCommand({ id: "manage-review-decks", name: "新建与管理复习卡组", callback: () => openReviewDecks(this) });
@@ -337,7 +338,7 @@ export default class MarginStudyPlugin extends Plugin {
     this.addSettingTab(new MarginStudySettingTab(this.app, this));
 
     this.addCommand({ id: "save-now", name: "立即保存学习库", callback: () => { void this.store.flush().then(() => new Notice("学习库已保存")).catch(() => {}); } });
-    this.addCommand({ id: "restore-backup", name: "恢复完整学习库备份", callback: () => this.chooseBackup() });
+    this.addCommand({ id: "restore-backup", name: "选择保护快照恢复对象", callback: () => this.showLocalStatus() });
     this.addCommand({ id: "resolve-save-conflict", name: "处理保存冲突", callback: () => this.showSaveConflict() });
     this.addCommand({ id: "undo-library", name: "撤销最近一次学习库操作", callback: () => { if (!this.store.undoLibraryChange()) new Notice("没有可撤销的操作"); } });
     this.addCommand({ id: "redo-library", name: "重做最近一次学习库操作", callback: () => { if (!this.store.redoLibraryChange()) new Notice("没有可重做的操作"); } });
@@ -376,16 +377,13 @@ export default class MarginStudyPlugin extends Plugin {
   private isReaderFile(file: TFile): boolean { return ["pdf", "msref", "docx", "epub", "html", "htm"].includes(file.extension.toLowerCase()); }
   private isSupportedDocument(file: TFile): boolean { return this.isReaderFile(file) || file.extension.toLowerCase() === "md"; }
 
-  private chooseBackup(): void {
-    const files = this.app.vault.getFiles().filter(f => f.path.startsWith("MarginStudyBackups/") && f.name === "manifest.json").sort((a,b) => b.path.localeCompare(a.path));
-    const { modal, close } = createModal("恢复学习库");
-    modal.append(el("p", { text: "选择备份。恢复前会先完整备份当前学习库，校验通过后才开始恢复。" }));
-    if (!files.length) modal.append(el("p", { text: "还没有完整备份，请先运行「备份数据」。" }));
-    for (const file of files) {
-      const b = el("button", { class: "ms-btn", text: file.parent?.name ?? file.path });
-      b.addEventListener("click", () => { b.setAttribute("disabled", "true"); void this.store.restoreBackup(file.path).then(close).catch(e => { b.removeAttribute("disabled"); new Notice("恢复未完成：" + String(e), 12000); }); });
-      modal.append(b);
-    }
+  private showLocalStatus(): void {
+    openSyncStatusPanel(this.store, {
+      findSource: () => { void this.reconcileMissingSources(false).then(() => this.recoveryPrompts.openPending()).catch(error => new Notice("来源扫描未完成：" + String(error), 10000)); },
+      resolveConflict: () => this.showSaveConflict(),
+      backupPaths: () => this.app.vault.getFiles().filter(file => file.path.startsWith("MarginStudyBackups/") && file.name === "manifest.json").map(file => file.path).sort((left, right) => right.localeCompare(left)),
+      notify: message => { new Notice(message, 10000); },
+    });
   }
 
   private showSaveConflict(): void {
