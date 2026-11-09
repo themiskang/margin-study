@@ -1,0 +1,155 @@
+import { Store } from '__PROJECT__/src/model/store';
+import { MindmapRenderer } from '__PROJECT__/src/mindmap/mindmapRenderer';
+import { mergePreservingVersions } from '__PROJECT__/src/model/conflicts';
+import { MarkdownRenderer } from 'obsidian';
+
+const target = document.querySelector('#fixtures') as HTMLElement;
+const results: any[] = [], mounted: MindmapRenderer[] = [], stores: Store[] = [], errors: string[] = [];
+(window as any).results = results;
+(HTMLElement.prototype as any).empty = function() { this.replaceChildren(); };
+Element.prototype.setPointerCapture = function() {};
+Element.prototype.releasePointerCapture = function() {};
+(MarkdownRenderer as any).render = async (_app: any, text: string, host: HTMLElement) => {
+  const match = /\[([^\]]+)\]\(([^)]+)\)/.exec(text);
+  if (!match) { host.textContent = text; return; }
+  const link = document.createElement('a'); link.textContent = match[1]; link.href = match[2];
+  host.append(document.createTextNode(text.slice(0, match.index)), link, document.createTextNode(text.slice(match.index + match[0].length)));
+};
+window.addEventListener('error', event => errors.push(event.message));
+window.addEventListener('unhandledrejection', event => errors.push(String(event.reason)));
+const wait = () => new Promise<void>(resolve => setTimeout(resolve, 0));
+function assert(value: any, message: string) { if (!value) throw new Error(message); }
+function equal(actual: any, expected: any, message: string) { assert(JSON.stringify(actual) === JSON.stringify(expected), message + ': ' + JSON.stringify(actual)); }
+function button(root: ParentNode, label: string): HTMLButtonElement {
+  const found = [...root.querySelectorAll<HTMLButtonElement>('button')].find(item => item.getAttribute('aria-label') === label || item.textContent === label);
+  assert(found, 'Missing UI action: ' + label); return found!;
+}
+function node(p: any, id: string): HTMLElement { const found = p.host.querySelector(`[data-id="${id}"]`); assert(found, 'Missing node: ' + id); return found; }
+function menu(p: any, id: string, action: string) {
+  node(p, id).click();
+  button(p.host.querySelector('.ms-node-toolbar')!, '更多').click();
+  button(document.querySelector('#test-menu')!, action).click();
+}
+function modal(): HTMLElement { const dialogs = document.querySelectorAll<HTMLElement>('.ms-modal'); assert(dialogs.length, 'Missing dialog'); return dialogs[dialogs.length - 1]; }
+function textDialog(value: string) { const dialog = modal(); (dialog.querySelector('textarea') as HTMLTextAreaElement).value = value; button(dialog, '确定').click(); }
+async function test(name: string, action: () => Promise<any>) {
+  for (const view of mounted.splice(0)) view.dispose(); target.replaceChildren(); document.querySelectorAll('.ms-modal-bg,#test-menu').forEach(item => item.remove());
+  try { const details = await action(); results.push({ name, passed: true, details }); }
+  catch (error) { results.push({ name, passed: false, error: String(error), stack: (error as any).stack }); }
+}
+async function fresh() {
+  let disk: any = {}; const files = new Map<string, string>();
+  const app: any = { vault: { getFiles: () => [], getAbstractFileByPath: () => null, adapter: { exists: async (path: string) => files.has(path), mkdir: async (path: string) => files.set(path, ''), write: async (path: string, value: string) => files.set(path, value), read: async (path: string) => files.get(path) } } };
+  const storage: any = { app, loadData: async () => structuredClone(disk), saveData: async (value: any) => { disk = structuredClone(value); } };
+  let store = new Store(storage); await store.load(); stores.push(store); store.createStudySet('A18'); const canvasId = store.activeCanvasId!;
+  store.addCard({ id: 'card-root', docPath: 'source.pdf', type: 'flashcard', title: '标题', front: '原文 [链接](https://example.com)', back: '答案正文', tags: ['样本'], links: [], createdAt: '2026-01-01T00:00:00.000Z' });
+  store.addCard({ id: 'card-child', docPath: 'source.pdf', type: 'comment', title: '子卡', front: '子卡正文', back: '子卡笔记', tags: [], links: ['card-root'], createdAt: '2026-01-02T00:00:00.000Z' });
+  store.addNode({ id: 'root', canvasId, parentId: null, cardId: 'card-root', title: '节点标题', collapsed: false, x: 40, y: 40 });
+  for (let index = 1; index <= 10; index++) store.addNode({ id: `node-${String(index).padStart(2, '0')}`, canvasId, parentId: 'root', cardId: 'card-child', title: `分支 ${index}`, collapsed: false, x: 380, y: index * 150 });
+  const host = document.createElement('section'); host.style.cssText = 'height:650px;width:1050px;max-width:100%;position:relative'; target.append(host);
+  const p: any = { store, canvasId, host, storage };
+  p.mount = () => { const plugin: any = { app, store: p.store, activeReader: null, viewEvents: {}, refreshSidebar() {}, refreshMindmap() {} }; p.view = new MindmapRenderer(plugin, { nativeChrome: true }); p.view.mount(host); mounted.push(p.view); };
+  p.reload = async () => { await p.store.flush(); p.view.dispose(); mounted.splice(mounted.indexOf(p.view), 1); p.store = new Store(storage); stores.push(p.store); await p.store.load(); p.mount(); await wait(); };
+  p.mount(); await wait(); return p;
+}
+function cards(p: any) { return structuredClone(p.store.cards); }
+function displayDialog(p: any) { button(p.host, '选择脑图').click(); button(document.querySelector('#test-menu')!, '脑图显示设置…').click(); return modal(); }
+function change(input: HTMLInputElement | HTMLSelectElement, value: string | boolean) {
+  if (typeof value === 'boolean') (input as HTMLInputElement).checked = value; else input.value = value;
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+try {
+  await test('A18.1 子图创建改名删除保持源卡身份和全部字段', async () => {
+    const p = await fresh(), original = cards(p), ids = original.map((card: any) => card.id).sort();
+    menu(p, 'root', '创建子脑图…'); textDialog('原始子图');
+    let record = p.store.canvases.find((canvas: any) => canvas.id === p.canvasId).submaps?.[0];
+    assert(record?.id && record.name === '原始子图' && record.rootNodeId === 'root' && record.createdAt, 'Independent submap record is missing');
+    const id = record.id; assert(p.store.getNode('root').submapId === id, 'Node does not reference submap'); equal(cards(p), original, 'Create changed cards');
+    await p.reload(); record = p.store.canvases.find((canvas: any) => canvas.id === p.canvasId).submaps?.[0];
+    assert(record?.id === id && p.store.getNode('root').submapId === id, 'Submap identity did not survive reopening');
+    menu(p, 'root', '重命名子脑图…'); textDialog('改名子图'); equal(cards(p), original, 'Rename changed cards');
+    await p.reload(); record = p.store.canvases.find((canvas: any) => canvas.id === p.canvasId).submaps?.[0];
+    assert(record?.id === id && record.name === '改名子图', 'Rename or identity did not survive reopening');
+    menu(p, 'root', '删除子脑图…'); button(modal(), '删除子脑图').click(); await p.reload();
+    assert(!p.store.getNode('root').submapId && !(p.store.canvases.find((canvas: any) => canvas.id === p.canvasId).submaps ?? []).some((item: any) => item.id === id), 'Delete retained submap or reference');
+    equal(cards(p), original, 'Delete changed cards'); equal(p.store.cards.map((card: any) => card.id).sort(), ids, 'Card IDs changed');
+    return { submapId: id, cardIds: ids, operations: ['create', 'rename', 'delete'], reloads: 3 };
+  });
+  await test('A18.2 十种节点分支样式保存并重开恢复', async () => {
+    const p = await fresh(), values = ['right', 'left', 'both', 'tree', 'logic', 'mind', 'mini', 'down', 'org', 'timeline'], expected: any[] = [];
+    for (let index = 0; index < values.length; index++) {
+      const id = `node-${String(index + 1).padStart(2, '0')}`; menu(p, id, '设置分支样式…');
+      const dialog = modal(), select = dialog.querySelector<HTMLSelectElement>('[aria-label="节点分支样式"]'); assert(select, 'Missing per-node style selector');
+      select!.value = values[index]; button(dialog, '应用样式').click(); expected.push({ id, style: values[index] });
+    }
+    await p.reload();
+    const actual = expected.map(({ id }: any) => ({ id, style: p.store.getNode(id).layout })); equal(actual, expected, 'Node styles did not persist');
+    const signatures = expected.map(({ id, style }: any) => { const path = p.host.querySelector(`path[data-branch-node="${id}"]`); assert(path?.getAttribute('data-branch-style') === style, 'Branch not rendered with saved style for ' + id); return [path.getAttribute('stroke'), path.getAttribute('stroke-width'), path.getAttribute('stroke-dasharray'), path.getAttribute('d')?.replace(/[0-9. -]+/g, '')].join('|'); });
+    assert(new Set(signatures).size === 10, 'Ten saved styles are not visually distinguishable'); return { nodes: actual, distinctVisualStyles: new Set(signatures).size };
+  });
+  await test('A18.3 标题-only 不创建正文元素且不修改卡片', async () => {
+    const p = await fresh(), original = cards(p); assert(node(p, 'root').querySelector('.ms-node-body'), 'Fixture lacks body');
+    menu(p, 'root', '仅显示标题'); await wait();
+    assert(!node(p, 'root').querySelector('.ms-node-body, [data-field="excerpt"], [data-field="note"], [data-field="comment"], .ms-node-images'), 'Body element exists in title-only node');
+    assert(node(p, 'root').textContent?.includes('标题'), 'Title missing'); equal(cards(p), original, 'Title-only changed cards');
+    await p.reload(); assert(!node(p, 'root').querySelector('.ms-node-body, [data-field="excerpt"], [data-field="note"], [data-field="comment"], .ms-node-images'), 'Title-only did not survive reopening');
+    menu(p, 'root', '显示卡片正文'); assert(node(p, 'root').querySelector('.ms-node-body'), 'Restoring body failed'); equal(cards(p), original, 'Restoring body changed cards');
+    return { nodeId: 'root', front: p.store.getCard('card-root').front, back: p.store.getCard('card-root').back };
+  });
+  await test('A18.4 隐藏链接宽度手写背景独立持久且不修改卡片', async () => {
+    const p = await fresh(), original = cards(p); p.store.addEdge('node-01', 'node-02', '关联'); p.view.render();
+    const initial = structuredClone(p.store.canvases.find((canvas: any) => canvas.id === p.canvasId));
+    assert(node(p, 'root').querySelector('[data-field="excerpt"] a'), 'Fixture lacks rendered Markdown link');
+    let dialog = displayDialog(p); const hide = dialog.querySelector<HTMLInputElement>('[aria-label="隐藏链接"]'); assert(hide, 'Missing hide-links setting'); change(hide!, true); await wait();
+    let settings = p.store.canvases.find((canvas: any) => canvas.id === p.canvasId).display; equal(settings, { hideLinks: true }, 'Hide links changed other settings'); equal(cards(p), original, 'Hide links changed cards');
+    assert(!p.host.querySelector('path[data-link-edge="true"]'), 'Cross-link remains visible'); assert(p.host.querySelector('path[data-branch-node="node-01"]'), 'Hiding links removed structural branch');
+    assert(!node(p, 'root').querySelector('[data-field] a') && node(p, 'root').textContent?.includes('链接'), 'Hidden Markdown link remains interactive or lost its text');
+    const width = dialog.querySelector<HTMLInputElement>('[aria-label="卡片宽度"]'); assert(width, 'Missing card-width setting'); change(width!, '280');
+    settings = p.store.canvases.find((canvas: any) => canvas.id === p.canvasId).display; equal(settings, { hideLinks: true, cardWidth: 280 }, 'Width changed other settings'); equal(cards(p), original, 'Width changed cards');
+    assert(Math.abs(node(p, 'root').getBoundingClientRect().width - 280) < 1, 'Card width is not rendered');
+    const background = dialog.querySelector<HTMLSelectElement>('[aria-label="手写背景"]'); assert(background, 'Missing handwriting-background setting'); change(background!, 'grid');
+    settings = p.store.canvases.find((canvas: any) => canvas.id === p.canvasId).display; equal(settings, { hideLinks: true, cardWidth: 280, handwritingBackground: 'grid' }, 'Background changed other settings'); equal(cards(p), original, 'Background changed cards');
+    assert(p.host.querySelector('.ms-mindmap')?.getAttribute('data-handwriting-background') === 'grid', 'Background not rendered');
+    button(dialog, '关闭').click(); await p.reload();
+    equal(p.store.canvases.find((canvas: any) => canvas.id === p.canvasId).display, settings, 'Display settings did not survive reopening'); equal(cards(p), original, 'Reopen changed cards');
+    const after = structuredClone(p.store.canvases.find((canvas: any) => canvas.id === p.canvasId)); delete after.display; delete initial.display; equal(after, initial, 'Display settings changed unrelated canvas fields');
+    dialog = displayDialog(p); const restored = dialog.querySelector<HTMLInputElement>('[aria-label="隐藏链接"]')!; change(restored, false); await wait();
+    assert(node(p, 'root').querySelector('[data-field="excerpt"] a') && p.host.querySelector('path[data-link-edge="true"]'), 'Disabling hidden links did not restore links');
+    assert(p.store.canvases.find((canvas: any) => canvas.id === p.canvasId).display.cardWidth === 280 && p.store.canvases.find((canvas: any) => canvas.id === p.canvasId).display.handwritingBackground === 'grid', 'Toggling links changed independent settings'); equal(cards(p), original, 'Restoring links changed cards');
+    return { settings, cardIds: original.map((card: any) => card.id) };
+  });
+  await test('A18.5 无子图字段旧数据正常加载并渲染', async () => {
+    const p = await fresh(); p.store.updateNode('root', { submap: true }); await p.reload();
+    const canvas = p.store.canvases.find((item: any) => item.id === p.canvasId); assert(!('submaps' in canvas) && !('submapId' in p.store.getNode('root')), 'Fixture is not legacy');
+    assert(node(p, 'root').querySelector('.ms-node-submap-badge') && !p.host.querySelector('[data-id="node-01"]'), 'Legacy submap failed to render');
+    return { nodeId: 'root', legacySubmap: true, badgeVisible: true, childCollapsed: true };
+  });
+  await test('A18 子图折叠展开、复制移动、撤销及根节点删除保持身份一致', async () => {
+    const p = await fresh(), original = cards(p); menu(p, 'root', '折叠为子脑图');
+    const submapId = p.store.getNode('root').submapId; assert(submapId, 'Collapse created no submap identity');
+    menu(p, 'root', '展开子脑图'); assert(p.store.getNode('root').submapId === submapId && node(p, 'node-01'), 'Expand removed identity or hid descendants');
+    menu(p, 'root', '折叠为子脑图'); assert(p.store.getNode('root').submapId === submapId, 'Collapse replaced identity');
+    const other = p.store.createCanvas(p.store.activeStudySetId!, 'Other'), fragment = p.store.copySubtree(['root']);
+    const ids = p.store.pasteSubtree(fragment, { canvasId: other.id, mode: 'reference' }), copiedRoot = p.store.getNode(ids[0]);
+    assert(copiedRoot.submapId && copiedRoot.submapId !== submapId && other.submaps?.some((item: any) => item.id === copiedRoot.submapId && item.rootNodeId === copiedRoot.id), 'Copy reused or lost submap identity');
+    p.store.moveSubtrees(['root'], { canvasId: other.id });
+    assert(p.store.getNode('root').submapId === submapId && other.submaps?.some((item: any) => item.id === submapId && item.rootNodeId === 'root'), 'Move lost identity');
+    assert(!p.store.canvases.find((item: any) => item.id === p.canvasId).submaps?.some((item: any) => item.id === submapId), 'Move left stale submap');
+    p.store.removeNodes(['root']); assert(!other.submaps?.some((item: any) => item.id === submapId), 'Removing root left orphan submap');
+    assert(p.store.undoLibraryChange() && p.store.getNode('root')?.submapId === submapId, 'Undo failed to restore submap');
+    await p.reload(); assert(p.store.canvases.find((item: any) => item.id === other.id).submaps?.some((item: any) => item.id === submapId), 'Moved submap did not survive reopening');
+    equal(cards(p), original, 'Submap graph operations changed cards'); return { submapId, copiedSubmapId: copiedRoot.submapId };
+  });
+  await test('A18 合并冲突副本保持两套子图身份与根节点引用', async () => {
+    const p = await fresh(); p.store.createSubmap('root', '共同名称'); await p.store.flush();
+    const local = await p.storage.loadData(), remote = structuredClone(local); remote.nodes.find((item: any) => item.id === 'root').title = '远程节点改动';
+    const merged = mergePreservingVersions(local, remote), store = new Store({ ...p.storage, loadData: async () => structuredClone(merged) }); await store.load(); stores.push(store);
+    const submaps = store.canvases.flatMap(canvas => (canvas.submaps ?? []).map(submap => ({ ...submap, canvasId: canvas.id })));
+    assert(submaps.length === 2 && new Set(submaps.map(item => item.id)).size === 2, 'Conflict merge lost or reused submap IDs');
+    for (const submap of submaps) { const root = store.getNode(submap.rootNodeId); assert(root?.canvasId === submap.canvasId && root.submapId === submap.id, 'Conflict merge broke submap root reference'); }
+    return { submaps: submaps.map(({ id, rootNodeId, canvasId }) => ({ id, rootNodeId, canvasId })) };
+  });
+  if (errors.length) throw new Error('Unhandled browser errors: ' + errors.join('; '));
+} catch (error) { (window as any).fatal = String(error); }
+finally { for (const store of stores) await store.flush(); (window as any).done = true; }

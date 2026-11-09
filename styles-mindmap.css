@@ -14,6 +14,20 @@
   background: var(--ms-map-canvas);
   background-image: none;
 }
+.ms-mindmap-root .ms-mindmap[data-handwriting-background="lines"] {
+  background-image: repeating-linear-gradient(0deg, transparent 0 27px, #8294a533 28px 29px);
+}
+.ms-mindmap-root .ms-mindmap[data-handwriting-background="grid"] {
+  background-image: linear-gradient(#8294a533 1px, transparent 1px), linear-gradient(90deg, #8294a533 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+.ms-mindmap-root .ms-mindmap[data-handwriting-background="dots"] {
+  background-image: radial-gradient(#8294a566 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+.ms-map-display-settings { display: flex; flex-direction: column; gap: 14px; margin: 12px 0 18px; }
+.ms-map-display-settings input[type="number"] { width: 84px; }
+.ms-mindmap-root.ms-map-hide-links .ms-node [data-field] a { color: inherit; text-decoration: none; pointer-events: none; }
 .ms-mindmap-world.is-pinching { will-change: transform; }
 
 .ms-mindmap-root .ms-node {

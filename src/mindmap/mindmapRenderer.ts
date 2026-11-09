@@ -2,7 +2,7 @@ import { applyCardTypography } from "../cards/typography";
 import { Menu, Notice, setIcon } from "obsidian";
 import type MarginStudyPlugin from "../main";
 import { MindNode, Edge, BRANCH_STYLES } from "../types";
-import type { HandwritingPresetSpec } from "../types";
+import type { HandwritingPresetSpec, MindmapDisplaySettings } from "../types";
 import { handwritingPresetWidth, handwritingPresets } from "../annot/handwritingPresets";
 import { el, clear } from "../utils/dom";
 import { openTextModal, openConfirm, createModal, openImageLightbox } from "../utils/modal";
@@ -36,6 +36,18 @@ const WHEEL_LINE_HEIGHT_CSS_PX = 16;
 const VIEW_OVERSCROLL_RATIO = 4;
 const MIN_VIEW_OVERSCROLL_CSS = 240;
 const VIEW_INITIAL_INSET_CSS = 52;
+const BRANCH_APPEARANCE: Record<string, { color: string; width: number; dash?: string }> = {
+  right: { color: "#4078bd", width: 2 },
+  left: { color: "#c05a4a", width: 2, dash: "8 4" },
+  both: { color: "#8064b4", width: 3 },
+  tree: { color: "#458967", width: 3, dash: "2 4" },
+  logic: { color: "#b17828", width: 2, dash: "10 3 2 3" },
+  mind: { color: "#c55d8c", width: 4 },
+  mini: { color: "#668593", width: 1.5, dash: "3 3" },
+  down: { color: "#327e9c", width: 3, dash: "12 5" },
+  org: { color: "#6559a6", width: 2.5, dash: "1 3" },
+  timeline: { color: "#b46c39", width: 4, dash: "7 3" },
+};
 
 function svgEl(tag: string, attrs: Record<string, string | number>): SVGElement {
   const e = document.createElementNS(SVG_NS, tag);
@@ -403,6 +415,7 @@ export class MindmapRenderer {
         } });
       }));
       menu.addItem((item) => item.setTitle("脑图工具与设置…").onClick(() => this.openNativeTools()));
+      menu.addItem((item) => item.setTitle("脑图显示设置…").onClick(() => this.openDisplaySettings()));
       menu.addItem((item) => item.setTitle("新建手绘卡片…").onClick(() => this.options.onHandwrite ? this.options.onHandwrite() : this.openDrawingCard()));
       menu.showAtMouseEvent(event);
     });
@@ -548,6 +561,7 @@ export class MindmapRenderer {
       this.showHidden = !this.showHidden;
       this.render();
     }, true));
+    toolbar.append(btn("显示设置", "设置链接、卡片宽度和手写背景", () => this.openDisplaySettings()));
     toolbar.append(
       btn("撤销", "撤销上一次内容或关系变更", () => {
         if (!this.plugin.store.undoLibraryChange()) new Notice("没有可撤销的变更");
@@ -741,8 +755,15 @@ export class MindmapRenderer {
     item("在此处隐藏", () => this.hideSelected());
     item("评论", () => this.editComments(), nodes.length !== 1);
     item("打开子脑图", () => this.openChildMap(), nodes.length !== 1);
+    item("创建子脑图…", () => this.createSelectedSubmap(), nodes.length !== 1 || !!nodes[0].submapId);
+    item("重命名子脑图…", () => this.renameSelectedSubmap(), nodes.length !== 1 || !nodes[0].submapId);
+    item("删除子脑图…", () => this.deleteSelectedSubmap(), nodes.length !== 1 || !nodes[0].submapId);
     item("折叠为子脑图", () => this.collapseToSubmap(), nodes.length !== 1);
     item("展开子脑图", () => this.expandSubmap(), nodes.length !== 1);
+    item("设置分支样式…", () => this.openBranchStyle(), nodes.length !== 1);
+    item(nodes[0].titleOnly ? "显示卡片正文" : "仅显示标题", () => {
+      this.plugin.store.updateNode(nodes[0].id, { titleOnly: !nodes[0].titleOnly }); this.render();
+    }, nodes.length !== 1);
     menu.showAtMouseEvent(event);
   }
 
@@ -1070,6 +1091,9 @@ export class MindmapRenderer {
     if (this.finishNodeDrag || this.pinchGeom) { this.renderAfterDrag = true; return; }
     if (!this.world || !this.svg) return;
     const canvasId = this.currentCanvasId();
+    const display = this.currentCanvas()?.display;
+    if (this.scrollEl) this.scrollEl.dataset.handwritingBackground = display?.handwritingBackground ?? "plain";
+    this.root?.classList.toggle("ms-map-hide-links", !!display?.hideLinks);
     const recallActive=this.isRecallHierarchyActive();if(this.wasRecallActive&&!recallActive){this.revealedIds.clear();this.layeredOpenIds.clear();}this.wasRecallActive=recallActive;
     if (canvasId !== this.renderedCanvasId) { this.revealedIds.clear(); this.layeredOpenIds.clear(); this.revealedImageMasks.clear(); this.revealedEmphasis.clear(); this.recallCollapsed.clear(); this.transientVisibleIds.clear(); this.renderedCanvasId = canvasId; }
     if (this.currentCanvas()?.singlePeek && this.revealedIds.size > 1) this.revealedIds.clear();
@@ -1115,6 +1139,8 @@ export class MindmapRenderer {
     let cls = "ms-node" + (n.parentId === null ? " is-root" : "");
     if (this.selectedIds.has(n.id)) cls += " is-selected";
     const div = el("div", { class: cls, "data-id": n.id, tabindex: "0", role: "group", "aria-label": "脑图卡片" });
+    const display = this.currentCanvas()?.display;
+    if (display?.cardWidth) { div.style.width = `${display.cardWidth}px`; div.style.maxWidth = "600px"; }
     div.setAttribute("data-selected", String(this.selectedIds.has(n.id)));
     if (content.color) {
       div.style.setProperty("--ms-node-color", content.color);
@@ -1147,7 +1173,7 @@ export class MindmapRenderer {
     });
     header.append(more);
     if (n.reference) header.append(el("span", { class: "ms-node-reference", text: "↔", title: "共享引用：内容与其他引用同步", "aria-label": "共享引用" }));
-    if (card && (card.docPath || card.sources?.some((source) => source.docPath))) {
+    if (!display?.hideLinks && card && (card.docPath || card.sources?.some((source) => source.docPath))) {
       const jump = el("button", { class: "ms-node-source", text: "›", type: "button", "aria-label": "跳转到原文", title: "跳转到原文" });
       jump.addEventListener("click", (event) => { event.stopPropagation(); jumpToCardSource(this.plugin, card); });
       header.append(jump);
@@ -1203,7 +1229,11 @@ export class MindmapRenderer {
     const masked = maskable && !this.revealedIds.has(n.id);
     const layeredClosed=this.isLayeredRecall()&&!this.layeredOpenIds.has(n.id);
     const showQuestion = masked && this.reviewMode !== "title" && !content.heading && card?.type === "flashcard" && !!content.note;
-    {
+    if (n.titleOnly) {
+      const title = el("div", { class: "ms-node-title ms-node-heading", "data-field": "title" });
+      applyCardTypography(title, this.plugin.store.settings, card, true);
+      this.renderNodeText(title, content.heading || n.title || content.title || "(空)", n, false); div.append(title);
+    } else {
       let sectionIndex=0;
       const section = (field: string, text: string, classes: string) => {
         if (!text) return;
@@ -1217,7 +1247,7 @@ export class MindmapRenderer {
         for(const block of displayedExcerptBlocks(card)){
           if(block.text)section("excerpt",block.text,"ms-node-excerpt" + (!content.heading ? " ms-node-title" : ""));
           if(block.image)appendImages([block.image],block.id);
-          if(block.target)div.append(excerptSourceButton(this.plugin,card,block));
+          if(block.target && !display?.hideLinks)div.append(excerptSourceButton(this.plugin,card,block));
         }
       }else section("excerpt", content.excerpt, "ms-node-excerpt" + (!content.heading ? " ms-node-title" : ""));
       if(orderedComments){
@@ -1234,7 +1264,7 @@ export class MindmapRenderer {
       }
     }
 
-    if (content.tags.length) {
+    if (!n.titleOnly && content.tags.length) {
       const tags = el("div", { class: "ms-node-tags" });
       for (const t of content.tags) {
         const tagEl = el("span", { class: "ms-node-tag", text: t });
@@ -1248,8 +1278,8 @@ export class MindmapRenderer {
       div.append(tags);
     }
 
-    if (!orderedComments) appendImages((excerptBlocks?.length ? content.images.slice(excerptBlocks.filter(block=>block.image).length) : content.images).filter(image => !leadingImages.includes(image)));
-    if ((card?.sources?.length ?? 0) > 1) {
+    if (!n.titleOnly && !orderedComments) appendImages((excerptBlocks?.length ? content.images.slice(excerptBlocks.filter(block=>block.image).length) : content.images).filter(image => !leadingImages.includes(image)));
+    if (!n.titleOnly && !display?.hideLinks && (card?.sources?.length ?? 0) > 1) {
       const sources = el("div", { class: "ms-node-sources" });
       sources.addEventListener("click", (event) => event.stopPropagation());
       appendSources(sources, this.plugin, card!);
@@ -1269,11 +1299,11 @@ export class MindmapRenderer {
     }
     this.updateCardRemaining(div, n.id, masked);
 
-    if (n.submap && this.plugin.store.nodes.some((c) => c.parentId === n.id)) {
+    if (n.submap || (n.submapId && this.options.subtreeRoot !== n.id)) {
       div.classList.add("is-submap");
       const badge = el("button", {
         class: "ms-node-submap-badge",
-        text: "⊞ 子脑图",
+        text: "⊞ " + (this.currentCanvas()?.submaps?.find(item => item.id === n.submapId)?.name || "子脑图"),
         title: "在浮动视图打开该节点子树",
       });
       badge.addEventListener("click", (e) => {
@@ -1540,7 +1570,7 @@ export class MindmapRenderer {
       return;
     }
     const { bg, modal, close } = createModal(
-      "子脑图：" + (nodeContent(this.plugin.store, sel[0]).title || "(空)"),
+      "子脑图：" + (this.currentCanvas()?.submaps?.find(item => item.id === sel[0].submapId)?.name || nodeContent(this.plugin.store, sel[0]).title || "(空)"),
       () => child.destroy()
     );
     const wrap = el("div", { style: "width:min(80vw,700px);height:70vh;position:relative" });
@@ -1549,6 +1579,66 @@ export class MindmapRenderer {
     pin.addEventListener("click",()=>{const store=this.plugin.store,node=store.getNode(sel[0].id),canvas=store.canvases.find(item=>item.id===node?.canvasId),set=store.studySets.find(item=>item.id===canvas?.studySetId);if(!node||!canvas||!set)return;store.updateStudySet(set.id,{fixedViews:[...(set.fixedViews??[]),{id:uid("fixed"),name:(node.title||"未命名节点")+" · 子脑图",kind:"submap",canvasId:canvas.id,nodeId:node.id,viewport:child.captureViewport()}]});new Notice("已固定子脑图视角");});
     modal.append(pin,wrap);
     child.mount(wrap);
+  }
+
+  private createSelectedSubmap(): void {
+    const node = this.selectedViewNode(); if (!node) return;
+    openTextModal({ title: "创建子脑图", initial: nodeContent(this.plugin.store, node).title || "未命名子脑图", onOk: name => {
+      if (!name.trim()) { new Notice("子脑图名称不能为空"); return; }
+      try { this.plugin.store.createSubmap(node.id, name); this.render(); }
+      catch (error) { new Notice("无法创建子脑图：" + String(error)); }
+    } });
+  }
+  private renameSelectedSubmap(): void {
+    const node = this.selectedViewNode(), submap = this.currentCanvas()?.submaps?.find(item => item.id === node?.submapId);
+    if (!node?.canvasId || !submap) return;
+    openTextModal({ title: "重命名子脑图", initial: submap.name, onOk: name => {
+      if (!name.trim()) { new Notice("子脑图名称不能为空"); return; }
+      try { this.plugin.store.renameSubmap(node.canvasId!, submap.id, name); this.render(); }
+      catch (error) { new Notice("无法重命名子脑图：" + String(error)); }
+    } });
+  }
+  private deleteSelectedSubmap(): void {
+    const node = this.selectedViewNode(), submap = this.currentCanvas()?.submaps?.find(item => item.id === node?.submapId);
+    if (!node?.canvasId || !submap) return;
+    openConfirm("删除子脑图", `删除子脑图“${submap.name}”并恢复节点显示？源卡片和子节点不会删除。`, () => {
+      try { this.plugin.store.deleteSubmap(node.canvasId!, submap.id); this.render(); }
+      catch (error) { new Notice("无法删除子脑图：" + String(error)); }
+    }, "删除子脑图");
+  }
+  private openBranchStyle(): void {
+    const node = this.selectedViewNode(); if (!node) return;
+    const { modal, close } = createModal("设置节点分支样式");
+    const select = el("select", { "aria-label": "节点分支样式" }) as HTMLSelectElement;
+    select.append(el("option", { value: "", text: "默认" }));
+    for (const style of BRANCH_STYLES) select.append(el("option", { value: style.id, text: style.name }));
+    select.value = node.layout ?? "";
+    const apply = el("button", { type: "button", text: "应用样式" });
+    apply.addEventListener("click", () => { this.plugin.store.updateNode(node.id, { layout: select.value || undefined }); this.render(); close(); });
+    modal.append(select, apply);
+  }
+  private openDisplaySettings(): void {
+    const canvasId = this.currentCanvasId(), canvas = this.currentCanvas();
+    if (!canvasId || !canvas) { new Notice("请先打开脑图"); return; }
+    const { modal, close } = createModal("脑图显示设置");
+    const save = (patch: Partial<MindmapDisplaySettings>) => {
+      const current = this.plugin.store.canvases.find(item => item.id === canvasId); if (!current) return;
+      this.plugin.store.updateCanvas(canvasId, { display: { ...current.display, ...patch } }); this.render();
+    };
+    const hide = el("input", { type: "checkbox", "aria-label": "隐藏链接" }) as HTMLInputElement;
+    hide.checked = !!canvas.display?.hideLinks; hide.addEventListener("change", () => save({ hideLinks: hide.checked }));
+    const hideLabel = el("label"); hideLabel.append(hide, document.createTextNode(" 隐藏关联线与来源链接"));
+    const width = el("input", { type: "number", min: "120", max: "600", step: "10", "aria-label": "卡片宽度" }) as HTMLInputElement;
+    width.value = String(canvas.display?.cardWidth ?? 230);
+    width.addEventListener("change", () => { const value = Number(width.value); if (!Number.isFinite(value)) return; width.value = String(Math.max(120, Math.min(600, value))); save({ cardWidth: Number(width.value) }); });
+    const widthLabel = el("label", { text: "卡片宽度 " }); widthLabel.append(width, document.createTextNode(" px"));
+    const background = el("select", { "aria-label": "手写背景" }) as HTMLSelectElement;
+    for (const [value, name] of [["plain", "纯色"], ["lines", "横线"], ["grid", "方格"], ["dots", "点阵"]]) background.append(el("option", { value, text: name }));
+    background.value = canvas.display?.handwritingBackground ?? "plain";
+    background.addEventListener("change", () => save({ handwritingBackground: background.value as MindmapDisplaySettings["handwritingBackground"] }));
+    const backgroundLabel = el("label", { text: "手写背景 " }); backgroundLabel.append(background);
+    const done = el("button", { type: "button", text: "关闭" }); done.addEventListener("click", close);
+    const fields = el("div", { class: "ms-map-display-settings" }); fields.append(hideLabel, widthLabel, backgroundLabel); modal.append(fields, done);
   }
 
   /** 折叠为子脑图：把选中节点的子树收拢（主视图隐藏，点击 ⊞ 在浮动视图打开） */
@@ -1564,7 +1654,8 @@ export class MindmapRenderer {
       new Notice("该节点没有子节点，无法折叠为子脑图");
       return;
     }
-    this.plugin.store.updateNode(n.id, { submap: true });
+    if (n.submapId) this.plugin.store.updateNode(n.id, { submap: true });
+    else this.plugin.store.createSubmap(n.id, nodeContent(this.plugin.store, n).title || "未命名子脑图");
     this.selectSingle(n.id);
     this.render();
     new Notice("已折叠为子脑图，点击节点上的 ⊞ 展开子树");
@@ -1616,13 +1707,19 @@ export class MindmapRenderer {
     const ty = b.offsetTop + b.offsetHeight / 2 + (e.to === movedId ? dyMove : 0);
     const dx = Math.max(50, Math.abs(tx - sx) / 2);
     // 连线颜色跟随子节点背景色；无色则用 divider
-    const stroke = b.style.backgroundColor || "var(--divider-color)";
+    const target = this.plugin.store.getNode(e.to), source = this.plugin.store.getNode(e.from);
+    const structural = target?.parentId === e.from;
+    const style = structural ? target?.layout || source?.layout : undefined;
+    const appearance = style ? BRANCH_APPEARANCE[style] : undefined;
+    const stroke = appearance?.color || b.style.backgroundColor || "var(--divider-color)";
     const path = svgEl("path", {
       d: `M ${sx} ${sy} C ${sx + dx} ${sy}, ${tx - dx} ${ty}, ${tx} ${ty}`,
       fill: "none",
       stroke,
-      "stroke-width": 2.5,
+      "stroke-width": appearance?.width ?? 2.5,
       "stroke-opacity": "0.75",
+      ...(structural ? { "data-branch-node": e.to, "data-branch-style": style ?? "default" } : { "data-link-edge": "true" }),
+      ...(appearance?.dash ? { "stroke-dasharray": appearance.dash } : {}),
     });
     let label: SVGElement | undefined;
     if (e.label) {
@@ -1648,6 +1745,7 @@ export class MindmapRenderer {
       }
     }
     for (const e of edges) {
+      if (this.currentCanvas()?.display?.hideLinks && this.plugin.store.getNode(e.to)?.parentId !== e.from) continue;
       const a = this.nodeEls.get(e.from);
       const b = this.nodeEls.get(e.to);
       if (!a || !b) continue;
@@ -1976,6 +2074,7 @@ export class MindmapRenderer {
   }
   private renderNodeText(target: HTMLElement, text: string, node: MindNode, firstBlockOnly = false): void {
     void renderMarkdown(this.plugin.app, text, target, nodeContent(this.plugin.store, node).docPath).then(() => {
+      if (this.currentCanvas()?.display?.hideLinks) for (const link of target.querySelectorAll("a")) link.replaceWith(...link.childNodes);
       if (firstBlockOnly) for (const child of [...target.children].slice(1)) if (child instanceof HTMLElement) { child.style.visibility = "hidden"; child.setAttribute("aria-hidden", "true"); }
       const recall = this.isRecallHierarchyActive() && this.root?.closest<HTMLElement>(".ms-study-workspace")?.hasAttribute("data-recall-mask-emphasis-images");
       if (recall && !this.revealedIds.has(node.id)) {

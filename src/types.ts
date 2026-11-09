@@ -219,8 +219,10 @@ export interface MindNode {
   tags?: string[]; // 节点标签
   comments?: string[]; // 节点评论/对话记录
   layout?: string; // 分支样式（mini/logic/right/left/tree…）
+  titleOnly?: boolean;
   collapsed: boolean;
   submap?: boolean; // 已折叠为子脑图（点击节点在浮动视图打开子树，对齐 MN「子脑图层级」）
+  submapId?: string;
   x: number;
   y: number;
 }
@@ -312,6 +314,21 @@ export interface MindCanvas {
   emphasisCloze?: boolean;
   singlePeek?: boolean;
   handwriting?: import("./mindmap/handwritingContracts").MindmapHandwriting;
+  submaps?: MindSubmap[];
+  display?: MindmapDisplaySettings;
+}
+
+export interface MindSubmap {
+  id: string;
+  name: string;
+  rootNodeId: string;
+  createdAt: string;
+}
+
+export interface MindmapDisplaySettings {
+  hideLinks?: boolean;
+  cardWidth?: number;
+  handwritingBackground?: "plain" | "lines" | "grid" | "dots";
 }
 
 export interface MindmapFragment {

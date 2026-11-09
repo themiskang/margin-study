@@ -2,7 +2,7 @@ import { App, TFile, Notice } from "obsidian";
 import { sha256Hex } from "../utils/sha256";
 import {
   Annotation, Card, CardState, DEFAULT_HANDWRITING_PRESETS, DEFAULT_SETTINGS, DocMeta, Edge,
-  MarginStudySettings, MindNode, PluginData, StudySet, MindCanvas,
+  MarginStudySettings, MindNode, PluginData, StudySet, MindCanvas, MindSubmap,
   MindmapFragment, PasteOptions, CardSource, DocumentRecord, ReviewDeck, HandwritingPresetSpec, StudySceneId, StudySceneSelection, StudySceneTemplate, LocalEvent, LocalEventKind, SyncStatusItem,
 } from "../types";
 import { freshState, schedule, todayStr, normalizeState, isDue, fmtDate } from "../srs";
@@ -181,6 +181,18 @@ export class Store {
     for (const s of data.studySets ?? []) if (typeof s.name !== "string" || !Array.isArray(s.docPaths) || s.docPaths.some((p: unknown) => typeof p !== "string")) throw new Error("学习集格式无效");
     for (const c of data.canvases ?? []) {
       if (typeof c.name !== "string" || typeof c.studySetId !== "string") throw new Error("画布格式无效");
+      if (c.submaps !== undefined) {
+        if (!Array.isArray(c.submaps)) throw new Error("子脑图格式无效");
+        const ids = new Set<string>(), roots = new Set<string>();
+        for (const submap of c.submaps) {
+          if (!submap || typeof submap.id !== "string" || !submap.id || ids.has(submap.id) || typeof submap.name !== "string" || !submap.name.trim() || typeof submap.rootNodeId !== "string" || roots.has(submap.rootNodeId) || typeof submap.createdAt !== "string") throw new Error("子脑图格式无效");
+          ids.add(submap.id); roots.add(submap.rootNodeId);
+        }
+      }
+      if (c.display !== undefined) {
+        const display = c.display;
+        if (!display || typeof display !== "object" || Array.isArray(display) || (display.hideLinks !== undefined && typeof display.hideLinks !== "boolean") || (display.cardWidth !== undefined && (!Number.isFinite(display.cardWidth) || display.cardWidth < 120 || display.cardWidth > 600)) || (display.handwritingBackground !== undefined && !["plain", "lines", "grid", "dots"].includes(display.handwritingBackground))) throw new Error("脑图显示设置格式无效");
+      }
       if (c.handwriting !== undefined) {
         const handwriting = normalizeMindmapHandwriting(c.handwriting);
         if (!handwriting) throw new Error("脑图手写格式或版本不支持");
@@ -1371,6 +1383,15 @@ export class Store {
       for (const n of fragment.nodes) {
         const copy = clone(n); copy.id = ids.get(n.id)!; copy.parentId = n.parentId && ids.has(n.parentId) ? ids.get(n.parentId)! : options.parentId ?? null;
         copy.canvasId = targetCanvas; copy.x += offset.x; copy.y += offset.y; copy.sourceNodeId = options.mode === "reference" ? n.id : undefined;
+        if (copy.submapId) {
+          const source = this.canvases.find(canvas => canvas.id === n.canvasId)?.submaps?.find(submap => submap.id === n.submapId && submap.rootNodeId === n.id);
+          const target = this.canvases.find(canvas => canvas.id === targetCanvas);
+          delete copy.submapId;
+          if (source && target) {
+            const submap = { id: uid("submap"), name: source.name, rootNodeId: copy.id, createdAt: new Date().toISOString() };
+            (target.submaps ??= []).push(submap); copy.submapId = submap.id;
+          }
+        }
         copy.cardId = n.cardId ? cardIds.get(n.cardId) ?? (this.getCard(n.cardId) ? n.cardId : undefined) : undefined; copy.reference = options.mode === "reference";
         if (options.mode === "reference" && !copy.cardId) {
           const source = this.getNode(n.id);
@@ -1401,6 +1422,12 @@ export class Store {
       const roots = this.nodes.filter(node => moved.has(node.id) && (!node.parentId || !moved.has(node.parentId)));
       const siblings = this.nodes.filter(node => !moved.has(node.id) && node.canvasId === canvasId && node.parentId === parentId);
       const offset = options.offset ?? {x:40,y:40};
+      const target = this.canvases.find(canvas => canvas.id === canvasId)!;
+      for (const source of this.canvases) if (source.id !== canvasId && source.submaps?.some(submap => moved.has(submap.rootNodeId))) {
+        const transferring = source.submaps.filter(submap => moved.has(submap.rootNodeId));
+        source.submaps = source.submaps.filter(submap => !moved.has(submap.rootNodeId));
+        (target.submaps ??= []).push(...transferring);
+      }
       for (const node of this.nodes) if (moved.has(node.id)) { node.canvasId = canvasId; node.x += offset.x; node.y += offset.y; }
       roots.forEach((node,index) => { node.parentId = parentId; node.order = siblings.length + index; });
       // Internal links travel with the branch; explicit links cannot cross canvases.
@@ -1438,6 +1465,11 @@ export class Store {
       const chain = new Set([n.id]); let p = n.parentId;
       while (p) { if (chain.has(p)) { n.parentId = null; break; } chain.add(p); p = nodes.get(p)?.parentId ?? null; }
     }
+    for (const canvas of this.canvases) if (canvas.submaps) canvas.submaps = canvas.submaps.filter(submap => {
+      const root = nodes.get(submap.rootNodeId);
+      return root?.canvasId === canvas.id && root.submapId === submap.id;
+    });
+    for (const node of this.nodes) if (node.submapId && !this.canvases.find(canvas => canvas.id === node.canvasId)?.submaps?.some(submap => submap.id === node.submapId && submap.rootNodeId === node.id)) delete node.submapId;
     const seen = new Map<string, Edge>(); this.edges = this.edges.filter(e => { const key = e.from + ":" + e.to; if (!nodes.has(e.from) || !nodes.has(e.to) || e.from === e.to || nodes.get(e.from)?.canvasId !== nodes.get(e.to)?.canvasId) return false; const existing = seen.get(key); if (existing) { existing.label = [...new Set([...(existing.label ?? "").split("\n"), ...(e.label ?? "").split("\n")].filter(Boolean))].join("\n") || undefined; return false; } seen.set(key,e); return true; });
     if (this.activeStudySetId && !this.studySets.some(s => s.id === this.activeStudySetId)) { this.activeStudySetId = undefined; this.activeCanvasId = undefined; }
     if (this.activeCanvasId && !this.canvases.some(c => c.id === this.activeCanvasId && c.studySetId === this.activeStudySetId)) this.activeCanvasId = this.canvases.find(c => c.studySetId === this.activeStudySetId)?.id;
@@ -1555,6 +1587,29 @@ export class Store {
         if (!ink || ink.layers.length === 1 && layer?.id === "default" && layer.name === "Default" && !layer.strokes.length && ink.activeLayerId === "default" && !ink.overlayLayerId) delete canvas.handwriting;
       }
     }
+  }); }
+  createSubmap(rootNodeId: string, name: string): MindSubmap { return this.mutate("创建子脑图", () => {
+    const node = this.getNode(rootNodeId), canvas = this.canvases.find(item => item.id === node?.canvasId);
+    if (!node || !canvas) throw new Error("子脑图根节点不存在");
+    if (node.submapId || canvas.submaps?.some(item => item.rootNodeId === rootNodeId)) throw new Error("该节点已有子脑图");
+    const title = name.trim(); if (!title) throw new Error("子脑图名称不能为空");
+    const used = new Set(this.canvases.flatMap(item => (item.submaps ?? []).map(submap => submap.id)));
+    let id: string; do { id = uid("submap"); } while (used.has(id));
+    const submap: MindSubmap = { id, name: title, rootNodeId, createdAt: new Date().toISOString() };
+    (canvas.submaps ??= []).push(submap); node.submapId = submap.id; node.submap = true;
+    return clone(submap);
+  }); }
+  renameSubmap(canvasId: string, submapId: string, name: string): void { this.mutate("重命名子脑图", () => {
+    const submap = this.canvases.find(canvas => canvas.id === canvasId)?.submaps?.find(item => item.id === submapId);
+    if (!submap) throw new Error("子脑图不存在");
+    const title = name.trim(); if (!title) throw new Error("子脑图名称不能为空");
+    submap.name = title;
+  }); }
+  deleteSubmap(canvasId: string, submapId: string): void { this.mutate("删除子脑图", () => {
+    const canvas = this.canvases.find(item => item.id === canvasId), submap = canvas?.submaps?.find(item => item.id === submapId);
+    if (!canvas || !submap) throw new Error("子脑图不存在");
+    canvas.submaps = canvas.submaps!.filter(item => item.id !== submapId);
+    for (const node of this.nodes) if (node.canvasId === canvasId && node.submapId === submapId) { delete node.submapId; node.submap = false; }
   }); }
   canvasHasNotes(id: string, visibleOnly = false): boolean {
     if (mindmapHasHandwriting(this.canvases.find(canvas => canvas.id === id)?.handwriting)) return true;

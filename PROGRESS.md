@@ -1824,3 +1824,24 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - 前置：CC 两轮均用 Debugger.getScriptSource 核对运行时脚本（A29 初验 709→726、修复复验 726→788）
 - 证据：evidence/acceptance-20261106/CC-A29-RESULT.md（初验 3 张 + 修复复验 2 张截图 + 逐项数值 + 清理后业务对象与基线零差异）
 - 路线 A 批次 A5（A28/A29）全部完成；下一步第一动作：批次 A6 的 A18（子脑图/分支/卡片显示）
+
+## 2026-11-09 · A18 子脑图、分支与卡片显示（自动验收 + 宿主验收完成）
+
+- 完成定义：五项自动断言各运行两次改前及改后对照；完整 `npm run verify` 全绿；构建安装桌面隔离库并登记 SHA-256。子图管理、样式切换、标题-only 的真实宿主验收留 CC；不碰 adb、真实库、`evidence/**`，不提交。
+- 子图以画布内 `submaps[{id,name,rootNodeId,createdAt}]` 和节点 `submapId` 表示；创建、改名、删除及折叠/展开不改变卡片；删除仅移除子图身份和节点引用。复制创建新身份、跨画布移动保持身份、删除根节点清理引用、撤销恢复；外部冲突双版本各有独立身份。旧 `submap` 布尔标记继续支持。A08 完整固定仍挂起，现有固定视图仍按 `nodeId` 工作，**尚未接入 `submapId`，不宣称 A08 完整固定完成**。
+- 节点 `layout` 保存十种预设，以连线颜色、线宽和线型区分，未宣称十种独立自动布局方向；标题-only 直接不创建摘录/笔记/评论/图片 DOM。每画布 `display` 独立保存隐藏链接、卡片宽度和手写背景；隐藏关联线及来源控件，并将 Markdown 链接显示为普通文字，结构线保留。上述显示操作不改卡片。
+- 五条原断言两轮结果依次：子图管理 **FAIL/FAIL → PASS/PASS**；十种样式 **FAIL/FAIL → PASS/PASS**；标题-only **FAIL/FAIL → PASS/PASS**；三项显示设置 **FAIL/FAIL → PASS/PASS**；旧数据兼容 **PASS/PASS → PASS/PASS**。旧数据兼容本就是回归项，改前已通过，不伪称失败；前四项改前均因对应 UI 入口缺失提前失败，不能声称更深层的每一步均已执行。
+- 改后两轮各 **7/7**（原五项加复制/移动/删除/撤销、冲突双版本），源 `card-root`/`card-child` 全字段深比较不变。样式逐项：`node-01:right`、`node-02:left`、`node-03:both`、`node-04:tree`、`node-05:logic`、`node-06:mind`、`node-07:mini`、`node-08:down`、`node-09:org`、`node-10:timeline`，重开后 10 种视觉签名各异。设置样本 `hideLinks=true`、`cardWidth=280`、`handwritingBackground=grid`；正文 `front`/`back` 保持原值。
+- 可复核结果：`.agent-artifacts/a18-20261109/before-1.json`、`.agent-artifacts/a18-20261109/before-2.json`、`.agent-artifacts/a18-20261109/after-1.json`、`.agent-artifacts/a18-20261109/after-2.json`；完整汇总 `.agent-artifacts/a18-20261109/verify-results.json`。该目录由 `.gitignore` 忽略。最终 `MARGINSTUDY_VERIFY_DIR=/tmp/marginstudy-a18-verify-final-20261109 npm run verify` **41/41 套件通过**；A18 **7/7**、Workspace **319/319**、Reader **224/224**、脑图手写 **81/81**，`git diff --check` 通过。
+- 最终构建已安装桌面隔离库，源和安装文件 SHA-256 相同：`main.js` `cec17fa7c67f86fa2dcd66bbe0939dd093963229916ef6f5a6022e09d5fd6147`；`styles.css` `e5dc4a56882ee977b75598a32dd9cb5467502047bca4afb55dadb02793fb362c`。隔离库 `data.json` 安装前后均为 `92a7c12b68f6dde0f70ea48afd3c342fb00bf7f8b5fb3a7fdc88d25ce1285602`。未重载宿主，安装不等于运行中已加载。
+- CC 宿主验收第一动作：核对安装哈希并重载隔离库插件，以临时学习集和合成卡片验证创建/重命名/删除子图、重开身份与卡片字段不变、十种节点样式切换与重开、标题-only 无正文容器；再核对隐藏链接、宽度、手写背景互不影响及卡片不变，清理合成对象并对照业务基线。真实宿主验收已由同日晚 CC 轮完成，见下条。
+- 2026-11-09 CC 宿主验收完成：`evidence/acceptance-20261106/CC-A18-RESULT.md`，五项全 pass。前置：旧运行时 scriptId 788 无 A18 符号，disable/enable 后 scriptId 816、sha256 `984f69643197714bd5a3e16ec053b8ac4a3f7a0b872d387b48689420e1f383ba`，`submapId` 36 / `createSubmap` 3 / `renameSubmap` 2 / `deleteSubmap` 2 / `titleOnly` 7 / `hideLinks` 10 / `cardWidth` 21 / `handwritingBackground` 6。实测：子图创建/改名/删除三步卡片全字段深比较 `fullEqual=true`；十种样式重开 10/10、视觉签名 10 种互异；标题-only 正文容器 `querySelector=null`、卡片不变；隐藏链接/卡宽 280/手写背景 grid 三项 `cards` 深比较不变、仅 `display` 变化；库内 18 个真实节点 18/18 无 `submapId`，P10 画布 9/9、A17-A/B 各 1/1 渲染（L4 的 4 个既有 `hidden:true` 节点按既定规则不渲染）。收尾：合成对象零残留、22 张真实卡深比较相等、业务对象数回基线、宿主回学习集主页（5 张学习集卡）；revision 2586→2623（+37）、localEvents 96→172（+76），4 张画布 `lastVisitedAt` 被导航更新且恢复快照无 2586 基线，已如实登记；最终 `data.json` sha256 `6c28e11094f743e7ec763f6dc5932314a12657ab0238f035c87543f5165ff0ec`。未改产品代码、未提交、未改既有 evidence。
+
+## 2026-11-09 20:50 A18 完成（批次 A6 第一张）
+- 完成：A18 子脑图/分支/卡片显示，自动验收 7/7（前四项改前两次失败、改后两次通过）、verify 41/41（Workspace 319/319）
+- 结论：结论：CC 实机五项全 pass —— 子图创建/改名/删除后 24 张卡 ids/fields/fullEqual 全 true；10 种分支样式 detach+重建后 store.layout 与 DOM 10/10 一致且签名互异；标题-only 正文容器 querySelector=null；隐藏链接/宽度/手写背景切换后 cards 每次 fullEqual=true；18 个无 submapId 旧节点全部正常渲染（P10-Luna 9/9、A17-A/B 各 1/1）
+- 前置：CC 用 Debugger.getScriptSource 核对运行时脚本（重载前 788 缺 A18 符号，重载后 816 全命中）
+- 挂起（单列 A08-FIXED-SUBMAP-01 = unknown）：A18 已提供可持久化 `submapId`，但**现有固定视图尚未引用它**，A08「完整固定」子项仍未关闭
+- 口径限制（CC 如实登记）：交互为 CDP 驱动真实 DOM click/change 事件（命中产品监听器），非物理鼠标键盘；4 张画布 lastVisitedAt 被导航更新、恢复目录滚动快照被覆盖，无法精确回写，仅导航元数据无业务变化；localEvents +76、revision +37 属计数器偏移
+- 证据：evidence/acceptance-20261106/CC-A18-RESULT.md（3 张截图 + 逐项数值 + 清理后业务对象与卡片逐对象回到基线）
+- 下一步第一动作：批次 A6 第二张 A19（看板引用与高级卡片链接）

@@ -68,8 +68,10 @@ export function mergePreservingVersions(local: PluginData, remote: PluginData): 
   local.reviewDecks = reviewDecksForData(local, local.reviewPending!);
   remote.reviewDecks = reviewDecksForData(remote, remote.reviewPending!);
   const maps = Object.fromEntries(collections.map(key => [key, new Map<string, string>()])) as IdMaps;
+  const submapIds = new Map<string, string>();
   const localRows = Object.fromEntries(collections.map(key => [key, new Map(rows(local, key).map(item => [item.id, item]))])) as Record<Collection, Map<string, RecordWithId>>;
   const reserved = new Set(collections.flatMap(key => [...rows(local, key), ...rows(remote, key)].map(item => item.id)));
+  for (const canvas of [...local.canvases ?? [], ...remote.canvases ?? []]) for (const submap of canvas.submaps ?? []) reserved.add(submap.id);
   const mapped = (collection: Collection, id: string): string => maps[collection].get(id) ?? id;
   const allocate = (collection: Collection, id: string): boolean => {
     if (maps[collection].has(id)) return false;
@@ -96,6 +98,7 @@ export function mergePreservingVersions(local: PluginData, remote: PluginData): 
     if (item.parentId) item.parentId = mapped("nodes", item.parentId);
     if (item.canvasId) item.canvasId = mapped("canvases", item.canvasId);
     if (item.sourceNodeId) item.sourceNodeId = mapped("nodes", item.sourceNodeId);
+    if (item.submapId && item.canvasId) item.submapId = submapIds.get(`${original.canvasId}:${item.submapId}`) ?? item.submapId;
     return item;
   };
   const edge = (original: Edge): Edge => ({ ...clone(original), from: mapped("nodes", original.from), to: mapped("nodes", original.to) });
@@ -149,6 +152,9 @@ export function mergePreservingVersions(local: PluginData, remote: PluginData): 
       if (typeof item.legacyScopeId === "string") item.legacyScopeId = mapped("canvases", item.legacyScopeId);
     } else if (collection === "canvases") {
       item.studySetId = mapped("studySets", item.studySetId as string);
+      if (Array.isArray(item.submaps)) item.submaps = (item.submaps as { id: string; rootNodeId: string }[]).map(submap => ({
+        ...submap, id: submapIds.get(`${original.id}:${submap.id}`) ?? submap.id, rootNodeId: mapped("nodes", submap.rootNodeId),
+      }));
     } else if (collection === "reviewLogs") {
       const log = item as unknown as RetainedReviewLog;
       log.cardId = mapped("cards", log.cardId);
@@ -186,6 +192,14 @@ export function mergePreservingVersions(local: PluginData, remote: PluginData): 
   let changed: boolean;
   do {
     changed = false;
+    for (const canvas of remote.canvases ?? []) for (const submap of canvas.submaps ?? []) {
+      const key = `${canvas.id}:${submap.id}`;
+      if (!submapIds.has(key) && (maps.canvases.has(canvas.id) || maps.nodes.has(submap.rootNodeId))) {
+        let next: string;
+        do { next = uid("submap-conflict"); } while (reserved.has(next));
+        reserved.add(next); submapIds.set(key, next); changed = true;
+      }
+    }
     for (const collection of collections) for (const original of rows(remote, collection)) {
       if (maps[collection].has(original.id)) continue;
       const existing = localRows[collection].get(original.id);
