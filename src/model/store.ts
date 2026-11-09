@@ -1348,6 +1348,49 @@ export class Store {
   removeNodes(ids: string[]): void { this.mutate("删除节点", () => {
     const removed = this.descendants(ids); this.nodes = this.nodes.filter(n => !removed.has(n.id)); this.edges = this.edges.filter(e => !removed.has(e.from) && !removed.has(e.to));
   }); }
+  linkCards(from: string, to: string, bidirectional = false): boolean {
+    const source = this.getCard(from), target = this.getCard(to);
+    if (!source || !target || from === to) return false;
+    return this.mutate("关联卡片", () => {
+      this.updateCard(from, { links: [...new Set([...source.links, to])] });
+      if (bidirectional) this.updateCard(to, { links: [...new Set([...target.links, from])] });
+      return true;
+    });
+  }
+  unlinkCards(from: string, to: string, bidirectional = false): boolean {
+    const source = this.getCard(from), target = this.getCard(to);
+    if (!source || !target || from === to) return false;
+    return this.mutate("断开卡片关联", () => {
+      const matches = (edge: Edge) => {
+        const a = this.getNode(edge.from)?.cardId, b = this.getNode(edge.to)?.cardId;
+        return a === from && b === to || bidirectional && a === to && b === from;
+      };
+      this.edges = this.edges.filter(edge => !matches(edge));
+      this.updateCard(from, { links: source.links.filter(id => id !== to) });
+      if (bidirectional) this.updateCard(to, { links: target.links.filter(id => id !== from) });
+      return true;
+    });
+  }
+  connectNodes(from: string, to: string): boolean {
+    const source = this.getNode(from), target = this.getNode(to);
+    if (!source || !target || source.canvasId !== target.canvasId || from === to || !source.cardId || !target.cardId || source.cardId === target.cardId || !this.getCard(source.cardId) || !this.getCard(target.cardId)) return false;
+    if (source.parentId === to || target.parentId === from) return false;
+    return this.mutate("绘制卡片关联", () => {
+      this.addEdge(from, to); this.linkCards(source.cardId!, target.cardId!); return true;
+    });
+  }
+  disconnectNodes(from: string, to: string): boolean {
+    const edge = this.edges.find(item => item.from === from && item.to === to);
+    if (!edge) return false;
+    return this.mutate("断开脑图关联", () => {
+      const source = this.getNode(from)?.cardId, target = this.getNode(to)?.cardId;
+      this.removeEdge(from, to);
+      const remaining = source && target && this.edges.some(item => this.getNode(item.from)?.cardId === source && this.getNode(item.to)?.cardId === target);
+      const card = source ? this.getCard(source) : undefined;
+      if (card && target && !remaining) this.updateCard(card.id, { links: card.links.filter(id => id !== target) });
+      return true;
+    });
+  }
   private assertParent(id: string, parentId: string | null): void {
     if (parentId === null) return;
     const parent = this.getNode(parentId); const node = this.getNode(id);

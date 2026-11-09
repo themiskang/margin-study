@@ -1,0 +1,236 @@
+import { Store } from '__PROJECT__/src/model/store';
+import { MindmapRenderer } from '__PROJECT__/src/mindmap/mindmapRenderer';
+import { CardBoardRenderer } from '__PROJECT__/src/board/cardBoardRenderer';
+import { copyBoardCards, referenceBoardCards } from '__PROJECT__/src/board/boardModel';
+import { nodeContent } from '__PROJECT__/src/study/nodeContent';
+import { cardUrl, openCardLink, parseCardUrl } from '__PROJECT__/src/study/cardLink';
+import { openDetail } from '__PROJECT__/src/cards/cardView';
+import { MarkdownRenderer } from 'obsidian';
+
+const target = document.querySelector('#fixtures') as HTMLElement;
+const results: any[] = [], stores: Store[] = [], mounted: { dispose(): void }[] = [], errors: string[] = [];
+(window as any).results = results;
+(HTMLElement.prototype as any).empty = function() { this.replaceChildren(); };
+Element.prototype.setPointerCapture = function() {};
+Element.prototype.releasePointerCapture = function() {};
+(MarkdownRenderer as any).render = async (_app: any, text: string, host: HTMLElement) => {
+  host.replaceChildren();
+  const pattern = /\[([^\]]+)\]\(([^)]+)\)/g;
+  let match: RegExpExecArray | null, start = 0;
+  while ((match = pattern.exec(text))) {
+    host.append(document.createTextNode(text.slice(start, match.index)));
+    const link = document.createElement('a'); link.textContent = match[1]; link.href = match[2]; host.append(link); start = pattern.lastIndex;
+  }
+  host.append(document.createTextNode(text.slice(start)));
+};
+window.addEventListener('error', event => errors.push(event.message));
+window.addEventListener('unhandledrejection', event => errors.push(String(event.reason)));
+const wait = () => new Promise<void>(resolve => setTimeout(resolve, 30));
+function assert(value: any, message: string) { if (!value) throw new Error(message); }
+function equal(actual: any, expected: any, message: string) { assert(JSON.stringify(actual) === JSON.stringify(expected), message + ': ' + JSON.stringify(actual)); }
+function button(root: ParentNode, label: string): HTMLButtonElement {
+  const found = [...root.querySelectorAll<HTMLButtonElement>('button')].find(item => item.getAttribute('aria-label') === label || item.textContent === label);
+  assert(found, 'Missing UI action: ' + label); return found!;
+}
+function modal(): HTMLElement { const items = document.querySelectorAll<HTMLElement>('.ms-modal'); assert(items.length, 'Missing dialog'); return items[items.length - 1]; }
+function graphNode(host: HTMLElement, id: string): HTMLElement { const found = host.querySelector<HTMLElement>(`.ms-node[data-id="${id}"]`); assert(found, 'Missing graph node: ' + id); return found!; }
+function relationship(store: Store) { return structuredClone({ links: store.cards.map(card => ({ id: card.id, links: card.links })), edges: store.edges }); }
+function undo(store: Store, before: any, message: string) { assert(store.undoLibraryChange(), message + ': nothing to undo'); equal(relationship(store), before, message); }
+async function test(name: string, action: () => Promise<any>) {
+  for (const view of mounted.splice(0)) view.dispose(); target.replaceChildren(); document.querySelectorAll('.ms-modal-bg,#test-menu').forEach(item => item.remove());
+  try { results.push({ name, passed: true, details: await action() }); }
+  catch (error) { results.push({ name, passed: false, error: String(error), stack: (error as any).stack }); }
+}
+async function fresh() {
+  let disk: any = {}; const files = new Map<string, string>();
+  const app: any = { vault: { getName: () => 'A19 资料库 & test', getFiles: () => [], getAbstractFileByPath: () => null,
+    adapter: { exists: async (path: string) => files.has(path), mkdir: async (path: string) => files.set(path, ''), write: async (path: string, value: string) => files.set(path, value), read: async (path: string) => files.get(path) } } };
+  const host: any = { app, loadData: async () => structuredClone(disk), saveData: async (value: any) => { disk = structuredClone(value); } };
+  const store = new Store(host); await store.load(); stores.push(store); store.createStudySet('A19'); const canvasId = store.activeCanvasId!;
+  for (const [id, title] of [['source', '源卡标题'], ['target', '目标卡标题'], ['third', '第三卡标题'], ['fourth', '第四卡标题']]) {
+    store.addCard({ id, docPath: '', type: 'comment', title, front: title + ' 正文', back: title + ' 笔记', tags: [], links: [], createdAt: '2026-01-01T00:00:00.000Z' });
+  }
+  for (const [index, id] of ['source', 'target', 'third', 'fourth'].entries()) store.addNode({ id: 'node-' + id, canvasId, parentId: null, cardId: id, title: '旧节点标题', collapsed: false, x: 60 + index * 300, y: 80 });
+  const plugin: any = { app, store, activeReader: null, viewEvents: {}, refreshSidebar() {}, refreshMindmap() {} };
+  const element = () => { const item = document.createElement('section'); item.style.cssText = 'height:620px;width:1100px;position:relative'; target.append(item); return item; };
+  const board = () => { const host = element(), view = new CardBoardRenderer(plugin, { nativeChrome: true }); view.mount(host); mounted.push(view); return { host, view }; };
+  const graph = () => { const host = element(), view = new MindmapRenderer(plugin, { showToolbar: true }); view.mount(host); mounted.push(view); return { host, view }; };
+  return { store, canvasId, plugin, board, graph, storage: host };
+}
+function pick(plugin: any, id: string) { openDetail(plugin, plugin.store.getCard(id)); button(modal(), '关联卡片').click(); }
+function chooseTarget(id: string) { const item = modal().querySelector<HTMLElement>(`[data-link-card-id="${id}"]`); assert(item, 'Missing link target: ' + id); return item!; }
+function draw(host: HTMLElement, from: string, to: string) {
+  const source = graphNode(host, from).getBoundingClientRect(), dest = graphNode(host, to).getBoundingClientRect();
+  const x1 = source.right - 8, y1 = (source.top + source.bottom) / 2, x2 = dest.left + 8, y2 = (dest.top + dest.bottom) / 2;
+  graphNode(host, from).dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerId: 12, pointerType: 'pen', button: 0, clientX: x1, clientY: y1 }));
+  window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 12, pointerType: 'pen', buttons: 1, clientX: (x1 + x2) / 2, clientY: (y1 + y2) / 2 }));
+  window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true, pointerId: 12, pointerType: 'pen', button: 0, clientX: x2, clientY: y2 }));
+}
+
+try {
+  await test('A19.1 看板引用三个节点实时读取同一卡片', async () => {
+    const p = await fresh(), board = p.board(), graph = p.graph(), count = p.store.cards.length;
+    const source = board.host.querySelector<HTMLElement>('[data-card-id="source"]')!; source.click();
+    const beforeReference = relationship(p.store);
+    for (let index = 0; index < 3; index++) { button(board.host, '引用到脑图').click(); await wait(); }
+    const references = p.store.nodes.filter(node => node.cardId === 'source' && node.id !== 'node-source');
+    assert(references.length === 3 && references.every(node => node.reference), 'Expected three shared references');
+    assert(p.store.cards.length === count, 'References created independent cards');
+    assert(new Set(references.map(node => node.y)).size === 3, 'References overlap');
+    p.store.updateCard('source', { title: '新标题', front: '新正文', back: '新笔记' }); await wait();
+    for (const ref of references) {
+      const content = nodeContent(p.store, p.store.getNode(ref.id)!);
+      equal([content.heading, content.excerpt, content.note], ['新标题', '新正文', '新笔记'], 'Reference did not read canonical content');
+      const node = graphNode(graph.host, ref.id); assert(node.textContent?.includes('新标题') && node.textContent?.includes('新正文') && node.textContent?.includes('新笔记'), 'Rendered reference is stale');
+    }
+    assert(board.host.querySelector('[data-card-id="source"]')?.textContent?.includes('新正文'), 'Board did not render canonical card');
+    assert(p.store.undoLibraryChange(), 'Undo edit'); equal(relationship(p.store), beforeReference, 'Edit undo changed relationships');
+    for (let index = 2; index >= 0; index--) { assert(p.store.undoLibraryChange(), 'Undo reference'); assert(!p.store.getNode(references[index].id), 'One undo did not remove the latest reference'); equal(relationship(p.store), beforeReference, 'Undo reference changed links or edges'); }
+    return { references: references.map(node => node.id), cardCount: p.store.cards.length };
+  });
+  await test('A19.2 单向双向链接去重无自环与 URL 精确定位', async () => {
+    const p = await fresh(); pick(p.plugin, 'source');
+    (modal().querySelector('[aria-label="关联方向"]') as HTMLSelectElement).value = 'one-way'; chooseTarget('target').click();
+    equal(p.store.getCard('source')!.links, ['target'], 'One-way source links'); equal(p.store.getCard('target')!.links, [], 'One-way reverse links');
+    (modal().querySelector('[aria-label="关联方向"]') as HTMLSelectElement).value = 'two-way'; chooseTarget('third').click(); chooseTarget('third').click();
+    equal(p.store.getCard('source')!.links, ['target', 'third'], 'Deduplication'); equal(p.store.getCard('third')!.links, ['source'], 'Two-way reverse links');
+    assert(!modal().querySelector('[data-link-card-id="source"]'), 'Self link was offered');
+    document.querySelectorAll('.ms-modal-bg').forEach(item => item.remove());
+    const url = new URL(cardUrl(p.plugin.app.vault.getName(), 'target'));
+    equal([url.protocol, url.host, url.searchParams.get('msvault'), url.searchParams.get('card')], ['obsidian:', 'margin-study-card', 'A19 资料库 & test', 'target'], 'URL parsing');
+    openCardLink(p.plugin, { vault: url.searchParams.get('msvault')!, card: url.searchParams.get('card')! });
+    equal((modal().querySelector('[aria-label="卡片标题"]') as HTMLInputElement).value, '目标卡标题', 'URL opened wrong card');
+    return { url: url.href, parsed: { scheme: url.protocol, action: url.host, vault: url.searchParams.get('msvault'), card: url.searchParams.get('card') } };
+  });
+  await test('A19.3 手绘断开只修改指定关系', async () => {
+    const p = await fresh(), graph = p.graph(); button(graph.host, '连线模式').click(); draw(graph.host, 'node-source', 'node-target'); draw(graph.host, 'node-third', 'node-fourth');
+    assert(p.store.edges.length === 2, 'Hand-drawn connections did not create two edges');
+    const before = relationship(p.store); const edge = graph.host.querySelector<SVGElement>('[data-link-from="node-source"][data-link-to="node-target"]');
+    assert(edge, 'Missing selectable relationship');
+    const path = edge as SVGPathElement, center = path.getPointAtLength(path.getTotalLength() / 2).matrixTransform(path.getScreenCTM()!);
+    const hit = document.elementFromPoint(center.x, center.y); assert(hit === edge, 'Relationship cannot be hit in the real rendered layout: ' + (hit as HTMLElement)?.className);
+    edge!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerId: 13, pointerType: 'mouse', button: 0, clientX: center.x, clientY: center.y }));
+    edge!.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: center.x, clientY: center.y })); button(modal(), '断开此关联').click();
+    const expected = structuredClone(before); expected.edges = expected.edges.filter((item: any) => item.from !== 'node-source' || item.to !== 'node-target');
+    expected.links.find((item: any) => item.id === 'source').links = [];
+    equal(relationship(p.store), expected, 'Disconnect changed unrelated links or edges'); undo(p.store, before, 'Undo disconnect');
+    return { before, afterUndo: relationship(p.store) };
+  });
+  await test('A19.4 每类关系操作一次撤销恢复 links 与 edges', async () => {
+    const p = await fresh(); pick(p.plugin, 'source');
+    const original = relationship(p.store);
+    const target = [...modal().querySelectorAll<HTMLElement>('.ms-card')].find(item => item.textContent?.includes('目标卡标题')); assert(target, 'Missing target'); target!.click();
+    assert(p.store.getCard('source')!.links.includes('target') && p.store.getCard('target')!.links.includes('source'), 'Existing default two-way association did not occur');
+    undo(p.store, original, 'One undo must restore both sides');
+    document.querySelectorAll('.ms-modal-bg').forEach(item => item.remove());
+    const graph = p.graph(); button(graph.host, '连线模式').click(); const beforeDraw = relationship(p.store); draw(graph.host, 'node-source', 'node-target');
+    assert(p.store.edges.length === 1 && p.store.getCard('source')!.links.includes('target'), 'Hand-drawn relationship incomplete'); undo(p.store, beforeDraw, 'Undo drawing');
+    const beforeDelete = relationship(p.store); p.store.linkCards('source', 'target', true); p.store.removeCard('target');
+    assert(!p.store.getCard('source')!.links.includes('target'), 'Deleting a card left a dangling link'); assert(p.store.undoLibraryChange(), 'Undo deletion');
+    assert(p.store.getCard('target') && p.store.getCard('source')!.links.includes('target'), 'Undo deletion did not restore card and link'); undo(p.store, beforeDelete, 'Undo association after restoring deletion');
+    return { original, afterUndo: relationship(p.store) };
+  });
+  await test('A19.5 克隆仍为独立对象', async () => {
+    const p = await fresh(), before = p.store.cards.length, ids = copyBoardCards(p.store, ['source'], { canvasId: p.canvasId });
+    const copy = p.store.getCard(p.store.getNode(ids[0])!.cardId!)!; assert(copy.id !== 'source' && p.store.cards.length === before + 1, 'Clone is not independent');
+    p.store.updateCard('source', { title: '新标题', front: '新正文', back: '新笔记' });
+    equal([copy.title, copy.front, copy.back], ['源卡标题', '源卡标题 正文', '源卡标题 笔记'], 'Source edit changed clone');
+    return { source: 'source', clone: copy.id };
+  });
+  await test('A19 正文行内卡片链接点击到精确目标', async () => {
+    const p = await fresh(), url = cardUrl(p.plugin.app.vault.getName(), 'target');
+    p.store.updateCard('source', { front: `正文 [打开目标](${url})`, back: `笔记 [打开目标](${url})` }); const graph = p.graph(), board = p.board(); await wait();
+    const link = graphNode(graph.host, 'node-source').querySelector<HTMLAnchorElement>('a'); assert(link, 'Markdown link not rendered');
+    link!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    assert(document.querySelector('.ms-modal'), 'Inline link did not open a card');
+    equal((modal().querySelector('[aria-label="卡片标题"]') as HTMLInputElement).value, '目标卡标题', 'Inline link opened wrong card');
+    document.querySelectorAll('.ms-modal-bg').forEach(item => item.remove());
+    const boardLink = board.host.querySelector<HTMLAnchorElement>('[data-card-id="source"] a'); assert(boardLink, 'Board inline link missing'); boardLink!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    equal((modal().querySelector('[aria-label="卡片标题"]') as HTMLInputElement).value, '目标卡标题', 'Board inline link opened wrong card');
+    document.querySelectorAll('.ms-modal-bg').forEach(item => item.remove()); openDetail(p.plugin, p.store.getCard('source')!);
+    button(modal(), '切换 Markdown / 预览').click(); await wait(); const richLink = modal().querySelector<HTMLAnchorElement>('.ms-native-card-rich-preview a'); assert(richLink, 'Card preview inline link missing');
+    richLink!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); equal((modal().querySelector('[aria-label="卡片标题"]') as HTMLInputElement).value, '目标卡标题', 'Card preview opened wrong card');
+    return { href: link!.href, title: '目标卡标题', surfaces: ['mindmap', 'board', 'card preview'] };
+  });
+  await test('A19 单向双向断链与重叠引用的关系隔离', async () => {
+    const p = await fresh(), store = p.store;
+    store.addNode({ id: 'node-source-ref', cardId: 'source', canvasId: p.canvasId, parentId: null, title: '', reference: true, collapsed: false, x: 60, y: 310 });
+    store.linkCards('source', 'target', true); store.linkCards('source', 'third');
+    store.connectNodes('node-source', 'node-target'); store.connectNodes('node-source-ref', 'node-target'); store.connectNodes('node-third', 'node-fourth');
+    let before = relationship(store); assert(store.disconnectNodes('node-source', 'node-target'), 'Missing first edge');
+    assert(store.getCard('source')!.links.includes('target'), 'Disconnecting one reference erased another edge relation');
+    assert(store.getCard('target')!.links.includes('source') && store.edges.some(edge => edge.from === 'node-source-ref'), 'Disconnect changed reverse or other edge');
+    undo(store, before, 'Undo first edge disconnect');
+    before = relationship(store); assert(store.unlinkCards('source', 'target'), 'Missing one-way unlink');
+    equal(store.getCard('source')!.links, ['third'], 'One-way unlink source'); equal(store.getCard('target')!.links, ['source'], 'One-way unlink reverse');
+    equal(store.edges, [{ from: 'node-third', to: 'node-fourth' }], 'One-way unlink did not remove only matching explicit edges'); undo(store, before, 'Undo one-way unlink');
+    before = relationship(store); assert(store.unlinkCards('source', 'target', true), 'Missing two-way unlink');
+    equal(store.getCard('target')!.links, [], 'Two-way unlink reverse'); equal(store.getCard('source')!.links, ['third'], 'Two-way unlink unrelated'); undo(store, before, 'Undo two-way unlink');
+    const duplicate = relationship(store); assert(!store.connectNodes('node-source', 'node-source-ref'), 'Same-card self-link accepted'); equal(relationship(store), duplicate, 'Self-link changed state');
+    assert(!store.getCard('source')!.links.includes('source'), 'Self-link persisted');
+    return { restored: relationship(store) };
+  });
+  await test('A19 单向/双向添加与删除各为一次撤销', async () => {
+    const p = await fresh(), store = p.store;
+    for (const bidirectional of [false, true]) {
+      const before = relationship(store); assert(store.linkCards('source', 'target', bidirectional), 'Link failed');
+      equal(store.getCard('source')!.links, ['target'], 'Forward link'); equal(store.getCard('target')!.links, bidirectional ? ['source'] : [], 'Reverse link');
+      undo(store, before, 'Undo link');
+    }
+    store.linkCards('source', 'target', true); store.connectNodes('node-source', 'node-target'); store.connectNodes('node-target', 'node-source');
+    pick(p.plugin, 'source'); const selector = modal().querySelector<HTMLSelectElement>('[aria-label="关联方向"]')!;
+    selector.value = 'one-way'; selector.dispatchEvent(new Event('change')); let before = relationship(store); button(chooseTarget('target'), '断开单向关联').click();
+    equal(store.getCard('source')!.links, [], 'Single direction unlink'); equal(store.getCard('target')!.links, ['source'], 'Reverse direction changed');
+    equal(store.edges, [{ from: 'node-target', to: 'node-source' }], 'Reverse edge changed'); undo(store, before, 'Undo UI one-way unlink');
+    selector.value = 'two-way'; selector.dispatchEvent(new Event('change')); before = relationship(store); button(chooseTarget('target'), '断开双向关联').click();
+    equal(store.getCard('source')!.links, [], 'Two-way source'); equal(store.getCard('target')!.links, [], 'Two-way target'); equal(store.edges, [], 'Two-way edges'); undo(store, before, 'Undo UI two-way unlink');
+    return { restored: relationship(store) };
+  });
+  await test('A19 不同画布引用重开与撤销保持卡片身份', async () => {
+    const p = await fresh(), store = p.store, board = p.board();
+    const other = store.createStudySet('目标学习集'), canvasId = store.activeCanvasId!; board.view.render();
+    const select = board.host.querySelector<HTMLSelectElement>('[aria-label="卡片来源"]')!; select.value = 'all'; select.dispatchEvent(new Event('change'));
+    const source = board.host.querySelector<HTMLElement>('[data-card-id="source"]'); assert(source, 'Cross-study source is missing'); source!.click();
+    const before = structuredClone({ cards: store.cards, nodes: store.nodes, links: relationship(store) }); button(board.host, '引用到脑图').click();
+    const ref = store.nodes.find(node => node.canvasId === canvasId && node.cardId === 'source'); assert(ref?.reference, 'Cross-study reference is missing');
+    assert(store.cardsForStudySet(other.id).some(card => card.id === 'source'), 'Target study cannot resolve shared card');
+    await store.flush(); const persisted = await p.storage.loadData();
+    const reopened = new Store({ ...p.storage, app: { ...p.storage.app, vault: { ...p.storage.app.vault, adapter: { ...p.storage.app.vault.adapter } } }, loadData: async () => structuredClone(persisted), saveData: async (value: any) => { Object.assign(persisted, structuredClone(value)); } });
+    await reopened.load(); stores.push(reopened);
+    assert(reopened.getNode(ref!.id)?.cardId === 'source' && reopened.getNode(ref!.id)?.reference, 'Reference identity did not survive reopen');
+    reopened.updateCard('source', { title: '重开标题', front: '重开正文', back: '重开笔记' });
+    const content = nodeContent(reopened, reopened.getNode(ref!.id)!); equal([content.heading, content.excerpt, content.note], ['重开标题', '重开正文', '重开笔记'], 'Reopened reference is not live');
+    assert(reopened.undoLibraryChange(), 'Undo reopened source edit'); await reopened.flush();
+    equal(store.cards, before.cards, 'Creating reference changed canonical cards'); assert(store.undoLibraryChange(), 'Cross-study reference not undoable');
+    equal(store.cards, before.cards, 'Undo reference changed cards'); equal(store.nodes, before.nodes, 'Undo reference changed nodes'); equal(relationship(store), before.links, 'Undo reference changed relationships');
+    return { canvasId, cardId: 'source' };
+  });
+  await test('A19 URL 校验不越库或误解其他协议', async () => {
+    const p = await fresh(), vault = p.plugin.app.vault.getName(), specialId = '空格 & id/一';
+    p.store.addCard({ id: specialId, docPath: '', type: 'comment', title: '特殊目标', front: '特殊正文', tags: [], links: [], createdAt: '2026-01-01' });
+    const url = cardUrl(vault, specialId); equal(parseCardUrl(url), { vault, card: specialId }, 'URL encoded identity');
+    assert(!parseCardUrl('https://margin-study-card/?msvault=x&card=y'), 'HTTP URL accepted');
+    assert(!parseCardUrl('obsidian://margin-study-card?msvault=x&card=y&card=z'), 'Ambiguous card accepted');
+    assert(!parseCardUrl('obsidian://margin-study-card?msvault=x'), 'Missing card accepted');
+    openCardLink(p.plugin, { vault: '其他库', card: specialId }); assert(!document.querySelector('.ms-modal'), 'Cross-vault link opened a card');
+    openCardLink(p.plugin, { vault, card: '不存在' }); assert(!document.querySelector('.ms-modal'), 'Missing card opened a card');
+    openCardLink(p.plugin, parseCardUrl(url)!); equal((modal().querySelector('[aria-label="卡片标题"]') as HTMLInputElement).value, '特殊目标', 'Special URL opened wrong card');
+    return { url, parsed: parseCardUrl(url) };
+  });
+  await test('A19 本地大纲节点首次引用转换为共享源并可撤销', async () => {
+    const p = await fresh(), store = p.store;
+    store.addNode({ id: 'local-topic', canvasId: p.canvasId, parentId: null, title: '本地主题', collapsed: false, x: 80, y: 500 });
+    const before = structuredClone({ cards: store.cards, nodes: store.nodes, relations: relationship(store) });
+    const ids = referenceBoardCards(store, ['board-node:local-topic']); assert(ids.length === 1, 'Reference creation failed');
+    const original = store.getNode('local-topic')!, reference = store.getNode(ids[0])!;
+    assert(original.cardId && original.reference && reference.cardId === original.cardId && reference.reference, 'Local source and reference do not share identity');
+    assert(store.cards.length === before.cards.length + 1, 'Expected exactly one canonical card');
+    store.updateCard(original.cardId!, { title: '共享标题', front: '共享正文', back: '共享笔记' });
+    for (const node of [original, reference]) { const content = nodeContent(store, node); equal([content.heading, content.excerpt, content.note], ['共享标题', '共享正文', '共享笔记'], 'Materialized node not synchronized'); }
+    assert(store.undoLibraryChange(), 'Undo source edit'); assert(store.undoLibraryChange(), 'Undo reference materialization');
+    equal(store.cards, before.cards, 'Undo materialization changed cards'); equal(store.nodes, before.nodes, 'Undo materialization changed original node'); equal(relationship(store), before.relations, 'Undo materialization changed relationships');
+    return { source: original.id, reference: reference.id };
+  });
+  if (errors.length) throw new Error('Unhandled browser errors: ' + errors.join('; '));
+} catch (error) { (window as any).fatal = String(error); }
+finally { for (const store of stores) await store.flush(); (window as any).done = true; }

@@ -1845,3 +1845,40 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - 口径限制（CC 如实登记）：交互为 CDP 驱动真实 DOM click/change 事件（命中产品监听器），非物理鼠标键盘；4 张画布 lastVisitedAt 被导航更新、恢复目录滚动快照被覆盖，无法精确回写，仅导航元数据无业务变化；localEvents +76、revision +37 属计数器偏移
 - 证据：evidence/acceptance-20261106/CC-A18-RESULT.md（3 张截图 + 逐项数值 + 清理后业务对象与卡片逐对象回到基线）
 - 下一步第一动作：批次 A6 第二张 A19（看板引用与高级卡片链接）
+
+## 2026-11-09 · A19 看板引用与高级卡片链接（进行中）
+- 完成定义：五条原断言分别记录两轮改前及改后结果；完整 `npm run verify` 输出到 `/tmp` 且全绿；构建安装桌面隔离库并登记 SHA-256。看板引用、URL、行内链接、手绘连线留 CC 宿主实机验；不操作 adb、真实库、`evidence/**`，不提交。
+- 改前合成 Chromium 两轮均为 **1/6**：引用入口、单向入口、手绘连接、双向一次撤销、行内链接均失败；独立克隆回归已通过，不能伪称改前失败。URL 的既有生成和解析路径在上述第二项入口失败后未执行，不能宣称其改前失败。
+- 改前结果：`/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-a19-QNRvIW/results.json`、`/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-a19-476iST/results.json`。改后两轮各 **10/10**：`/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-a19-0w0qwR/results.json`、`/private/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-a19-8gsmlE/results.json`。第一至四条改前 FAIL/FAIL → 改后 PASS/PASS；独立克隆回归改前 PASS/PASS → 改后 PASS/PASS；新增正文行内链接改前 FAIL/FAIL → 改后 PASS/PASS。改前部分断言因入口缺失提前失败，未覆盖后续步骤。
+- 已实现：看板显式引用不克隆；保留看板拖拽和生成脑图的独立克隆；单双向卡片关联及定向断链单次事务；连接模式下笔拖创建关联线及单向 `links`，点击线定向断链；同一方向其他引用线仍在时保留链接；行内链接覆盖脑图、看板和卡片 Markdown 预览。三者源卡更新通过 Store 通知自动刷新。
+- URL：`obsidian://margin-study-card?vault=<资料库名>&msvault=<资料库名>&card=<卡片ID>`，协议注册 `src/main.ts`，解析与校验 `src/study/cardLink.ts`；样本经解析得到 `vault=A19 资料库 & test`、`card=target`。其他库、重复 ID 参数及不存在的目标不打开。A02 未冻结的高级手势仍挂起；本轮笔拖只在产品已有的显式连线模式中生效，不推断 MN5 手势。
+- 已完成定向回归：typecheck、study 15/15、organize-ui 27/27、A18 7/7、A19 8/8（随后扩为 10/10）、脑图手写 81/81。下一步：完整 `MARGINSTUDY_VERIFY_DIR=/tmp/... npm run verify`，修复任务相关回归后构建、安装隔离库并核对文件及数据哈希，再登记 CC 实机验收入口。
+
+## 2026-11-09 · A19 本地验收完成，宿主实机留 CC
+- 五条原断言依次：共享引用 **FAIL/FAIL → PASS/PASS**；单向/双向及 URL **FAIL/FAIL → PASS/PASS**；定向断链 **FAIL/FAIL → PASS/PASS**；一次撤销 **FAIL/FAIL → PASS/PASS**；独立克隆回归 **PASS/PASS → PASS/PASS**。改前引用、方向选择、手绘连线分别因入口缺失提前失败；改前 URL 实际未执行。改前克隆本已正确，不能编造失败。
+- 行内链接另测 **FAIL/FAIL → PASS/PASS**；最终改后扩展验收两轮各 **11/11**，覆盖跨学习集引用重开、本地大纲节点首次转换为共享源及撤销、特殊字符 URL、非法和跨库 URL、单/双向断链、多个引用线、删除卡片清理与单次撤销、脑图/看板/卡片预览实际点击。关联线在合成 Chromium 布局中经 `elementFromPoint` 命中。测试为合成浏览器与内存 Store，并非 Obsidian 实机。
+- 可复核：`.agent-artifacts/a19-20261109/before-1.json`、`.agent-artifacts/a19-20261109/before-2.json`、`.agent-artifacts/a19-20261109/after-1.json`、`.agent-artifacts/a19-20261109/after-2.json`、`.agent-artifacts/a19-20261109/verify-results.json`；完整日志 `/tmp/marginstudy-a19-verify-final-20261109/`。最终 `MARGINSTUDY_VERIFY_DIR=/tmp/marginstudy-a19-verify-final-20261109 npm run verify` **42/42 套件通过**；A19 **11/11**、Workspace **319/319**、Reader **224/224**、脑图手写 **81/81**。`git diff --check` 通过。
+- 构建已安装桌面隔离库，开发目录和安装目录文件 SHA-256 一致：`main.js` `4c10200260a6c4b892c22e874ec19871955d0599f027fcb8270e5e2f75cc6728`；`styles.css` `e5dc4a56882ee977b75598a32dd9cb5467502047bca4afb55dadb02793fb362c`。隔离库 `data.json` 安装前后均为 `6c28e11094f743e7ec763f6dc5932314a12657ab0238f035c87543f5165ff0ec`；未重载宿主，安装不等于运行中已加载。
+- CC 宿主实机首个动作：核对上述安装哈希、重载隔离库插件并核对运行时；使用临时学习集和合成卡片，验证看板「引用到脑图」创建 3 个同 ID 引用及源卡更新、独立克隆不联动；复制 URL 并打开精确卡 ID，在脑图、看板和卡片 Markdown 预览点行内链接；在显式连线模式用笔拖连卡片，点线定向断链，逐项检查一次撤销恢复 `links`/`edges`，最后清除合成对象并核对业务数据。若宿主无法提供笔输入，CC 如实标记该项未验，不以合成事件冒充实笔。
+- 边界：A02 未冻结的 MN5 高级手势继续挂起；不实现 MN 私有 URL；不碰 A08 固定、adb、真实库或 `evidence/**`，不提交。A19 本地任务完成不等于 CC 宿主实机验收通过。
+
+## 2026-11-09 22:15 A19 CC 实机验收完成（批次 A6 第二张）
+- 结论：Step 0 PASS，五项断言全 pass；隔离库单实例、串行执行，未启用后台工作流；本轮新建截图 3 张，未改产品代码、未提交、未改既有 evidence。
+- 前置：首次运行时仍为 A18（scriptId **816**，`linkCards`/`unlinkCards`/`connectNodes`/`disconnectNodes`/`referenceBoardCards`/`bindInlineCardLinks`/`parseCardUrl` 均 0）；`disablePlugin/enablePlugin` 后重取 scriptId **883**（5,236,363 字符，sha256 `5ae6e2b7…`），A19 符号命中 `linkCards` 6、`unlinkCards` 3、`connectNodes` 5、`disconnectNodes` 2、`referenceBoardCards` 2、`bindInlineCardLinks` 7、`parseCardUrl` 2、`openCardLink` 3。安装 main.js 5,239,750 字节 sha256 `4c102002…`；运行时比安装包少 3,387 字节，不能等同。
+- 五项：1 PASS（3 引用节点均读到源卡新 title/front/back，cards 26→26，DOM 3/3）；2 PASS（source `[target,third]`、target `[]`、third `[source]`，dedup/selfOffered/noSelf/linksOk 全 true；URL 解析 action `margin-study-card`、card `cc-a19-target`，真实打开 1 个模态且精确目标）；3 PASS（26 个链接项仅 source 去掉 target，target/third/edges 深比较不变）；4 PASS（单向增/双向增/单向断各一次工具栏撤销 16→15，手绘连一次场景撤销 20→19，四次 restored=true）；5 PASS（克隆 id `card-mw9c0ytm-pfjxc6` 源卡改名后三字段与 DOM 不变；行内锚点 `isCardUrl=true` 点击打开目标；显式连线模式 pen 指针 third→fourth 新增 1 links+1 edges，边缘对话框定向断开仅改 third，撤销 20→19）。
+- 口径限制：手绘输入为 CDP `pointerType:"pen"` 指针注入，非物理数位笔；若验收强制物理笔硬件，应单列补验。截图 1 实际画面为合成学习集入口页而非引用节点，引用数值以 store/DOM 读数为准。另观察到 `Menu.showAtPosition` 在 Obsidian 1.15.0 本运行时不出菜单（`.menu=0`），同场景 `showAtMouseEvent` 正常；克隆走节点「更多卡片操作」入口完成，不构成本卡失败。
+- 收尾：合成学习集/画布/5 卡/8 节点/关联边全部删除；业务对象 **22 cards / 18 nodes / 2 edges / 5 studySets / 9 canvases** 回到基线，cards/nodes/edges/studySets/canvases 深比较全 true；workspaceState 恢复 true；活动 L4SampleSet `study-mv9q2o2p-e1drd9` / 画布主脑图 `canvas-mv9q2o2q-l7bn41`，已回学习集主页，modal/menu 为 0。
+- 计数器偏移：开工前 revision **2623** / localEvents **172**；重载后基线 **2624/175**；收尾 **2640/217**。相对基线 **+16 / +42**，相对开工前 **+17 / +45**；内存 `history` 余 **20** 条合成记录（20/20 命中合成 id，未写入 data.json）。最终 `data.json` 461,806 字节 sha256 `193e350d…`，savedAt `2026-11-09T14:10:15.238Z`。
+- 证据：`evidence/acceptance-20261106/CC-A19-RESULT.md`；截图 `CC-A19-01-references.png`（206,927 B）、`CC-A19-02-clone-inline-edge.png`（426,587 B）、`CC-A19-03-edge-disconnect.png`（415,570 B），sha256 与字节数均已登记。
+- 下一步第一动作：A19 验收卡关闭；批次 A6 下一张卡待总控排期。
+
+## 2026-11-09 22:25 A19 完成（批次 A6 第二张）
+- 完成：A19 看板引用与高级卡片链接，自动验收 11/11（前四项改前两轮 FAIL→改后两轮 PASS、克隆回归 PASS/PASS）、verify 42/42（Workspace 319/319）
+- 结论：结论：CC 实机五项全 pass —— 3 引用读同一源卡新正文且 cards 不增；单双向 links 结构正确无自环、`obsidian://margin-study-card` 精确落到目标卡；断链只改 1 项关系、edges diff 空；四类操作各一次撤销 links/edges restored=true；克隆独立、行内卡链可点、显式连线模式手绘建/断链生效
+- URL 方案：`obsidian://margin-study-card?...&msvault=<库名>&card=<卡片ID>`（非 MN 私有协议），解析入口 `src/study/cardLink.ts`
+- 挂起（单列）：`A19-GESTURE-01` unknown —— A02 实机契约未冻结，未擅自新增 MN5 高级手势，笔拖仅显式连线模式生效；物理笔硬件未验（CDP pen 指针注入）
+- UI 观察（单列 `A19-MENU-UI-01` unknown）：整理场景「复制移动」的原生 `Menu.showAtPosition` 在此运行时 DOM .menu 数为 0；同环境 `showAtMouseEvent` 节点菜单正常；非 A19 失败，需另单复现
+- 口径限制（CC 如实登记）：交互为 CDP 真实 DOM/指针事件非物理鼠标键盘；截图 01 实为学习集入口页未显示引用节点（引用数值以 store/DOM 3/3 读数为准）
+- 前置：CC 用 Debugger.getScriptSource 核对运行时脚本（重载前 816 为 A18 构建缺 A19 符号，重载后 883 全命中）
+- 证据：evidence/acceptance-20261106/CC-A19-RESULT.md（3 张截图 + 逐项数值 + 清理后 22 张真实卡与业务对象逐对象回到基线）
+- 下一步第一动作：批次 A6 的 A30-A（补 P2/P5/P6/P8/P9/P10 断言）与 A31 冻结签收

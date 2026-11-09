@@ -1,5 +1,6 @@
 import { applyCardTypography } from "./typography";
 import type MarginStudyPlugin from "../main";
+import { bindInlineCardLinks } from "../study/cardLink";
 import { TFile, Notice } from "obsidian";
 import { Card, CardType } from "../types";
 import { el, clear } from "../utils/dom";
@@ -247,6 +248,7 @@ export function renderCardList(container: HTMLElement, plugin: MarginStudyPlugin
 
   const makeItem = (c: Card): HTMLElement => {
     const item = el("div", { class: "ms-card", "data-card-id": c.id });
+    bindInlineCardLinks(plugin, item);
     if (c.color) item.style.borderLeft = `4px solid ${c.color}`;
     if (batchMode) {
       const chk = el("input", { type: "checkbox", class: "ms-card-chk" }) as HTMLInputElement;
@@ -455,6 +457,7 @@ export function openDetail(plugin: MarginStudyPlugin, card: Card, onChanged?: ()
   // 正面
   modal.append(el("label", { text: "正面 / 摘录（Markdown）", style: "font-size:12px;color:var(--text-muted);display:block;margin-top:6px" }));
   const frontPrev = el("div", { class: "ms-md-preview" });
+  bindInlineCardLinks(plugin, frontPrev);
   const front = el("textarea", { "aria-label": "卡片正面或摘录", "data-card-part": "excerpt" }) as HTMLTextAreaElement;
   front.value = card.front;
   front.style.minHeight = "70px";
@@ -526,6 +529,7 @@ export function openDetail(plugin: MarginStudyPlugin, card: Card, onChanged?: ()
     back.value = card.back ?? "";
     back.style.minHeight = "70px";
     const backPrev = el("div", { class: "ms-md-preview" });
+    bindInlineCardLinks(plugin, backPrev);
     const syncBack = () => void renderMarkdown(plugin.app, back!.value || "*（空）*", backPrev, card.docPath);
     back.addEventListener("input", syncBack);
     modal.append(back, savedClozeAction(back, "note", syncBack), backPrev);
@@ -739,12 +743,16 @@ export function openDetail(plugin: MarginStudyPlugin, card: Card, onChanged?: ()
     const linksEl = el("div", { class: "ms-card-links", style: "margin-top:8px" });
     for (const lid of card.links) {
       const lc = plugin.store.getCard(lid);
-      const chip = el("span", { class: "ms-chip", text: lc ? lc.front.slice(0, 20) : "(已删除)" });
-      chip.style.cursor = "pointer";
+      const row = el("span", { class: "ms-chip" });
+      const chip = el("button", { type: "button", text: lc ? (lc.title || lc.front).slice(0, 20) : "(已删除)" });
       chip.addEventListener("click", () => {
-        if (lc) openDetail(plugin, lc);
+        const current = plugin.store.getCard(lid); if (current) openDetail(plugin, current);
       });
-      linksEl.append(chip);
+      const remove = el("button", { type: "button", text: "×", "aria-label": `断开到${lc?.title || lc?.front || lid}的关联` });
+      remove.addEventListener("click", () => {
+        if (plugin.store.unlinkCards(card.id, lid)) { row.remove(); onChanged?.(); new Notice("已断开此方向关联"); }
+      });
+      row.append(chip, remove); linksEl.append(row);
     }
     modal.append(
       el("div", { text: "关联：", style: "font-size:12px;color:var(--text-muted);margin-top:8px" }),
@@ -801,6 +809,8 @@ function openReviewCopyRefresh(plugin: MarginStudyPlugin, copy: Card, onRefreshe
 function openLinkPicker(plugin: MarginStudyPlugin, card: Card): void {
   const { modal } = createModal("关联卡片（点击添加）");
   const search = el("input", { class: "ms-search", type: "text", placeholder: "搜索…" }) as HTMLInputElement;
+  const direction = el("select", { class: "ms-select", "aria-label": "关联方向" }) as HTMLSelectElement;
+  direction.append(el("option", { value: "two-way", text: "双向关联" }), el("option", { value: "one-way", text: "单向关联" }));
   const list = el("div", {});
   const draw = () => {
     clear(list);
@@ -809,20 +819,25 @@ function openLinkPicker(plugin: MarginStudyPlugin, card: Card): void {
       (c) => c.id !== card.id && (!q || c.front.toLowerCase().includes(q))
     );
     for (const c of others) {
-      const item = el("div", { class: "ms-card" });
+      const current = plugin.store.getCard(card.id); if (!current) continue;
+      const item = el("div", { class: "ms-card", "data-link-card-id": c.id });
       item.append(el("div", { class: "ms-card-front", text: c.front.slice(0, 80) }));
-      item.append(el("div", { class: "ms-card-type", text: card.links.includes(c.id) ? "已关联 ✓" : "" }));
+      item.append(el("div", { class: "ms-card-type", text: current.links.includes(c.id) ? "已关联 ✓" : "" }));
+      if (current.links.includes(c.id) || direction.value === "two-way" && c.links.includes(current.id)) {
+        const unlink = el("button", { type: "button", class: "ms-btn", text: direction.value === "two-way" ? "断开双向关联" : "断开单向关联" });
+        unlink.addEventListener("click", event => {
+          event.stopPropagation();
+          if (plugin.store.unlinkCards(current.id, c.id, direction.value === "two-way")) { new Notice("已断开关联"); draw(); }
+        });
+        item.append(unlink);
+      }
       item.addEventListener("click", () => {
-        if (!card.links.includes(c.id)) {
-          plugin.store.updateCard(card.id, { links: [...card.links, c.id] });
-          plugin.store.updateCard(c.id, { links: [...(plugin.store.getCard(c.id)?.links ?? []), card.id] });
-          new Notice("已关联");
-        }
+        if (plugin.store.linkCards(card.id, c.id, direction.value === "two-way")) { new Notice("已关联"); draw(); }
       });
       list.append(item);
     }
   };
-  search.addEventListener("input", draw);
-  modal.append(search, list);
+  search.addEventListener("input", draw); direction.addEventListener("change", draw);
+  modal.append(direction, search, list);
   draw();
 }

@@ -42,6 +42,7 @@ const allSuites=[
   ["workspace-a26","src/workspace/a26-acceptance.mjs"],
   ["mindmap-layout","src/mindmap/layout-acceptance.mjs"],
   ["mindmap-a18","src/mindmap/a18-acceptance.mjs"],
+  ["mindmap-a19","src/mindmap/a19-acceptance.mjs"],
   ["mindmap-ink-export","src/mindmap/handwriting-acceptance.mjs"],
   ["card-flow","src/export/cardFlow-acceptance.mjs"],
   ["ai","src/ai/acceptance.mjs"],

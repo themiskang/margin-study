@@ -150,3 +150,24 @@ export function copyBoardCards(store: Store, cardIds: string[], options: { canva
     return ids;
   });
 }
+
+export function referenceBoardCards(store: Store, cardIds: string[], options: { canvasId?: string; parentId?: string | null; x?: number; y?: number } = {}): string[] {
+  return store.libraryTransaction("从看板引用卡片到脑图", () => {
+    const ids: string[] = [], canvasId = options.canvasId ?? store.activeCanvasId;
+    const canvas = store.canvases.find(candidate => candidate.id === canvasId);
+    if (!canvas) throw new Error("目标脑图不存在");
+    const parent = options.parentId ? store.getNode(options.parentId) : undefined;
+    if (options.parentId && parent?.canvasId !== canvasId) throw new Error("目标父节点不属于此脑图");
+    const startY = options.y ?? Math.max(80, ...store.nodes.filter(node => node.canvasId === canvasId).map(node => node.y + 170));
+    for (const cardId of [...new Set(cardIds)]) {
+      const source = resolveBoardCard(store, cardId); if (!source || source.groupId || source.hidden) continue;
+      const card = source.boardNodeId ? store.detachNodeReference(source.boardNodeId, false) : store.getCard(source.id);
+      if (!card) continue;
+      if (source.boardNodeId) store.updateNode(source.boardNodeId, { reference: true });
+      const node: MindNode = { id: uid("node"), cardId: card.id, canvasId, parentId: options.parentId ?? null, title: "",
+        collapsed: false, reference: true, x: options.x ?? 80, y: startY + ids.length * 170 };
+      store.addNode(node); ids.push(node.id);
+    }
+    return ids;
+  });
+}

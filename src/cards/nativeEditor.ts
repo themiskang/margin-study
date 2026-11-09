@@ -9,6 +9,7 @@ import { reviewDrawingInput } from "../review/drawing";
 import { orderedCommentKeys } from "./commentOrder";
 import { handwritingPresetWidth, handwritingPresets } from "../annot/handwritingPresets";
 import { cardCommentImage, openCardInkComment } from "./inkComment";
+import { bindInlineCardLinks } from "../study/cardLink";
 
 const ICONS: Record<string, string> = {
   pen: '<circle cx="12" cy="12" r="9.3"/><path d="m8 18 4-14 4 14M9.5 13h5M10 20l2-3 2 3"/>',
@@ -85,7 +86,7 @@ export function mountNativeCardEditor(plugin: MarginStudyPlugin, options: {
   const hasText=()=>!!back.value.trim()||sourceTexts.some(item=>item.input.value.trim());
   if(title.value.trim())sheet.append(title);else advanced.prepend(title);
   sheet.append(front, ...images, ...comments, textComment,...sourceTexts.map(item=>item.block));
-  const preview = el("div", { class: "ms-native-card-rich-preview" }); preview.hidden = true;
+  const preview = el("div", { class: "ms-native-card-rich-preview" }); preview.hidden = true; bindInlineCardLinks(plugin, preview);
   const tools = el("div", { class: "ms-native-card-footer" });
   const pen = iconButton("手写批注", "pen"), camera = iconButton("插入图片", "camera"), mic = iconButton("录制语音批注", "mic"), tag = iconButton("编辑标签", "tag"), rich = iconButton("切换 Markdown / 预览", "rich"), more = iconButton("更多卡片操作", "more");
   let attached = (card.commentMedia ?? []).map(item => ({ ...item }));

@@ -9,7 +9,8 @@ import { imageUrl, cardImages } from "../review/content";
 import { getOutline } from "../pdf/outline";
 import { revealAt } from "../study/reveal";
 import { CARD_COLORS } from "../model/cardColors";
-import { BOARD_DRAG_TYPE, BOARD_GROUPINGS, boardGroupValues, boardMatchesQuery, cardsFromBoardSource, copyBoardCards, groupBoardCards, materializeBoardCards, resolveBoardCard,
+import { bindInlineCardLinks } from "../study/cardLink";
+import { BOARD_DRAG_TYPE, BOARD_GROUPINGS, boardGroupValues, boardMatchesQuery, cardsFromBoardSource, copyBoardCards, groupBoardCards, materializeBoardCards, referenceBoardCards, resolveBoardCard,
   type BoardBucket, type BoardContext, type BoardGrouping, type BoardSource } from "./boardModel";
 
 export interface CardBoardRendererOptions {
@@ -48,14 +49,15 @@ export class CardBoardRenderer {
   private renderedScope = "";
   private generation = 0;
   private markdown: Component | null = null;
+  private stopStore: (() => void) | null = null;
 
   constructor(private plugin: MarginStudyPlugin, private options: CardBoardRendererOptions = {}) {
     this.context = { queries: options.context?.queries ?? [], outlines: options.context?.outlines ?? new Map() };
     if (options.nativeChrome) this.first = this.second = "none";
   }
 
-  mount(parent: HTMLElement): void { if (!this.root) this.build(); parent.append(this.root!); this.render(); }
-  dispose(): void { this.generation++; this.markdown?.unload(); this.markdown = null; this.root?.remove(); this.root = null; }
+  mount(parent: HTMLElement): void { if (!this.root) { this.build(); this.stopStore = this.plugin.store.subscribe(change => { if (!change) this.render(); }); } parent.append(this.root!); this.render(); }
+  dispose(): void { this.stopStore?.(); this.stopStore = null; this.generation++; this.markdown?.unload(); this.markdown = null; this.root?.remove(); this.root = null; }
   destroy(): void { this.dispose(); }
 
   private build(): void {
@@ -115,6 +117,12 @@ export class CardBoardRenderer {
         }
         store.removeNodes([...removed]); for (const id of ids) store.removeCard(id); this.selected.clear();
       })),
+      action("reference-map", "引用到脑图", () => {
+        const ids = this.selectionIds(); if (!ids.length) return;
+        let count = 0;
+        const created = this.mutate("从看板引用卡片到脑图", () => { count = referenceBoardCards(this.plugin.store, ids).length; });
+        if (created && count) new Notice(`已将 ${count} 张卡片作为引用加入当前脑图`);
+      }),
       action("create-map", "生成脑图", () => this.createMindmap()),
       action("undo", "撤销", () => { this.plugin.store.undoLibraryChange(); this.changed(); }));
     this.root.append(controls, this.filters, tools, this.body, this.footer);
@@ -229,7 +237,7 @@ export class CardBoardRenderer {
     else {
       const text = (value: string | undefined, className: string) => {
         if (!value) return;
-        const body = el("div", { class: className });applyCardTypography(body,this.plugin.store.settings,card,className==="ms-board-card-title"); item.append(body);
+        const body = el("div", { class: className });applyCardTypography(body,this.plugin.store.settings,card,className==="ms-board-card-title"); bindInlineCardLinks(this.plugin, body); item.append(body);
         void MarkdownRenderer.render(this.plugin.app, value, body, card.docPath || card.sources?.find(source => source.docPath)?.docPath || "", this.markdown!)
           .catch(() => { body.textContent = value; });
       };

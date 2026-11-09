@@ -29,6 +29,7 @@ import type { HandwritingMode, MindmapInkPoint, MindmapInkStroke } from "./handw
 import { cardClipboard } from "../study/cardClipboard";
 import { CARD_COLORS } from "../model/cardColors";
 import { handwritingSource } from "../documents/readingPosition";
+import { bindInlineCardLinks } from "../study/cardLink";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const PINCH_WHEEL_EXPONENT = 0.01346909075675091;
@@ -90,6 +91,7 @@ export class MindmapRenderer {
   private edgeEls = new Map<string, { path: SVGElement; label?: SVGElement }>();
   private connectMode = false;
   private pendingFrom: string | null = null;
+  private finishConnectDrag: (() => void) | null = null;
   private dragged = false;
   private selectedIds = new Set<string>();
   private selectionSource: "direct" | "linked" = "direct";
@@ -122,6 +124,7 @@ export class MindmapRenderer {
   private handwriting: MindmapHandwritingController | null = null;
   private handwritingMode: HandwritingMode = "off";
   private handwritingListeners = new Set<(mode: HandwritingMode) => void>();
+  private stopStore: (() => void) | null = null;
 
   // 视图缩放/平移
   private viewScale = 1;
@@ -156,6 +159,9 @@ export class MindmapRenderer {
   /** 将导图挂载到指定父元素（可重复调用以迁移 DOM） */
   mount(parent: HTMLElement): void {
     if (!this.root) {
+      this.stopStore = this.plugin.store.subscribe(change => {
+        if (change) this.updateMovedNodes(change.movedNodeIds); else this.requestRender();
+      });
       this.root = el("div", {
         class: "ms-mindmap-root" + (this.options.nativeChrome ? " is-native-chrome" : ""),
         style: "display:flex;flex-direction:column;height:100%;overflow:hidden",
@@ -288,10 +294,12 @@ export class MindmapRenderer {
 
   /** 清理 DOM 与事件监听 */
   destroy(): void {
+    this.stopStore?.(); this.stopStore = null;
     closeCardActionMenu();
     stopCardActionSpeech();
     this.finishCanvasPan?.();
     this.finishNodeDrag?.();
+    this.finishConnectDrag?.();
     this.clearTouchPointers();
     this.viewportResize?.disconnect(); this.viewportResize = null;
     if (this.viewportResizeFrame) { cancelAnimationFrame(this.viewportResizeFrame); this.viewportResizeFrame = 0; }
@@ -337,6 +345,7 @@ export class MindmapRenderer {
   resetRecallState(): void { this.revealedIds.clear(); this.layeredOpenIds.clear(); this.revealedImageMasks.clear(); this.revealedEmphasis.clear(); this.recallCollapsed.clear(); this.render(); }
   resetRecallReveals(): void { this.revealedIds.clear(); this.revealedImageMasks.clear(); this.revealedEmphasis.clear(); this.render(); }
   setHandwritingMode(mode: HandwritingMode): void {
+    if (mode !== "off") this.finishConnectDrag?.();
     if (this.handwritingMode === mode) return;
     this.handwritingMode = mode;
     if (mode !== "off") { this.connectMode = false; this.pendingFrom = null; this.exitSelection(); this.root?.classList.remove("is-connect-mode"); }
@@ -861,6 +870,7 @@ export class MindmapRenderer {
 
   private onCanvasPointerDown(e: PointerEvent): void {
     if (this.handwritingMode !== "off") return;
+    if ((e.target as Element).closest('[data-link-edge="true"]')) return;
     if ((e.target as HTMLElement).closest(".ms-node")) return;
     if (this.connectMode) return;
     if (this.finishCanvasPan) return;
@@ -998,12 +1008,13 @@ export class MindmapRenderer {
   }
 
   private toggleConnect(): void {
+    this.finishConnectDrag?.();
     this.setHandwritingMode("off");
     this.connectMode = !this.connectMode;
     this.pendingFrom = null;
     this.clearSelection();
     // Notice 通过 plugin 调用
-    new Notice(this.connectMode ? "连线模式：点击源节点，再点击目标节点" : "已退出连线模式");
+    new Notice(this.connectMode ? "连线模式：依次点击两个节点，或用笔从源节点拖至目标节点" : "已退出连线模式");
   }
 
   // ===== 数据范围 =====
@@ -1363,11 +1374,11 @@ export class MindmapRenderer {
     });
     div.addEventListener("click", (e) => {
       if(this.isLayeredRecall()&&!this.layeredOpenIds.has(n.id)&&!(e.target instanceof Element && e.target.closest("button,a,input"))){const open=div.querySelector<HTMLButtonElement>('[aria-label="揭开下一层"]');if(open&&!open.disabled)open.click();return;}
+      if (this.dragged) { this.dragged = false; return; }
       if (this.connectMode) {
         this.onConnectClick(n, div);
         return;
       }
-      if (this.dragged) return;
       if (this.multiSelect || e.ctrlKey || e.metaKey) {
         this.toggleSelect(n.id);
       } else {
@@ -1388,6 +1399,9 @@ export class MindmapRenderer {
   }
 
   private onNodePointerDown(e: PointerEvent, n: MindNode, div: HTMLElement): void {
+    if (this.connectMode && e.pointerType === "pen" && e.button === 0 && !(e.target as HTMLElement).closest("button, a, input, textarea, [contenteditable=true]")) {
+      this.startConnectDrag(e, n); return;
+    }
     if ((e.target as HTMLElement).closest("button, a, input, textarea, [contenteditable=true]") || this.multiSelect || this.connectMode || e.button !== 0 || this.finishNodeDrag) return;
     e.preventDefault(); e.stopPropagation();
     this.dragged = false;
@@ -1448,16 +1462,61 @@ export class MindmapRenderer {
     this.finishNodeDrag = abort;
   }
 
+  private startConnectDrag(event: PointerEvent, source: MindNode): void {
+    if (!this.world || !this.svg || this.finishConnectDrag) return;
+    event.preventDefault(); event.stopPropagation();
+    const pointerId = event.pointerId, startX = event.clientX, startY = event.clientY, canvasId = this.currentCanvasId();
+    const start = this.viewCoordinates(startX, startY), preview = svgEl("path", { fill: "none", stroke: "var(--interactive-accent, #448aff)", "stroke-width": 2, "stroke-dasharray": "6 4", "pointer-events": "none" });
+    let moved = false; this.svg.append(preview);
+    const move = (next: PointerEvent) => {
+      if (next.pointerId !== pointerId) return;
+      moved ||= Math.hypot(next.clientX - startX, next.clientY - startY) >= 6;
+      const point = this.viewCoordinates(next.clientX, next.clientY);
+      preview.setAttribute("d", `M ${start.worldX} ${start.worldY} L ${point.worldX} ${point.worldY}`);
+    };
+    const cleanup = () => {
+      preview.remove(); window.removeEventListener("pointermove", move, true); window.removeEventListener("pointerup", up, true);
+      window.removeEventListener("pointercancel", cancel, true); window.removeEventListener("blur", cleanup); this.finishConnectDrag = null;
+    };
+    const up = (next: PointerEvent) => {
+      if (next.pointerId !== pointerId) return;
+      move(next); cleanup(); if (!moved || !this.connectMode || this.currentCanvasId() !== canvasId) return;
+      this.dragged = true; this.pendingFrom = null;
+      const target = [...this.nodeEls.entries()].reverse().find(([id, element]) => {
+        const rect = element.getBoundingClientRect();
+        return id !== source.id && next.clientX >= rect.left && next.clientX <= rect.right && next.clientY >= rect.top && next.clientY <= rect.bottom;
+      });
+      if (target && this.plugin.store.connectNodes(source.id, target[0])) { this.render(); this.plugin.refreshSidebar(); }
+      else new Notice("请连接同一脑图中的两张不同卡片");
+      window.setTimeout(() => { this.dragged = false; }, 0);
+    };
+    const cancel = (next: PointerEvent) => { if (next.pointerId === pointerId) cleanup(); };
+    window.addEventListener("pointermove", move, true); window.addEventListener("pointerup", up, true);
+    window.addEventListener("pointercancel", cancel, true); window.addEventListener("blur", cleanup); this.finishConnectDrag = cleanup;
+  }
+
   private onConnectClick(n: MindNode, div: HTMLElement): void {
     if (!this.pendingFrom) {
       this.pendingFrom = n.id;
       div.classList.add("is-selected");
     } else if (this.pendingFrom !== n.id) {
-      this.plugin.store.addEdge(this.pendingFrom, n.id);
+      this.connectSelectedNodes(this.pendingFrom, n.id);
       this.pendingFrom = null;
       this.clearSelection();
       this.render();
+      this.plugin.refreshSidebar();
     }
+  }
+
+  private connectSelectedNodes(from: string, to: string): void {
+    const source = this.plugin.store.getNode(from), target = this.plugin.store.getNode(to);
+    if (source?.cardId && target?.cardId) {
+      if (source.cardId === target.cardId) { new Notice("不能关联同一张卡片的两个引用"); return; }
+      const structural = source.parentId === to || target.parentId === from;
+      const existing = this.plugin.store.edges.some(edge => edge.from === from && edge.to === to);
+      if (structural && existing) this.plugin.store.addEdge(from, to);
+      else if (!this.plugin.store.connectNodes(from, to) && structural) new Notice("父子节点已由结构线连接，不能重复创建关联线");
+    } else this.plugin.store.addEdge(from, to);
   }
 
   private clearSelection(): void {
@@ -1709,6 +1768,7 @@ export class MindmapRenderer {
     // 连线颜色跟随子节点背景色；无色则用 divider
     const target = this.plugin.store.getNode(e.to), source = this.plugin.store.getNode(e.from);
     const structural = target?.parentId === e.from;
+    const explicit = this.plugin.store.edges.some(edge => edge.from === e.from && edge.to === e.to);
     const style = structural ? target?.layout || source?.layout : undefined;
     const appearance = style ? BRANCH_APPEARANCE[style] : undefined;
     const stroke = appearance?.color || b.style.backgroundColor || "var(--divider-color)";
@@ -1718,7 +1778,8 @@ export class MindmapRenderer {
       stroke,
       "stroke-width": appearance?.width ?? 2.5,
       "stroke-opacity": "0.75",
-      ...(structural ? { "data-branch-node": e.to, "data-branch-style": style ?? "default" } : { "data-link-edge": "true" }),
+      ...(structural ? { "data-branch-node": e.to, "data-branch-style": style ?? "default" } : {}),
+      ...(explicit ? { "data-link-edge": "true", "data-link-from": e.from, "data-link-to": e.to } : {}),
       ...(appearance?.dash ? { "stroke-dasharray": appearance.dash } : {}),
     });
     let label: SVGElement | undefined;
@@ -1749,11 +1810,28 @@ export class MindmapRenderer {
       const a = this.nodeEls.get(e.from);
       const b = this.nodeEls.get(e.to);
       if (!a || !b) continue;
+      const explicit = this.plugin.store.edges.some(edge => edge.from === e.from && edge.to === e.to);
+      const stored = explicit ? this.plugin.store.edges.find(edge => edge.from === e.from && edge.to === e.to) : undefined;
       const { path, label } = this.makeEdgePath(e, a, b);
+      if (explicit && (!this.currentCanvas()?.display?.hideLinks || this.plugin.store.getNode(e.to)?.parentId !== e.from)) {
+        path.setAttribute("pointer-events", "stroke"); path.setAttribute("tabindex", "0"); path.setAttribute("role", "button"); path.setAttribute("aria-label", "管理此关联线");
+        const manage = (event: Event) => { event.stopPropagation(); if (stored) this.manageEdge(stored); };
+        path.addEventListener("click", manage); path.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); manage(event); } });
+      }
       this.svg.append(path);
       if (label) this.svg.append(label);
       this.edgeEls.set(`${e.from}->${e.to}`, { path, label });
     }
+  }
+
+  private manageEdge(edge: Edge): void {
+    const { modal, close } = createModal("关联线");
+    const source = this.plugin.store.getNode(edge.from), target = this.plugin.store.getNode(edge.to);
+    modal.append(el("p", { text: `${source ? nodeContent(this.plugin.store, source).title : edge.from} → ${target ? nodeContent(this.plugin.store, target).title : edge.to}` }));
+    if (source?.parentId === edge.to || target?.parentId === edge.from) modal.append(el("p", { class: "ms-muted", text: "这是已保存的额外关联，断开后父子结构线仍会保留。" }));
+    const remove = el("button", { type: "button", class: "ms-btn", text: "断开此关联" });
+    remove.addEventListener("click", () => { if (this.plugin.store.disconnectNodes(edge.from, edge.to)) { this.render(); this.plugin.refreshSidebar(); } close(); });
+    const cancel = el("button", { type: "button", class: "ms-btn", text: "取消" }); cancel.addEventListener("click", close); modal.append(remove, cancel);
   }
 
   /** 拖拽时只更新与该节点相连的边 */
@@ -2073,6 +2151,7 @@ export class MindmapRenderer {
     remaining.textContent = `还有 ${count} 处`;remaining.setAttribute("aria-label",`本卡还有 ${count} 处遮挡`);
   }
   private renderNodeText(target: HTMLElement, text: string, node: MindNode, firstBlockOnly = false): void {
+    bindInlineCardLinks(this.plugin, target);
     void renderMarkdown(this.plugin.app, text, target, nodeContent(this.plugin.store, node).docPath).then(() => {
       if (this.currentCanvas()?.display?.hideLinks) for (const link of target.querySelectorAll("a")) link.replaceWith(...link.childNodes);
       if (firstBlockOnly) for (const child of [...target.children].slice(1)) if (child instanceof HTMLElement) { child.style.visibility = "hidden"; child.setAttribute("aria-hidden", "true"); }
@@ -2198,8 +2277,9 @@ export class MindmapRenderer {
     const nodes = this.selectedOrWarn();
     if (!nodes.length) return;
     if (nodes.length === 2) {
-      this.plugin.store.addEdge(nodes[0].id, nodes[1].id);
+      this.connectSelectedNodes(nodes[0].id, nodes[1].id);
       this.render();
+      this.plugin.refreshSidebar();
       new Notice("已添加关联线");
       return;
     }
