@@ -20,6 +20,8 @@ body:not(.is-mobile):has(.status-bar) .workspace-leaf.mod-active .ms-study-works
 .ms-study-workspace.has-scene-header .ms-workspace-body { margin-top:19px; }
 .ms-workspace-toolbar {display:flex;align-items:stretch;flex:none;height:70px;min-width:0;background:#fff;border-bottom:1px solid var(--ms-workspace-border);padding:0;gap:0;}
 .ms-bottom-capsule-shell {position:absolute;left:50%;bottom:var(--ms-capsule-bottom);z-index:40;display:flex;flex-direction:column;align-items:center;gap:5px;max-width:calc(100% - 16px);pointer-events:none;transform:translateX(-50%);filter:drop-shadow(0 7px 15px #0002);}
+.ms-study-workspace[data-auxiliary=research] .ms-bottom-capsule-shell {left:calc((100% - var(--ms-auxiliary-width,316px)) / 2);max-width:calc(100% - var(--ms-auxiliary-width,316px) - 16px);}
+@container (max-width:850px) {.ms-study-workspace[data-auxiliary=research] .ms-bottom-capsule-shell {left:calc((100% - 240px) / 2);max-width:calc(100% - 256px);}}
 .ms-bottom-capsule-shell button {pointer-events:auto;}
 .ms-workspace-notice-layer {position:absolute;left:50%;bottom:calc(var(--ms-capsule-bottom) + 45px);z-index:41;display:flex;justify-content:center;width:min(360px,calc(100% - 32px));pointer-events:none;transform:translateX(-50%);}
 .ms-workspace-notice {box-sizing:border-box;width:100%;padding:12px 18px;border:1px solid #dedee1;border-radius:9px;background:#ffffffed;box-shadow:0 3px 12px #00000016;color:#171717;text-align:center;white-space:pre-line;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Helvetica Neue","PingFang SC",sans-serif;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);}
@@ -235,6 +237,8 @@ body:not(.is-mobile):has(.status-bar) .workspace-leaf.mod-active .ms-study-works
 .ms-native-popover-head {display:flex;align-items:center;justify-content:space-between;height:36px;padding:2px 9px 2px 16px;border-bottom:1px solid #ececef;color:var(--ms-native-ink);}
 .ms-native-popover-head strong {font-size:13px;font-weight:600;}
 .ms-native-menu-row {display:flex;align-items:center;gap:9px;width:100%;height:auto;min-height:37px;white-space:normal;text-align:left;border:0!important;border-radius:0!important;box-shadow:none!important;background:transparent!important;padding:9px 16px!important;color:#333;font:13px/1.4 inherit;}
+.ms-study-home-create-options {grid-column:2;margin:8px 24px;overflow:hidden;border:1px solid #dedee1;border-radius:8px;background:#fff;box-shadow:0 3px 12px #0002;}
+@media(max-width:700px) {.ms-study-home-create-options {grid-column:1;margin-inline:12px;}}
 .ms-study-workspace button.ms-native-menu-row:not(.is-active) {color:#22232a;}
 .ms-native-menu-row:hover {background:#f2f7fd!important;}
 .ms-native-menu-row.is-active {color:var(--ms-native-blue)!important;background:#eef7ff!important;}

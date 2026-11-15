@@ -1718,7 +1718,8 @@ export class StudyWorkspaceView extends ItemView {
     create.addEventListener("click",()=>this.openNewStudySet());
     const open=el("button",{class:"ms-native-menu-row",text:"打开文档…"});open.addEventListener("click",()=>{this.dismissPopup();this.chooseDocument();});
     const notebook=el("button",{class:"ms-native-menu-row",text:"新建空白笔记本…"});notebook.addEventListener("click",()=>{this.dismissPopup();openNewNotebook(this.plugin);});
-    pane.append(create,open,notebook);
+    const createOptions=el("div",{class:"ms-study-home-create-options"});
+    createOptions.append(create,open,notebook);pane.append(createOptions);
     const sourceUrl=store.documents.find(doc=>doc.path===this.state.activePath)?.sourceUrl;
     if(sourceUrl){
       const source=el("button",{class:"ms-native-menu-row",text:"打开来源网页","aria-label":"打开来源网页"});

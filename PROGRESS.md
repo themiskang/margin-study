@@ -3451,3 +3451,13 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - `npx tsc --noEmit` 通过；`npm run verify` 52/52 通过；最终 `node scripts/px-gap.mjs --out evidence/type-2/px-gap` 为 292 通过、0 超差、0 缺失、6 跳过。夹具有两个既有导出警告。
 - 桌面通过后推送最终 `styles.css` 至 Pad 隔离库并重启 Obsidian。设备和本机 SHA-256 均为 `aabf80fd6aeb0c9ee14e2e8e8b020bdadaccb1f925cda86b45b582936f237816`；截图 `evidence/type-2/pad.png`。Pad 未逐点测量。
 - 未新增测试，未提交，暂存区为空。交付记录 `.agent-artifacts/codex-type2-last.md`。
+
+## 2026-11-16 · 深度复核返工完成
+
+- R1 I-11 多选工具条：✅ 误报修正。多选分支（mindmapRenderer.ts:776-797）已有概要/重组/合并/对话四项；复核 Bot 读的是单选分支（802-814）。
+- R2 1024 胶囊遮挡：✅ CDP 实测交叠 0×63px（capsule x8,w568 vs panel x584,w440）， capsule 定位作用域已缩小至面板避让。
+- R3 756 更多按钮劫持：✅ capsule 移至面板左侧（x8,w500,right508），与 webview（x516）无重叠，点击不再被劫持。
+- R4 O-3 新建下拉：✅ create-options 容器 border 1px solid + radius 8px + shadow 存在（CDP 实测）。
+- 基线：tsc 0 + verify 52/52 PASS + px-gap 292/298 0 超差。
+- 新构建 evidence：.agent-artifacts/newbuild-20261116/（3 视口截图 + build.json 锚点）。
+- 剩余未闭合：A6 Pad（设备离线）、A3 379 全菜单矩阵（需 MN5 原生采集）、I-04 编辑器内容坐标（trailing）。
