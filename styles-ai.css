@@ -9,8 +9,10 @@
 .ms-ai-panel .ms-ai-icon { display:inline-flex; align-items:center; justify-content:center; flex:0 0 24px; width:24px; height:26px; min-height:0; padding:0; border:0; border-radius:0; color:#7b8490; background:transparent; }
 .ms-ai-header .ms-ai-mode { position:absolute; top:0; left:calc(50% - 42px); width:84px; height:32px; padding:0 5px; border:0; border-radius:0; font-size:16px; line-height:32px; text-align:center; appearance:none; color:#141416; background:white; box-shadow:none; }
 .ms-ai-header .ms-ai-icon:last-child { margin-left:auto; }
-.ms-ai-template-row { flex:0 0 40px; padding:10px 18px 6px; }
-.ms-ai-panel .ms-ai-template { width:100%; height:24px; min-height:24px; border:1px solid #c8c8cd; border-radius:6px; background:#ececef; color:#626b79; font-size:12px; padding:1px 8px; }
+.ms-ai-template-row { flex:0 0 40px; display:flex; align-items:center; gap:6px; padding:10px 18px 6px; }
+.ms-ai-panel .ms-ai-template { flex:1; min-width:0; height:24px; min-height:24px; border:1px solid #c8c8cd; border-radius:6px; background:#ececef; color:#626b79; font-size:12px; padding:1px 8px; }
+.ms-ai-template-row button { flex:none; height:24px; padding:2px 6px; border:0; border-radius:4px; background:#ececef; color:#626b79; font-size:11px; }
+.ms-ai-panel > .ms-ai-attachment-menu { top:70px; bottom:auto; }
 .ms-ai-body { position:relative; flex:1; min-height:0; overflow:auto; padding:12px 20px 18px; overflow-wrap:anywhere; }
 .ms-ai-empty { position:absolute; left:24px; right:24px; top:47%; transform:translateY(-50%); color:#c3c3c7; text-align:center; font-size:15px; line-height:1.25; }
 .ms-ai-panel .ms-ai-connect { display:block; margin:0 auto 12px; padding:4px 12px; border:0; border-radius:4px; background:transparent; color:#007aff; font-size:12px; }

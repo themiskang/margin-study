@@ -248,6 +248,9 @@ export function renderCardList(container: HTMLElement, plugin: MarginStudyPlugin
 
   const makeItem = (c: Card): HTMLElement => {
     const item = el("div", { class: "ms-card", "data-card-id": c.id });
+    const appendImage = (source: string) => {
+      item.append(buildRegionImage(imageUrl(plugin, source), true));
+    };
     bindInlineCardLinks(plugin, item);
     if (c.color) item.style.borderLeft = `4px solid ${c.color}`;
     if (batchMode) {
@@ -270,9 +273,9 @@ export function renderCardList(container: HTMLElement, plugin: MarginStudyPlugin
         if(block.text){const front=el("div",{class:"ms-card-front","data-excerpt-block":block.id});applyCardTypography(front,plugin.store.settings,c);item.append(front);void renderMarkdown(plugin.app,hasCloze(block.text)?clozeHint(block.text):block.text,front,c.docPath);}
         if(block.target)item.append(excerptSourceButton(plugin,c,block));
       }
-      for(const image of cardImages(c).slice(c.excerptBlocks.filter(block=>block.image).length))item.append(buildRegionImage(imageUrl(plugin,image),true));
+      for(const image of cardImages(c).slice(c.excerptBlocks.filter(block=>block.image).length))appendImage(image);
     }else{
-      for (const image of cardImages(c)) item.append(buildRegionImage(imageUrl(plugin, image), true));
+      for (const image of cardImages(c)) appendImage(image);
       const front = el("div", { class: "ms-card-front" });applyCardTypography(front,plugin.store.settings,c);
       item.append(front);
       const preview = hasCloze(c.front) ? clozeHint(c.front) : c.front.slice(0, 160);

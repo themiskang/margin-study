@@ -3,6 +3,7 @@ import { TFile, Notice } from "obsidian";
 import { el, clear } from "../utils/dom";
 import { createModal } from "../utils/modal";
 import { jumpToCardSource } from "../cards/cardView";
+import { openSettingAndReveal, queryFeatures, runFeature } from "./featureSearch";
 
 interface SearchHit {
   kind: "card" | "ann";
@@ -14,9 +15,10 @@ interface SearchHit {
 }
 
 /** 全局检索：跨卡片与所有文档批注，结果可一键回源 */
-export function openGlobalSearch(plugin: MarginStudyPlugin): void {
+export function openGlobalSearch(plugin: MarginStudyPlugin, getReader: () => import("../types").ReaderLike | null = () => plugin.activeReader, nativeCategoriesOnly = false): void {
   let timer: number | null = null, revision = 0, closed = false;
-  const { modal, close } = createModal("全局检索（卡片 + 批注）", () => {
+  let category: "mindmap" | "outline" | "text" | "feature" | "legacy" = "mindmap";
+  const { modal, close } = createModal("全局搜索", () => {
     closed = true; revision++; if (timer !== null) window.clearTimeout(timer);
   });
   const search = el("input", {
@@ -24,8 +26,17 @@ export function openGlobalSearch(plugin: MarginStudyPlugin): void {
     type: "text",
     placeholder: "输入关键词（空格=AND，OR，减号 - 排除）…",
   }) as HTMLInputElement;
+  search.setAttribute("aria-label", "搜索关键词");
+  const tabs = el("div", { class: "ms-search-categories", role: "tablist", "aria-label": "搜索分类" });
+  const categories = [["mindmap", "脑图"], ["outline", "文档目录"], ["text", "文档正文"], ["feature", "功能"], ["legacy", "卡片与批注"]] as const;
+  for (const [id, label] of categories) {
+    if (nativeCategoriesOnly && id === "legacy") continue;
+    const button = el("button", { type: "button", role: "tab", text: label, "aria-selected": String(id === category) });
+    button.addEventListener("click", () => { category = id; for (const tab of tabs.querySelectorAll("[role=tab]")) tab.setAttribute("aria-selected", String(tab === button)); void draw(); });
+    tabs.append(button);
+  }
   const list = el("div", { style: "margin-top:8px;max-height:60vh;overflow:auto" });
-  modal.append(search, list);
+  modal.append(search, tabs, list);
   setTimeout(() => search.focus(), 0);
 
   const draw = async () => {
@@ -47,6 +58,59 @@ export function openGlobalSearch(plugin: MarginStudyPlugin): void {
       if (exclude.some((t) => hay.includes(t))) return false;
       return true;
     };
+    const row = (title: string, sub: string, action: () => void) => {
+      const button = el("button", { type: "button", class: "ms-card ms-search-result" });
+      button.append(el("div", { class: "ms-card-front", text: title }), el("div", { class: "ms-muted", text: sub }));
+      button.addEventListener("click", action); list.append(button);
+    };
+    if (category === "feature") {
+      for (const entry of queryFeatures(raw)) row(entry.title, entry.description, () => {
+        close();
+        const success = entry.kind === "command" ? runFeature(plugin, entry.id) : !!entry.setting && openSettingAndReveal(plugin, entry.setting);
+        if (!success) new Notice("该功能当前不可用：" + entry.title);
+      });
+    } else if (category === "mindmap") {
+      for (const node of plugin.store.nodes) {
+        const card = node.cardId ? plugin.store.getCard(node.cardId) : undefined;
+        if (!match([node.title, card?.title, card?.front, card?.back].filter(Boolean).join(" ").toLowerCase())) continue;
+        const canvas = plugin.store.canvases.find(item => item.id === node.canvasId);
+        row(node.title || card?.title || card?.front || "无标题", canvas?.name ?? "脑图", () => {
+          close();
+          if (canvas && plugin.store.activeStudySetId !== canvas.studySetId) plugin.store.setActiveStudySet(canvas.studySetId);
+          if (canvas) plugin.store.setActiveCanvas(canvas.id);
+          plugin.refreshMindmap();
+        });
+      }
+    } else if (category === "outline" || category === "text") {
+      const reader = getReader(), path = reader?.getFilePath();
+      if (!reader || !path) { list.append(el("p", { text: "请先打开文档。" })); return; }
+      if (category === "outline") {
+        const editable = reader.getEditableOutline ? await reader.getEditableOutline() : undefined;
+        if (closed || revision !== current) return;
+        if (editable) {
+          for (const item of editable) if (match(item.title.toLowerCase())) row(item.title, path, () => { close(); reader.navigateToOutline?.(item); });
+        } else {
+          for (const item of reader.getNavigationOutline?.() ?? []) if (match(item.title.toLowerCase())) row(item.title, path, () => { close(); item.select(); });
+        }
+      } else {
+        const doc = reader.getDoc?.();
+        if (doc) {
+          for (let page = 1; page <= doc.numPages; page++) {
+            const content = await (await doc.getPage(page)).getTextContent();
+            if (closed || revision !== current) return;
+            const text = content.items.map((item: { str?: string }) => item.str ?? "").join(" ");
+            if (match(text.toLowerCase())) row(text.slice(0, 160), `${path} · 第 ${page} 页`, () => { close(); reader.gotoPage?.(page); });
+          }
+        } else {
+          const text = reader.getScrollContainer().textContent ?? "";
+          if (match(text.toLowerCase())) row(text.slice(0, 160), path, () => close());
+        }
+      }
+    }
+    if (category !== "legacy") {
+      if (!list.childElementCount) list.append(el("p", { text: "没有匹配结果。" }));
+      return;
+    }
     const hits: SearchHit[] = [];
 
     for (const c of plugin.store.cards) {

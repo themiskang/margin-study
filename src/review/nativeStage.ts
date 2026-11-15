@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖 DOM 工具构建复习界面。
+ * [OUTPUT]: 提供复习界面的原生图标和控件。
+ * [POS]: 为复习视图提供通用的界面元素。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import { el } from "../utils/dom";
 
 type ReviewIcon = "star" | "star-filled" | "notes" | "close" | "aq" | "previous" | "next";
@@ -34,7 +40,7 @@ export function nativeReviewStage(modal: HTMLElement, bg: HTMLElement, options: 
   identity.append(el("h3", { class: "ms-review-visually-hidden", text: options.name }), el("span", { text: options.count }), el("span", { class: "ms-review-visually-hidden", text: ` · ${options.detail}` }));
   const paper = el("article", { class: "ms-native-review-paper" });
   const toolbar = el("div", { class: "ms-native-review-paper-tools" });
-  const edit = el("button", { class: "ms-native-review-edit", text: "Edit", type: "button", "aria-label": "编辑卡片", title: "编辑卡片" });
+  const edit = el("button", { class: "ms-native-review-edit", text: "编辑", type: "button", "aria-label": "编辑卡片", title: "编辑卡片" });
   const favorite = reviewIconButton("☆ 收藏", "star", "ms-native-review-favorite");
   const notes = reviewIconButton("批注与工具", "notes", "ms-native-review-notes"); notes.setAttribute("aria-expanded", "false");
   toolbar.append(edit, favorite, notes);

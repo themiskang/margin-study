@@ -36,3 +36,12 @@
   background: var(--background-primary, #fff);
 }
 .ms-web-import button:disabled { opacity: .6; cursor: wait; }
+
+.ms-baidu-netdisk { width: min(720px, 92vw); max-height: calc(100vh - 48px); overflow-y: auto; }
+.ms-baidu-file-list { max-height: 46vh; overflow: auto; margin-top: 12px; border: 1px solid var(--background-modifier-border); border-radius: 8px; }
+.ms-baidu-file-row { display: flex; align-items: center; gap: 12px; padding: 7px 10px; border-bottom: 1px solid var(--background-modifier-border); }
+.ms-baidu-file-row:last-child { border-bottom: 0; }
+.ms-baidu-file-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; overflow-wrap: anywhere; text-align: left; }
+.ms-baidu-body { min-width: min(680px, 78vw); }
+.ms-baidu-netdisk .ms-web-import-field { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+.ms-baidu-netdisk .ms-web-import-field > input, .ms-baidu-netdisk .ms-web-import-field > select { flex: 1; }

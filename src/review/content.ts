@@ -11,18 +11,22 @@ import { createSpeechSession, speechTextFromMarkdown } from "../audio/speech";
 import { reviewMaterial } from "./presentation";
 import { cardCommentImage } from "../cards/inkComment";
 
+export function commentImage(item: NonNullable<Card["commentMedia"]>[number]): string | undefined {
+  return item.image || (item.parts?.length ? item.parts.reduce((first, part) => part.y < first.y ? part : first).image : undefined);
+}
+
 export function cardImages(card: Card): string[] {
   const composed=card.extendMedia?.some(media=>media.noteId===card.anchorAnnId&&media.composed);
   const images = !composed ? card.images ?? [] : [];
   const sourceImages = [card.image, ...images].filter((image): image is string => !!image);
   const primary = card.excerptBlocks?.length ? sourceImages : [...new Set(sourceImages)];
-  const extra = [...new Set([...(card.sources ?? []).map((source) => source.image), ...(card.extendMedia ?? []).map(item => item.image), ...(card.commentMedia ?? []).map(item => item.image)].filter((image): image is string => !!image))].filter(image => !primary.includes(image));
+  const extra = [...new Set([...(card.sources ?? []).map((source) => source.image), ...(card.extendMedia ?? []).map(item => item.image), ...(card.commentMedia ?? []).map(commentImage)].filter((image): image is string => !!image))].filter(image => !primary.includes(image));
   return [...primary, ...extra];
 }
 
 export function collapsibleCardComment(card: Card, image: string): NonNullable<Card["commentMedia"]>[number] | undefined {
   const source = [card.image, ...(card.images ?? []), ...(card.sources ?? []).map(value => value.image), ...(card.extendMedia ?? []).map(value => value.image)].includes(image);
-  return source ? undefined : card.commentMedia?.find(item => item.image === image && item.collapsed !== undefined);
+  return source ? undefined : card.commentMedia?.find(item => commentImage(item) === image && (item.collapsed !== undefined || !!item.parts?.length));
 }
 
 export function imageUrl(plugin: MarginStudyPlugin, path: string): string {
@@ -95,8 +99,10 @@ export async function renderQuestion(container: HTMLElement, plugin: MarginStudy
     const imageWrap = el("div", { class: "ms-review-image", style: "position:relative;display:block;width:fit-content;max-width:100%;margin:10px 0" });
     const image = el("img", { src: imageUrl(plugin, images[i]), style: "display:block;max-width:100%;height:auto", alt: "卡片图片" }) as HTMLImageElement;
     image.draggable = false;
-    const media = collapsibleCardComment(card, images[i]);
-    imageWrap.append(media ? cardCommentImage(plugin, media, { alt: "卡片图片", style: "display:block;max-width:100%;height:auto" }) : image);
+    const media = collapsibleCardComment(card, images[i]) ?? card.commentMedia?.find(item => item.collapsed === undefined && !item.parts?.length && commentImage(item) === images[i]);
+    const displayed = media ? cardCommentImage(plugin, media, { alt: "卡片图片", style: "display:block;max-width:100%;height:auto" }) : image;
+    if (displayed instanceof HTMLImageElement) displayed.draggable = false;
+    imageWrap.append(displayed);
     if (question.kind === "occlusion" && i === 0 && !revealed) {
       const mask = validOcclusions(card).find((item) => item.id === question.maskId);
       if (mask) {

@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖卡片数据、编辑组件和 Obsidian 插件服务。
+ * [OUTPUT]: 提供原生卡片编辑界面。
+ * [POS]: 连接卡片内容编辑与手写评论。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import type MarginStudyPlugin from "../main";
 import type { Card } from "../types";
 import { Notice } from "obsidian";
@@ -53,11 +59,11 @@ export function mountNativeCardEditor(plugin: MarginStudyPlugin, options: {
   save.innerHTML = `<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">${ICONS.save}</svg>`;
   top.append(type, handle, save);
   const sheet = el("div", { class: "ms-native-card-sheet" });
-  title.className = "ms-native-card-title"; title.placeholder = "CARD TITLE";title.style.textTransform=plugin.store.settings.cardTitleUppercase?"uppercase":"none";
+  title.className = "ms-native-card-title"; title.placeholder = "卡片标题";title.style.textTransform=plugin.store.settings.cardTitleUppercase?"uppercase":"none";
   const composed=card.extendMedia?.some(media=>media.noteId===card.anchorAnnId&&media.composed);
   if(composed&&!front.value.trim())front.style.display="none";
-  front.className = "ms-native-card-excerpt"; front.style.minHeight = "54px"; front.placeholder = "Excerpt";
-  back.className = "ms-native-card-note"; back.style.minHeight = "180px"; back.placeholder = "Add Comment";
+  front.className = "ms-native-card-excerpt"; front.style.minHeight = "54px"; front.placeholder = "摘录";
+  back.className = "ms-native-card-note"; back.style.minHeight = "180px"; back.placeholder = "添加评论";
   const textComment = el("div", { class: "ms-card-text-comment" }); textComment.append(back);
   const textActions = el("div", { class: "ms-modal-actions" }); textActions.hidden = true;
   const removeText = el("button", { class: "ms-card-comment-remove", text: "⊖", "aria-label": "移除文字评论", title: "移除文字评论" });
@@ -92,7 +98,7 @@ export function mountNativeCardEditor(plugin: MarginStudyPlugin, options: {
   let attached = (card.commentMedia ?? []).map(item => ({ ...item }));
   let knownStored = new Set(attached.map(item => item.id));
   const attachedRoot = el("div", { class: "ms-card-attached-comments" }); sheet.append(attachedRoot);
-  const comment = el("button", { class: "ms-native-card-comment", text: "Edit Comments", "aria-label": "编辑评论" }); comment.disabled = !hasText() && !comments.length && !attached.length;
+  const comment = el("button", { class: "ms-native-card-comment", text: "编辑评论", "aria-label": "编辑评论" }); comment.disabled = !hasText() && !comments.length && !attached.length;
   let editingComments = false, orderChanged=false;
   let commentOrder=[...(card.commentOrder??[])];
   let cancelCommentDrag: (() => void) | undefined;
@@ -119,7 +125,7 @@ export function mountNativeCardEditor(plugin: MarginStudyPlugin, options: {
     for(const item of sourceTexts)if(item.input.value.trim())rows.push({key:"extend-text:"+item.noteId,block:item.block,actions:item.actions,label:"来源留白文字"});
     for(const item of attached){
       const block=el("div",{class:"ms-card-extend-comment","data-card-comment":item.id});
-      const media=cardCommentImage(plugin,item,{alt:item.name??(item.kind==="ink"?"手写评论":"图片评论"),style:item.collapsed === undefined ? "display:block;width:120px;max-width:100%;max-height:160px;object-fit:contain;margin:auto" : "display:block;width:100%;height:auto;margin:8px auto"});
+      const media=cardCommentImage(plugin,item,{alt:item.name??(item.kind==="ink"?"手写评论":"图片评论"),style:item.collapsed === undefined && !item.parts?.length ? "display:block;width:120px;max-width:100%;max-height:160px;object-fit:contain;margin:auto" : "display:block;width:100%;height:auto;margin:8px auto"});
       media.querySelector("img")?.setAttribute("aria-label","卡片附加图片"); if(media instanceof HTMLImageElement)media.setAttribute("aria-label","卡片附加图片"); block.append(media);
       const actions=el("div",{class:"ms-modal-actions"}),remove=el("button",{class:"ms-card-comment-remove",text:"⊖","aria-label":"移除图片评论",title:"移除图片评论"}),cancel=el("button",{class:"ms-btn",text:"取消移除图片"});cancel.hidden=true;let confirming=false;
       cancel.addEventListener("click",()=>{confirming=false;remove.textContent="⊖";remove.setAttribute("aria-label","移除图片评论");block.classList.remove("is-confirming");cancel.hidden=true;});

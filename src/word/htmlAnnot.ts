@@ -308,12 +308,13 @@ export class HtmlAnnotationController extends BaseAnnotationController {
       onChange: (changes) => this.commitPenChanges(changes),
       onUndo: () => this.undoPenChange(), onRedo: () => this.redoPenChange(),
     });
+    this.watchPenGestures(body.querySelector<SVGSVGElement>(":scope > .ms-pen-overlay")!);
     pc.color = this.color;
     pc.setTool(this.penTool);
     pc.setActive(true);
     this.pen = pc;
   }
-  protected flushPen(): void { this.pen?.flush(); }
+  protected flushPen(commitDrawing = true): void { this.pen?.flush(commitDrawing); }
   protected onPenToolChanged(): void { this.pen?.setTool(this.penTool); }
 
   protected teardownPen(): void {

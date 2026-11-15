@@ -186,8 +186,8 @@
   box-sizing: border-box;
   width: max-content;
   max-width: calc(100% - 24px);
-  min-height: 68px;
-  padding: 6px 9px;
+  min-height: 0;
+  padding: 3px 5px;
   gap: 1px;
   flex-wrap: nowrap;
   align-items: center;
@@ -200,31 +200,36 @@
   scrollbar-width: thin;
 }
 .ms-mindmap-root .ms-selection-actions[data-selection]::before { content: none; display: none; }
+/* MN5 node bar: one compact row, icon cluster + four named actions. */
 .ms-mindmap-root .ms-selection-actions .ms-node-tb-item {
   appearance: none;
   display: flex;
   flex: 0 0 auto;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  min-width: 46px;
-  height: 54px;
+  gap: 5px;
+  min-width: 30px;
+  height: 30px;
   margin: 0;
-  padding: 3px 6px;
+  padding: 2px 5px;
   border: 0;
   border-radius: 7px;
   background: transparent;
   box-shadow: none;
   color: #fff;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.15;
   transition: none;
 }
+.ms-mindmap-root .ms-selection-actions .ms-node-tb-item[data-icon-only="true"] { min-width: 30px; padding: 2px 4px; }
+.ms-mindmap-root .ms-selection-actions .ms-node-tb-item[data-icon-only="true"] .ms-selection-label {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
 .ms-mindmap-root .ms-selection-actions .ms-node-tb-item:hover:enabled { background: #ffffff1a; color: #fff; }
 .ms-mindmap-root .ms-selection-actions .ms-node-tb-item:disabled { opacity: .35; cursor: default; }
-.ms-mindmap-root .ms-selection-icon { display: flex; align-items: center; justify-content: center; height: 26px; }
-.ms-mindmap-root .ms-selection-icon svg { width: 25px; height: 25px; stroke-width: 1.7; }
+.ms-mindmap-root .ms-selection-icon { display: flex; align-items: center; justify-content: center; height: 20px; }
+.ms-mindmap-root .ms-selection-icon svg { width: 20px; height: 20px; stroke-width: 1.7; }
 .ms-mindmap-root .ms-selection-label { white-space: nowrap; }
 .ms-mindmap-root .ms-node-tb-item[data-action="close"] {
   position: sticky;
@@ -297,9 +302,9 @@ body.ms-theme-dark .ms-mindmap-root .ms-node-comment { border-top-color: #ffffff
 .ms-mindmap-root.is-connect-mode [data-native-tool="link"] { color: #4a95f4; background: #edf6ff; }
 .ms-mindmap-root.is-connect-mode [data-native-tool="hand"] { color: #7f8792; background: transparent; }
 @media (max-width: 520px) {
-  .ms-mindmap-root .ms-selection-actions { bottom: 10px; min-height: 62px; border-radius: 22px; }
-  .ms-mindmap-root .ms-selection-actions .ms-node-tb-item { min-width: 42px; height: 48px; padding: 2px 4px; }
-  .ms-mindmap-root .ms-selection-icon svg { width: 22px; height: 22px; }
+  .ms-mindmap-root .ms-selection-actions { bottom: 10px; min-height: 0; border-radius: 18px; }
+  .ms-mindmap-root .ms-selection-actions .ms-node-tb-item { min-width: 32px; height: 32px; padding: 2px 5px; }
+  .ms-mindmap-root .ms-selection-icon svg { width: 20px; height: 20px; }
 }
 .ms-map-ink{position:absolute;inset:0;width:100%;height:100%;overflow:visible;z-index:30;touch-action:none;outline:none}
 .ms-map-ink-preview{position:absolute;width:100vw;height:100vh;pointer-events:none;z-index:35;will-change:transform}

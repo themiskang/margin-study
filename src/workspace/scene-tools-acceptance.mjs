@@ -15,6 +15,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { build } from "esbuild";
+import { runBrowser } from "../../scripts/ego-harness.mjs";
 
 const exec = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
@@ -59,8 +60,8 @@ const server = createServer(async (request, response) => {
   response.end(await readFile(join(temporary, name)));
 });
 await new Promise(done => server.listen(0, "127.0.0.1", done));
-const session = (await exec("agent-browser", ["session", "id", "--scope", "worktree", "--prefix", `marginstudy-scene-tools-${process.pid}`], { cwd: project })).stdout.trim();
-const browser = (...args) => exec("agent-browser", ["--session", session, ...args], { cwd: project, maxBuffer: 8 * 1024 * 1024 });
+const session = `marginstudy-scene-tools-${process.pid}`;
+const browser = (...args) => runBrowser(session, ...args);
 const results = [];
 const record = (name, passed, error) => results.push({ name, passed, ...(passed ? {} : { error }) });
 
@@ -203,7 +204,7 @@ try {
     generatedAt: new Date().toISOString(),
     mapPath,
     mapSha256: createHash("sha256").update(await readFile(mapPath)).digest("hex"),
-    environment: "Isolated Chromium via agent-browser; real Store + StudyWorkspaceView; synthetic in-memory host; PDF/Word adapters mocked",
+    environment: "Chromium via ego-browser; real Store + StudyWorkspaceView; synthetic in-memory host; PDF/Word adapters mocked",
     limitations: [
       "Obsidian host lifecycle is mocked; native MarginNote appearance is not asserted here",
       "No ink is created; pen checks assert tool/preset state only",

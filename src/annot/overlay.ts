@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 批注模型、DOM 工具和文字样式工具。
+ * [OUTPUT]: 自由批注的几何计算与交互界面。
+ * [POS]: annot 模块的自由批注界面，供文档阅读器使用。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import type { Annotation } from "../types";
 import { el } from "../utils/dom";
 import { annotationTextRuns, annotationTextStyle, applyTextStyle, renderTextRuns } from "./textRuns";
@@ -62,7 +68,7 @@ export function createFreeOverlay(ann: Annotation, surface: OverlaySurface, opti
     tools.append(move, edit);
     if(options.rotate){const angle=el("input",{type:"number",min:"-360",max:"360",step:"1",value:String(ann.overlay?.rotation??0),"aria-label":"旋转批注角度",title:"旋转角度（度）"});angle.style.width="56px";
       angle.addEventListener("change",()=>{const value=Number(angle.value);if(Number.isFinite(value)&&value>=-360&&value<=360)options.rotate?.((value%360+360)%360);else angle.value=String(ann.overlay?.rotation??0);});tools.append(angle);}
-    if(ann.overlay?.kind==="image"&&options.crop){const crop=el("button",{text:"Crop","aria-label":"Crop"});crop.addEventListener("click",event=>{event.stopPropagation();options.crop?.();});tools.append(crop);}
+    if(ann.overlay?.kind==="image"&&options.crop){const crop=el("button",{text:"裁剪","aria-label":"裁剪"});crop.addEventListener("click",event=>{event.stopPropagation();options.crop?.();});tools.append(crop);}
     tools.append(card, remove); element.append(tools, resize);
     edit.addEventListener("click", event => { event.stopPropagation(); options.edit(); });
     remove.addEventListener("click", event => { event.stopPropagation(); options.remove(); });

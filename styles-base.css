@@ -1,3 +1,9 @@
+/*
+ * [INPUT]: 插件界面类名和 Obsidian 主题变量。
+ * [OUTPUT]: 阅读器、通用控件和同步面板样式。
+ * [POS]: 插件共享视觉层，供各功能界面使用。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 /* ============================================================
    MarginStudy — 全部样式使用 .ms- 命名空间，避免与其它插件冲突
    颜色随 Obsidian 主题自适应（使用官方 CSS 变量）
@@ -1021,6 +1027,8 @@ body.ms-theme-dark .ms-word-body { background: #20232e; color: #e6e8ef; }
 .ms-btn { border: 1px solid var(--ms-line); background: var(--ms-card-bg); color: var(--text-normal); border-radius: 10px; padding: 6px 14px; cursor: pointer; font-size: 13px; }
 .ms-btn:hover { border-color: var(--ms-accent); color: var(--ms-accent); }
 .ms-btn.primary { background: var(--ms-accent); color: #fff; border-color: var(--ms-accent); }
+.ms-modal div:has(> .ms-btn[title^="将所选卡片加入学习集绑定的复习卡组"]) > .ms-btn:first-child {background:#1692fe;color:#fff;border-color:#1692fe;}
+.ms-modal div:has(> .ms-btn[title^="将所选卡片加入学习集绑定的复习卡组"]) > .ms-btn:first-child:hover {background:#0f86ec;color:#fff;border-color:#0f86ec;}
 .ms-btn.is-active { background: var(--ms-accent-soft); color: var(--ms-accent); }
 
 .ms-search { width: 100%; box-sizing: border-box; border: 1px solid var(--ms-line); border-radius: 10px; padding: 6px 10px; background: var(--ms-card-bg); color: var(--text-normal); font-size: 13px; margin-bottom: 6px; }
@@ -1211,6 +1219,7 @@ body.ms-theme-dark .ms-heat-cell[data-lvl="3"] { background: rgba(140,150,255,0.
 .ms-sync-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 0; border-bottom: 1px solid var(--ms-line); overflow-wrap: anywhere; }
 .ms-sync-row > div { flex: 1 1 260px; }
 .ms-sync-row small { flex-basis: 100%; color: var(--text-muted); }
+.theme-light .ms-sync-status :is(.ms-sync-row small,.ms-sync-history p) { color: #5e5f64; }
 .ms-sync-history, .ms-sync-snapshot { padding: 10px 0; }
 .ms-sync-history p { color: var(--text-muted); overflow-wrap: anywhere; }
 .ms-sync-snapshot { border-bottom: 1px solid var(--ms-line); }

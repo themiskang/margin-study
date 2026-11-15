@@ -10,13 +10,16 @@ import { uid } from "../utils/id";
 import { excerptSourceButton, jumpToCardSource } from "../cards/cardView";
 import { displayedExcerptBlocks } from "../cards/excerptBlocks";
 import { renderMarkdown, hasCloze, clozeHint } from "../utils/markdown";
-import { exportMindmapPng } from "../export/mindmapExport";
+import { exportMindmapNodes, exportMindmapPng } from "../export/mindmapExport";
+import { openStudySetExport, hasStudySetContent } from "../export/studySetExport";
+import { exportCanvas } from "../canvas/canvasIo";
+import { createSpeechSession, speechTextFromMarkdown } from "../audio/speech";
 import { nodeContent } from "../study/nodeContent";
 import { cardCommentItems } from "../cards/commentOrder";
 import { cardCommentImage } from "../cards/inkComment";
-import { notebookMeta } from "../annot/documentNotebooks";
+import { notebookMeta, updateNotebookMeta } from "../annot/documentNotebooks";
 import { appendSources, collapsibleCardComment, imageUrl } from "../review/content";
-import { addCommonCardActions, closeCardActionMenu, detachNode, openNodeSplit, showNodeActions, stopCardActionSpeech, trackCardActionMenu } from "../study/nodeActions";
+import { addCardToReview, addCommonCardActions, appendCardAnnotation, clearCardRichFormat, closeCardActionMenu, convertCardTextToTitle, copyCardFragment, deleteCardWithNodes, detachNode, openCardColorPicker, openCardEditor, openCardInk, openCardTagsEditor, openCardTitleEditor, openNodeSplit, removeCardFromMindmap, resetCardTypography, showNodeActions, speakCard, stopCardActionSpeech, toggleCardOcclusion, trackCardActionMenu } from "../study/nodeActions";
 import { ReaderView } from "../pdf/readerView";
 import { maskEmphasis, revealAt } from "../study/reveal";
 import { validOcclusions } from "../review/questions";
@@ -25,11 +28,13 @@ import { OutlineRenderer } from "../outline/outlineRenderer";
 import { CardBoardRenderer } from "../board/cardBoardRenderer";
 import { reviewDrawingInput } from "../review/drawing";
 import { MindmapHandwritingController } from "./handwriting";
+import { recognizeInk } from "../annot/recognizeInk";
 import type { HandwritingMode, MindmapInkPoint, MindmapInkStroke } from "./handwritingContracts";
 import { cardClipboard } from "../study/cardClipboard";
 import { CARD_COLORS } from "../model/cardColors";
 import { handwritingSource } from "../documents/readingPosition";
-import { bindInlineCardLinks } from "../study/cardLink";
+import { enrollCardsForReview } from "../review/decks";
+import { bindInlineCardLinks, cardUrl } from "../study/cardLink";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const PINCH_WHEEL_EXPONENT = 0.01346909075675091;
@@ -69,6 +74,9 @@ export interface MindmapRendererOptions {
   nativeChrome?: boolean;
   onOpenOutline?: () => void;
   onOpenBoard?: () => void;
+  onCloseMindmap?: () => void;
+  onShowMindmap?: () => void;
+  onOpenSceneTemplates?: () => void;
   onHandwrite?: () => void;
   onHandwritingModeChange?: (mode: HandwritingMode) => void;
   onSelectionChange?: (nodes: readonly MindNode[]) => void;
@@ -100,6 +108,7 @@ export class MindmapRenderer {
   private focusId: string | null = null;
   private reviewMode: "" | "mask" | "title" | "expand" | "recite" = "";
   private maxDepth = 1;
+  private viewDepth: number | null = null;
   private recallHierarchyDepth = 8;
   private recallCollapsed = new Set<string>();
   private wasRecallActive = false;
@@ -125,6 +134,7 @@ export class MindmapRenderer {
   private handwritingMode: HandwritingMode = "off";
   private handwritingListeners = new Set<(mode: HandwritingMode) => void>();
   private stopStore: (() => void) | null = null;
+  private closeCardSpeech: (() => void) | null = null;
 
   // 视图缩放/平移
   private viewScale = 1;
@@ -217,6 +227,7 @@ export class MindmapRenderer {
         redo: () => { this.plugin.store.redoLibraryChange(); this.render(); this.plugin.refreshSidebar(); },
         binding: point => this.inkBinding(point),
         frame: stroke => this.inkTargetFrame(stroke),
+        recognize: image => recognizeInk(this.plugin, image),
         source: stroke => {
           const workspace = this.plugin.studyWorkspace;
           if (!workspace) { new Notice("请在学习工作区中打开笔迹来源"); return; }
@@ -246,6 +257,7 @@ export class MindmapRenderer {
       this.viewportResize.observe(this.scrollEl);
 
       this.scrollEl.addEventListener("dblclick", (e) => this.onCanvasDblClick(e));
+      this.scrollEl.addEventListener("contextmenu", (e) => this.openBackgroundMenu(e));
       this.scrollEl.addEventListener("wheel", this.onWheelBound, { passive: false });
       this.scrollEl.addEventListener("pointerdown", this.onTouchPointerDown, true);
       this.scrollEl.addEventListener("pointerdown", this.onCanvasPointerDownBound);
@@ -294,6 +306,7 @@ export class MindmapRenderer {
 
   /** 清理 DOM 与事件监听 */
   destroy(): void {
+    this.closeCardSpeech?.();
     this.stopStore?.(); this.stopStore = null;
     closeCardActionMenu();
     stopCardActionSpeech();
@@ -405,34 +418,96 @@ export class MindmapRenderer {
 
   private buildNativeChrome(): void {
     this.nativeCanvasButton = el("button", { type: "button", class: "ms-native-canvas-menu", "aria-label": "选择脑图" });
-    this.nativeCanvasButton.addEventListener("click", (event) => {
-      const menu = new Menu();
-      menu.addItem(item => item.setTitle("大纲").onClick(() => this.options.onOpenOutline ? this.options.onOpenOutline() : this.toggleNativePanel("outline")));
-      menu.addItem(item => item.setTitle("卡片分组看板 ⌃⌘M").onClick(() => this.openBoard()));
-      menu.addItem(item => item.setTitle("多选 ⌥⌘M").setChecked(this.multiSelect).onClick(() => this.toggleSceneMultiSelect()));
-      menu.addItem(item => item.setTitle("工具 ▸").onClick((click) => this.openMapToolMenu(click)));
-      for (const canvas of this.plugin.store.canvases.filter((candidate) => candidate.studySetId === this.plugin.store.activeStudySetId && candidate.kind !== "review")) {
-        menu.addItem((item) => item.setTitle((canvas.id === this.currentCanvasId() ? "✓ " : "") + canvas.name).onClick(() => { this.plugin.store.setActiveCanvas(canvas.id); this.render(); this.plugin.refreshSidebar(); }));
-      }
-      menu.addItem((item) => item.setTitle("新建脑图…").onClick(() => {
-        openTextModal({ title: "新建脑图", initial: "新脑图", onOk: (name) => {
-          if (!name.trim()) return;
-          const store = this.plugin.store;
-          if (!store.activeStudySetId) store.createStudySet(name.trim());
-          else store.setActiveCanvas(store.createCanvas(store.activeStudySetId, name.trim()).id);
-          this.render(); this.plugin.refreshSidebar();
-        } });
-      }));
-      menu.addItem((item) => item.setTitle("脑图工具与设置…").onClick(() => this.openNativeTools()));
-      menu.addItem((item) => item.setTitle("脑图显示设置…").onClick(() => this.openDisplaySettings()));
-      menu.addItem((item) => item.setTitle("新建手绘卡片…").onClick(() => this.options.onHandwrite ? this.options.onHandwrite() : this.openDrawingCard()));
-      menu.showAtMouseEvent(event);
-    });
+    this.nativeCanvasButton.addEventListener("click", (event) => this.openCanvasMenu(event));
     this.root!.append(this.nativeCanvasButton);
+  }
+
+  openCanvasMenu(event: MouseEvent): void {
+    const canvas = this.currentCanvas(), menu = new Menu();
+    menu.addItem(item => item.setTitle("关闭脑图").setDisabled(!this.options.onCloseMindmap).onClick(() => this.options.onCloseMindmap?.()));
+    menu.addItem(item => item.setTitle(canvas?.name ?? "未选择脑图").setChecked(!!canvas).setDisabled(!canvas).onClick(() => this.options.onShowMindmap?.()));
+    menu.addItem(item => item.setTitle("管理脑图").onClick(() => this.openNativeTools()));
+    menu.addItem(item => item.setTitle("大纲").onClick(() => { this.options.onShowMindmap?.(); this.options.onOpenOutline ? this.options.onOpenOutline() : this.toggleNativePanel("outline"); }));
+    menu.addItem(item => item.setTitle("卡片分组看板").onClick(() => { this.options.onShowMindmap?.(); this.openBoard(); }));
+    menu.addItem(item => item.setTitle("导出思维导图").onClick(() => { void exportCanvas(this.plugin).catch(error => new Notice("导出思维导图失败：" + String(error))); }));
+    menu.addItem(item => item.setTitle("导出学习集").setDisabled(!hasStudySetContent(this.plugin.store)).onClick(() => {
+      openStudySetExport(this.plugin, {}, () => new Notice("学习集已导出；撤销仅撤销历史记录，不删除导出文件。"));
+    }));
+    menu.addItem(item => item.setTitle("朗读卡片").onClick(() => this.openCardSpeech()));
+    menu.addItem(item => item.setTitle("在场景模板里设置…").setDisabled(!this.options.onOpenSceneTemplates).onClick(() => this.options.onOpenSceneTemplates?.()));
+    menu.showAtMouseEvent(event);
+  }
+
+  private openCardSpeech(): void {
+    this.closeCardSpeech?.();
+    const cards = this.plugin.store.cardsForStudySet(), session = createSpeechSession("mindmap-cards");
+    const { modal, close } = createModal("朗读卡片", () => { session.dispose(); this.closeCardSpeech = null; });
+    this.closeCardSpeech = close;
+    const status = el("p", { role: "status", "aria-live": "polite", text: "准备朗读" });
+    const pause = el("button", { type: "button", text: "暂停朗读" }) as HTMLButtonElement;
+    const stop = el("button", { type: "button", text: "停止朗读" });
+    pause.addEventListener("click", () => { if (session.state.status === "paused") session.resume(); else session.pause(); });
+    stop.addEventListener("click", () => session.stop());
+    const dismiss = el("button", { type: "button", text: "关闭" }); dismiss.addEventListener("click", close);
+    session.subscribe(state => {
+      status.textContent = state.error ?? ({ idle: "准备朗读", preparing: "正在准备朗读", speaking: "正在朗读" + (state.label ? "：" + state.label : ""), paused: "朗读已暂停", stopped: "朗读已停止", finished: "朗读已完成", error: "朗读失败" }[state.status]);
+      pause.textContent = state.status === "paused" ? "继续朗读" : "暂停朗读";
+      pause.disabled = !["preparing", "speaking", "paused"].includes(state.status);
+    });
+    modal.append(status, pause, stop, dismiss);
+    void session.start(cards.map((card, index) => ({ label: card.title || `卡片 ${index + 1}`, text: speechTextFromMarkdown([card.title, card.front, card.back].filter(Boolean).join("\n")) })));
   }
 
   openBoard(): void {
     if (this.options.onOpenBoard) this.options.onOpenBoard(); else this.toggleNativePanel("board");
+  }
+
+  /** MN5 全部展开/全部折叠：一次事务，撤销恢复原折叠状态。 */
+  private setAllCollapsed(collapsed: boolean): void {
+    const nodes = this.scopedNodes().filter(node => node.collapsed !== collapsed);
+    if (!nodes.length) return;
+    this.plugin.store.libraryTransaction(collapsed ? "全部折叠" : "全部展开", () => {
+      for (const node of nodes) this.plugin.store.updateNode(node.id, { collapsed });
+    });
+    this.options.onShowMindmap?.(); this.render();
+  }
+
+  /** MN5 展开到层级 N：只改当前视图深度，不写任何节点的 collapsed。 */
+  private setViewDepth(depth: number | null): void {
+    this.viewDepth = depth === null ? null : Math.max(1, Math.min(8, Math.floor(depth)));
+    this.options.onShowMindmap?.(); this.render();
+  }
+  getViewDepth(): number | null { return this.viewDepth; }
+
+  /** MN5 向上/向下移动：与同级节点交换 order。 */
+  private moveSelectedSibling(direction: -1 | 1): void {
+    const node = this.selectedViewNode();
+    if (!node) return;
+    const siblings = this.plugin.store.nodes.filter(item => item.parentId === node.parentId && item.canvasId === node.canvasId)
+      .slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    const index = siblings.findIndex(item => item.id === node.id), target = index + direction;
+    if (index < 0 || target < 0 || target >= siblings.length) return;
+    // Normalise every sibling order first so legacy nodes without `order` still swap visibly.
+    const ids = siblings.map(item => item.id);
+    [ids[index], ids[target]] = [ids[target], ids[index]];
+    this.plugin.store.libraryTransaction("移动卡片顺序", () => {
+      ids.forEach((id, position) => this.plugin.store.updateNode(id, { order: position }));
+    });
+    this.render();
+  }
+
+  /** MN5 删除卡片树：删除选中节点及其子孙的脑图引用（保留源卡片与标注）。 */
+  private deleteSelectedSubtree(): void {
+    const roots = this.selectedNodes();
+    if (!roots.length) return;
+    const ids = new Set(roots.map(node => node.id)), all = this.plugin.store.nodes;
+    let grew = true;
+    while (grew) { grew = false; for (const node of all) if (node.parentId && ids.has(node.parentId) && !ids.has(node.id)) { ids.add(node.id); grew = true; } }
+    openConfirm("删除卡片树", `从脑图移除 ${ids.size} 个节点（含子孙）？源卡片、摘录与 PDF 标注保留。`, () => {
+      // Structural nodes without a card cannot use removeExcerptFromMindmap; removeNodes drops the subtree.
+      this.plugin.store.libraryTransaction("删除卡片树", () => this.plugin.store.removeNodes([...ids]));
+      this.exitSelection(); this.render(); this.plugin.refreshSidebar();
+    }, "删除");
   }
 
   private openMapToolMenu(event: MouseEvent | KeyboardEvent): void {
@@ -449,7 +524,36 @@ export class MindmapRenderer {
     }));
     menu.addItem(item => item.setTitle("连接卡片").setChecked(this.connectMode).onClick(() => this.toggleSceneConnectMode()));
     menu.addItem(item => item.setTitle("脑图手写").setChecked(this.handwritingMode !== "off").onClick(() => this.setHandwritingMode(this.handwritingMode === "off" ? "pen" : "off")));
+    menu.addSeparator();
+    menu.addItem(item => item.setTitle("全部展开").setDisabled(this.viewDepth !== null).onClick(() => this.setAllCollapsed(false)));
+    menu.addItem(item => item.setTitle("全部折叠").setDisabled(this.viewDepth !== null).onClick(() => this.setAllCollapsed(true)));
+    const depth = new Menu();
+    depth.addItem(entry => entry.setTitle("显示到层级").setIsLabel(true));
+    for (const level of [1,2,3,4,5,6,7,8]) depth.addItem(entry => entry.setTitle(`展开到层级 ${level}`).setChecked(this.viewDepth === level).onClick(() => this.setViewDepth(level)));
+    depth.addItem(entry => entry.setTitle("显示全部层级").setChecked(this.viewDepth === null).onClick(() => this.setViewDepth(null)));
+    menu.addItem(item => item.setTitle("展开到层级 ▸").onClick(click => depth.showAtPosition({x: click instanceof MouseEvent ? click.clientX : 0, y: click instanceof MouseEvent ? click.clientY : 0})));
+    menu.addItem(item => item.setTitle("向上移动").setDisabled(this.selectedIds.size !== 1).onClick(() => this.moveSelectedSibling(-1)));
+    menu.addItem(item => item.setTitle("向下移动").setDisabled(this.selectedIds.size !== 1).onClick(() => this.moveSelectedSibling(1)));
+    menu.addItem(item => item.setTitle("删除卡片树").setDisabled(!this.selectedIds.size).onClick(() => this.deleteSelectedSubtree()));
+    menu.addItem(item => item.setTitle("缩放至合适大小").onClick(() => this.resetView()));
     menu.showAtPosition({x: event instanceof MouseEvent ? event.clientX : 0, y: event instanceof MouseEvent ? event.clientY : 0});
+  }
+
+  private openBackgroundMenu(event: MouseEvent): void {
+    event.preventDefault();
+    const menu = new Menu();
+    const point = this.viewCoordinates(event.clientX, event.clientY);
+    menu.addItem(item => item.setTitle("新建卡片").onClick(() => this.newNodeAt(Math.max(10, point.worldX), Math.max(10, point.worldY))));
+    menu.addItem(item => item.setTitle("粘贴").setDisabled(!cardClipboard.fragment).onClick(() => this.pasteNodes(cardClipboard.mode)));
+    menu.addItem(item => item.setTitle("排列").onClick(() => { this.autoLayout(); this.render(); }));
+    menu.addItem(item => item.setTitle("缩放至合适大小").onClick(() => this.resetView()));
+    menu.addItem(item => item.setTitle("展开到层级").onClick(click => {
+      const depth = new Menu();
+      depth.addItem(entry => entry.setTitle("全部展开").onClick(() => { this.setViewDepth(null); this.setAllCollapsed(false); }));
+      for (const level of [1, 2, 3, 4, 5, 6, 7, 8]) depth.addItem(entry => entry.setTitle(`展开到层级 ${level}`).onClick(() => this.setViewDepth(level)));
+      depth.showAtPosition({ x: click instanceof MouseEvent ? click.clientX : event.clientX, y: click instanceof MouseEvent ? click.clientY : event.clientY });
+    }));
+    menu.showAtMouseEvent(event);
   }
 
   private toggleNativePanel(kind: "outline" | "board"): void {
@@ -478,7 +582,30 @@ export class MindmapRenderer {
   }
 
   private openNativeTools(): void {
-    const { modal } = createModal("脑图工具");
+    const { modal, close } = createModal("管理脑图");
+    const store = this.plugin.store;
+    const maps = el("div", { class: "ms-native-tools-menu" });
+    for (const canvas of store.canvases.filter(candidate => candidate.studySetId === store.activeStudySetId && candidate.kind !== "review")) {
+      const select = el("button", { type: "button", text: canvas.name, "aria-pressed": String(canvas.id === this.currentCanvasId()) });
+      select.addEventListener("click", () => { store.setActiveCanvas(canvas.id); this.options.onShowMindmap?.(); this.render(); this.plugin.refreshSidebar(); close(); });
+      maps.append(select);
+    }
+    const create = el("button", { type: "button", text: "新建脑图…" });
+    create.addEventListener("click", () => {
+      close(); openTextModal({ title: "新建脑图", initial: "新脑图", onOk: name => {
+        if (!name.trim()) return;
+        if (!store.activeStudySetId) store.createStudySet(name.trim());
+        else store.setActiveCanvas(store.createCanvas(store.activeStudySetId, name.trim()).id);
+        this.options.onShowMindmap?.(); this.render(); this.plugin.refreshSidebar();
+      } });
+    });
+    const multiple = el("button", { type: "button", text: "多选 ⌥⌘M" });
+    multiple.addEventListener("click", () => { close(); this.options.onShowMindmap?.(); this.toggleSceneMultiSelect(); });
+    const mapTools = el("button", { type: "button", text: "工具 ▸" });
+    mapTools.addEventListener("click", event => { close(); this.openMapToolMenu(event); });
+    const drawing = el("button", { type: "button", text: "新建手绘卡片…" });
+    drawing.addEventListener("click", () => { close(); this.options.onHandwrite ? this.options.onHandwrite() : this.openDrawingCard(); });
+    maps.append(create, multiple, mapTools, drawing); modal.append(maps);
     const tools = el("div", { class: "ms-native-tools-menu ms-toolbar" });
     const multi = this.multiSelectBtn, review = this.reviewControlBtn;
     this.buildToolbar(tools); this.multiSelectBtn?.remove(); this.multiSelectBtn = multi; this.reviewControlBtn = review;
@@ -633,8 +760,10 @@ export class MindmapRenderer {
   // ===== 节点浮动工具栏 =====
   private buildNodeToolbar(toolbar: HTMLElement): void {
     clear(toolbar);
-    const item = (action: string, label: string, icon: string, title: string, cb: (event: MouseEvent) => void) => {
+    const item = (action: string, label: string, icon: string, title: string, cb: (event: MouseEvent) => void, iconOnly = false) => {
       const b = el("button", { class: "ms-node-tb-item", title, "aria-label": label, "data-action": action, type: "button" });
+      // MN5 keeps the first cluster icon-only; the four named actions stay as text.
+      if (iconOnly) b.dataset.iconOnly = "true";
       const glyph = el("span", { class: "ms-selection-icon", "aria-hidden": "true" });
       setIcon(glyph, icon);
       b.append(glyph, el("span", { class: "ms-selection-label", text: label }));
@@ -644,23 +773,280 @@ export class MindmapRenderer {
       });
       return b;
     };
+    if (this.multiSelect) {
+      toolbar.append(
+        item("cut", "剪切", "scissors", "剪切选中卡片和子树", () => this.cutNodes(), true),
+        item("copy", "复制", "copy", "复制选中卡片和子树", () => this.copyNodes(), true),
+        item("color", "颜色", "palette", "设置卡片颜色", () => this.pickColor(), true),
+        item("tag", "标签", "tag", "编辑卡片标签", () => this.editTags(), true),
+        item("link", "链接", "link", "添加卡片链接", () => this.addLink()),
+        item("summary", "概要", "brackets", "创建概要", () => this.createSummary()),
+        item("regroup", "重组", "network", "重组节点", () => this.regroupNodes()),
+        item("merge", "合并", "combine", "合并卡片", () => this.mergeNodes()),
+        item("chat", "对话", "message-circle", "使用选中卡片对话", () => {
+          const text = this.selectedNodes().map(node => {
+            const content = nodeContent(this.plugin.store, node);
+            return [content.heading, content.excerpt, content.note, ...content.comments].filter(Boolean).join("\n");
+          }).join("\n\n");
+          if (this.plugin.studyWorkspace) this.plugin.studyWorkspace.showAiContext({ text, label: "选中卡片" });
+          else new Notice("请在学习工作区中打开对话");
+        }),
+        item("delete", "删除", "trash-2", "删除选中卡片和子树", () => this.deleteSelectedNodes(), true),
+        item("more", "更多", "ellipsis", "更多卡片操作", (event) => this.showSelectionMore(event), true)
+      );
+      return;
+    }
+    // MN5 order: icon actions (colours/tags/delete are unlabelled icons there), then
+    // 分支布局 / 焦点 / 链接 / 添加复习, then 更多. Self-made 退出多选 stays at the end.
     toolbar.append(
-      item("cut", "剪切", "scissors", "剪切选中卡片和子树", () => this.cutNodes()),
-      item("copy", "复制", "copy", "复制选中卡片和子树", () => this.copyNodes()),
-      item("color", "颜色", "palette", "设置卡片颜色", () => this.pickColor()),
-      item("tag", "标签", "tag", "编辑卡片标签", () => this.editTags()),
+      item("cut", "剪切", "scissors", "剪切选中卡片和子树", () => this.cutNodes(), true),
+      item("copy", "复制", "copy", "复制选中卡片和子树", () => this.copyNodes(), true),
+      item("color", "颜色", "palette", "设置卡片颜色", () => this.pickColor(), true),
+      item("tag", "标签", "tag", "编辑卡片标签", () => this.editTags(), true),
+      item("delete", "删除", "trash-2", "删除选中卡片和子树", () => this.deleteSelectedNodes(), true),
+      item("layout", "分支布局", "git-branch", "选择分支布局样式", (event) => this.openBranchLayoutMenu(event)),
+      item("focus", "焦点", "focus", "聚焦选中节点的子树（再次点击退出）", () => this.toggleFocus()),
       item("link", "链接", "link", "添加卡片链接", () => this.addLink()),
-      item("summary", "概要", "brackets", "为同级卡片创建概要", () => this.createSummary()),
-      item("regroup", "重新分组", "network", "将同级卡片归入新的父节点", () => this.regroupNodes()),
-      item("merge", "合并", "combine", "合并多选卡片", () => this.mergeNodes()),
-      item("delete", "删除", "trash-2", "删除选中卡片和子树", () => this.deleteSelectedNodes()),
-      item("more", "更多", "ellipsis", "更多卡片操作", (event) => this.showSelectionMore(event)),
-      item("close", "退出多选", "x", "退出选择模式", () => this.exitSelection())
+      item("review", "添加复习", "graduation-cap", "把选中卡片加入当前复习卡组", () => this.enrollSelectedForReview()),
+      item("more", "更多", "ellipsis", "更多卡片操作", (event) => this.showSelectionMore(event), true),
+      item("close", "退出多选", "x", "退出选择模式", () => this.exitSelection(), true)
     );
+  }
+
+  private selectedCardId(): string | undefined {
+    const nodes = this.selectedNodes();
+    return nodes.length === 1 ? nodes[0].cardId : undefined;
+  }
+
+  /** MN5 分支布局：列出预设样式并标出当前选中节点/画布的样式。 */
+  private openBranchLayoutMenu(event: MouseEvent): void {
+    const node = this.selectedViewNode();
+    const current = node?.layout ?? this.plugin.store.settings.layout;
+    const menu = new Menu();
+    for (const style of BRANCH_STYLES) {
+      menu.addItem(item => item.setTitle(style.name).setChecked(style.id === current).onClick(() => {
+        if (node) this.plugin.store.updateNode(node.id, { layout: style.id });
+        else {
+          this.plugin.store.settings.layout = style.id;
+          this.plugin.store.save();
+        }
+        this.render();
+      }));
+    }
+    menu.addSeparator();
+    menu.addItem(item => item.setTitle("更多分支样式…").onClick(() => this.openBranchStyle()));
+    menu.showAtMouseEvent(event);
+  }
+
+  private enrollSelectedForReview(): void {
+    const cardIds = [...new Set(this.selectedNodes().map(node => node.cardId).filter((id): id is string => !!id))];
+    if (!cardIds.length) { new Notice("选中的节点没有关联卡片"); return; }
+    enrollCardsForReview(this.plugin, cardIds, () => this.render());
+  }
+
+  /** 选中整个分支：当前选中节点及其全部子孙节点。 */
+  private selectWholeBranch(): void {
+    const roots = this.selectedNodes();
+    if (!roots.length) return;
+    const all = this.plugin.store.nodes, ids = new Set<string>(roots.map(node => node.id));
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const node of all) {
+        if (node.parentId && ids.has(node.parentId) && !ids.has(node.id)) { ids.add(node.id); grew = true; }
+      }
+    }
+    this.multiSelect = ids.size > 1 || this.multiSelect;
+    this.selectionSource = "direct";
+    this.selectedIds = ids;
+    this.applySelectionClasses(); this.render();
+    new Notice(`已选中整个分支（${ids.size} 个节点）`);
+  }
+
+  private setSelectedCollapsed(collapsed: boolean): void {
+    const nodes = this.selectedNodes();
+    if (!nodes.length) return;
+    for (const node of nodes) {
+      if (!this.plugin.store.nodes.some(child => child.parentId === node.id)) continue;
+      if (!!node.collapsed !== collapsed) this.plugin.store.updateNode(node.id, { collapsed });
+    }
+    this.render();
+  }
+
+  private exportSelected(kind: "branch" | "card"): void {
+    const nodes = this.selectedNodes();
+    if (!nodes.length) { new Notice("请先选中卡片"); return; }
+    if (kind === "card") { void exportMindmapNodes(this.plugin, [nodes[0].id], "card"); return; }
+    const all = this.plugin.store.nodes, ids = new Set<string>(nodes.map(node => node.id));
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const node of all) if (node.parentId && ids.has(node.parentId) && !ids.has(node.id)) { ids.add(node.id); grew = true; }
+    }
+    void exportMindmapNodes(this.plugin, [...ids], "branch");
+  }
+
+  /** MN5 更多菜单：16 项按基准顺序，插件自有动作收在「更多操作…」。 */
+  private showSelectionMore(event: MouseEvent): void {
+    const nodes = this.selectedNodes();
+    if (!nodes.length) return;
+    const menu = new Menu();
+    trackCardActionMenu(menu);
+    const cardId = nodes.length === 1 ? nodes[0].cardId : undefined;
+    const card = cardId ? this.plugin.store.getCard(cardId) : undefined;
+    const item = (label: string, action: () => void, disabled = false) => menu.addItem(entry => entry.setTitle(label).setDisabled(disabled).onClick(action));
+    const refresh = () => this.render();
+    item("剪切", () => this.cutNodes());
+    item("复制", () => this.copyNodes());
+    item("粘贴", () => this.pasteNodes(cardClipboard.mode), !cardClipboard.fragment);
+    item("整卡截图批注", () => cardId && openCardInk(this.plugin, cardId, "snapshot", refresh), !cardId);
+    item("导出分支", () => this.exportSelected("branch"));
+    item("导出本卡", () => this.exportSelected("card"), nodes.length !== 1);
+    item("选中整个分支", () => this.selectWholeBranch());
+    item("塌缩成子脑图", () => this.collapseToSubmap(), nodes.length !== 1);
+    item("复制克隆到剪贴板", () => {
+      if (!copyCardFragment(this.plugin, nodes[0].id, "clone")) new Notice("该节点没有可复制的卡片");
+    }, !cardId);
+    item("重置尺寸和字体比例", () => cardId && resetCardTypography(this.plugin, cardId, refresh), !cardId);
+    item("从脑图中移除", () => removeCardFromMindmap(this.plugin, nodes[0], refresh));
+    item("清除富文本格式", () => cardId && clearCardRichFormat(this.plugin, cardId, refresh), !cardId);
+    item("展开", () => this.setSelectedCollapsed(false));
+    item("折叠", () => this.setSelectedCollapsed(true));
+    if (this.multiSelect) {
+      item("分支布局", () => this.openBranchLayoutMenu(event));
+      item("焦点", () => this.toggleFocus());
+      item("添加复习", () => this.enrollSelectedForReview());
+      item("退出多选", () => this.exitSelection());
+    }
+    item("更多操作…", () => this.showSelectionExtra(event, nodes));
+    item("自定义…", () => this.openDisplaySettings());
+    menu.showAtMouseEvent(event);
+  }
+
+  /** 更多操作…：插件自有与高级动作，保持不删。 */
+  private showSelectionExtra(event: MouseEvent, captured?: MindNode[]): void {
+    const nodes = captured?.length ? captured : this.selectedNodes();
+    if (!nodes.length) return;
+    const menu = new Menu();
+    trackCardActionMenu(menu);
+    const cardId = nodes.length === 1 ? nodes[0].cardId : undefined;
+    const card = cardId ? this.plugin.store.getCard(cardId) : undefined;
+    const item = (label: string, action: () => void, disabled = false) => menu.addItem(entry => entry.setTitle(label).setDisabled(disabled).onClick(action));
+    const refresh = () => this.render();
+    item("粘贴克隆", () => this.pasteNodes("clone"), !cardClipboard.fragment);
+    item("粘贴引用", () => this.pasteNodes("reference"), !cardClipboard.fragment);
+    item("复制卡片克隆", () => { if (!copyCardFragment(this.plugin, nodes[0].id, "clone")) new Notice("该节点没有可复制的卡片"); }, !cardId);
+    item("复制卡片引用", () => { if (!copyCardFragment(this.plugin, nodes[0].id, "reference")) new Notice("该节点没有可复制的卡片"); }, !cardId);
+    item("复制卡片URL", () => {
+      if (!card) return;
+      void navigator.clipboard.writeText(cardUrl(this.plugin.app.vault.getName(), card.id)).then(() => new Notice("已复制卡片链接")).catch(error => new Notice("无法复制卡片链接：" + String(error)));
+    }, !card);
+    item("断开引用", () => detachNode(this.plugin, nodes[0], refresh), nodes.length !== 1 || !nodes[0].cardId);
+    item("按内容拆分…", () => openNodeSplit(this.plugin, nodes[0], () => { this.revealedIds.clear(); refresh(); }), nodes.length !== 1);
+    item("连续摘录", () => {
+      const reader = this.plugin.activeReader;
+      if (!(reader instanceof ReaderView) || !card || !reader.continueExcerptInCard(card.id)) new Notice("请先在同一 PDF 中选择摘录笔");
+    }, nodes.length !== 1 || !card || !(this.plugin.activeReader instanceof ReaderView) || this.plugin.activeReader.getFilePath() !== card.docPath);
+    item("解除合并", () => { if (card) { this.plugin.store.unmergeCard(card.id); refresh(); } }, nodes.length !== 1 || !card?.mergedCards?.length);
+    item("概要", () => this.createSummary(), nodes.length < 2);
+    item("重新分组", () => this.regroupNodes(), nodes.length < 2);
+    item("合并", () => this.mergeNodes(), nodes.length < 2 || !this.multiSelect);
+    item("颜色", () => cardId && openCardColorPicker(this.plugin, cardId, refresh), !cardId);
+    item("标签", () => cardId && openCardTagsEditor(this.plugin, cardId, refresh), !cardId);
+    item("编辑标题", () => cardId && openCardTitleEditor(this.plugin, cardId, refresh), !cardId);
+    item("编辑卡片", () => cardId && openCardEditor(this.plugin, cardId, refresh), !cardId);
+    item("空白手写", () => cardId && openCardInk(this.plugin, cardId, "blank", refresh), !cardId);
+    item("追加批注", () => cardId && appendCardAnnotation(this.plugin, cardId, refresh), !cardId);
+    item("文本转标题", () => cardId && convertCardTextToTitle(this.plugin, cardId, refresh), !cardId || !!card?.image || !!card?.images?.length || !card?.front.trim());
+    item("朗读", () => cardId && speakCard(this.plugin, cardId), !cardId);
+    item("添加到复习", () => cardId && addCardToReview(this.plugin, cardId, refresh), !cardId);
+    item("设为标题", () => cardId && openCardTitleEditor(this.plugin, cardId, refresh), !cardId);
+    const notesForCard = () => card?.anchorAnnId ? (notebookMeta(this.plugin.store.getDocMeta(card.docPath)).pdfExtendNotes ?? []).filter(note => note.sourceAnnId === card.anchorAnnId) : [];
+    const toggleNotes = (collapsed: boolean) => {
+      if (!card) return;
+      const notes = notesForCard();
+      if (!notes.length) { new Notice("这张卡还没有留白评论"); return; }
+      updateNotebookMeta(this.plugin, card.docPath, { pdfExtendNotes: (notebookMeta(this.plugin.store.getDocMeta(card.docPath)).pdfExtendNotes ?? []).map(note => notes.some(target => target.id === note.id) ? { ...note, collapsed } : note) });
+      refresh();
+    };
+    item("展开留白", () => toggleNotes(false), !card || !notesForCard().length);
+    item("折叠留白", () => toggleNotes(true), !card || !notesForCard().length);
+    item("添加到脑图", () => {
+      if (!card) return;
+      const existing = this.plugin.store.nodes.find(node => node.cardId === card.id && node.canvasId === this.plugin.store.activeCanvasId);
+      if (existing) { if (existing.hidden) this.plugin.store.setNodeHidden(existing.id, false); refresh(); return; }
+      const canvasId = this.plugin.store.activeCanvasId;
+      const root = this.plugin.store.nodes.find(node => node.docPath === card.docPath && !node.parentId && node.canvasId === canvasId)
+        ?? (() => { const created = { id: uid("node"), parentId: null, title: card.docPath.split("/").pop() ?? "文档", docPath: card.docPath, canvasId, collapsed: false, x: 40, y: 40 }; this.plugin.store.addNode(created); return created; })();
+      this.plugin.store.addNode({ id: uid("node"), parentId: root.id, cardId: card.id, title: card.front.slice(0, 60) || "卡片", docPath: card.docPath, canvasId, collapsed: false, x: 320, y: 40 + this.plugin.store.nodes.filter(node => node.parentId === root.id && node.canvasId === canvasId).length * 150 });
+      refresh();
+    }, !card);
+    const pickTarget = (label: string, run: (targetId: string) => void) => {
+      if (!card) return;
+      const candidates = this.plugin.store.cards.filter(candidate => candidate.id !== card.id && !candidate.groupId);
+      if (!candidates.length) { new Notice("没有可选的其它卡片"); return; }
+      const { modal, close } = createModal(label);
+      const list = el("div", { style: "max-height:50vh;overflow:auto" });
+      for (const candidate of candidates.slice(0, 200)) {
+        const button = el("button", { class: "ms-native-menu-row", text: (candidate.title || candidate.front || "(空卡)").slice(0, 80) });
+        button.addEventListener("click", () => { close(); run(candidate.id); });
+        list.append(button);
+      }
+      const cancel = el("button", { class: "ms-btn", text: "取消" }); cancel.addEventListener("click", close);
+      modal.append(el("p", { class: "ms-muted", text: "选择目标卡片；操作可用一次撤销恢复。" }), list, cancel);
+    };
+    item("加为评论", () => pickTarget("加为评论", targetId => {
+      if (!card) return;
+      const target = this.plugin.store.getCard(targetId);
+      if (!target) return;
+      this.plugin.store.libraryTransaction("加为评论", () => {
+        this.plugin.store.updateCard(targetId, { back: [target.back, card.front].filter(Boolean).join("\n\n") });
+        for (const node of this.plugin.store.nodes.filter(node => node.cardId === card.id)) this.plugin.store.setNodeHidden(node.id, true);
+        this.plugin.store.updateCard(card.id, { hidden: true });
+      });
+      refresh();
+    }), !card);
+    item("合并到", () => pickTarget("合并到", targetId => {
+      if (!card) return;
+      this.plugin.store.mergeCards(targetId, [card.id]);
+      refresh();
+    }), !card);
+    item("文本优先", () => {
+      if (!card) return;
+      this.plugin.store.updateCard(card.id, { textFirst: !card.textFirst }); refresh();
+    }, !card);
+    item("摘录遮挡", () => toggleCardOcclusion(this.plugin, nodes, refresh));
+    item("整卡遮挡", () => this.toggleSelectedOcclusion());
+    item("在此处隐藏", () => this.hideSelected());
+    item("评论", () => this.editComments(), nodes.length !== 1);
+    item("打开子脑图", () => this.openChildMap(), nodes.length !== 1);
+    item("创建子脑图…", () => this.createSelectedSubmap(), nodes.length !== 1 || !!nodes[0].submapId);
+    item("重命名子脑图…", () => this.renameSelectedSubmap(), nodes.length !== 1 || !nodes[0].submapId);
+    item("删除子脑图…", () => this.deleteSelectedSubmap(), nodes.length !== 1 || !nodes[0].submapId);
+    item("展开子脑图", () => this.expandSubmap(), nodes.length !== 1);
+    item("设置分支样式…", () => this.openBranchStyle(), nodes.length !== 1);
+    item(nodes[0].titleOnly ? "显示卡片正文" : "仅显示标题", () => {
+      this.plugin.store.updateNode(nodes[0].id, { titleOnly: !nodes[0].titleOnly }); refresh();
+    }, nodes.length !== 1);
+    item("删除", () => {
+      if (!card) return;
+      const { modal, close } = createModal("删除卡片");
+      modal.append(el("p", { text: "删除卡片及其各脑图引用，并从复习卡组移除。子节点提升到原父节点，源文档和标注保留。" }));
+      const cancel = el("button", { type: "button", text: "取消" });
+      const remove = el("button", { type: "button", text: "确认删除卡片" });
+      cancel.addEventListener("click", close);
+      remove.addEventListener("click", () => { remove.setAttribute("disabled", ""); deleteCardWithNodes(this.plugin, card.id, refresh, close); });
+      modal.append(cancel, remove);
+    }, !card || !!card.groupId || !!card.mergedCards?.length);
+    menu.showAtMouseEvent(event);
   }
 
   private updateNodeToolbar(): void {
     if (!this.nodeToolbarEl) return;
+    if (this.nodeToolbarEl.dataset.mode !== String(this.multiSelect)) {
+      this.nodeToolbarEl.dataset.mode = String(this.multiSelect);
+      this.buildNodeToolbar(this.nodeToolbarEl);
+    }
     const count = this.selectedIds.size;
     this.nodeToolbarEl.style.display = this.selectionSource === "direct" && (this.multiSelect || count > 0) ? "flex" : "none";
     this.nodeToolbarEl.setAttribute("data-selection", String(count));
@@ -670,10 +1056,7 @@ export class MindmapRenderer {
     this.multiSelectBtn?.classList.toggle("is-active", this.multiSelect);
     this.multiSelectBtn?.setAttribute("aria-pressed", String(this.multiSelect));
     for (const button of this.nodeToolbarEl.querySelectorAll<HTMLButtonElement>("button[data-action]")) {
-      const action = button.dataset.action;
-      const needsPair = action === "summary" || action === "regroup" || action === "merge";
-      button.disabled = action === "close" ? false : needsPair ? count < 2 : count === 0;
-      if (action === "merge") button.disabled ||= !this.multiSelect;
+      button.disabled = button.dataset.action !== "close" && count === 0;
     }
     this.positionNodeToolbar();
   }
@@ -738,42 +1121,6 @@ export class MindmapRenderer {
   private exitSelection(): void {
     this.multiSelect = false;
     this.clearSelection();
-  }
-
-  private showSelectionMore(event: MouseEvent): void {
-    const nodes = this.selectedNodes();
-    if (!nodes.length) return;
-    const menu = new Menu();
-    trackCardActionMenu(menu);
-    addCommonCardActions(menu, this.plugin, nodes, () => this.render());
-    const item = (label: string, action: () => void, disabled = false) => menu.addItem((entry) => entry.setTitle(label).setDisabled(disabled).onClick(action));
-    item("粘贴卡片", () => this.pasteNodes(cardClipboard.mode), !cardClipboard.fragment);
-    item("粘贴克隆", () => this.pasteNodes("clone"), !cardClipboard.fragment);
-    item("粘贴引用", () => this.pasteNodes("reference"), !cardClipboard.fragment);
-    item("断开引用", () => this.detachSelectedReference(), nodes.length !== 1 || !nodes[0].cardId);
-    item("按内容拆分…", () => this.splitSelectedContent(), nodes.length !== 1);
-    const card = nodes[0].cardId ? this.plugin.store.getCard(nodes[0].cardId) : undefined;
-    item("连续摘录", () => {
-      const reader = this.plugin.activeReader;
-      if (!(reader instanceof ReaderView) || !card || !reader.continueExcerptInCard(card.id)) new Notice("请先在同一 PDF 中选择摘录笔");
-    }, nodes.length !== 1 || !card || !(this.plugin.activeReader instanceof ReaderView) || this.plugin.activeReader.getFilePath() !== card.docPath);
-    item("解除合并", () => {
-      if (card) { this.plugin.store.unmergeCard(card.id); this.render(); }
-    }, nodes.length !== 1 || !card?.mergedCards?.length);
-    item("整卡遮挡", () => this.toggleSelectedOcclusion());
-    item("在此处隐藏", () => this.hideSelected());
-    item("评论", () => this.editComments(), nodes.length !== 1);
-    item("打开子脑图", () => this.openChildMap(), nodes.length !== 1);
-    item("创建子脑图…", () => this.createSelectedSubmap(), nodes.length !== 1 || !!nodes[0].submapId);
-    item("重命名子脑图…", () => this.renameSelectedSubmap(), nodes.length !== 1 || !nodes[0].submapId);
-    item("删除子脑图…", () => this.deleteSelectedSubmap(), nodes.length !== 1 || !nodes[0].submapId);
-    item("折叠为子脑图", () => this.collapseToSubmap(), nodes.length !== 1);
-    item("展开子脑图", () => this.expandSubmap(), nodes.length !== 1);
-    item("设置分支样式…", () => this.openBranchStyle(), nodes.length !== 1);
-    item(nodes[0].titleOnly ? "显示卡片正文" : "仅显示标题", () => {
-      this.plugin.store.updateNode(nodes[0].id, { titleOnly: !nodes[0].titleOnly }); this.render();
-    }, nodes.length !== 1);
-    menu.showAtMouseEvent(event);
   }
 
   // ===== 缩放/平移 =====
@@ -1077,6 +1424,8 @@ export class MindmapRenderer {
     if (this.reviewMode === "expand") {
       all = all.filter((n) => this.depthOf(n) <= this.maxDepth);
     }
+    // MN5 脑图「展开到层级 N」：只影响当前视图，不写 collapsed
+    if (this.viewDepth !== null) all = all.filter((n) => this.depthOf(n) <= this.viewDepth!);
     const hidden = new Set<string>();
     const childrenOf = (id: string) => all.filter((n) => n.parentId === id);
     const markHidden = (id: string, preserveTransient = false) => {
@@ -1203,6 +1552,8 @@ export class MindmapRenderer {
     let imageIndex = 0;
     const appendImages = (values: string[], blockId?: string) => {
       if (!values.length) return;
+      // MN5 「文本优先」: hide image media on the node face and keep text visible.
+      if (card?.textFirst) { imageIndex += values.length; return; }
       const images = el("div", { class: "ms-node-images" });
       for (const image of values) {
         const source = imageUrl(this.plugin, image);
@@ -1346,7 +1697,7 @@ export class MindmapRenderer {
           if(isCollapsed){this.afterImagesReady(div,toggle as HTMLButtonElement,()=>{this.layeredOpenIds.add(n.id);this.revealNode(n.id);this.recallCollapsed.delete(n.id);this.render();});return;}else{this.layeredOpenIds.delete(n.id);this.revealedIds.delete(n.id);this.recallCollapsed.add(n.id);}
         } else if (this.isRecallHierarchyActive()) {
           if (this.recallCollapsed.has(n.id)) this.recallCollapsed.delete(n.id); else this.recallCollapsed.add(n.id);
-        } else this.plugin.store.updateNode(n.id, { collapsed: !n.collapsed });
+        } else if (!n.collapsed) this.plugin.store.updateNode(n.id, { collapsed: true });
         this.render();
       });
       actions.append(toggle);
@@ -1369,8 +1720,8 @@ export class MindmapRenderer {
     });
     div.addEventListener("contextmenu", (event) => {
       event.preventDefault(); event.stopPropagation();
-      if (!this.selectedIds.has(n.id)) this.multiSelect ? this.toggleSelect(n.id) : this.selectSingle(n.id);
-      showNodeActions(this.plugin, [...this.selectedIds], event, () => { this.revealedIds.clear(); this.render(); });
+      if (this.selectedIds.has(n.id)) this.clearSelection();
+      else this.openBackgroundMenu(event);
     });
     div.addEventListener("click", (e) => {
       if(this.isLayeredRecall()&&!this.layeredOpenIds.has(n.id)&&!(e.target instanceof Element && e.target.closest("button,a,input"))){const open=div.querySelector<HTMLButtonElement>('[aria-label="揭开下一层"]');if(open&&!open.disabled)open.click();return;}
@@ -1986,6 +2337,22 @@ export class MindmapRenderer {
 
   private onDrop(e: DragEvent): void {
     e.preventDefault();
+    const aiReply = e.dataTransfer?.getData("application/x-marginstudy-ai-reply");
+    if (aiReply && this.world) {
+      try {
+        if (aiReply.length > 1000000) throw new Error("回复内容过长");
+        const payload = JSON.parse(aiReply) as { text?: unknown; docPath?: unknown };
+        if (typeof payload.text !== "string" || !payload.text.trim() || typeof payload.docPath !== "string") throw new Error("回复内容无效");
+        const text = payload.text.trim(), point = this.viewCoordinates(e.clientX, e.clientY), id = uid("card");
+        this.plugin.store.libraryTransaction("AI 回复加入脑图", () => {
+          this.plugin.store.addCard({ id, docPath: payload.docPath as string, type: "comment", front: text, tags: [], links: [], createdAt: new Date().toISOString() });
+          this.plugin.store.addNode({ id: uid("node"), cardId: id, title: text.slice(0, 60), docPath: payload.docPath as string, canvasId: this.currentCanvasId(), parentId: null, x: Math.max(10, point.worldX - 60), y: Math.max(10, point.worldY - 20), collapsed: false });
+        });
+        this.render();
+        new Notice("AI 回复已加入脑图");
+      } catch (error) { new Notice("无法将 AI 回复加入脑图：" + String(error)); }
+      return;
+    }
     const boardData = e.dataTransfer?.getData(BOARD_DRAG_TYPE);
     if (boardData && this.world) {
       try {

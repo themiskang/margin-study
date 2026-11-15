@@ -137,7 +137,7 @@ export class ExtendNotes {
     this.popupId = this.mode() === "collapse" ? note.id : null;
     await this.replace(note.id, note, "添加留白"); this.edit(note.id); return note.id;
   }
-  async update(id: string, patch: Partial<Pick<PdfExtendNote, "anchor" | "height" | "text" | "runs" | "collapsed" | "ink" | "color" | "tags" | "images" | "textBoxes">>): Promise<void> {
+  async update(id: string, patch: Partial<Pick<PdfExtendNote, "anchor" | "height" | "text" | "runs" | "collapsed" | "ink" | "color" | "tags" | "images" | "textBoxes" | "translation">>): Promise<void> {
     const before = this.notes().find(note => note.id === id); if (!before) return;
     const next = { ...before, ...structuredClone(patch) };
     if (!Number.isFinite(next.height) || next.height < 24 || next.height > 3000 || ![next.anchor.x, next.anchor.y].every(Number.isFinite)) throw new Error("留白位置或高度无效");
@@ -148,6 +148,28 @@ export class ExtendNotes {
     if(next.textBoxes?.some(box=>!box.id||typeof box.text!=="string"||box.text.length>100_000||![box.x,box.y,box.w,box.h].every(Number.isFinite)||box.x<0||box.y<0||box.w<=0||box.h<=0||box.x+box.w>1.001||box.y+box.h>1.001))throw new Error("留白文字框无效");
     await this.replace(id, next, "编辑留白");
   }
+  /** 插入页内译文：文字框可继续编辑，整次只记一条「插入译文」历史。 */
+  async addTranslation(page: number, box: { x: number; y: number; w: number; h: number }, text: string, translation: import("../types").PdfTranslation): Promise<{ noteId: string; boxId: string }> {
+    await this.finish();
+    const pageId = this.reader.getPdfPageId(page);
+    if (!pageId) throw new Error("请在 PDF 页面中添加译文");
+    if (!text.trim()) throw new Error("译文为空，未写入文档");
+    const boxId = uid("box"), id = uid("extend");
+    const clamped = {
+      x: Math.max(0, Math.min(0.98, box.x)), y: Math.max(0, Math.min(0.98, box.y)),
+      w: Math.max(0.05, Math.min(1 - Math.max(0, Math.min(0.98, box.x)), box.w)),
+      h: Math.max(0.02, Math.min(1 - Math.max(0, Math.min(0.98, box.y)), box.h)),
+    };
+    const note: PdfExtendNote = {
+      id, pageId, anchor: { x: clamped.x, y: clamped.y }, height: Math.max(90, Math.round(clamped.h * 600)),
+      text: "", translation, textBoxes: [{ id: boxId, text, x: clamped.x, y: clamped.y, w: clamped.w, h: clamped.h }],
+      createdAt: new Date().toISOString(),
+    };
+    this.popupId = null;
+    await this.replace(id, note, "插入译文");
+    return { noteId: id, boxId };
+  }
+
   async remove(id: string): Promise<void> { await this.finish(); this.popupId = null; await this.replace(id, undefined, "删除留白"); }
   private ownCard(id: string): Card | undefined {
     return this.reader.plugin.store.cards.find(card=>card.docPath===this.reader.getFilePath()&&card.anchorAnnId===id&&!card.groupId);
@@ -342,9 +364,10 @@ export class ExtendNotes {
       let pastePoint={x:.1,y:.1};box.tabIndex=0;
       const paperPoint=(event:MouseEvent)=>{const bounds=box.getBoundingClientRect();return{x:Math.max(0,Math.min(.94,(event.clientX-bounds.left)/bounds.width)),y:Math.max(0,Math.min(.85,(event.clientY-bounds.top)/bounds.height))};};
       const canPaste=(target:EventTarget|null)=>this.reader.getHandwritingMode()==="off"&&!(target instanceof Element&&target.closest('[contenteditable],input,textarea'));
+      box.addEventListener("pointerdown",event=>{const grip=event.target instanceof Element?event.target.closest<HTMLElement>(".ms-extend-text-box-resize"):null;if(grip&&event.button===0&&this.reader.getHandwritingMode()==="off"){try{grip.setPointerCapture(event.pointerId);}catch{}}},true);
       box.addEventListener("pointerdown",event=>{pastePoint=paperPoint(event);if(event.target===box||event.target===content)box.focus({preventScroll:true});});
       box.addEventListener("paste",event=>{if(!canPaste(event.target))return;const text=event.clipboardData?.getData("text/plain")??"",files=Array.from(event.clipboardData?.files??[]).filter(isPageImage);if(!text&&!files.length)return;event.preventDefault();event.stopPropagation();void (async()=>{if(await this.pasteImage(note.id,text,pastePoint,path,notebook))return;if(files.length)await this.insertImages(note.id,files);else if(!text.startsWith("marginstudy-image:"))await this.pasteTextBox(note.id,text,pastePoint,path,notebook);})().catch(error=>new Notice(String(error)));});
-      box.addEventListener("contextmenu",event=>{if(!canPaste(event.target)||(event.target as Element).closest("button"))return;event.preventDefault();event.stopPropagation();pastePoint=paperPoint(event);const point={...pastePoint};new Menu().addItem(item=>item.setTitle("Paste").setIcon("clipboard-paste").onClick(async()=>{try{const text=await navigator.clipboard.readText();if(await this.pasteImage(note.id,text,point,path,notebook))return;if(text&&!text.startsWith("marginstudy-image:"))await this.pasteTextBox(note.id,text,point,path,notebook);else{const items=await navigator.clipboard.read();const item=items.find(item=>item.types.includes("image/png"));if(item)await this.insertImages(note.id,[new File([await item.getType("image/png")],"Clipboard.png",{type:"image/png"})]);}}catch(error){new Notice("粘贴文字框失败："+String(error));}})).showAtMouseEvent(event);});
+      box.addEventListener("contextmenu",event=>{if(!canPaste(event.target)||(event.target as Element).closest("button"))return;event.preventDefault();event.stopPropagation();pastePoint=paperPoint(event);const point={...pastePoint};new Menu().addItem(item=>item.setTitle("粘贴").setIcon("clipboard-paste").onClick(async()=>{try{const text=await navigator.clipboard.readText();if(await this.pasteImage(note.id,text,point,path,notebook))return;if(text&&!text.startsWith("marginstudy-image:"))await this.pasteTextBox(note.id,text,point,path,notebook);else{const items=await navigator.clipboard.read();const item=items.find(item=>item.types.includes("image/png"));if(item)await this.insertImages(note.id,[new File([await item.getType("image/png")],"Clipboard.png",{type:"image/png"})]);}}catch(error){new Notice("粘贴文字框失败："+String(error));}})).showAtMouseEvent(event);});
       if (embeddedInMargin) marginBottom = top + note.height * contentScale + 8;
       const content = el("div", { class: "ms-extend-content ms-extend-text" });
       if(marginTextBand){
@@ -396,7 +419,7 @@ export class ExtendNotes {
     const path=this.reader.getFilePath(),notebook=this.reader.getDocumentNotebookId();
     const {modal,close}=createModal("切换留白显示模式");modal.setAttribute("role","dialog");modal.setAttribute("aria-label","切换留白显示模式");
     modal.append(el("p",{text:"当前设置下，留白只能以弹出方式显示。若要嵌入显示，需要切换设置。是否切换？"}));
-    const actions=el("div",{class:"ms-modal-actions"}),no=el("button",{text:"No","aria-label":"No"}),yes=el("button",{text:"Yes","aria-label":"Yes"});
+    const actions=el("div",{class:"ms-modal-actions"}),no=el("button",{text:"否","aria-label":"否"}),yes=el("button",{text:"是","aria-label":"是"});
     no.addEventListener("click",close);yes.addEventListener("click",()=>{close();if(this.reader.getFilePath()===path&&this.reader.getDocumentNotebookId()===notebook)void expand().catch(error=>new Notice(String(error)));});actions.append(no,yes);modal.append(actions);no.focus();
   }
   private async editCard(id: string): Promise<void> {
@@ -435,7 +458,7 @@ export class ExtendNotes {
     const actions=el("div",{class:"ms-modal-actions"});
     for(const [label,format] of [["PDF","pdf"],["Long Image","png"]] as const){const button=el("button",{text:label,"aria-label":label});button.addEventListener("click",()=>{close();if(this.reader.getFilePath()!==path||this.reader.getDocumentNotebookId()!==notebook)return;
       void this.reader.exportExtendCard(note.id,format).then(bytes=>{const url=URL.createObjectURL(new Blob([new Uint8Array(bytes).buffer],{type:format==="pdf"?"application/pdf":"image/png"})),link=el("a",{href:url,download:`Extend.${format}`});link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}).catch(error=>new Notice(String(error)));});actions.append(button);}
-    const cancel=el("button",{text:"Cancel","aria-label":"Cancel"});cancel.addEventListener("click",close);actions.append(cancel);modal.append(actions);
+    const cancel=el("button",{text:"取消","aria-label":"取消"});cancel.addEventListener("click",close);actions.append(cancel);modal.append(actions);
   }
   private async pickImages(id: string, source: "files"|"photos"|"camera"): Promise<void> {
     this.imageRequest?.abort();this.imageInput?.remove();const request=new AbortController();this.imageRequest=request;

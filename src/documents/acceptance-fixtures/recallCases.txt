@@ -8,6 +8,19 @@ export async function runRecallAcceptance(context:any){
   const every=(root:HTMLElement,id:string,name:string,on:boolean)=>elements(root,id).length>0&&elements(root,id).every(node=>node.classList.contains(name)===on);
   const click=(root:HTMLElement,id:string)=>{const visible=elements(root,id).filter(node=>getComputedStyle(node).display!=='none'&&getComputedStyle(node).pointerEvents!=='none');const found=visible.find(node=>node.classList.contains('ms-recall-mask'))??visible[0];assert(found,'missing interactive annotation element');found.click();};
 
+  await test('New PDF excerpt types default to uncovered in reading and support temporary recall reveal',async()=>{
+    add('default-occlusion.pdf',{name:'Default occlusion',pages:1});const p=plugin(),view:any=new ReaderView({app} as any,p as any);await view.onOpen();
+    try{await view.loadFileByPath('default-occlusion.pdf');await view.renderPage(1);const controller=view.annController;
+      for(const [index,type] of ['highlight','underline','strike'].entries())controller.commitAnnotation({kind:'pdf',pageNum:1,rects:[{x:80,y:500-index*50,w:160,h:18}],pdfCoordinateSpace:'pdf'},type,'#ff0',type);
+      controller.commitRegion({kind:'pdf',pageNum:1,rects:[{x:300,y:200,w:120,h:80}],pdfCoordinateSpace:'pdf'},undefined,'region');
+      const anns=await p.store.loadAnnotations('default-occlusion.pdf');assert(anns.length===4,'expected four excerpt types');
+      for(const ann of anns){assert(p.store.getCard(ann.cardId)?.occluded!==true,`${ann.type} defaulted to occluded`);assert(every(view.scrollEl,ann.id,'is-occluded',false),`${ann.type} masked in reading`);}
+      view.setRecallMode(true);assert(anns.every((ann:any)=>every(view.scrollEl,ann.id,'is-occluded',true)),'recall did not mask all excerpt types');
+      click(view.scrollEl,anns[0].id);assert(every(view.scrollEl,anns[0].id,'is-revealed',true),'recall reveal did not show excerpt');
+      assert(p.store.getCard(anns[0].cardId)?.occluded!==true,'temporary reveal changed persisted flag');
+    }finally{await view.onClose();}
+  });
+
   await test('continuous PDF excerpts share one card and preserve both source anchors',async()=>{
     add('continuous-session.pdf',{name:'Continuous session',pages:1});const p=plugin(),view:any=new ReaderView({app} as any,p as any);await view.onOpen();
     try{await view.loadFileByPath('continuous-session.pdf');view.setContinuousExcerpt(true);

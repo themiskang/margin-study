@@ -93,7 +93,7 @@ export function reviewDrawingInput(options: Partial<DrawingStyle> = {}): { eleme
 }
 
 export function cardInkInput(width: number, height: number, reference: { x: number; y: number; width: number; height: number }, style: DrawingStyle): {
-  canvas: HTMLCanvasElement; strokes(): MindmapInkStroke[]; undo(): void; clear(): void;
+  canvas: HTMLCanvasElement; strokes(): MindmapInkStroke[]; undo(): void; clear(): void; freeze(value: boolean): void;
 } {
   const canvas = el("canvas", { "aria-label": "卡片批注画布" }) as HTMLCanvasElement;
   canvas.width = width; canvas.height = height;
@@ -101,7 +101,7 @@ export function cardInkInput(width: number, height: number, reference: { x: numb
   const context = canvas.getContext("2d")!;
   const strokes: MindmapInkStroke[] = [];
   const palm = new PalmGuard();
-  let current: MindmapInkStroke | undefined, pointerId: number | null = null, pointerType: string | null = null;
+  let current: MindmapInkStroke | undefined, pointerId: number | null = null, pointerType: string | null = null, frozen = false;
   const point = (event: PointerEvent): Stroke => {
     const bounds = canvas.getBoundingClientRect();
     const x = Math.max(0, Math.min(width, (event.clientX - bounds.left) * width / Math.max(1, bounds.width)));
@@ -126,6 +126,7 @@ export function cardInkInput(width: number, height: number, reference: { x: numb
     }
   };
   canvas.addEventListener("pointerdown", event => {
+    if (frozen) return;
     if (palm.down(event, pointerType) || pointerId !== null || event.button !== 0) return;
     pointerId = event.pointerId; pointerType = event.pointerType;
     current = { id: uid("ink"), tool: "pen", color: style.color, width: style.width, opacity: style.opacity, points: [point(event)] };
@@ -134,10 +135,12 @@ export function cardInkInput(width: number, height: number, reference: { x: numb
     event.preventDefault();
   });
   canvas.addEventListener("pointermove", event => {
+    if (frozen) return;
     if (palm.move(event, pointerType) || !current || pointerId !== event.pointerId) return;
     for (const sample of inkSamples(event)) { const next = point(sample), previous = current.points[current.points.length - 1]; current.points.push(next); segment(current, previous, next); }
   });
   const finish = (event: PointerEvent) => {
+    if (frozen) return;
     palm.end(event, pointerType, pointerId);
     if (pointerId !== event.pointerId) return;
     if (event.type === "pointerup" && current) {
@@ -149,6 +152,79 @@ export function cardInkInput(width: number, height: number, reference: { x: numb
   };
   canvas.addEventListener("pointerup", finish); canvas.addEventListener("pointercancel", finish); canvas.addEventListener("lostpointercapture", finish);
   return { canvas, strokes: () => strokes.map(stroke => ({ ...stroke, points: stroke.points.map(value => ({ ...value })) })),
-    undo: () => { if (pointerId !== null) return; strokes.pop(); repaint(); },
-    clear: () => { if (pointerId !== null) return; strokes.length = 0; repaint(); } };
+    undo: () => { if (frozen || pointerId !== null) return; strokes.pop(); repaint(); },
+    clear: () => { if (frozen || pointerId !== null) return; strokes.length = 0; repaint(); },
+    freeze: value => { frozen = value; if (value) { current = undefined; pointerId = null; pointerType = null; } } };
+}
+
+export function segmentedCardInkInput(width: number, height: number, style: DrawingStyle): {
+  element: HTMLElement; canvases: HTMLCanvasElement[]; strokes(): MindmapInkStroke[]; undo(): void; clear(): void; freeze(value: boolean): void;
+} {
+  const element = el("div", { style: `width:${width}px` });
+  const canvases: HTMLCanvasElement[] = [];
+  for (let y = 0; y < height; y += 8000) {
+    const canvas = el("canvas", { "aria-label": "卡片批注画布" }) as HTMLCanvasElement;
+    canvas.width = width; canvas.height = Math.min(8000, height - y);
+    Object.assign(canvas.style, { display: "block", width: `${width}px`, height: `${canvas.height}px`, touchAction: "none", cursor: "crosshair" });
+    canvas.dataset.offsetY = String(y); element.append(canvas); canvases.push(canvas);
+  }
+  const strokes: MindmapInkStroke[] = [], palm = new PalmGuard();
+  let current: MindmapInkStroke | undefined, pointerId: number | null = null, pointerType: string | null = null, frozen = false;
+  const point = (event: PointerEvent, canvas: HTMLCanvasElement): Stroke => {
+    const bounds = canvas.getBoundingClientRect();
+    const x = Math.max(0, Math.min(width, (event.clientX - bounds.left) * width / bounds.width));
+    const y = Math.max(0, Math.min(height, Number(canvas.dataset.offsetY) + (event.clientY - bounds.top) * canvas.height / bounds.height));
+    return inkPoint(event, x / width, y / height);
+  };
+  const draw = (stroke: MindmapInkStroke, previous: Stroke, next?: Stroke) => {
+    const startY = previous.y * height, endY = (next?.y ?? previous.y) * height;
+    for (const canvas of canvases) {
+      const offset = Number(canvas.dataset.offsetY);
+      if (Math.max(startY, endY) + stroke.width < offset || Math.min(startY, endY) - stroke.width > offset + canvas.height) continue;
+      const context = canvas.getContext("2d")!, pressure = next?.pressure ?? previous.pressure;
+      context.strokeStyle = stroke.color; context.fillStyle = stroke.color; context.globalAlpha = stroke.opacity ?? 1;
+      context.lineWidth = pressure === undefined ? stroke.width : Math.max(.5, stroke.width * (.45 + pressure * 1.1));
+      context.lineCap = "round"; context.lineJoin = "round"; context.beginPath();
+      if (next) { context.moveTo(previous.x * width, startY - offset); context.lineTo(next.x * width, endY - offset); context.stroke(); }
+      else { context.arc(previous.x * width, startY - offset, Math.max(.5, context.lineWidth / 2), 0, Math.PI * 2); context.fill(); }
+      context.globalAlpha = 1;
+    }
+  };
+  const repaint = () => {
+    for (const canvas of canvases) canvas.getContext("2d")!.clearRect(0, 0, width, canvas.height);
+    for (const stroke of strokes) if (stroke.points.length) {
+      draw(stroke, stroke.points[0]);
+      for (let index = 1; index < stroke.points.length; index++) draw(stroke, stroke.points[index - 1], stroke.points[index]);
+    }
+  };
+  for (const canvas of canvases) {
+    canvas.addEventListener("pointerdown", event => {
+      if (frozen || palm.down(event, pointerType) || pointerId !== null || event.button !== 0) return;
+      pointerId = event.pointerId; pointerType = event.pointerType;
+      current = { id: uid("ink"), tool: "pen", color: style.color, width: style.width, opacity: style.opacity, points: [point(event, canvas)] };
+      strokes.push(current); draw(current, current.points[0]);
+      try { canvas.setPointerCapture(event.pointerId); } catch {}
+      event.preventDefault();
+    });
+    canvas.addEventListener("pointermove", event => {
+      if (frozen || palm.move(event, pointerType) || !current || pointerId !== event.pointerId) return;
+      for (const sample of inkSamples(event)) { const next = point(sample, canvas), previous = current.points[current.points.length - 1]; current.points.push(next); draw(current, previous, next); }
+    });
+    const finish = (event: PointerEvent) => {
+      if (frozen) return;
+      palm.end(event, pointerType, pointerId);
+      if (pointerId !== event.pointerId) return;
+      if (event.type === "pointerup" && current) {
+        const previous = current.points[current.points.length - 1], next = inkEndpoint(event, point(event, canvas), previous);
+        if (next) { current.points.push(next); draw(current, previous, next); }
+      }
+      current = undefined; pointerId = null; pointerType = null;
+      if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+    };
+    canvas.addEventListener("pointerup", finish); canvas.addEventListener("pointercancel", finish); canvas.addEventListener("lostpointercapture", finish);
+  }
+  return { element, canvases, strokes: () => strokes.map(stroke => ({ ...stroke, points: stroke.points.map(value => ({ ...value })) })),
+    undo: () => { if (!frozen && pointerId === null) { strokes.pop(); repaint(); } },
+    clear: () => { if (!frozen && pointerId === null) { strokes.length = 0; repaint(); } },
+    freeze: value => { frozen = value; if (value) { current = undefined; pointerId = null; pointerType = null; } } };
 }

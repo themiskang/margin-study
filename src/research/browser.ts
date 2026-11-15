@@ -131,8 +131,8 @@ export function mountResearchBrowser(container: HTMLElement, plugin: MarginStudy
   header.append(mode, engine, button("x", "关闭研究浏览器", () => options.onClose?.()));
   const content = el("div", { class: "ms-research-content" });
   const empty = el("form", { class: "ms-research-start", "aria-label": "开始研究搜索" });
-  const query = el("input", { type: "search", placeholder: "Search", "aria-label": "研究搜索内容" });
-  const submit = el("button", { type: "submit", text: "Search", class: "ms-research-search" });
+  const query = el("input", { type: "search", placeholder: "搜索", "aria-label": "研究搜索内容" });
+  const submit = el("button", { type: "submit", text: "搜索", class: "ms-research-search" });
   empty.append(query, submit, el("p", { text: "选中文字后打开研究浏览器，或在此输入关键词。" }));
   content.append(empty, port.element); port.element.hidden = true;
   const status = el("div", { class: "ms-research-status", role: "status", "aria-live": "polite" }); status.hidden = true;
@@ -149,7 +149,7 @@ export function mountResearchBrowser(container: HTMLElement, plugin: MarginStudy
   const renderLock = () => { setIcon(lock, prefs.locked ? "lock-keyhole" : "lock-keyhole-open"); lock.setAttribute("aria-pressed", String(prefs.locked)); lock.title = prefs.locked ? "解锁并同步选中文字" : "锁定研究内容"; };
   const drawChoices = () => {
     mode.replaceChildren(...prefs.order.map(id => el("option", { value: id, text: RESEARCH_MODES.find(item => item.id === id)!.label }))); mode.value = prefs.mode;
-    engine.replaceChildren(...prefs.engines.filter(item => item.mode === prefs.mode).map(item => el("option", { value: item.id, text: item.name })), el("option", { value: "__settings__", text: "Customize…" }));
+    engine.replaceChildren(...prefs.engines.filter(item => item.mode === prefs.mode).map(item => el("option", { value: item.id, text: item.name })), el("option", { value: "__settings__", text: "自定义…" }));
     engine.value = prefs.selected[prefs.mode]!;
   };
   const updateNavigation = (readUrl = true) => {
@@ -220,8 +220,8 @@ export function mountResearchBrowser(container: HTMLElement, plugin: MarginStudy
     menu.addItem(item => item.setTitle("搜索或输入网址…").setIcon("search").onClick(() => {
       closeDialog?.();
       const { modal, close } = createModal("Research", () => { closeDialog = undefined; }, ownerDocument); closeDialog = close;
-      const input = el("input", { type: "text", "aria-label": "研究关键词或网址", placeholder: "Search or URL" }); input.value = term || current;
-      const go = el("button", { text: "Open" }); go.addEventListener("click", () => { /^https?:\/\//i.test(input.value) ? navigate(input.value) : search(input.value); close(); });
+      const input = el("input", { type: "text", "aria-label": "研究关键词或网址", placeholder: "搜索或输入网址" }); input.value = term || current;
+      const go = el("button", { text: "打开" }); go.addEventListener("click", () => { /^https?:\/\//i.test(input.value) ? navigate(input.value) : search(input.value); close(); });
       input.addEventListener("keydown", event => { if (event.key === "Enter") go.click(); }); modal.append(input, go); input.focus();
     }));
     menu.addItem(item => item.setTitle("重新载入").setIcon("refresh-cw").onClick(() => port.reload()));
@@ -263,10 +263,10 @@ export function openResearchSettings(plugin: MarginStudyPlugin, onSaved?: () => 
   let prefs = researchPreferences(plugin.store.settings.research);
   const { modal, close } = createModal("Research", undefined, ownerDocument);
   modal.classList.add("ms-research-settings");
-  const closeButton=el("button", {text:"Close",class:"ms-research-settings-close","aria-label":"关闭研究设置"});closeButton.addEventListener("click",close);modal.prepend(closeButton);
+  const closeButton=el("button", {text:"关闭",class:"ms-research-settings-close","aria-label":"关闭研究设置"});closeButton.addEventListener("click",close);modal.prepend(closeButton);
   const choices=el("div",{class:"ms-research-choices","aria-label":"研究搜索引擎设置"});
   const editor=el("div",{class:"ms-research-editor"});editor.hidden=true;
-  const edit=el("button",{text:"Custom URL · 搜索引擎与顺序…",class:"ms-research-edit-link","aria-label":"编辑搜索引擎与顺序"});
+  const edit=el("button",{text:"自定义网址 · 搜索引擎与顺序…",class:"ms-research-edit-link","aria-label":"编辑搜索引擎与顺序"});
   const drawChoices=()=>{
     choices.replaceChildren();
     const ids=["dictionary",...prefs.order.filter(id=>id!=="dictionary")] as ResearchMode[];
@@ -282,7 +282,7 @@ export function openResearchSettings(plugin: MarginStudyPlugin, onSaved?: () => 
       choices.append(group);
     }
   };
-  edit.addEventListener("click",()=>{const show=editor.hidden;editor.hidden=!show;choices.hidden=show;edit.textContent=show?"‹ Research":"Custom URL · 搜索引擎与顺序…";if(!show){prefs=researchPreferences(plugin.store.settings.research);draw();drawChoices();}});
+  edit.addEventListener("click",()=>{const show=editor.hidden;editor.hidden=!show;choices.hidden=show;edit.textContent=show?"‹ 研究":"自定义网址 · 搜索引擎与顺序…";if(!show){prefs=researchPreferences(plugin.store.settings.research);draw();drawChoices();}});
   const order = el("div", { class: "ms-research-order" });
   const draw = () => {
     order.replaceChildren();
@@ -296,11 +296,11 @@ export function openResearchSettings(plugin: MarginStudyPlugin, onSaved?: () => 
         const name = el("input", { type: "text", "aria-label": item.id + " 名称" }), url = el("input", { type: "text", "aria-label": item.id + " 搜索网址" }); name.value = item.name; url.value = item.url;
         name.addEventListener("input", () => { item.name = name.value; }); url.addEventListener("input", () => { item.url = url.value; }); fields.append(name, url); order.append(fields);
       }
-      const add = el("button", { text: "＋ Custom URL", class: "ms-research-add-engine" }); add.addEventListener("click", () => { prefs.engines.push({ id: "custom-" + crypto.randomUUID(), mode: id, name: "Custom", url: "https://www.bing.com/search?q=%s" }); draw(); }); order.append(add);
+      const add = el("button", { text: "＋ 自定义网址", class: "ms-research-add-engine" }); add.addEventListener("click", () => { prefs.engines.push({ id: "custom-" + crypto.randomUUID(), mode: id, name: "Custom", url: "https://www.bing.com/search?q=%s" }); draw(); }); order.append(add);
     }
   }; draw();
   const error = el("p", { role: "status", class: "ms-research-settings-error" });
-  const save = el("button", { text: "Save", class: "ms-research-search" }); save.addEventListener("click", () => {
+  const save = el("button", { text: "保存", class: "ms-research-search" }); save.addEventListener("click", () => {
     try { prefs.engines = prefs.engines.map(validateEngine); plugin.store.settings.research = prefs; plugin.store.save(); close(); onSaved?.(); }
     catch (failure) { error.textContent = failure instanceof Error ? failure.message : String(failure); }
   });

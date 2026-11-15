@@ -26,21 +26,22 @@ const test = async (name, run) => {
 try {
   const result = await build({
     stdin: {
-      contents: 'export * from "./model/store.ts"; export * from "./study/nodeContent.ts";',
+      contents: 'export * from "./model/store.ts"; export * from "./study/nodeContent.ts"; export * from "./annot/baseController.ts"; export * from "./study/excerptNotice.ts";',
       resolveDir: root,
     },
     platform: "node", format: "cjs", bundle: true, write: false,
     plugins: [{ name: "synthetic-obsidian", setup(builder) {
+      builder.onResolve({ filter: /^canvas$/ }, () => ({ path: "canvas", namespace: "synthetic" }));
       builder.onResolve({ filter: /^obsidian$/ }, () => ({ path: "obsidian", namespace: "synthetic" }));
       builder.onLoad({ filter: /.*/, namespace: "synthetic" }, () => ({
-        contents: "export class Component {} export class App {} export class TFile {} export class Notice {} export const MarkdownRenderer = { render: async () => {} };",
+        contents: "export class Component {} export class App {} export class TFile {} export class Notice { constructor(text) { this.message=text; this.noticeEl=globalThis.document?.createElement('div'); } setMessage(text) { this.message=text; } hide() {} } export class Menu {} export class ItemView {} export class WorkspaceLeaf {} export const Platform = {}; export function setIcon() {} export function sanitizeHTMLToDom() {} export const MarkdownRenderer = { render: async () => {} };",
         loader: "js",
       }));
     } }],
   });
   const bundle = path.join(temporary, "study.cjs");
   await writeFile(bundle, result.outputFiles[0].contents);
-  const { Store, nodeContent } = createRequire(import.meta.url)(bundle);
+  const { Store, nodeContent, BaseAnnotationController, showExcerptNotice } = createRequire(import.meta.url)(bundle);
   const fresh = async () => {
     let disk = { cards: [], nodes: [], edges: [], srs: {} };
     const files = new Map();
@@ -68,6 +69,56 @@ try {
   });
   const node = (id, parentId, cardId, order = 0) => ({
     id, parentId, cardId, order, title: `snapshot-${id}`, docPath: cardId === "b" ? "b.pdf" : "a.pdf", collapsed: false, x: 1, y: 2,
+  });
+
+  await test("continuous PDF excerpts share one annotation and preserve page geometry", async () => {
+    const { store } = await fresh();
+    const controller = Object.create(BaseAnnotationController.prototype);
+    Object.assign(controller, {
+      docPath:"a.pdf", cache:[], activeNotebookId:"default", continuousExcerpts:new Map(), continuousExcerptKey:"text",
+      plugin:{store,refreshSidebar(){}}, prepareAnnotation(){}, isAnnotationVisible(){return false;},
+      syncOcclusionElements(){}, onAnnotationsChanged(){}, makeCard(annotation) {
+        store.addCard(card("continuous", "a.pdf", annotation.text)); annotation.cardId="continuous";
+      },
+    });
+    const make = (id, page, text) => ({id,docPath:"a.pdf",docKind:"pdf",page,type:"highlight",rects:[{x:page,y:1,width:2,height:3}],pdfCoordinateSpace:"pdf",text,color:"#ffff00",createdAt:"2026-10-15"});
+    controller.setContinuousExcerpt(true);
+    controller.pushAnnotation(make("first",1,"first"));
+    controller.pushAnnotation(make("second",1,"second"));
+    assert.equal(controller.cache.length,1);
+    assert.equal(controller.getContinuousExcerpt().count,2);
+    assert.equal(controller.cache[0].pdfGeometry.flatMap(part=>part.rects).length,2);
+    assert.equal(controller.cache[0].rects.length,2);
+    assert.equal(controller.cache[0].text,"first\n\nsecond");
+    assert.equal(store.getCard("continuous").sources[1].anchorAnnId,"first");
+    controller.pushAnnotation(make("third",2,"third"));
+    assert.deepEqual(controller.cache[0].pdfGeometry.map(part=>part.page),[1,2]);
+    controller.setContinuousExcerpt(false);
+    store.settings.autoCardOnHighlight = false;
+    controller.pushAnnotation(make("ordinary",1,"ordinary"));
+    assert.equal(controller.cache.length,2);
+    assert.equal(controller.cache[1].text,"ordinary");
+  });
+
+  await test("withdrawing a mindmap excerpt retains its annotation and undo restores the node", async () => {
+    const { store } = await fresh();
+    const annotations = await store.loadAnnotations("a.pdf");
+    annotations.push({id:"ann",docPath:"a.pdf",docKind:"pdf",page:1,type:"highlight",rects:[],text:"excerpt",color:"#ffff00",cardId:"a",createdAt:"2026-10-15"});
+    store.saveAnnotationsDebounced("a.pdf", annotations);
+    store.addCard(card("a","a.pdf","excerpt")); store.addNode({...node("root",null,"a"),canvasId:store.activeCanvasId});
+    const originalDocument = globalThis.document;
+    globalThis.document = {createElement:()=>({children:[],append(child){this.children.push(child);},setAttribute(){},addEventListener(_type,callback){this.click=()=>callback({stopPropagation(){}});}})};
+    let notice;
+    try {
+      notice = showExcerptNotice({store,refreshMindmap(){}},"a");
+      notice.noticeEl.children.find(button=>button.textContent==="撤回").click();
+    } finally { globalThis.document = originalDocument; }
+    assert.equal(notice.message,"已撤回入图，原文摘录保留");
+    assert.equal(store.getNode("root"),undefined);
+    assert.ok((await store.loadAnnotations("a.pdf")).some(item=>item.id==="ann"));
+    assert.equal(store.undoLibraryChange(),true);
+    assert.ok(store.getNode("root"));
+    assert.ok((await store.loadAnnotations("a.pdf")).some(item=>item.id==="ann"));
   });
 
   await test("subtree copy keeps descendant links and handles children stored before parents", async () => {

@@ -1,0 +1,49 @@
+ await test('5.0.2 HTML eraser cancels interrupted ink and preserves undo and pen switching',async()=>{
+  const path='word-hw-eraser.html',p=plugin(),view=htmlController(p,path);
+  await view.load();view.body.style.cssText='position:relative;width:400px;height:300px';
+  try{
+   view.ann.setHandwritingMode('pen');
+   const overlay=view.body.querySelector('.ms-pen-overlay');
+   assert(overlay&&view.ann.pen,'real HTML pen controller was not mounted');
+   drag(overlay,view.body,[[.1,.2],[.5,.2]]);
+   drag(overlay,view.body,[[.1,.6],[.5,.6]]);
+   const original=JSON.stringify(await p.store.loadAnnotations(path));
+   assert(JSON.parse(original).length===2,'two completed strokes were not saved');
+   view.ann.setHandwritingMode('eraser');pointer(overlay,view.body,'pointermove',.3,.2);pointer(overlay,view.body,'pointerup',.3,.2);
+   assert(JSON.stringify(await p.store.loadAnnotations(path))===original,'hover after completed stroke changed ink or IDs');
+   view.ann.setHandwritingMode('pen');
+   let commits=0;const onCommit=view.ann.pen.opts.onCommit;view.ann.pen.opts.onCommit=(...args:any[])=>{commits++;return onCommit(...args);};
+   pointer(overlay,view.body,'pointerdown',.3,.2);
+   pointer(overlay,view.body,'pointermove',.35,.25);
+   assert(view.ann.pen.pointerId===1&&view.ann.pen.gesture==='draw','interrupted draw did not start');
+   view.ann.setHandwritingMode('eraser');
+   assert(view.ann.pen&&view.ann.pen.pointerId===null&&view.ann.pen.gesture===null&&view.ann.pen.current.length===0,'switch did not clear gesture state');
+   pointer(overlay,view.body,'pointermove',.3,.2);pointer(overlay,view.body,'pointerup',.3,.2);
+   assert(commits===0&&JSON.stringify(await p.store.loadAnnotations(path))===original,'interrupted drawing changed existing ink or committed a partial stroke');
+   drag(overlay,view.body,[[.3,.15],[.3,.25]]);
+   let annotations=await p.store.loadAnnotations(path);
+   assert(annotations[0].strokes.length===0&&annotations[1].strokes.length===1,'eraser did not exclusively erase the crossed stroke');
+   view.ann.undoPenChange();
+   assert(JSON.stringify(await p.store.loadAnnotations(path))===original,'undo did not restore erased stroke');
+   await p.store.flush();const reopened=htmlController(p,path);await reopened.load();
+   try{assert(JSON.stringify(await p.store.loadAnnotations(path))===original,'reopened HTML data differs');assert(reopened.body.querySelectorAll('.ms-pen-render').length===2,'reopened HTML did not render restored ink');}finally{await reopened.close();}
+   view.ann.undoPenChange();
+   annotations=await p.store.loadAnnotations(path);
+   assert(annotations.length===1&&annotations[0].id===JSON.parse(original)[0].id,'cancelled stroke created a history entry');
+   view.ann.redoPenChange();
+   assert(JSON.stringify(await p.store.loadAnnotations(path))===original,'redo did not restore completed stroke');
+   view.ann.setHandwritingMode('pen');
+   drag(overlay,view.body,[[.1,.8],[.5,.8]]);
+   const afterPointerUp=JSON.stringify(await p.store.loadAnnotations(path));
+   view.ann.setHandwritingMode('eraser');
+   assert(JSON.stringify(await p.store.loadAnnotations(path))===afterPointerUp&&JSON.parse(afterPointerUp).length===3,'switch after pointerup lost completed ink');
+   view.ann.setHandwritingMode('pen');
+   pointer(overlay,view.body,'pointerdown',.1,.4);pointer(overlay,view.body,'pointermove',.5,.4);
+   view.ann.setHandwritingMode('highlight');
+   annotations=await p.store.loadAnnotations(path);
+   assert(annotations.length===4&&annotations[3].inkBrush!=='highlight','pen to highlight failed to commit pen ink');
+   drag(overlay,view.body,[[.1,.9],[.5,.9]]);
+   annotations=await p.store.loadAnnotations(path);
+   assert(annotations.length===5&&annotations[4].inkBrush==='highlight','highlight failed after pen switch');
+  }finally{await view.close();}
+ });

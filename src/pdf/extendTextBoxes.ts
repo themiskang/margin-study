@@ -15,9 +15,9 @@ export function renderExtendTextBoxes(paper: HTMLElement, note: PdfExtendNote, s
     box.style.cssText=`left:${record.x*100}%;top:${record.y*100}%;width:${record.w*100}%;height:${record.h*100}%`;
     const content=el("div",{class:"ms-extend-text-box-content"});applyTextStyle(content,style(),scale);renderTextRuns(content,record.runs?.length?record.runs:[{text:record.text,style:style()}],scale);box.append(content);
     const menu=el("div",{class:"ms-extend-image-menu",role:"toolbar","aria-label":"文字框操作"});
-    const copy=el("button",{"aria-label":"复制留白文字框",text:"Copy"});
+    const copy=el("button",{"aria-label":"复制留白文字框",text:"复制"});
     copy.addEventListener("click",event=>{event.stopPropagation();if(enabled())void navigator.clipboard.writeText(record.text).then(()=>movement?.copied?.()).catch(error=>new Notice("复制文字框失败："+String(error)));});menu.append(copy);
-    if(movement?.cut){const cut=el("button",{"aria-label":"剪切留白文字框",text:"Cut"});cut.addEventListener("click",event=>{event.stopPropagation();if(enabled())void navigator.clipboard.writeText(record.text).then(()=>{if(movement.current())movement.cut?.(record);}).catch(error=>new Notice("剪切文字框失败："+String(error)));});menu.append(cut);}
+    if(movement?.cut){const cut=el("button",{"aria-label":"剪切留白文字框",text:"剪切"});cut.addEventListener("click",event=>{event.stopPropagation();if(enabled())void navigator.clipboard.writeText(record.text).then(()=>{if(movement.current())movement.cut?.(record);}).catch(error=>new Notice("剪切文字框失败："+String(error)));});menu.append(cut);}
     const trash=el("button",{"aria-label":"删除留白文字框",text:"×"});trash.addEventListener("click",event=>{event.stopPropagation();if(enabled())remove(record.id);});menu.append(trash);box.append(menu);
     box.addEventListener("click",event=>{event.stopPropagation();if(enabled()){for(const other of paper.querySelectorAll(".ms-extend-text-box.is-selected"))other.classList.remove("is-selected");box.classList.add("is-selected");box.focus({preventScroll:true});}});
     const begin=(event:PointerEvent,resize:boolean)=>{

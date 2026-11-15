@@ -1,8 +1,8 @@
 export const RESEARCH_MODES = [
-  { id: "video", label: "Video Search" }, { id: "text", label: "Text Search" },
-  { id: "image", label: "Image Search" }, { id: "scholar", label: "Scholar Search" },
-  { id: "question", label: "Question Search" }, { id: "dictionary", label: "Dictionary Search" },
-  { id: "pdf", label: "PDF Search" }, { id: "translate", label: "Translate" },
+  { id: "video", label: "视频搜索" }, { id: "text", label: "文本搜索" },
+  { id: "image", label: "图片搜索" }, { id: "scholar", label: "学术搜索" },
+  { id: "question", label: "问答搜索" }, { id: "dictionary", label: "词典搜索" },
+  { id: "pdf", label: "PDF 搜索" }, { id: "translate", label: "翻译" },
 ] as const;
 export type ResearchMode = typeof RESEARCH_MODES[number]["id"];
 export interface ResearchEngine { id: string; mode: ResearchMode; name: string; url: string; }

@@ -1,12 +1,18 @@
+/**
+ * [INPUT]: 依赖 PDF 阅读器、标注基类、手写控制器和存储。
+ * [OUTPUT]: 提供 PDF 标注控制器。
+ * [POS]: 将页面手写、标注渲染和存储活动连接起来。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import type MarginStudyPlugin from "../main";
 import { ReaderView } from "./readerView";
 import { Annotation, AnnotationType, Card, HandwritingPresetId, PdfPageGeometry, PdfRect, Stroke } from "../types";
 import { uid } from "../utils/id";
 import { el } from "../utils/dom";
 import { todayStr } from "../srs";
-import { Notice, TFile } from "obsidian";
+import { Notice, Platform, TFile } from "obsidian";
 import { saveVoiceBlob } from "../audio/voice";
-import { PenController } from "../annot/pen";
+import { PenController, inkHitTest, measurePenCommit, paintInkStrokes } from "../annot/pen";
 import { handwritingPresetWidth } from "../annot/handwritingPresets";
 import { BaseAnnotationController, SelTarget, VoiceTarget } from "../annot/baseController";
 import { recognizeImage, mergeOcrWords } from "../ocr/ocr";
@@ -21,17 +27,28 @@ import { handwritingSource } from "../documents/readingPosition";
 import type { HandwritingSource } from "../documents/readingPosition";
 
 type PenCommit = (strokes: Stroke[][]) => void;
+type PageInkEntry = { ann: Annotation; strokes: Stroke[][]; projected: Stroke[][]; fingerprint: string; reference: boolean; masks: HTMLElement[] };
+type PageInkRaster = { canvas: HTMLCanvasElement; layer: HTMLElement; wrapper: HTMLElement; width: number; height: number; ratio: number; scale: number; projection: string; recall: boolean; entries: PageInkEntry[]; observer: ResizeObserver | null; click: (event: MouseEvent) => void };
 
 /** PDF 标注控制器：坐标换算、rects 增量渲染、per-page 手写（继承公共基类） */
 export class AnnotationController extends BaseAnnotationController {
   reader: ReaderView;
   getInkColor(): string { return this.color; }
+  /** Public delete path used by the workspace/learning-set sync-delete contract. */
+  deleteAnnotation(id: string): boolean {
+    const annotation = this.cache.find(item => item.id === id);
+    if (!annotation) return false;
+    this.deleteAnn(annotation);
+    return true;
+  }
 
   // 标注 id → 渲染元素映射（性能优化 D：增量增删，避免整页重建）
-  private elMap = new Map<string, { annId: string; els: HTMLElement[]; scale: number; page: number; fingerprint: string }>();
+  private elMap = new Map<string, { annId: string; els: HTMLElement[]; scale: number; page: number; fingerprint: string; strokes?: Stroke[][] }>();
 
   // 手写批注（仅平板）：每页一个 PenController
   private penControllers = new Map<number, PenController>();
+  private inkRasters = new Map<number, PageInkRaster>();
+  private inkRecall = false;
 
   // 套索/区域摘录
   private lassoOverlay: HTMLElement | null = null;
@@ -44,7 +61,10 @@ export class AnnotationController extends BaseAnnotationController {
     this.reader = reader;
     this.attach();
     this.bindLasso();
+    window.addEventListener("resize", this.onInkViewportResize);
   }
+
+  private onInkViewportResize = (): void => { for (const page of this.inkRasters.keys()) this.syncInkRaster(page); };
 
   protected getScrollContainer(): HTMLElement {
     return this.reader.getScrollContainer();
@@ -57,6 +77,7 @@ export class AnnotationController extends BaseAnnotationController {
 
   protected onLoadDoc(): void {
     this.elMap.clear();
+    for (const page of this.inkRasters.keys()) this.releaseInkRaster(page);
   }
 
   protected onAnnotationsChanged(): void { this.refreshAll(); }
@@ -90,7 +111,7 @@ export class AnnotationController extends BaseAnnotationController {
     const previous = this.popEl;
     super.onAnnClick(stored,ev);
     if (this.popEl && this.popEl !== previous && this.hasExtendSource(stored.id)) {
-      const action = el("button", {text:"Extend"});
+      const action = el("button", {text:"留白"});
       action.addEventListener("click", () => { this.removePop(); void this.extendAnnotation(stored.id).catch(error => new Notice(String(error))); });
       this.popEl.append(action);
     }
@@ -103,11 +124,13 @@ export class AnnotationController extends BaseAnnotationController {
     this.lassoOverlay?.remove();
     this.lassoOverlay = null;
   }
-  protected onReleaseDocument(): void { this.cancelRegionGesture(); }
+  protected onReleaseDocument(): void { this.cancelRegionGesture(); for (const page of this.inkRasters.keys()) this.releaseInkRaster(page); }
 
   async destroy(): Promise<void> {
     this.getScrollContainer().removeEventListener("pointerdown", this.onLassoPointerDown);
+    window.removeEventListener("resize", this.onInkViewportResize);
     await super.destroy();
+    for (const page of this.inkRasters.keys()) this.releaseInkRaster(page);
     this.elMap.clear();
   }
 
@@ -116,6 +139,7 @@ export class AnnotationController extends BaseAnnotationController {
     const pen = this.penControllers.get(pageNum);
     pen?.destroy();
     this.penControllers.delete(pageNum);
+    this.releaseInkRaster(pageNum);
     for (const [id, entry] of this.elMap) {
       if (entry.page !== pageNum) continue;
       entry.els.forEach((element) => this.detachAnnotationElement(element));
@@ -126,7 +150,7 @@ export class AnnotationController extends BaseAnnotationController {
   protected onColorChanged(): void {
     for (const pc of this.penControllers.values()) pc.color = this.color;
   }
-  protected flushPen(): void { for (const pen of this.penControllers.values()) pen.flush(); }
+  protected flushPen(commitDrawing = true): void { for (const pen of this.penControllers.values()) pen.flush(commitDrawing); }
   protected onPenToolChanged(): void { for (const pen of this.penControllers.values()) pen.setTool(this.penTool); }
   protected placeTextInExtend(event: MouseEvent): boolean { return this.reader.placeExtendText(event); }
   protected resolveOverlaySurface(event: MouseEvent, width: number, height: number): OverlaySurface | null {
@@ -201,14 +225,14 @@ export class AnnotationController extends BaseAnnotationController {
     };
     return [{ id: "fold", icon: "fold-vertical", label: "折叠", run: async () => {
       if (revision === this.documentRevision && this.docPath) await this.reader.foldSelection(target.pdfGeometry ?? [{page:target.pageNum,rects:target.rects}]);
-    }}, { id: "insert-toc", label: "Insert into TOC", run: async () => {
+    }}, { id: "insert-toc", label: "插入目录", run: async () => {
       const items = await this.reader.getEditableOutline();
       if (revision !== this.documentRevision || !this.docPath) return;
       const item = {id:uid("toc"),title:text.trim(),page:target.pageNum,level:0,rects:target.rects};
       const index = items.findIndex(entry => entry.level === 0 && entry.page > item.page);
       items.splice(index < 0 ? items.length : index, 0, item);
       await this.reader.setEditableOutline(items);new Notice("已添加文档目录条目");
-    }}, { id: "extend", label: "Extend", run: () => extend() },
+    }}, { id: "extend", label: "留白", run: () => extend() },
       { id: "extend-text", icon: "type", label: "文本", run: () => extend("text") },
       { id: "extend-ink", icon: "between-horizontal-start", label: "留白", run: () => extend("pen") }];
   }
@@ -333,11 +357,13 @@ export class AnnotationController extends BaseAnnotationController {
       getOpacity: () => this.getHandwritingPreset().opacity,
       isVanishPen: () => this.isVanishPen(),
       onBegin: () => { source = handwritingSource(this.plugin.store.documents ?? [], this.docPath, num); },
+      onInputActivity: change => this.plugin.store.noteInputActivity?.(change),
       onCommit: (strokes, brush, width, opacity) => this.createPenAnnotation(num, strokes, layerId, notebookId, brush, width, opacity, undefined, source),
       getInk: () => this.getPenRecords(num, layerId).map(record => ({ ...record, strokes: this.reader.projectAnnotationInk(num, record.strokes) })),
       onChange: (changes) => this.commitPenChanges(changes, { project: strokes => this.reader.projectAnnotationInk(num, strokes), unproject: strokes => this.reader.projectAnnotationInk(num, strokes, true) }),
       onUndo: () => this.undoPenChange(), onRedo: () => this.redoPenChange(),
     });
+    this.watchPenGestures(rec.wrapper.querySelector<SVGSVGElement>(":scope > .ms-pen-overlay")!);
     pc.color = this.color;
     pc.setTool(this.penTool);
     pc.setActive(true);
@@ -363,7 +389,7 @@ export class AnnotationController extends BaseAnnotationController {
       rects: [],
       text: "",
       color: this.getHandwritingPreset().color,
-      strokes: this.reader.projectAnnotationInk(pageNum, strokes, true),
+      strokes: measurePenCommit("projectMs", () => this.reader.projectAnnotationInk(pageNum, strokes, true)),
       inkBrush,
       inkRecallPurpose: inkBrush==="highlight" ? this.getHandwritingPreset().recallPurpose??"mask" : undefined,
       inkWidth: inkWidth ?? handwritingPresetWidth(this.getHandwritingPreset(), "document"),
@@ -523,6 +549,13 @@ export class AnnotationController extends BaseAnnotationController {
       tmp.width,
       tmp.height
     );
+    const raster = this.inkRasters.get(pageNum)?.canvas;
+    if (raster?.width && raster.height && rec.annLayer.clientWidth && rec.annLayer.clientHeight) {
+      const layerBounds = rec.annLayer.getBoundingClientRect(), sourceBounds = source.getBoundingClientRect();
+      const rasterX = raster.width / rec.annLayer.clientWidth, rasterY = raster.height / rec.annLayer.clientHeight;
+      ctx.drawImage(raster, (sourceBounds.left + left - layerBounds.left) * rasterX, (sourceBounds.top + top - layerBounds.top) * rasterY,
+        width * rasterX, height * rasterY, 0, 0, tmp.width, tmp.height);
+    }
     try {
       return tmp.toDataURL("image/jpeg", 0.85);
     } catch {
@@ -561,12 +594,137 @@ export class AnnotationController extends BaseAnnotationController {
       }
     }return result;
   }
+  private releaseInkRaster(pageNum: number): void {
+    const state = this.inkRasters.get(pageNum); if (!state) return;
+    state.observer?.disconnect(); state.wrapper.removeEventListener("click", state.click);
+    state.entries.forEach(entry => entry.masks.forEach(mask => this.detachAnnotationElement(mask)));
+    state.canvas.remove(); state.canvas.width = state.canvas.height = 0; this.inkRasters.delete(pageNum);
+  }
+
+  private inkProjection(pageNum: number): string {
+    const crop = this.reader.getPageCrop(), rec = this.reader.getPageRecord(pageNum), viewport: any = rec?.viewport;
+    const height = rec?.baseViewport?.height ?? viewport?.height ?? 0;
+    return JSON.stringify([crop.left, crop.top, crop.right, crop.bottom, this.reader.getPdfPageRotation(pageNum),
+      ...[0, .125, .25, .375, .5, .625, .75, .875, 1].map(value => viewport?.extendDown?.(value * height) ?? value * height)]);
+  }
+
+  private rasterRatio(): number {
+    const mobile = Platform.isMobile || document.body.classList.contains("is-mobile") || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    return mobile ? Math.min(window.devicePixelRatio || 1, 1.25) : window.devicePixelRatio || 1;
+  }
+
+  private ensureInkRaster(pageNum: number): { state: PageInkRaster; reset: boolean } | null {
+    const rec = this.reader.getPageRecord(pageNum);
+    if (!rec?.viewport || !rec.canvas.width || rec.renderedScale !== this.reader.getScale()) return null;
+    const width = rec.annLayer.clientWidth, height = rec.annLayer.clientHeight; if (!width || !height) return null;
+    let state = this.inkRasters.get(pageNum);
+    if (state && (state.layer !== rec.annLayer || state.canvas.parentElement !== rec.annLayer)) { this.releaseInkRaster(pageNum); state = undefined; }
+    let reset = false;
+    if (!state) {
+      const canvas = document.createElement("canvas"); canvas.className = "ms-ink-raster"; canvas.setAttribute("aria-hidden", "true");
+      canvas.getContext("2d", { willReadFrequently: true });
+      const click = (event: MouseEvent) => this.onInkClick(pageNum, event);
+      state = { canvas, layer: rec.annLayer, wrapper: rec.wrapper, width: 0, height: 0, ratio: 0, scale: -1, projection: "", recall: this.inkRecall, entries: [], observer: null, click };
+      this.inkRasters.set(pageNum, state); rec.annLayer.prepend(canvas); rec.wrapper.addEventListener("click", click);
+      if (typeof ResizeObserver !== "undefined") { state.observer = new ResizeObserver(() => this.syncInkRaster(pageNum)); state.observer.observe(rec.annLayer); }
+      reset = true;
+    }
+    const ratio = this.rasterRatio(), scale = this.reader.getScale(), projection = this.inkProjection(pageNum);
+    if (state.width !== width || state.height !== height || state.ratio !== ratio || state.scale !== scale || state.projection !== projection) {
+      state.width = width; state.height = height; state.ratio = ratio; state.scale = scale; state.projection = projection;
+      state.canvas.width = Math.max(1, Math.ceil(width * ratio)); state.canvas.height = Math.max(1, Math.ceil(height * ratio)); reset = true;
+    }
+    return { state, reset };
+  }
+
+  private paintRasterEntry(state: PageInkRaster, entry: PageInkEntry, dirty = false): void {
+    if (state.recall && entry.reference) return;
+    const context = state.canvas.getContext("2d"); if (!context) return;
+    context.setTransform(state.canvas.width / state.width, 0, 0, state.canvas.height / state.height, 0, 0);
+    if (dirty) {
+      let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+      for (const stroke of entry.projected) for (const point of stroke) {
+        left = Math.min(left, point.x * state.width); top = Math.min(top, point.y * state.height);
+        right = Math.max(right, point.x * state.width); bottom = Math.max(bottom, point.y * state.height);
+      }
+      if (!Number.isFinite(left)) return;
+      const thickness = entry.ann.inkWidth ?? (entry.ann.inkBrush === "highlight" ? 16 : 3);
+      const padding = (entry.ann.inkBrush === "highlight" ? thickness : thickness * 5.8 / 3) / 2 + 2 / state.ratio;
+      context.save(); context.beginPath(); context.rect(left - padding, top - padding, right - left + padding * 2, bottom - top + padding * 2); context.clip();
+    }
+    paintInkStrokes(context, entry.projected, state.width, state.height, entry.ann.color, entry.ann.inkBrush, entry.ann.inkWidth, entry.ann.inkOpacity, entry.reference);
+    if (dirty) context.restore();
+  }
+
+  private appendInkAnnotation(pageNum: number, ann: Annotation): void {
+    const ensured = this.ensureInkRaster(pageNum); if (!ensured) return;
+    const { state } = ensured;
+    if (ensured.reset) { this.syncInkRaster(pageNum, undefined, true); return; }
+    const annotations = this.getAnnotationsForDisplay().filter(candidate => candidate.type === "pen" && !candidate.overlay && !!candidate.strokes?.length && this.isInkVisible(candidate) && annotationGeometry(candidate).some(geometry => geometry.page === pageNum));
+    if (!ensured.reset && state.recall === this.inkRecall && annotations.length === state.entries.length && state.entries.every((entry, index) => entry.ann.id === annotations[index].id && entry.strokes === annotations[index].strokes && entry.fingerprint === this.annotationFingerprint(annotations[index]) && entry.reference === this.isInkReference(annotations[index]))) return;
+    if (ensured.reset || state.recall !== this.inkRecall || annotations.length !== state.entries.length + 1 || annotations[annotations.length - 1]?.id !== ann.id ||
+      !state.entries.every((entry, index) => entry.ann.id === annotations[index].id && entry.strokes === annotations[index].strokes && entry.fingerprint === this.annotationFingerprint(annotations[index]) && entry.reference === this.isInkReference(annotations[index]))) {
+      this.syncInkRaster(pageNum, annotations); return;
+    }
+    const projected = this.reader.projectAnnotationInk(pageNum, ann.strokes!);
+    const entry: PageInkEntry = { ann, strokes: ann.strokes!, projected, fingerprint: this.annotationFingerprint(ann), reference: this.isInkReference(ann), masks: this.appendRecallInkMasks(state.layer, ann, projected, state.width, state.height) };
+    entry.masks.forEach(mask => { mask.classList.toggle("ms-ink-reference", entry.reference); mask.classList.toggle("ms-document-notebook-reference", this.isNotebookReference(ann)); });
+    state.entries.push(entry); this.paintRasterEntry(state, entry, true);
+  }
+
+  private syncInkRaster(pageNum: number, annotations?: Annotation[], force = false): void {
+    const ensured = this.ensureInkRaster(pageNum); if (!ensured) return;
+    const { state } = ensured;
+    const visible = (annotations ?? this.getAnnotationsForDisplay().filter(ann => annotationGeometry(ann).some(geometry => geometry.page === pageNum)))
+      .filter(ann => ann.type === "pen" && !ann.overlay && !!ann.strokes?.length && this.isInkVisible(ann));
+    const match = (entry: PageInkEntry, ann: Annotation) => entry.ann.id === ann.id && entry.strokes === ann.strokes &&
+      entry.fingerprint === this.annotationFingerprint(ann) && entry.reference === this.isInkReference(ann);
+    const incremental = !force && !ensured.reset && state.recall === this.inkRecall && visible.length === state.entries.length && state.entries.every((entry, index) => match(entry, visible[index]));
+    state.recall = this.inkRecall;
+    if (!incremental) {
+      state.entries.forEach(entry => entry.masks.forEach(mask => this.detachAnnotationElement(mask)));
+      state.entries = []; const context = state.canvas.getContext("2d");
+      context?.setTransform(1, 0, 0, 1, 0, 0); context?.clearRect(0, 0, state.canvas.width, state.canvas.height);
+    }
+    let before = state.canvas.nextElementSibling;
+    for (const ann of incremental ? [] : visible) {
+      const projected = this.reader.projectAnnotationInk(pageNum, ann.strokes!);
+      const entry: PageInkEntry = { ann, strokes: ann.strokes!, projected, fingerprint: this.annotationFingerprint(ann), reference: this.isInkReference(ann), masks: this.appendRecallInkMasks(state.layer, ann, projected, state.width, state.height) };
+      entry.masks.forEach(mask => { mask.classList.toggle("ms-ink-reference", entry.reference); mask.classList.toggle("ms-document-notebook-reference", this.isNotebookReference(ann)); });
+      if (!incremental) entry.masks.forEach(mask => state.layer.insertBefore(mask, before));
+      state.entries.push(entry); this.paintRasterEntry(state, entry);
+    }
+  }
+
+  private onInkClick(pageNum: number, event: MouseEvent): void {
+    const state = this.inkRasters.get(pageNum); if (!state || event.defaultPrevented) return;
+    const target = event.target as Element | null;
+    if (target?.closest(".ms-ann, .ms-pen-overlay, .ms-extend-layer, button, a, input, textarea, select")) return;
+    const bounds = state.layer.getBoundingClientRect(); if (!bounds.width || !bounds.height) return;
+    const point = { x: (event.clientX - bounds.left) * state.width / bounds.width, y: (event.clientY - bounds.top) * state.height / bounds.height };
+    const context = state.canvas.getContext("2d"); if (!context) return;
+    for (const entry of [...state.entries].reverse()) {
+      if (entry.reference || !inkHitTest(context, entry.projected, state.width, state.height, point, entry.ann.inkBrush, entry.ann.inkWidth)) continue;
+      event.stopPropagation(); this.onAnnClick(entry.ann, event); return;
+    }
+  }
+
+  protected syncOcclusionElements(): void {
+    const recall = !!this.getScrollContainer().closest(".ms-reader-root")?.classList.contains("ms-recall");
+    if (recall !== this.inkRecall) {
+      this.inkRecall = recall;
+      for (const page of this.inkRasters.keys()) this.syncInkRaster(page);
+    }
+    super.syncOcclusionElements();
+  }
+
   renderPage(pageNum: number): void {
     const rec = this.reader.getPageRecord(pageNum);
     if (!rec || rec.renderedScale !== this.reader.getScale()) return;
     if (this.penMode) this.setupPenForPage(pageNum);
     const scale = this.reader.getScale();
     const inCache = this.getAnnotationsForDisplay().filter((a) => (a.type !== "pen" || this.isInkVisible(a)) && annotationGeometry(a).some((geometry) => geometry.page === pageNum));
+    this.syncInkRaster(pageNum, inCache);
     const inCacheIds = new Set(inCache.map((a) => a.id));
     // 1. 移除本页已不存在的标注元素（增量删除，不再整页 clear——性能优化 D）
     for (const [id, entry] of this.elMap) {
@@ -577,11 +735,13 @@ export class AnnotationController extends BaseAnnotationController {
     }
     // 2. 新增 / scale 变化需重建的标注：仅处理缺失或过期项，已是最新的跳过
     for (const a of inCache) {
+      if (a.type === "pen" && !a.overlay) continue;
       const entry = this.elMap.get(this.pageKey(a.id, pageNum));
       const live =
         entry &&
         entry.scale === scale &&
         entry.fingerprint === this.annotationFingerprint(a) &&
+        (a.type !== "pen" || entry.strokes === a.strokes) &&
         entry.els.length > 0 &&
         entry.els.every((e) => e.parentElement === rec.annLayer);
       if (live) continue;
@@ -594,8 +754,12 @@ export class AnnotationController extends BaseAnnotationController {
   protected renderOne(ann: Annotation): void {
     ann=this.mapAnnotationForDisplay(ann);
     if (!this.isAnnotationVisible(ann) || (ann.overlay && !this.isInkVisible(ann))) return;
+    if (ann.type === "pen" && !ann.overlay) {
+      for (const geometry of annotationGeometry(ann)) this.appendInkAnnotation(geometry.page, ann);
+      this.syncOcclusionElements(); return;
+    }
     for (const geometry of annotationGeometry(ann)) this.renderOnPage(ann, geometry.page, geometry.rects);
-    this.onReadingPreferencesChanged();
+    if (ann.type !== "pen") this.onReadingPreferencesChanged();
     this.syncOcclusionElements();
   }
 
@@ -614,35 +778,13 @@ export class AnnotationController extends BaseAnnotationController {
     const finish = () => {
       made.forEach((element) => element.classList.toggle("ms-document-notebook-reference", this.isNotebookReference(ann)));
       made.forEach((element) => element.classList.toggle("ms-reference-source", !!(ann as LinkedPageAnnotation).referenceSource));
-      this.elMap.set(key, { annId: ann.id, els: made, scale, page: pageNum, fingerprint: this.annotationFingerprint(ann) });
+      this.elMap.set(key, { annId: ann.id, els: made, scale, page: pageNum, fingerprint: this.annotationFingerprint(ann), strokes: ann.strokes });
     };
 
     if (ann.overlay && !ann.overlay.deleted) {
       const surface = this.getOverlaySurface(ann);
       if (surface) made.push(this.renderFreeOverlay(ann,surface));
       finish(); return;
-    }
-
-    if (ann.type === "pen" && ann.strokes && ann.strokes.length) {
-      if (!this.isInkVisible(ann)) { finish(); return; }
-      const w = rec.annLayer.clientWidth;
-      const h = rec.annLayer.clientHeight;
-      const holder = el("div", { class: "ms-ann ms-ann-pen" });
-      holder.dataset.annId = ann.id;
-      if(ann.inkBrush==="highlight")holder.dataset.recallInk="";
-      holder.dataset.inkLayerId = ann.inkLayerId ?? "default";
-      holder.classList.toggle("ms-ink-reference", this.isInkReference(ann));
-      const projected=this.reader.projectAnnotationInk(pageNum, ann.strokes);
-      PenController.render(holder, projected, w, h, ann.color, ann.inkBrush, ann.inkWidth, ann.inkOpacity);
-      holder.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        this.onAnnClick(ann, ev);
-      });
-      rec.annLayer.append(holder);
-      made.push(holder);
-      made.push(...this.appendRecallInkMasks(rec.annLayer,ann,projected,w,h));
-      finish();
-      return;
     }
 
     if (ann.type === "voice" && ann.audioPath) {
@@ -752,18 +894,19 @@ export class AnnotationController extends BaseAnnotationController {
       entry.els.forEach((e) => this.detachAnnotationElement(e));
       this.elMap.delete(key);
     }
+    if (ann.type === "pen" && !ann.overlay) for (const page of this.inkRasters.keys()) this.syncInkRaster(page);
     this.onReadingPreferencesChanged();
   }
 
   protected afterNoteEdited(ann: Annotation): void { this.renderOne(ann); }
 
   private annotationFingerprint(ann: Annotation): string {
-    return JSON.stringify([ann.type, ann.rects, ann.pdfGeometry, ann.pdfCoordinateSpace, ann.color, ann.text, ann.noteText, ann.audioPath, ann.pos, ann.strokes, ann.cardId, ann.inkLayerId, ann.inkBrush, ann.inkRecallPurpose, ann.overlay, (ann.type === "pen" || !!ann.overlay) && this.isInkReference(ann)]);
+    return JSON.stringify([ann.type, ann.rects, ann.pdfGeometry, ann.pdfCoordinateSpace, ann.color, ann.text, ann.noteText, ann.audioPath, ann.pos, ann.cardId, ann.inkLayerId, ann.inkBrush, ann.inkWidth, ann.inkOpacity, ann.inkRecallPurpose, ann.overlay, (ann.type === "pen" || !!ann.overlay) && this.isInkReference(ann)]);
   }
 
   refreshAll(): void {
     if (!this.docPath) return;
-    const pages = new Set([...this.getAnnotationsForDisplay().flatMap((a) => annotationGeometry(a).map((geometry) => geometry.page)), ...[...this.elMap.values()].map((entry) => entry.page)]);
+    const pages = new Set([...this.getAnnotationsForDisplay().flatMap((a) => annotationGeometry(a).map((geometry) => geometry.page)), ...[...this.elMap.values()].map((entry) => entry.page), ...this.inkRasters.keys()]);
     for (const p of pages) this.renderPage(p);
   }
 

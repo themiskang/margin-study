@@ -3,6 +3,7 @@ import { applyTheme } from '__PROJECT__/src/theme';
 import { mountNativeCardEditor } from '__PROJECT__/src/cards/nativeEditor';
 import { Store } from '__PROJECT__/src/model/store';
 import { StudyWorkspaceView } from '__PROJECT__/src/workspace/studyWorkspace';
+import { showExcerptNotice } from '__PROJECT__/src/study/excerptNotice';
 import { DocumentReaderView } from '__PROJECT__/src/documents/documentReader';
 import { ReaderView } from '__PROJECT__/src/pdf/readerView';
 import { WordReaderView } from '__PROJECT__/src/word/wordReader';
@@ -14,8 +15,9 @@ import { AiError } from '__PROJECT__/src/ai/contracts';
 import { cardImages } from '__PROJECT__/src/review/content';
 import { renderCardList } from '__PROJECT__/src/cards/cardView';
 import { CARD_COLORS } from '__PROJECT__/src/model/cardColors';
-import { queryFeatures } from '__PROJECT__/src/search/featureSearch';
-import { TFile, notices, markdownTiming } from 'obsidian';
+import { FEATURE_INDEX, queryFeatures } from '__PROJECT__/src/search/featureSearch';
+import { Menu, TFile, notices, markdownTiming } from 'obsidian';
+import { openBaiduNetdisk } from '__PROJECT__/src/import/baiduNetdiskUi';
 
 const target=document.querySelector('#fixtures') as HTMLElement,results:any[]=[],errors:string[]=[],active:any[]=[];
 (window as any).results=results;(window as any).testErrors=errors;
@@ -32,10 +34,10 @@ async function until(test:()=>any,message:string){const deadline=performance.now
 function button(root:ParentNode,label:string):HTMLButtonElement{
   let node=[...root.querySelectorAll<HTMLButtonElement>('button')].find(item=>item.getAttribute('aria-label')===label||item.textContent===label);
   if(!node&&label==='固定视图'){button(root,'学习集更多设置').click();node=button(root,'固定视图…');}
-  const labels:Record<string,string>={'大纲':'大纲','卡片分组看板':'卡片分组看板 ⌃⌘M','多选':'多选 ⌥⌘M','脑图手写':'脑图手写','手形工具':'手形工具'};
+  const labels:Record<string,string>={'大纲':'大纲','卡片分组看板':'卡片分组看板','多选':'多选 ⌥⌘M','脑图手写':'脑图手写','手形工具':'手形工具'};
   if(!node&&labels[label]){
     const graph=(root as Element).matches?.('.ms-mindmap-root')?root:root.querySelector('.ms-mindmap-root');
-    if(graph){button(graph,'选择脑图').click();if(label==='脑图手写'||label==='手形工具')button(document.querySelector('#test-menu')!,'工具 ▸').click();node=button(document.querySelector('#test-menu')!,labels[label]);}
+    if(graph){button(graph,'选择脑图').click();if(label==='多选'||label==='脑图手写'||label==='手形工具'){button(document.querySelector('#test-menu')!,'管理脑图').click();if(label==='多选')node=button(document.querySelector('.ms-modal')!,labels[label]);else button(document.querySelector('.ms-modal')!,'工具 ▸').click();}if(!node)node=button(document.querySelector('#test-menu')!,labels[label]);}
   }
   assert(node,'Missing button '+label);return node!;
 }
@@ -121,7 +123,7 @@ async function freshPinchScene(){
   return {p,scroll,world,rect,point};
 }
 
-function layoutMenu(p:any){button(p.root,'学习集更多设置').click();button(p.root.querySelector('[aria-label="StudySet - More"]')!,'工作区设置…').click();return document.querySelector('#test-menu')!;}
+function layoutMenu(p:any){button(p.root,'学习集更多设置').click();button(p.root.querySelector('[aria-label="学习集"]')!,'工作区设置…').click();return document.querySelector('#test-menu')!;}
 function readerAction(p:any,label:string){button(layoutMenu(p),'阅读与批注的全部工具').click();button(p.root.querySelector('[role="dialog"]')!,label).click();}
 function linkedMode(p:any,label:string){const mode=label.includes('双向')?'both':label.includes('关闭')?'off':label.startsWith('→')?'document':'mindmap';for(let i=0;i<4&&state(p).linkMode!==mode;i++)button(p.root,'设置文档与脑图联动').click();assert(state(p).linkMode===mode,'link cycle did not reach requested mode');}
 function placement(p:any,label:string){const menu=layoutMenu(p);const choice=[...menu.querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent?.includes(label));assert(choice,'placement missing from workspace settings');choice!.click();}
@@ -133,10 +135,540 @@ function trackWindowPointerListeners(){
   window.removeEventListener=((type:string,listener:any,options?:any)=>{mutate(false)(type,listener);return nativeRemove(type,listener,options);}) as typeof window.removeEventListener;
   return {count(type?:string){return type?(live.get(type)?.size??0):[...live.values()].reduce((sum,listeners)=>sum+listeners.size,0);},restore(){window.addEventListener=nativeAdd;window.removeEventListener=nativeRemove;}};
 }
-function morePane(p:any,name:string){button(p.root,'学习集更多设置').click();button(p.root.querySelector('[aria-label="StudySet - More"]')!,name).click();}
+function morePane(p:any,name:string){button(p.root,'学习集更多设置').click();button(p.root.querySelector('[aria-label="学习集"]')!,name).click();}
+/** 卡片「更多」的 16 项按 MN5 排序；插件自有动作在二级「更多操作…」里。 */
+function cardMore(menu:HTMLElement,label:string){const rows=()=>[...menu.querySelectorAll('button')].map(item=>item.textContent);if(!rows().includes(label)){if(rows().includes('更多操作…')){button(menu,'更多操作…').click();menu=document.querySelector<HTMLElement>('#test-menu')!;}else throw new Error('card action missing: '+label+' rows='+rows().join('|'));}return button(menu,label);}
 function mapInk(p:any){return p.root.querySelector('[aria-label="脑图手写画布"]') as SVGSVGElement;}
 
 try{
+  await test('MN5 scene capsule separates template groups from unrelated study settings',async()=>{
+    const p=await fresh();p.store.setStudyInterface(p.set.id,'scenes');p.view.refresh(true);await frame();
+    button(p.root,'场景模板：标准').click();
+    const menu=document.querySelector<HTMLElement>('#test-menu')!;
+    assert(menu,'scene template menu missing');
+    const rows=[...menu.querySelectorAll<HTMLButtonElement>('button')];
+    assert(rows.map(row=>row.textContent).join('|')==='系统场景模板|标准|我的场景模板|读写忆（样例）|摆放界面|更多场景模板…|编辑场景模板…|切换到传统界面','scene menu order: '+rows.map(row=>row.textContent).join('|'));
+    assert(rows[1].getAttribute('aria-checked')==='true'&&rows.filter(row=>row.getAttribute('aria-checked')==='true').length===1,'current template is not checked');
+    assert(!/AI|搜索|导入|固定视图/.test(menu.textContent??''),'scene menu contains unrelated settings');
+  });
+  await test('MN5 capsules preserve personal templates and expose only the active map and template',async()=>{
+    const p=await fresh();p.store.setStudyInterface(p.set.id,'scenes');
+    const first=p.store.copySceneTemplate('standard'),second=p.store.copySceneTemplate('read-write-recall');
+    first.name='P10-MN5-Evidence-20261029';second.name='个人模板';p.store.saveSceneTemplate(first);p.store.saveSceneTemplate(second);
+    p.store.selectStudyScene(p.set.id,first.id,first.scenes[0].id);const other=p.store.createCanvas(p.set.id,'第二脑图');p.store.setActiveCanvas(other.id);p.view.refresh(true);await frame();
+    const templates=JSON.stringify(p.store.sceneTemplates),cards=JSON.stringify(p.store.cards);
+    button(p.root,'场景模板：'+first.name).click();let menu=document.querySelector<HTMLElement>('#test-menu')!;
+    let rows=[...menu.querySelectorAll<HTMLButtonElement>('button')];
+    assert(rows.map(row=>row.textContent).join('|')==='系统场景模板|标准|我的场景模板|读写忆（样例）|P10-MN5-Evidence-20261029|个人模板|摆放界面|更多场景模板…|编辑场景模板…|切换到传统界面','personal template order wrong');
+    assert(rows.filter(row=>row.getAttribute('aria-checked')==='true').map(row=>row.textContent).join('|')===first.name,'wrong selected template');
+    button(menu,second.name).click();await frame();button(p.root,'场景模板：'+second.name).click();menu=document.querySelector<HTMLElement>('#test-menu')!;
+    assert(button(menu,second.name).getAttribute('aria-checked')==='true','template selection did not update check');menu.remove();
+    button(p.root,'脑图：第二脑图').click();menu=document.querySelector<HTMLElement>('#test-menu')!;rows=[...menu.querySelectorAll<HTMLButtonElement>('button')];
+    assert(rows.length===9&&rows[1].textContent==='第二脑图'&&rows[1].getAttribute('aria-checked')==='true'&&!rows.some(row=>row.textContent==='主脑图'),'active map was split or omitted');
+    button(menu,'管理脑图').click();const dialog=document.querySelector<HTMLElement>('.ms-modal')!;button(dialog,'主脑图').click();await frame();
+    assert(p.store.activeCanvasId===p.canvasId&&JSON.stringify(p.store.sceneTemplates)===templates&&JSON.stringify(p.store.cards)===cards,'switching maps or templates changed existing template or card data');
+  });
+  await test('MN5 mind-map actions open panels, export Canvas, read cards and recover after close',async()=>{
+    const p=await fresh();p.store.setStudyInterface(p.set.id,'scenes');p.view.refresh(true);await frame();
+    const cards=JSON.stringify(p.store.cards),templates=JSON.stringify(p.store.sceneTemplates),exports=new Map<string,string>();
+    p.app.vault.getAbstractFileByPath=(path:string)=>p.sources.get(path)?.file??null;
+    p.app.vault.create=async(path:string,content:string)=>{exports.set(path,content);return new TFile(path);};
+    const open=()=>{button(p.root,'脑图：主脑图').click();return document.querySelector<HTMLElement>('#test-menu')!;};
+    let menu=open(),rows=[...menu.querySelectorAll<HTMLButtonElement>('button')];
+    assert(rows.length===9&&rows.every(row=>!row.disabled),'workspace menu availability incorrect');
+    button(menu,'大纲').click();assert(p.root.querySelector('.ms-map-floating-panel .ms-outline-renderer'),'outline did not open');button(p.root,'关闭面板').click();
+    button(open(),'卡片分组看板').click();assert(p.root.querySelector('.ms-map-floating-panel .ms-card-board'),'board did not open');button(p.root,'关闭面板').click();
+    button(open(),'导出思维导图').click();await until(()=>exports.size===1,'Canvas export did not write');
+    const [path,content]=[...exports.entries()][0];assert(path.endsWith('.canvas')&&JSON.parse(content).nodes.some((node:any)=>node.id==='anchor-node'),'Canvas export lost scoped nodes');
+    const speechDescriptor=Object.getOwnPropertyDescriptor(window,'speechSynthesis'),utteranceDescriptor=Object.getOwnPropertyDescriptor(window,'SpeechSynthesisUtterance'),spoken:string[]=[];
+    try{
+      Object.defineProperty(window,'SpeechSynthesisUtterance',{configurable:true,value:class{constructor(public text:string){}}});
+      Object.defineProperty(window,'speechSynthesis',{configurable:true,value:{speak(utterance:any){spoken.push(utterance.text);},cancel(){},pause(){},resume(){}}});
+      button(open(),'朗读卡片').click();await until(()=>spoken.length>0,'card speech did not reach the system engine');
+      const dialog=document.querySelector<HTMLElement>('.ms-modal')!;assert(dialog.textContent?.includes('正在朗读')&&spoken.some(text=>text.includes('Alpha anchor')),'speech state or content missing');button(dialog,'关闭').click();
+    }finally{if(speechDescriptor)Object.defineProperty(window,'speechSynthesis',speechDescriptor);else delete (window as any).speechSynthesis;if(utteranceDescriptor)Object.defineProperty(window,'SpeechSynthesisUtterance',utteranceDescriptor);else delete (window as any).SpeechSynthesisUtterance;}
+    button(open(),'在场景模板里设置…').click();assert(p.root.querySelector('[aria-label="场景模板管理"]'),'scene template manager did not open');button(p.root,'关闭工具面板').click();
+    button(open(),'关闭脑图').click();await frame();assert(state(p).mindmap===false&&p.root.dataset.mindmap==='false','close did not hide map');
+    button(open(),'主脑图').click();await frame();assert(state(p).mindmap===true,'current map could not reopen the closed pane');
+    assert(JSON.stringify(p.store.cards)===cards&&JSON.stringify(p.store.sceneTemplates)===templates,'actions changed card or template data');
+  });
+  await test('Mind-map menu passes the real click target to coexistence listeners',async()=>{
+    const p=await fresh();p.store.setStudyInterface(p.set.id,'scenes');p.view.refresh(true);await frame();
+    const original=Menu.prototype.showAtMouseEvent;let targetAttribute:string|null|undefined;
+    Menu.prototype.showAtMouseEvent=function(event:MouseEvent){targetAttribute=(event.target as HTMLElement).getAttribute('aria-label');return original.call(this,event);};
+    try{button(p.root,'脑图：主脑图').click();assert(targetAttribute==='脑图：主脑图','menu click target missing: '+targetAttribute);assert(!!document.querySelector('#test-menu'),'menu did not open');}
+    finally{Menu.prototype.showAtMouseEvent=original;}
+  });
+  await test('workspace search button opens categorized global search',async()=>{
+    const p=await fresh();button(p.root,'全局搜索').click();
+    const modal=document.querySelector('.ms-modal')!;
+    assert(!!modal.querySelector('[aria-label="搜索关键词"]'),'global search input missing');
+    const labels=[...modal.querySelectorAll('[role="tab"]')].map(item=>item.textContent);
+    assert(labels.join('|')==='脑图|文档目录|文档正文|功能','search categories differ');
+  });
+  await test('study set more menu offers backup export',async()=>{
+    const p=await fresh();button(p.root,'学习集更多设置').click();
+    assert(!!button(p.root,'导出学习集备份'),'backup export entry missing');
+    assert(!!button(p.root,'导出学习集备份（不含 PDF）'),'backup without PDF entry missing');
+    assert(!!button(p.root,'导出到笔记数据库'),'notes export entry missing');
+  });
+  await test('MN5 node toolbar exposes icon actions, branch layout, focus, link, review and more in order',async()=>{
+    const p=await fresh();p.store.updateNode('parent',{collapsed:false});p.view.refresh(true);await frame();
+    mapCard(p,'anchor-node').click();await frame();
+    const toolbar=p.root.querySelector<HTMLElement>('.ms-node-toolbar')!;
+    const labels=[...toolbar.querySelectorAll<HTMLButtonElement>('button[data-action]')].map(item=>item.getAttribute('aria-label'));
+    assert(labels.join('|')==='剪切|复制|颜色|标签|删除|分支布局|焦点|链接|添加复习|更多|退出多选','node toolbar order differs from MN5: '+labels.join('|'));
+    assert([...toolbar.querySelectorAll('button[data-action] .ms-selection-icon')].length===labels.length,'node toolbar lost its icon slots');
+    const iconOnly=[...toolbar.querySelectorAll<HTMLButtonElement>('button[data-icon-only="true"]')];
+    assert(iconOnly.length===7,'icon-only cluster size changed: '+iconOnly.length);
+    assert(iconOnly.every(item=>(item.querySelector('.ms-selection-label') as HTMLElement).getBoundingClientRect().width<=1),'icon-only actions still show text labels');
+    for(const label of ['分支布局','焦点','链接','添加复习']){const item=[...toolbar.querySelectorAll<HTMLButtonElement>('button[data-action]')].find(node=>node.getAttribute('aria-label')===label)!;assert(item.getBoundingClientRect().width>34&&(item.querySelector('.ms-selection-label') as HTMLElement).getBoundingClientRect().width>10,'named node action lost its visible label: '+label);}
+    const boxes=[...toolbar.querySelectorAll<HTMLButtonElement>('button[data-action]')].map(node=>node.getBoundingClientRect());
+    assert(Math.max(...boxes.map(box=>box.height))<=34,'node toolbar is taller than the MN5 single-row bar');
+    assert(new Set(boxes.map(box=>Math.round(box.top))).size===1,'node toolbar wrapped into multiple rows');
+    const barHeight=toolbar.getBoundingClientRect().height;assert(barHeight>=32&&barHeight<=40,'node bar height is outside the MN5 single-row range: '+barHeight);
+    button(toolbar,'分支布局').click();const layout=document.querySelector<HTMLElement>('#test-menu')!;
+    const styles=[...layout.querySelectorAll<HTMLButtonElement>('button')].map(item=>item.textContent);
+    assert(styles.slice(0,10).join('|')==='向右|向左|双向|鱼骨|逻辑图|经典|紧凑|向下|组织架构|时间轴'&&styles.includes('更多分支样式…'),'branch layout menu differs: '+styles.join('|'));
+    button(layout,'向右').click();assert(p.store.getNode('anchor-node')?.layout==='right','branch layout did not apply to the selected node');
+    button(toolbar,'焦点').click();await frame();assert(!mapCard(p,'beta-node'),'focus did not hide unrelated branches');button(toolbar,'退出多选').click();await frame();
+  });
+  await test('MN5 node more menu lists the sixteen actions in order and keeps plugin actions in 更多操作…',async()=>{
+    const p=await fresh();p.store.updateNode('parent',{collapsed:false});p.view.refresh(true);await frame();mapCard(p,'parent').click();await frame();
+    const toolbar=p.root.querySelector<HTMLElement>('.ms-node-toolbar')!;button(toolbar,'更多').click();
+    let menu=document.querySelector<HTMLElement>('#test-menu')!;
+    const rows=[...menu.querySelectorAll<HTMLButtonElement>('button')].map(item=>item.textContent);
+    assert(rows.join('|')==='剪切|复制|粘贴|整卡截图批注|导出分支|导出本卡|选中整个分支|塌缩成子脑图|复制克隆到剪贴板|重置尺寸和字体比例|从脑图中移除|清除富文本格式|展开|折叠|更多操作…|自定义…','node more menu differs from MN5: '+rows.join('|'));
+    assert(button(menu,'粘贴').disabled&&!button(menu,'剪切').disabled,'more menu availability is wrong');
+    button(menu,'更多操作…').click();menu=document.querySelector<HTMLElement>('#test-menu')!;
+    for(const label of ['颜色','标签','编辑标题','编辑卡片','概要','重新分组','合并','删除','断开引用','按内容拆分…','整卡遮挡','在此处隐藏','评论','打开子脑图','设置分支样式…','仅显示标题'])assert([...menu.querySelectorAll<HTMLButtonElement>('button')].some(item=>item.textContent===label),'更多操作… lost plugin action: '+label);
+  });
+  await test('MN5 同步删除卡片 removes the card only when enabled, and UI状态URL restores set/canvas/doc/page',async()=>{
+    const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;await reader.renderPage(2);
+    const settings=p.store.settings;
+    settings.syncDeleteCardOnSourceRemoval=false;
+    button(p.root,'学习集更多设置').click();button(p.root.querySelector('[aria-label="学习集"]')!,'删除源标注时同步删除卡片').click();await frame();
+    assert(p.store.settings.syncDeleteCardOnSourceRemoval===true,'sync-delete toggle did not persist');
+    p.store.addCard({id:'sync-card',docPath:p.delta.path,type:'excerpt',front:'Sync source',anchorAnnId:'sync-ann',tags:[],links:[],createdAt:'2026-11-10T00:00:00Z'});
+    p.store.addNode({id:'sync-node',cardId:'sync-card',canvasId:p.canvasId,parentId:null,title:'Sync source',x:100,y:100,collapsed:false});
+    await p.store.saveAnnotationsNow(p.delta.path,[{id:'sync-ann',docPath:p.delta.path,docKind:'pdf',page:2,type:'highlight',rects:[{x:10,y:10,w:40,h:10}],pdfCoordinateSpace:'pdf',text:'Sync source',color:'#ffff00',createdAt:'2026-11-10T00:00:00Z',cardId:'sync-card'}]);
+    const opened=await reader.loadFileByPath?.(p.delta.path);
+    assert(reader.deleteAnnotationById('sync-ann')||p.store.getCard('sync-card'),'annotation delete path unavailable');await frame();
+    assert(!p.store.getCard('sync-card')&&!p.store.getNode('sync-node'),'sync delete did not remove the card or its node');
+    assert(p.store.undoLibraryChange()&&p.store.getCard('sync-card'),'sync delete was not undoable as one transaction');
+    settings.syncDeleteCardOnSourceRemoval=false;
+    await (p.view.getReader() as ReaderView).navigateToReference(2,[],undefined,false);await frame();
+    const url=p.view.uiStateUrl();const parsed=new URL(url);assert(parsed.protocol==='obsidian:'&&parsed.host==='margin-study-state','UI state URL used the wrong protocol');
+    assert(parsed.searchParams.get('set')===p.store.activeStudySetId&&parsed.searchParams.get('doc')===p.delta.path,'UI state URL lost the study set or document');
+    assert(parsed.searchParams.get('page')==='2','UI state URL lost the current page');
+    p.store.setActiveCanvas(p.store.createCanvas(p.set.id,'State target').id);p.view.refresh(true);await frame();
+    const restored=await p.view.openFromStateParams({set:[...parsed.searchParams.values()][0]?parsed.searchParams.get('set')!:undefined,canvas:parsed.searchParams.get('canvas')!,doc:parsed.searchParams.get('doc')!,page:parsed.searchParams.get('page')!});
+    await until(()=>p.store.activeCanvasId===parsed.searchParams.get('canvas')&&p.view.getReader()?.getFilePath()===p.delta.path,'UI state URL did not restore canvas or document');
+    assert(restored&&(p.view.getReader() as ReaderView).getCurrentPage()===2,'UI state URL did not restore the page');
+  });
+  await test('MN5 card actions add-to-mindmap, comment-into, merge-into and extend-collapse work once-undoable',async()=>{
+    const p=await fresh();p.store.updateNode('parent',{collapsed:false});p.view.refresh(true);await frame();linkedMode(p,'关闭');
+    const more=async(label:string,nodeId='anchor-node')=>{const target=mapCard(p,nodeId);assert(target,'node missing in more('+label+'): '+nodeId+' '+JSON.stringify(p.store.nodes.find((n:any)=>n.id===nodeId)));target.click();await frame();const toolbar=p.root.querySelector<HTMLElement>('.ms-node-toolbar')!;button(toolbar,'更多').click();button(document.querySelector<HTMLElement>('#test-menu')!,'更多操作…').click();await frame();const menu=document.querySelector<HTMLElement>('#test-menu')!;const rows=[...menu.querySelectorAll('button')].map(item=>item.textContent);const found=rows.includes(label)?button(menu,label):null;assert(found,'submenu missing '+label+': rows='+rows.join('|'));return found!;};
+    p.store.updateDocMeta(p.alpha.path,{pdfExtendNotes:[{id:'x-note',pageId:'p1',sourceAnnId:'anchor-a',anchor:{x:.2,y:.3},height:90,text:'note',collapsed:false,createdAt:'2026-11-10T00:00:00Z'}]});
+    const collapse=await more('折叠留白');assert(!collapse.disabled,'折叠留白 disabled without notes');collapse.click();await frame();
+    assert((p.store.getDocMeta(p.alpha.path).pdfExtendNotes??[])[0]?.collapsed===true,'折叠留白 did not collapse the note');
+    (await more('展开留白')).click();await frame();
+    assert((p.store.getDocMeta(p.alpha.path).pdfExtendNotes??[])[0]?.collapsed===false,'展开留白 did not expand the note');
+    mapCard(p,'anchor-node').click();await frame();let toolbar=p.root.querySelector<HTMLElement>('.ms-node-toolbar')!;button(toolbar,'更多').click();button(document.querySelector<HTMLElement>('#test-menu')!,'更多操作…').click();
+    for(const node of p.store.nodes.filter((node:any)=>node.cardId==='anchor-card'))p.store.setNodeHidden(node.id,true);
+    button(document.querySelector<HTMLElement>('#test-menu')!,'添加到脑图').click();await frame();
+    assert(p.store.nodes.some((node:any)=>node.cardId==='anchor-card'&&!node.hidden&&node.canvasId===p.canvasId),'添加到脑图 did not reveal or create the node');
+    const betaFront=p.store.getCard('beta-card')?.front;
+    (await more('合并到','beta-node')).click();await until(()=>document.querySelector('.ms-modal .ms-native-menu-row'),'merge target picker missing');
+    [...document.querySelectorAll<HTMLButtonElement>('.ms-modal .ms-native-menu-row')].find(item=>item.textContent?.includes('Alpha'))!.click();await frame();
+    assert(p.store.getCard('anchor-card')?.mergedCards?.some((item:any)=>item.id==='beta-card')||p.store.getCard('beta-card')?.groupId==='anchor-card','合并到 did not merge into the target card');
+    assert(p.store.undoLibraryChange(),'合并到 was not undoable');await frame();
+  });
+  await test('5.0.2 table of contents supports arrow browsing, space multi-select, level keys and delete undo',async()=>{
+    const p=await fresh();p.sources.get(p.delta.path)!.binary=new TextEncoder().encode(JSON.stringify({name:'Delta',pages:5})).buffer;await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;await reader.renderPage(1);
+    await reader.setEditableOutline([{id:'t1',title:'One',page:1,level:0},{id:'t2',title:'Two',page:2,level:0},{id:'t3',title:'Three',page:3,level:0}]);
+    button(p.root,'文档目录与书签').click();const nav=p.root.querySelector<HTMLElement>('[aria-label="书页查找"]')!;
+    await until(()=>nav.querySelector('[data-toc-focus="t1"]'),'outline entries missing');
+    const entry=(id:string)=>nav.querySelector<HTMLButtonElement>(`[data-toc-focus="${id}"]`)!;
+    entry('t1').focus();
+    entry('t1').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true,cancelable:true}));
+    assert(document.activeElement===entry('t2'),'ArrowDown did not move focus to the next entry');
+    entry('t2').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowUp',bubbles:true,cancelable:true}));
+    assert(document.activeElement===entry('t1'),'ArrowUp did not move focus back');
+    entry('t1').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));
+    await until(()=>reader.getCurrentPage()===1,'Enter did not navigate to the entry page');
+    button(nav,'编辑').click();await until(()=>nav.querySelector('input[type="checkbox"]'),'outline edit mode missing');
+    entry('t1').focus();
+    entry('t1').dispatchEvent(new KeyboardEvent('keydown',{key:' ',bubbles:true,cancelable:true}));
+    const checkbox=nav.querySelector<HTMLInputElement>('[aria-label="选择目录 One"]')!;
+    assert(checkbox.checked,'Space did not select the focused entry');
+    entry('t1').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',altKey:true,bubbles:true,cancelable:true}));
+    await until(()=>reader.getEditableOutline().then(items=>items.find(item=>item.id==='t1')?.level===1),'Alt+ArrowRight did not indent the entry');
+    entry('t1').dispatchEvent(new KeyboardEvent('keydown',{key:'Delete',bubbles:true,cancelable:true}));
+    await until(()=>reader.getEditableOutline().then(items=>!items.some(item=>item.id==='t1')),'Delete did not remove the selected entry');
+    await reader.undoLastEdit();await frame();
+    assert((await reader.getEditableOutline()).some(item=>item.id==='t1'),'undo did not restore the deleted entry');
+  });
+  await test('5.0.2 merge sends the current page, a page range or the whole PDF into another document',async()=>{
+    const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;await reader.navigateToReference(2,[],undefined,false);await reader.renderPage(2);
+    p.app.vault.createFolder=async()=>{};
+    p.app.vault.createBinary=async(path:string,bytes:ArrayBuffer)=>{const file=new TFile(path,bytes.byteLength);p.sources.set(path,{file,content:'',binary:bytes.slice(0)});return file;};
+    p.app.vault.modifyBinary=async(file:TFile,bytes:ArrayBuffer)=>{const entry=p.sources.get(file.path)!;entry.binary=bytes.slice(0);entry.file.stat.size=bytes.byteLength;};
+    p.app.vault.readBinary=async(file:TFile)=>(p.sources.get(file.path)!.binary as ArrayBuffer).slice(0);
+    const { createPageCollection, readPageCollection } = await import('__PROJECT__/src/documents/pageCollection');
+    const targetFile=await createPageCollection(p.plugin,{title:'Merge target',pages:[{sourcePath:p.delta.path,sourcePage:1,origin:'document'}],origin:'document',studySetId:p.set.id});
+    const before=JSON.stringify(await readPageCollection(p.plugin,targetFile));
+    const sourceBytes=new Uint8Array((p.sources.get(p.delta.path)!.binary as ArrayBuffer).slice(0));
+    const open=()=>{button(p.root,'文档与工作区设置').click();return p.root.querySelector<HTMLElement>('[aria-label="文档 - 更多"]')!;};
+    const merge=async(scope:'page'|'range'|'document',range='')=>{
+      button(open(),'合并到另一份文档…').click();
+      await until(()=>document.querySelector('.ms-modal [aria-label="合并范围"]'),'merge dialog missing');
+      const modal=document.querySelector<HTMLElement>('.ms-modal')!;
+      const select=modal.querySelector<HTMLSelectElement>('[aria-label="合并范围"]')!;select.value=scope;select.dispatchEvent(new Event('change',{bubbles:true}));
+      if(scope==='range'){const input=modal.querySelector<HTMLInputElement>('[aria-label="合并页范围"]')!;input.value=range;}
+      const target=modal.querySelector<HTMLSelectElement>('[aria-label="合并目标文档"]')!;target.value=targetFile.path;
+      button(modal,'合并').click();
+      for(let attempt=0;attempt<100&&document.body.contains(modal);attempt++)await wait(20);
+    };
+    await merge('page');
+    let collection=await readPageCollection(p.plugin,targetFile);
+    assert(collection.pages.length===2&&collection.pages[1].sourcePath===p.delta.path&&collection.pages[1].sourcePage===2,'current page was not appended: '+JSON.stringify(collection.pages.map((entry:any)=>[entry.sourcePath,entry.sourcePage])));
+    await merge('range','1,3');
+    collection=await readPageCollection(p.plugin,targetFile);
+    assert(collection.pages.length===4&&collection.pages.slice(2).map((entry:any)=>entry.sourcePage).join(',')==='1,3','page range append wrong: '+JSON.stringify(collection.pages.map((entry:any)=>entry.sourcePage)));
+    await merge('document');
+    collection=await readPageCollection(p.plugin,targetFile);
+    assert(collection.pages.length===4+(reader.getDoc()?.numPages??0),'whole-PDF append wrong length: '+collection.pages.length);
+    const sourceAfter=new Uint8Array((p.sources.get(p.delta.path)!.binary as ArrayBuffer).slice(0));
+    assert(sourceAfter.join('|')===sourceBytes.join('|'),'merge modified the source PDF');
+    assert(JSON.stringify(await readPageCollection(p.plugin,targetFile))!==before,'merge did not change the target collection');
+  });
+  await test('5.0.2 document spine lists every study-set document, filters by title and opens one',async()=>{
+    const p=await fresh();await p.view.openFile(p.alpha);await frame();
+    button(p.root,'书脊：滚动与检索文档').click();
+    await until(()=>p.root.querySelector('[aria-label="书脊文档列表"]'),'spine list did not open');
+    const list=p.root.querySelector<HTMLElement>('[aria-label="书脊文档列表"]')!;
+    const rows=()=>[...list.querySelectorAll<HTMLButtonElement>('.ms-document-spine-row')].map(row=>row.dataset.documentPath);
+    const all=p.view['documents']().map((file:any)=>file.path);
+    assert(rows().join('|')===all.join('|'),'spine did not list every document: '+rows().join('|'));
+    assert(getComputedStyle(list).overflowY==='auto'&&getComputedStyle(list).flexDirection==='column','spine is not a vertical scroll list');
+    const search=p.root.querySelector<HTMLInputElement>('[aria-label="搜索书脊文档"]')!;
+    search.value='Beta';search.dispatchEvent(new Event('input',{bubbles:true}));await frame();
+    assert(rows().length===1&&rows()[0]===p.beta.path,'spine search did not filter by title');
+    list.querySelector<HTMLButtonElement>('.ms-document-spine-row')!.click();
+    await until(()=>p.view.getReader()?.getFilePath()===p.beta.path,'spine row did not open the document');
+    assert(!p.root.querySelector('[aria-label="书脊文档列表"]'),'spine panel stayed open after opening a document');
+  });
+  await test('5.0.2 clean view hides toolbars via a long-press handle, keeps a pen strip and honours template status bar',async()=>{
+    const p=await fresh();p.store.updateNode('parent',{collapsed:false});p.view.refresh(true);await frame();
+    const handle=p.root.querySelector<HTMLButtonElement>('[aria-label="简洁显示把手"]')!;assert(handle,'clean-view handle missing');
+    const toolbar=p.root.querySelector<HTMLElement>('.ms-workspace-toolbar')!;
+    assert(toolbar.checkVisibility(),'toolbar was hidden before clean view');
+    handle.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,button:0,pointerId:9}));
+    await wait(520);
+    handle.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,cancelable:true,button:0,pointerId:9}));
+    await frame();
+    assert(p.root.classList.contains('is-clean-view'),'long press did not enter clean view');
+    assert(!toolbar.checkVisibility(),'toolbar still visible in clean view');
+    assert(!p.root.querySelector<HTMLElement>('.ms-bottom-capsule-shell')!.checkVisibility(),'status bar still visible in clean view');
+    handle.click();await frame();
+    assert(!p.root.classList.contains('is-clean-view')&&toolbar.checkVisibility(),'tap did not restore the toolbars');
+    (p.view.getReader() as any).setHandwritingMode('pen');await frame();
+    assert(p.root.dataset.readerTool==='pen','pen tool did not reach the workspace state');
+    handle.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,button:0,pointerId:10}));await wait(520);
+    handle.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,cancelable:true,button:0,pointerId:10}));await frame();
+    const strip=p.root.querySelector<HTMLElement>('.ms-clean-pen-strip')!;
+    assert(p.root.classList.contains('is-clean-view')&&!strip.hidden&&strip.checkVisibility(),'pen strip is not visible during handwriting in clean view');
+    assert([...strip.querySelectorAll('button')].map(item=>item.getAttribute('aria-label')).join('|')==='普通笔 1|荧光笔|铅笔|橡皮擦','pen strip lost its essential tools');
+    handle.click();await frame();
+    assert(strip.hidden,'pen strip stayed visible after leaving clean view');
+    const template=p.store.copySceneTemplate('standard');template.name='简洁状态栏模板';template.statusBar='hidden';p.store.saveSceneTemplate(template);
+    const exported=p.store.exportSceneTemplate(template.id);assert(exported.includes('"statusBar": "hidden"')||exported.includes('"statusBar":"hidden"'),'template export lost the status bar setting: '+exported.slice(0,200));
+    p.store.setStudyInterface(p.set.id,'scenes');p.store.selectStudyScene(p.set.id,template.id,template.scenes[0].id);p.view.refresh(true);await frame();
+    assert(p.root.dataset.statusBar==='hidden','workspace did not apply the template status bar');
+    assert(!p.root.querySelector<HTMLElement>('.ms-bottom-capsule-shell')!.checkVisibility(),'hidden status bar is still visible');
+  });
+  await test('5.0.2 scene changes preserve occlusion and new excerpts through save and reopen',async()=>{
+    const p=await fresh();await p.view.openFile(p.delta);let reader:any=p.view.getReader();await reader.renderPage(1);
+    p.store.settings.autoCardOnHighlight=true;p.store.setStudyInterface(p.set.id,'scenes');
+    p.store.updateCard('anchor-card',{occluded:true});p.store.updateNode('anchor-node',{occluded:false});p.store.updateNode('beta-node',{occluded:true});
+    const original=()=>JSON.stringify({cards:p.store.cards.filter((item:any)=>['anchor-card','beta-card'].includes(item.id)).map((item:any)=>[item.id,item.occluded]),nodes:p.store.nodes.filter((item:any)=>['anchor-node','beta-node'].includes(item.id)).map((item:any)=>[item.id,item.occluded])});
+    const before=original(),custom=p.store.copySceneTemplate('standard');let index=0,markedCard='';
+    for(const [template,scenes] of [[custom.id,['excerpt','handwriting','recall']],['read-write-recall',['reading','writing','recall']],['standard',['excerpt','handwriting','recall']]] as any){
+      for(const scene of scenes){p.store.selectStudyScene(p.set.id,template,scene);p.view.refresh(true);await frame();assert(original()===before,`${template}/${scene} changed existing occlusion`);
+        reader=p.view.getReader();const count=p.store.cards.length;reader.annController.commitAnnotation({kind:'pdf',pageNum:1,rects:[{x:80,y:500-index++*30,w:120,h:18}],pdfCoordinateSpace:'pdf'},'highlight','#ff0',`${template}/${scene}`);
+        assert(p.store.cards.length===count+1&&p.store.cards[p.store.cards.length-1].occluded!==true,`${template}/${scene} new excerpt was occluded`);if(!markedCard)markedCard=p.store.cards[p.store.cards.length-1].id;
+        assert(!p.root.querySelector('.ms-workspace-reader .is-occluded'),`${template}/${scene} masked ordinary reading`);
+      }
+    }
+    p.store.selectStudyScene(p.set.id,'standard','excerpt');p.view.refresh(true);await frame();p.store.toggleCardOcclusion([markedCard]);await p.store.flush();const markedAnn=(await p.store.loadAnnotations(p.delta.path)).find((item:any)=>item.cardId===markedCard),saved=p.store.cards.map((item:any)=>[item.id,item.occluded]),viewState=state(p);
+    await p.view.onClose();p.view.unload();p.view.containerEl.remove();p.store=await p.reloadStore();p.plugin.store=p.store;p.view=new StudyWorkspaceView(p.leaf,p.plugin);p.root=p.view.contentEl;p.view.load();await p.view.setState(viewState);await p.view.onOpen();await frame();
+    assert(JSON.stringify(p.store.cards.map((item:any)=>[item.id,item.occluded]))===JSON.stringify(saved),'reopened card occlusion changed');
+    reader=p.view.getReader();await until(()=>p.root.querySelector(`[data-ann-id="${markedAnn.id}"]`),'reopened marked excerpt was not rendered');reader.setRecallMode(false);assert(!p.root.querySelector('.ms-workspace-reader .is-occluded'),'reopened ordinary reading masked excerpts');
+    reader.setRecallCoverAll(false);reader.setRecallMode(true);await frame();assert(p.root.querySelector(`[data-ann-id="${markedAnn.id}"].is-occluded`),'reopened marked excerpt was not masked in recall');
+  });
+  await test('5.0.2 first excerpt keeps the reading view and offers a locate action that opens the map',async()=>{
+    const p=await fresh();p.store.updateNode('parent',{collapsed:false});p.store.setStudyInterface(p.set.id,'scenes');p.view.refresh(true);await frame();
+    p.view.state.mindmap=false;p.view.state.reader=true;p.view.state.linkMode='off';p.view.applyLayout();p.view.drawToolbar();await frame();
+    const contained=(node:HTMLElement|null)=>!!node&&(p.root.contains(node)||document.body.contains(node));
+    p.store.settings.autoCardOnHighlight=true;const before=p.store.cards.length,mindmapBefore=p.view.state.mindmap,pathBefore=p.view.getReader()?.getFilePath();
+    annotation(p).click();await until(()=>document.querySelector('.ms-ann-pop'),'annotation menu missing');button(document.querySelector('.ms-ann-pop')!,'摘录卡').click();await frame();
+    const created=p.store.cards[p.store.cards.length-1];assert(p.store.cards.length===before+1,'excerpt card was not created');
+    assert(p.view.state.mindmap===mindmapBefore&&p.view.getReader()?.getFilePath()===pathBefore,'first excerpt changed the reading view or document');
+    const notice=[...document.querySelectorAll<HTMLElement>('.notice')].reverse().find(node=>node.textContent?.includes('已加入脑图'));
+    assert(notice,'excerpt notice missing');const locate=notice!.querySelector<HTMLButtonElement>('[aria-label="打开脑图"]');assert(locate,'excerpt notice has no open map action');
+    assert([...notice!.querySelectorAll('button')].map(item=>item.textContent).join('|')==='打开脑图|撤回|摘录操作|摘录去向','document notice buttons differ');
+    const farNode=p.store.nodes.find((node:any)=>node.cardId===created.id);assert(farNode,'excerpt node missing');
+    p.store.updateNode(farNode.id,{x:4000,y:3000});
+    locate!.click();await frame();
+    assert(p.view.state.mindmap===true,'locate action did not open the mind map');
+    const expectedNodeIds=p.store.nodes.filter((node:any)=>node.cardId===created.id).map((node:any)=>node.id);assert([...p.root.querySelectorAll('.ms-node.is-selected')].some(node=>expectedNodeIds.includes(node.getAttribute('data-id'))),'locate action did not select the new card node: '+[...p.root.querySelectorAll('.ms-node.is-selected')].map(node=>node.getAttribute('data-id')).join(',')+' expected '+expectedNodeIds.join(','));
+    const selected=p.root.querySelector<HTMLElement>(`.ms-node.is-selected[data-id="${farNode.id}"]`)!;
+    const selectedBox=selected.getBoundingClientRect(),viewport=p.root.querySelector<HTMLElement>('.ms-mindmap')!.getBoundingClientRect();
+    assert(selectedBox.right>viewport.left&&selectedBox.left<viewport.right&&selectedBox.bottom>viewport.top&&selectedBox.top<viewport.bottom,'offscreen excerpt did not enter the map viewport');
+    assert(p.store.getCard(created.id)?.occluded!==true,'new excerpt defaulted to occluded');
+    assert(!document.querySelector('.ms-workspace-reader .ms-hl.is-occluded'),'normal reading hid the source text');
+    const splitNotice=showExcerptNotice(p.plugin,created.id);
+    assert([...splitNotice.noticeEl.querySelectorAll('button')].map(item=>item.textContent).join('|')==='撤回|摘录操作|摘录去向','split notice buttons differ');
+    const annotationsBefore=(await p.store.loadAnnotations(created.docPath)).length;
+    splitNotice.noticeEl.querySelector<HTMLButtonElement>('[aria-label="撤回"]')!.click();await frame();
+    assert((await p.store.loadAnnotations(created.docPath)).length===annotationsBefore,'withdraw removed an annotation');
+    assert(!p.store.nodes.some((node:any)=>expectedNodeIds.includes(node.id)),'withdraw retained node');
+    assert(splitNotice.noticeEl.textContent==='已撤回入图，原文摘录保留','withdraw message differs');
+    assert(p.store.undoLibraryChange(),'withdraw not undoable');
+    assert(p.store.nodes.some((node:any)=>expectedNodeIds.includes(node.id)),'undo did not restore node');
+  });
+  await test('MN5 摘录与手写工具 exposes colour and pen slots and 回源 requires a selected card',async()=>{
+    const p=await fresh();p.store.updateNode('parent',{collapsed:false});await p.view.openFile(p.delta);await (p.view.getReader() as ReaderView).renderPage(1);
+    const open=()=>{button(p.root,'文档与工作区设置').click();return p.root.querySelector<HTMLElement>('[aria-label="文档 - 更多"]')!;};
+    let pane=open();
+    const rows=[...pane.querySelectorAll<HTMLButtonElement>('button')].map(item=>item.getAttribute('aria-label'));
+    assert(rows.includes('回源')&&rows.includes('摘录与手写工具'),'document rows missing: '+rows.join('|'));
+    assert(button(pane,'回源').disabled,'回源 enabled without a selected card');
+    button(pane,'摘录与手写工具').click();await until(()=>[...document.querySelectorAll<HTMLElement>('.ms-modal')].find(node=>node.querySelector('h3')?.textContent==='摘录与手写工具'),'摘录与手写工具 dialog did not open');
+    const panel=[...document.querySelectorAll<HTMLElement>('.ms-modal')].find(node=>node.querySelector('h3')?.textContent==='摘录与手写工具')!;
+    const labels=[...panel.querySelectorAll('button')].map(item=>item.textContent);
+    assert(labels.includes('摘录工具1')&&labels.includes('手写工具1'),'摘录与手写工具 slots missing: '+labels.join('|'));
+    button(panel,'手写工具1').click();await frame();
+    linkedMode(p,'关闭');mapCard(p,'anchor-node').click();await frame();pane=open();assert(!button(pane,'回源').disabled,'回源 stayed disabled with a selected card');
+  });
+  await test('MN5 加为评论 appends the source card text to the chosen target and is one undo',async()=>{
+    const p=await fresh();p.store.updateNode('parent',{collapsed:false});p.store.addNode({id:'comment-source',canvasId:p.canvasId,parentId:null,title:'Comment source',x:40,y:420,collapsed:false});p.store.addCard({id:'comment-card',docPath:p.alpha.path,type:'excerpt',front:'Comment text',tags:[],links:[],createdAt:'2026-11-10T00:00:00Z'});p.store.updateNode('comment-source',{cardId:'comment-card'});p.view.refresh(true);await frame();linkedMode(p,'关闭');
+    mapCard(p,'comment-source').click();await frame();const toolbar=p.root.querySelector<HTMLElement>('.ms-node-toolbar')!;button(toolbar,'更多').click();button(document.querySelector<HTMLElement>('#test-menu')!,'更多操作…').click();
+    button(document.querySelector<HTMLElement>('#test-menu')!,'加为评论').click();await until(()=>document.querySelector('.ms-modal .ms-native-menu-row'),'comment target picker missing');
+    [...document.querySelectorAll<HTMLButtonElement>('.ms-modal .ms-native-menu-row')].find(item=>item.textContent?.includes('Alpha'))!.click();await frame();
+    assert(p.store.getCard('anchor-card')?.back?.includes('Comment text')&&p.store.getCard('comment-card')?.hidden===true,'加为评论 did not append the text or hide the source card');
+    assert(p.store.undoLibraryChange()&&p.store.getCard('comment-card')?.hidden!==true,'加为评论 was not one undoable transaction');
+
+  });
+  await test('MN5 outline toolbar inserts a TOC entry and splits a chapter fold',async()=>{
+    const p=await fresh();p.sources.get(p.delta.path)!.binary=new TextEncoder().encode(JSON.stringify({name:'Delta',pages:4})).buffer;await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;await reader.renderPage(1);
+    button(p.root,'文档与工作区设置').click();button(p.root.querySelector('[aria-label="文档 - 更多"]')!,'转到指定页码').click();
+    const jump=document.querySelector<HTMLElement>('.ms-native-page-jump')!;(jump.querySelector('input[aria-label="跳转到页码"]') as HTMLInputElement).value='2';button(jump,'OK').click();
+    await until(()=>reader.getCurrentPage()===2,'page jump did not settle');
+    button(p.root,'文档目录与书签').click();const nav=p.root.querySelector<HTMLElement>('[aria-label="书页查找"]')!;await until(()=>nav.querySelector('button[aria-label="编辑"]'),'TOC toolbar missing');
+    button(nav,'编辑').click();await until(()=>nav.querySelector('button[aria-label="插入目录"]'),'插入目录 missing');
+    button(nav,'插入目录').click();await until(()=>document.querySelector('.ms-modal textarea'),'insert dialog missing');
+    const input=document.querySelector<HTMLTextAreaElement>('.ms-modal textarea')!;input.value='Inserted chapter';button(document.querySelector('.ms-modal')!,'确定').click();
+    for(let attempt=0;attempt<100;attempt++){const now=await reader.getEditableOutline();if(now.some(item=>item.title==='Inserted chapter'))break;await wait(20);}
+    const outline=await reader.getEditableOutline();assert(outline.some(item=>item.title==='Inserted chapter'),'插入目录 did not add an outline entry');assert(outline.find(item=>item.title==='Inserted chapter')?.page===2,'inserted entry lost its page: '+JSON.stringify(outline)+' current='+reader.getCurrentPage());
+    await reader.undoLastEdit();await frame();
+    assert(!(await reader.getEditableOutline()).some(item=>item.title==='Inserted chapter'),'undo did not remove the inserted TOC entry');
+    await reader.setEditableOutline([{id:'ch1',title:'Chapter One',page:1,level:0},{id:'ch2',title:'Chapter Two',page:3,level:0}]);
+    await reader.navigateToReference(1,[],undefined,false);await until(()=>nav.querySelector('button[aria-label="分割折页"]'),'分割折页 missing');const splitButton=button(nav,'分割折页');assert(!splitButton.disabled&&splitButton.isConnected,'分割折页 button unavailable: disabled='+splitButton.disabled);splitButton.click();
+    for(let attempt=0;attempt<100&&!(p.store.getDocMeta(p.delta.path).foldedPages??[]).length;attempt++)await wait(20);
+    const folded=p.store.getDocMeta(p.delta.path).foldedPages??[];
+    assert(folded.includes(1)||folded.includes(2)||folded.includes(3),'分割折页 did not fold the current chapter pages: '+JSON.stringify({folded,notices:notices.slice(-4),outline:await reader.getEditableOutline()}));
+  });
+  await test('MN5 文本优先 hides the node image while keeping the text card visible',async()=>{
+    const p=await fresh();p.store.updateNode('parent',{collapsed:false});
+    p.store.updateCard('anchor-card',{front:'Alpha anchor',image:'data:image/png;base64,iVBORw0KGgo='});
+    p.view.refresh(true);await frame();
+    const node=()=>p.root.querySelector('.ms-node[data-id="anchor-node"]')!;
+    assert(node().querySelector('.ms-node-img'),'fixture card lost its image');
+    mapCard(p,'anchor-node').click();await frame();const toolbar=p.root.querySelector<HTMLElement>('.ms-node-toolbar')!;
+    button(toolbar,'更多').click();button(document.querySelector('#test-menu')!,'更多操作…').click();
+    const menu=document.querySelector<HTMLElement>('#test-menu')!;button(menu,'文本优先').click();await frame();
+    assert(p.store.getCard('anchor-card')?.textFirst===true,'文本优先 did not persist on the card');
+    assert(!node().querySelector('.ms-node-img')&&node().textContent?.includes('Alpha anchor'),'文本优先 did not hide the image or lost the text');
+    mapCard(p,'anchor-node').click();await frame();button(toolbar,'更多').click();button(document.querySelector('#test-menu')!,'更多操作…').click();
+    button(document.querySelector<HTMLElement>('#test-menu')!,'文本优先').click();await frame();
+    assert(p.store.getCard('anchor-card')?.textFirst===false&&node().querySelector('.ms-node-img'),'second 文本优先 did not restore the image');
+  });
+  await test('MN5 mindmap menu expands, collapses, limits view depth, reorders siblings and deletes a card tree',async()=>{
+    const p=await fresh();p.store.updateNode('parent',{collapsed:false});p.store.addNode({id:'depth-1',canvasId:p.canvasId,parentId:'anchor-node',title:'Depth one',x:430,y:200,collapsed:false});p.store.addNode({id:'depth-2',canvasId:p.canvasId,parentId:'depth-1',title:'Depth two',x:560,y:240,collapsed:false});p.store.addNode({id:'depth-sibling',canvasId:p.canvasId,parentId:'anchor-node',title:'Depth sibling',x:430,y:340,collapsed:false});p.view.refresh(true);await frame();
+    const graph=p.root.querySelector<HTMLElement>('.ms-mindmap-root')!;
+    const tools=()=>{button(graph,'选择脑图').click();button(document.querySelector('#test-menu')!,'管理脑图').click();button(document.querySelector<HTMLElement>('.ms-modal')!,'工具 ▸').click();return document.querySelector<HTMLElement>('#test-menu')!;};
+    button(tools(),'全部折叠').click();await frame();
+    assert(p.store.getNode('parent')?.collapsed===true&&p.store.getNode('depth-1')?.collapsed===true,'全部折叠 did not fold every scoped node');
+    assert(p.store.undoLibraryChange()&&p.store.getNode('parent')?.collapsed===false,'全部折叠 was not one undoable transaction');
+    button(tools(),'全部展开').click();await frame();assert(p.store.getNode('depth-1')?.collapsed===false,'全部展开 did not unfold nodes');
+    const beforeDepth=JSON.stringify(p.store.nodes.map((node:any)=>[node.id,node.collapsed]));
+    button(tools(),'展开到层级 ▸').click();button(document.querySelector('#test-menu')!,'展开到层级 2').click();await frame();
+    assert((graph as any)&&document.querySelectorAll('.ms-node[data-id="depth-2"]').length===0,'展开到层级 2 still rendered a depth-3 node');
+    assert(document.querySelector('.ms-node[data-id="depth-1"]'),'展开到层级 2 hid a depth-2 node');
+    assert(JSON.stringify(p.store.nodes.map((node:any)=>[node.id,node.collapsed]))===beforeDepth,'展开到层级 wrote collapsed into data');
+    button(tools(),'展开到层级 ▸').click();button(document.querySelector('#test-menu')!,'显示全部层级').click();await frame();
+    assert(document.querySelector('.ms-node[data-id="depth-2"]'),'显示全部层级 did not restore deeper nodes');
+    p.store.updateNode('depth-1',{collapsed:false});p.view.refresh(true);await frame();
+    mapCard(p,'depth-sibling').click();await frame();const siblingOrder=()=>p.store.nodes.filter((node:any)=>node.parentId==='anchor-node').slice().sort((a:any,b:any)=>(a.order??0)-(b.order??0)).map((node:any)=>node.id);const orderBefore=siblingOrder();
+    const upMenu=tools(),up=button(upMenu,'向上移动');assert(!up.disabled,'向上移动 is disabled; selected='+p.root.querySelectorAll('.ms-node.is-selected').length);up.click();await frame();const orderAfter=siblingOrder();
+    assert(orderBefore.join('|')!==orderAfter.join('|'),'向上移动 did not reorder siblings: '+JSON.stringify({orderBefore,orderAfter,node:p.store.getNode('depth-1'),sibling:p.store.getNode('depth-sibling')}));assert(p.store.undoLibraryChange(),'向上移动 was not undoable');
+    mapCard(p,'depth-1').click();await frame();const delMenu=tools(),del=button(delMenu,'删除卡片树');assert(!del.disabled,'删除卡片树 is disabled; selected='+p.root.querySelectorAll('.ms-node.is-selected').length);del.click();await until(()=>document.querySelector('.ms-modal'),'delete confirmation missing');button(document.querySelector('.ms-modal')!,'删除').click();await frame();
+    assert(!p.store.getNode('depth-1')&&!p.store.getNode('depth-2')&&p.store.getCard('anchor-card'),'删除卡片树 removed the wrong nodes or the source card: '+JSON.stringify({d1:!!p.store.getNode('depth-1'),d2:!!p.store.getNode('depth-2'),card:!!p.store.getCard('anchor-card'),nodes:p.store.nodes.map((n:any)=>n.id)}));
+    assert(p.store.undoLibraryChange()&&p.store.getNode('depth-1'),'删除卡片树 was not one undoable transaction');
+  });
+  await test('MN5 node more actions select the branch, collapse/expand, export its branch and card',async()=>{
+    const p=await fresh();p.store.updateNode('parent',{collapsed:false});p.store.addNode({id:'branch-child',canvasId:p.canvasId,parentId:'anchor-node',title:'Branch child',x:430,y:220,collapsed:false});p.store.addNode({id:'branch-grand',canvasId:p.canvasId,parentId:'branch-child',title:'Branch grand',x:560,y:260,collapsed:false});p.view.refresh(true);await frame();
+    mapCard(p,'parent').click();await frame();const toolbar=p.root.querySelector<HTMLElement>('.ms-node-toolbar')!;
+    const open=()=>{button(toolbar,'更多').click();return document.querySelector<HTMLElement>('#test-menu')!;};
+    button(open(),'选中整个分支').click();await frame();
+    const ids=[...toolbar.querySelectorAll<HTMLButtonElement>('button[data-action]')].length?p.store.nodes.filter(node=>p.root.querySelector(`.ms-node[data-id="${node.id}"].is-selected`)).map(node=>node.id):[];
+    assert(ids.includes('parent')&&ids.includes('anchor-node')&&ids.includes('branch-child')&&ids.includes('branch-grand')&&!ids.includes('beta-node'),'select whole branch used the wrong node set: '+ids.join(','));
+    button(open(),'退出多选').click();await frame();mapCard(p,'parent').click();await frame();button(open(),'折叠').click();await frame();assert(p.store.getNode('parent')?.collapsed===true,'collapse action did not fold the branch');
+    button(open(),'展开').click();await frame();assert(p.store.getNode('parent')?.collapsed===false&&mapCard(p,'branch-child'),'expand action did not unfold the branch');
+    button(open(),'导出分支').click();await until(()=>document.querySelector<HTMLElement>('.ms-modal')?.textContent?.includes('导出分支'),'export branch dialog missing');let dialog=document.querySelector<HTMLElement>('.ms-modal')!;
+    assert(dialog.querySelector('h3')?.textContent==='导出分支'&&dialog.textContent?.includes('4 个节点'),'export branch did not target the whole branch: '+(dialog.textContent??'').slice(0,80));document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));document.querySelectorAll('.ms-modal-bg').forEach(node=>node.remove());
+    document.querySelectorAll('.ms-modal-bg').forEach(node=>node.remove());
+    mapCard(p,'anchor-node').click();await frame();button(open(),'导出本卡').click();await until(()=>document.querySelector<HTMLElement>('.ms-modal')?.textContent?.includes('导出卡片'),'export card dialog missing');dialog=document.querySelector<HTMLElement>('.ms-modal')!;
+    assert(dialog.querySelector('h3')?.textContent==='导出卡片'&&dialog.textContent?.includes('1 个节点'),'export card did not target a single card: '+(dialog.textContent??'').slice(0,80));document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));document.querySelectorAll('.ms-modal-bg').forEach(node=>node.remove());
+  });
+  await test('MN5 scene actions open layout and template management and toggle traditional mode',async()=>{
+    const p=await fresh();p.store.setStudyInterface(p.set.id,'scenes');p.view.refresh(true);await frame();
+    const open=()=>{button(p.root,'场景模板：标准').click();return document.querySelector<HTMLElement>('#test-menu')!;};
+    button(open(),'摆放界面').click();assert([...document.querySelectorAll('#test-menu button')].some(row=>row.textContent?.includes('文档置于左侧')),'layout settings did not open');document.querySelector('#test-menu')!.remove();
+    for(const action of ['更多场景模板…','编辑场景模板…']){button(open(),action).click();assert(p.root.querySelector('[aria-label="场景模板管理"]'),'manager did not open for '+action);button(p.root,'关闭工具面板').click();}
+    button(open(),'切换到传统界面').click();await frame();assert(p.store.getStudyScene(p.set.id)?.interfaceMode==='traditional','traditional mode did not activate');
+    button(open(),'切换到场景界面').click();await frame();assert(p.store.getStudyScene(p.set.id)?.interfaceMode==='scenes','scene mode did not return');
+    button(p.root,'工作区工具').click();button(p.root,'学习集更多设置').click();const studyMore=p.root.querySelector('[aria-label="学习集"]');assert(studyMore?.textContent?.includes('全局搜索…'),'unrelated settings no longer reachable from more');for(const label of ['进入沉浸模式','卡片','复习','研究','AI'])assert([...studyMore!.querySelectorAll('button')].some(row=>row.textContent?.trim()===label),'missing study menu label: '+label);
+  });
+  await test('MN5 document capsule matches the 47-row baseline structure and retains management tools',async()=>{
+    const p=await fresh(),extra=['Extra One.html','Extra Two.md','Extra Three.html'];
+    for(const name of extra){const file=new TFile(name);p.sources.set(name,{file,content:'<p>'+name+'</p>'});}
+    p.store.updateStudySet(p.set.id,{docPaths:[...p.set.docPaths,...extra],documentAttachments:{[p.delta.path]:[p.alpha.path]}});
+    await p.view.openFile(p.delta);
+    const open=()=>{button(p.root,'文档：Delta.pdf').click();return document.querySelector<HTMLElement>('#test-menu')!;};
+    const others=['Alpha','Beta','Gamma','Slow',...extra.map(name=>name.replace(/\.[^.]+$/,''))];
+    const expected=[
+      '关闭文档视图','文档浮窗',...others.map(name=>`和《${name}》对照`),
+      '单视图','双视图','三视图','自动方向','左右排列','上下排列','交换两篇文档的位置','结束对照，保留此文档',
+      'Delta',...others,'文档与目录','从资料库…','从文件','新建笔记本','从Web','从百度网盘','添加外部源','管理文档…','AI 拆书','转到指定页码','附件 · Alpha',
+      '竖向阅读','翻页阅读','双页模式 (PDF)（请先切回翻页阅读）','裁边','PDF OCR设置','编辑PDF页面','导出文档','在场景模板里设置…'
+    ];
+    let menu=open(),rows=[...menu.querySelectorAll<HTMLButtonElement>('button')];
+    assert(rows.length===44&&rows.map(row=>row.textContent).join('|')===expected.join('|'),'document menu differs from the MN5 business-item order: '+rows.map(row=>row.textContent).join('|'));
+    assert(!/筛选文档路径|勾选筛选结果|取消筛选结果|选择复用目标学习集|复用勾选文档|从电脑导入多份文档|保存文档成员/.test(menu.textContent??''),'management-only actions leaked into the capsule');
+    button(menu,'管理文档…').click();let dialog=document.querySelector<HTMLElement>('.ms-modal')!;
+    assert(dialog.querySelector('input[placeholder="筛选文档路径…"]'),'document path filter was not retained');
+    for(const label of ['勾选筛选结果','取消筛选结果','复用勾选文档','从电脑导入多份文档','保存文档成员'])assert(button(dialog,label),'management action missing: '+label);
+    assert(dialog.querySelector('option')?.textContent==='选择复用目标学习集','reuse destination was not retained');button(dialog,'取消').click();
+    const floated:string[]=[];p.app.workspace.openPopoutLeaf=()=>({openFile:async(file:TFile)=>{floated.push(file.path);}});
+    button(open(),'文档浮窗').click();await until(()=>floated.join('|')===p.delta.path,'document floating window did not open the active source');
+    button(open(),'从资料库…').click();const home=p.root.querySelector<HTMLElement>('[aria-label="StudySet"]')!;
+    assert(home&&!home.querySelector<HTMLElement>('[data-home-section="资料库"]')!.hidden,'library action did not open the library section');button(home,'关闭工具面板').click();
+    button(open(),'新建笔记本').click();assert(document.querySelector('.ms-modal')?.textContent?.includes('新建空白笔记本'),'new notebook action did not open its dialog');button(document.querySelector('.ms-modal')!,'取消').click();
+    button(open(),'从Web').click();assert(document.querySelector('.ms-modal')?.textContent?.includes('导入网页或微信文章'),'web import action did not open its dialog');button(document.querySelector('.ms-modal')!,'取消').click();
+    button(open(),'从百度网盘').click();const cloud=document.querySelector<HTMLElement>('.ms-baidu-netdisk')!;
+    assert(cloud&&cloud.textContent?.includes('AppKey')&&cloud.textContent?.includes('授权目录')&&!state(p).auxiliary.includes('research'),'Baidu action did not open the official OAuth configuration');
+    assert(cloud.querySelector('input[type="password"]')&&[...cloud.querySelectorAll<HTMLInputElement>('input')].some(input=>input.value==='/apps/MarginStudy'),'Baidu OAuth fields or app-directory boundary missing');button(cloud,'关闭').click();
+    const local=new Map<string,unknown>(),previousRequire=(window as any).require;
+    p.app.loadLocalStorage=(key:string)=>local.get(key);p.app.saveLocalStorage=(key:string,value:unknown)=>local.set(key,value);
+    (window as any).require=(name:string)=>name==='@electron/remote'?{dialog:{showOpenDialog:async()=>({canceled:false,filePaths:['/outside/source']})}}:previousRequire?.(name);
+    try{
+      button(open(),'添加外部源').click();const sources=document.querySelector<HTMLElement>('.ms-modal')!;button(sources,'选择文件夹').click();
+      await until(()=>sources.textContent?.includes('/outside/source'),'external folder missing');assert(JSON.stringify(local.get('marginstudy-external-sources'))==='["/outside/source"]','external path not saved');
+      button(sources,'移除外部源：/outside/source').click();assert(!sources.textContent?.includes('/outside/source'),'external folder not removed');button(sources,'完成').click();
+    }finally{(window as any).require=previousRequire;}
+    button(open(),'在场景模板里设置…').click();assert(p.root.querySelector('[aria-label="场景模板管理"]'),'document capsule did not reach scene template settings');button(p.root,'关闭工具面板').click();
+    button(open(),'关闭文档视图').click();await until(()=>state(p).reader===false,'close document view did not hide the reader');
+    button(open(),'Delta').click();await until(()=>state(p).reader===true&&p.view.getReader()?.getFilePath()===p.delta.path,'current document item did not restore its view');
+  });
+  await test('Baidu cloud UI downloads into the chosen study set and uploads the active document',async()=>{
+    const p=await fresh();await p.view.openFile(p.delta);p.store.settings.baiduNetdisk={clientId:'id',clientSecret:'secret',redirectUri:'oob',rootPath:'/apps/MarginStudy',accessToken:'token',expiresAt:Date.now()+3600000};
+    p.app.vault.createFolder=async()=>{};
+    p.app.vault.createBinary=async(path:string,bytes:ArrayBuffer)=>{const file=new TFile(path,bytes.byteLength);p.sources.set(path,{file,content:'',binary:bytes.slice(0)});return file;};
+    p.app.vault.rename=async(file:TFile,path:string)=>{const entry=p.sources.get(file.path)!;p.sources.delete(file.path);file.path=path;file.name=path.split('/').pop()!;file.extension=file.name.split('.').pop()!;file.basename=file.name.replace(/\.[^.]+$/,'');entry.file=file;p.sources.set(path,entry);return file;};
+    p.app.vault.delete=async(file:TFile)=>{p.sources.delete(file.path);};
+    const requests:any[]=[];
+    const transport=async(request:any)=>{
+      requests.push(request);
+      if(request.url.includes('method=list'))return{status:200,text:JSON.stringify({errno:0,list:[{fs_id:42,path:'/apps/MarginStudy/Cloud.pdf',server_filename:'Cloud.pdf',size:7,isdir:0}]})};
+      if(request.url.includes('method=filemetas'))return{status:200,text:JSON.stringify({list:[{dlink:'https://download.example/cloud?sign=x'}]})};
+      if(request.url.includes('download.example'))return{status:200,arrayBuffer:new TextEncoder().encode('%PDF-ui').buffer};
+      if(request.url.includes('method=precreate'))return{status:200,text:JSON.stringify({uploadid:'ui-upload'})};
+      if(request.url.includes('method=locateupload'))return{status:200,text:JSON.stringify({servers:[{server:'https://upload.example'}]})};
+      if(request.url.includes('method=create'))return{status:200,text:JSON.stringify({path:'/apps/MarginStudy/Delta.pdf',fs_id:77,size:10})};
+      if(request.url.includes('method=upload'))return{status:200,text:'{}'};
+      throw new Error('unexpected cloud request '+request.url);
+    };
+    openBaiduNetdisk(p.plugin,{activePath:()=>p.view.getReader()?.getFilePath(),onChanged:()=>p.view.refresh(true),transport});
+    await until(()=>document.querySelector('.ms-baidu-netdisk input[aria-label="选择 Cloud.pdf"]'),'cloud directory was not rendered');
+    let cloud=document.querySelector<HTMLElement>('.ms-baidu-netdisk')!;
+    cloud.querySelector<HTMLInputElement>('input[aria-label="选择 Cloud.pdf"]')!.click();button(cloud,'导入选中文件').click();
+    for(let attempt=0;attempt<100&&!p.store.documents.some(doc=>doc.sourceUrl==='baidu://fsid/42');attempt++)await wait(50);
+    assert(p.store.documents.some(doc=>doc.sourceUrl==='baidu://fsid/42'),'cloud download did not register its source; status='+cloud.textContent);
+    const imported=p.store.documents.find(doc=>doc.sourceUrl==='baidu://fsid/42')!;
+    assert(p.set.docPaths.includes(imported.path)&&p.store.studySets.find(set=>set.id===p.set.id)?.docPaths.includes(imported.path),'cloud file did not join the active study set');
+    button(cloud,'上传当前文档').click();for(let attempt=0;attempt<100&&!requests.some(request=>request.url.includes('method=create'));attempt++)await wait(50);
+    assert(requests.some(request=>request.url.includes('method=create')),'active document upload did not finish; status='+cloud.textContent);
+    assert(requests.some(request=>request.url.includes('method=locateupload'))&&requests.some(request=>request.url.includes('partseq=0')),'upload did not use the dynamic host/part flow');
+    button(cloud,'关闭').click();
+  });
+  await test('MN5 document comparison supports one two and three views direction swap and retain-current',async()=>{
+    const p=await fresh();await p.view.openFile(p.delta);const primary=p.view.getReader()!;
+    const open=()=>{button(p.root,'文档：Delta.pdf').click();return document.querySelector<HTMLElement>('#test-menu')!;};
+    const host=p.root.querySelector<HTMLElement>('.ms-workspace-reader-host')!;
+    button(open(),'双视图').click();await until(()=>host.querySelectorAll('.ms-workspace-child-view').length===2,'dual view did not create a second reader');
+    button(open(),'三视图').click();await until(()=>host.querySelectorAll('.ms-workspace-child-view').length===3&&host.dataset.viewCount==='3','triple view did not create two comparison readers');
+    assert(host.dataset.viewCount==='3'&&host.querySelectorAll('[aria-label="对照阅读面板"]').length===2,'triple view count or panel identity is wrong');
+    button(open(),'上下排列').click();assert(host.style.flexDirection==='column'&&host.dataset.comparisonDirection==='vertical','vertical comparison direction did not apply');
+    button(open(),'左右排列').click();assert(host.style.flexDirection==='row'&&host.dataset.comparisonDirection==='horizontal','horizontal comparison direction did not apply');
+    button(open(),'双视图').click();await until(()=>host.querySelectorAll('.ms-workspace-child-view').length===2,'returning to dual view left an extra reader');
+    const comparison=host.querySelector<HTMLElement>('[aria-label="对照阅读面板"]')!;
+    button(open(),'交换两篇文档的位置').click();assert(host.firstElementChild===comparison,'comparison documents did not exchange visual positions');
+    button(open(),'交换两篇文档的位置').click();assert(host.firstElementChild===primary.containerEl,'comparison positions did not swap back');
+    button(open(),'结束对照，保留此文档').click();await until(()=>host.querySelectorAll('.ms-workspace-child-view').length===1,'end comparison did not remove secondary readers');
+    assert(p.view.getReader()===primary&&primary.getFilePath()===p.delta.path&&host.dataset.viewCount==='1','end comparison did not retain the current document');
+    button(open(),'和《Beta》对照').click();await until(()=>host.querySelectorAll('.ms-workspace-child-view').length===2,'direct document comparison did not open');
+    assert(host.querySelector<HTMLElement>('[aria-label="对照阅读面板"]')?.dataset.documentPath===p.beta.path,'direct comparison opened the wrong document');
+    button(open(),'单视图').click();await until(()=>host.querySelectorAll('.ms-workspace-child-view').length===1,'single view did not close comparison');
+  });
+  await test('MN5 document PDF actions reach navigation reading crop page edit OCR and export surfaces',async()=>{
+    const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;await reader.renderPage(1);
+    const open=()=>{button(p.root,'文档：Delta.pdf').click();return document.querySelector<HTMLElement>('#test-menu')!;};
+    button(open(),'竖向阅读').click();await until(()=>reader.getPageLayout().continuous,'vertical reading did not apply');
+    button(open(),'翻页阅读').click();await until(()=>!reader.getPageLayout().continuous,'paged reading did not apply');
+    button(open(),'双页模式 (PDF)').click();await until(()=>reader.getPageLayout().layout==='spread','spread mode did not apply');
+    button(open(),'转到指定页码').click();const jump=document.querySelector<HTMLElement>('.ms-native-page-jump')!;
+    (jump.querySelector<HTMLInputElement>('[aria-label="跳转到页码"]')!).value='2';button(jump,'OK').click();await until(()=>reader.getCurrentPage()===2,'page jump did not navigate');
+    button(open(),'文档与目录').click();assert(p.root.querySelector('[aria-label="书页查找"]'),'document and contents did not open navigation');
+    button(open(),'AI 拆书').click();assert(document.querySelector('[aria-label="AI TOC"]'),'AI book splitting did not reach the existing AI TOC surface');button(document.querySelector('[aria-label="AI TOC"]')!,'Cancel').click();
+    button(open(),'PDF OCR设置').click();const settings=p.root.querySelector<HTMLElement>('[aria-label="设置"]')!;
+    assert(settings.querySelector('[aria-label="OCR"]')&&settings.querySelector('[aria-label="Apple OCR Engine"]'),'OCR settings did not open the OCR category');button(settings,'Close').click();
+    button(open(),'裁边').click();await until(()=>document.querySelector('[aria-label="裁剪"]'),'crop action did not open the crop editor');
+    document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));await until(()=>!document.querySelector('[aria-label="裁剪"]'),'crop editor did not close');
+    button(open(),'编辑PDF页面').click();await until(()=>p.root.querySelector('.ms-pdf-page-editor'),'PDF page editor did not open');
+    document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));assert(!p.root.querySelector('.ms-pdf-page-editor'),'PDF page editor did not close');
+    button(open(),'导出文档').click();assert(document.querySelector('[aria-label="Select Pages for Export"]'),'document export did not open PDF export');button(document,'Cancel PDF Export').click();
+  });
+  await test('Reading mode and double page settings persist globally and vertical mode disables spread',async()=>{
+    const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;
+    const open=()=>{button(p.root,'文档：Delta.pdf').click();return document.querySelector<HTMLElement>('#test-menu')!;};
+    const disabled=button(open(),'双页模式 (PDF)（请先切回翻页阅读）');
+    assert(disabled.disabled,'vertical mode did not disable double page');
+    button(open(),'翻页阅读').click();await until(()=>!reader.getPageLayout().continuous,'paged mode did not apply');
+    button(open(),'双页模式 (PDF)').click();await until(()=>reader.getPageLayout().layout==='spread','double page did not enable');
+    assert(notices.includes('对所有学习集生效'),'global setting notice missing');
+    await p.store.flush();const reloaded=new Store(p.store.host);await reloaded.load();
+    assert(reloaded.settings.readingMode==='paged'&&reloaded.settings.doublePage===true,'reading settings did not survive reload');
+    const other=p.store.createStudySet('阅读模式另一学习集',[p.delta.path]);p.store.setActiveStudySet(other.id);p.view.refresh(true);await p.view.openFile(p.delta);
+    const reopened=p.view.getReader() as ReaderView;
+    assert(reopened.getPageLayout().layout==='spread'&&!reopened.getPageLayout().continuous,'double page did not apply to another study set');
+    button(open(),'竖向阅读').click();await until(()=>reopened.getPageLayout().continuous,'vertical mode did not apply');
+    assert(reopened.getPageLayout().layout==='single'&&button(open(),'双页模式 (PDF)（请先切回翻页阅读）').disabled,'vertical mode retained spread or enabled its switch');
+    button(open(),'翻页阅读').click();await until(()=>reopened.getPageLayout().layout==='spread','paged mode did not restore global double page');
+    button(open(),'双页模式 (PDF)').click();await until(()=>reopened.getPageLayout().layout==='single','double page did not toggle off');
+  });
   await test('A20 review context reveals the exact card in its source map and refuses another study set',async()=>{
     const p=await fresh();const second=p.store.createCanvas(p.set.id,'另一个脑图');
     p.store.addNode({id:'a20-context-node',cardId:'anchor-card',canvasId:second.id,parentId:null,title:'复习来源',x:120,y:120,collapsed:false});
@@ -186,7 +718,7 @@ try{
     const page=source.getPageRecord(2)!.wrapper,overlay=page.querySelector<SVGSVGElement>('.ms-pen-overlay')!,box=overlay.getBoundingClientRect();pointer(overlay,'pointerdown',box.left+box.width*.2,box.top+box.height*.25);pointer(overlay,'pointermove',box.left+box.width*.3,box.top+box.height*.3);pointer(overlay,'pointerup',box.left+box.width*.4,box.top+box.height*.35);source.setHandwritingMode('off');
     const annotation=(await p.store.loadAnnotations(p.delta.path)).find((item:any)=>item.type==='pen') as any,sourceId=p.store.documents.find((item:any)=>item.path===p.delta.path)!.id;assert(annotation.sourceDocPath===p.delta.path&&annotation.sourceDocId===sourceId&&annotation.sourcePage===2,'PDF ink omitted exact snapshot');
     await p.store.flush();const reopenedAnnotations=await (await p.reloadStore()).loadAnnotations(p.delta.path),reopenedInk=reopenedAnnotations.find((item:any)=>item.id===annotation.id) as any;assert(reopenedInk.sourceDocPath===p.delta.path&&reopenedInk.sourceDocId===sourceId&&reopenedInk.sourcePage===2,'PDF source snapshot did not survive reopen');
-    const strokeId=annotation.id;await source.renderPage(2);const ink=page.querySelector<SVGPathElement>(`[data-ann-id="${strokeId}"] path`)!;assert(ink,'attachment ink not rendered');ink.dispatchEvent(new MouseEvent('click',{bubbles:true}));assert(button(document,'笔迹回源'),'PDF ink source action missing');document.querySelector('.ms-ann-pop')?.remove();
+    await source.renderPage(2);const raster=page.querySelector<HTMLCanvasElement>('.ms-ink-raster')!,inkBounds=source.getPageRecord(2)!.annLayer.getBoundingClientRect(),sample=annotation.strokes[0][1];assert(raster?.getContext('2d')!.getImageData(Math.round(sample.x*raster.width),Math.round(sample.y*raster.height),1,1).data[3]>0,'attachment ink not rendered');page.dispatchEvent(new MouseEvent('click',{bubbles:true,clientX:inkBounds.left+sample.x*inkBounds.width,clientY:inkBounds.top+sample.y*inkBounds.height}));assert(button(document,'笔迹回源'),'PDF ink source action missing');document.querySelector('.ms-ann-pop')?.remove();
     const graph=p.root.querySelector<HTMLElement>('.ms-mindmap-root')!;button(graph,'脑图手写').click();const surface=graph.querySelector<SVGSVGElement>('[aria-label="脑图手写画布"]')!,bounds=surface.getBoundingClientRect();pointer(surface,'pointerdown',bounds.left+100,bounds.top+80);pointer(surface,'pointerup',bounds.left+140,bounds.top+100);button(graph,'手形工具').click();
     await p.view.openFile(secondPdf);const other=p.view.getReader() as ReaderView;await other.navigateToReference(3,[],undefined,false);const scroll=other.getScrollContainer();scroll.scrollTop+=25;scroll.dispatchEvent(new Event('scroll'));await frame();const before={path:other.getFilePath(),page:other.getCurrentPage(),top:scroll.scrollTop};
     button(graph,'脑图手写').click();button(graph,'套索').click();const next=surface.getBoundingClientRect();for(const [index,point] of [[60,40],[180,40],[180,140],[60,140],[60,40]].entries())pointer(surface,index===0?'pointerdown':index===4?'pointerup':'pointermove',next.left+point[0],next.top+point[1]);button(graph,'笔迹回源').click();await until(()=>p.view.getReader()?.getFilePath()===p.delta.path&&p.view.getReader()?.getCurrentPage?.()===2,'source snapshot not opened');
@@ -194,7 +726,7 @@ try{
   });
   await test('A14 PDF annotation action uses its snapshot instead of the current page',async()=>{
     const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;await reader.navigateToReference(2,[],undefined,false);await reader.renderPage(2);reader.setHandwritingMode('pen');const page=reader.getPageRecord(2)!.wrapper,overlay=page.querySelector<SVGSVGElement>('.ms-pen-overlay')!,box=overlay.getBoundingClientRect();pointer(overlay,'pointerdown',box.left+20,box.top+20);pointer(overlay,'pointerup',box.left+50,box.top+40);reader.setHandwritingMode('off');const ann=(await p.store.loadAnnotations(p.delta.path)).find((item:any)=>item.type==='pen') as any;
-    await reader.navigateToReference(3,[],undefined,false);const scroll=reader.getScrollContainer();scroll.scrollTop+=20;scroll.dispatchEvent(new Event('scroll'));await frame();const previous={page:reader.getCurrentPage(),top:scroll.scrollTop};page.querySelector<SVGPathElement>(`[data-ann-id="${ann.id}"] path`)!.dispatchEvent(new MouseEvent('click',{bubbles:true}));button(document.querySelector('.ms-ann-pop')!,'笔迹回源').click();await until(()=>reader.getCurrentPage()===ann.sourcePage,'annotation action did not open saved page');assert(p.store.documents.find((item:any)=>item.path===reader.getFilePath())?.id===ann.sourceDocId,'annotation action changed document ID');button(p.root,'返回原阅读位置').click();await until(()=>reader.getCurrentPage()===previous.page&&!p.root.querySelector('[aria-label="返回原阅读位置"]'),'annotation return page mismatch');await frame();assert(Math.abs(scroll.scrollTop-previous.top)<=1,'annotation return scroll mismatch');
+    await reader.navigateToReference(3,[],undefined,false);const scroll=reader.getScrollContainer();scroll.scrollTop+=20;scroll.dispatchEvent(new Event('scroll'));await frame();const previous={page:reader.getCurrentPage(),top:scroll.scrollTop},inkBounds=reader.getPageRecord(2)!.annLayer.getBoundingClientRect(),sample=ann.strokes[0][0];page.dispatchEvent(new MouseEvent('click',{bubbles:true,clientX:inkBounds.left+sample.x*inkBounds.width,clientY:inkBounds.top+sample.y*inkBounds.height}));button(document.querySelector('.ms-ann-pop')!,'笔迹回源').click();await until(()=>reader.getCurrentPage()===ann.sourcePage,'annotation action did not open saved page');assert(p.store.documents.find((item:any)=>item.path===reader.getFilePath())?.id===ann.sourceDocId,'annotation action changed document ID');button(p.root,'返回原阅读位置').click();await until(()=>reader.getCurrentPage()===previous.page&&!p.root.querySelector('[aria-label="返回原阅读位置"]'),'annotation return page mismatch');await frame();assert(Math.abs(scroll.scrollTop-previous.top)<=1,'annotation return scroll mismatch');
   });
   await test('A14 missing document ID fails closed even if the old path exists',async()=>{
     const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;await reader.navigateToReference(3,[],undefined,false);const before=reader.getScrollContainer().scrollTop;let failed=false;try{await p.view.jumpToHandwritingSource({sourceDocPath:p.delta.path,sourceDocId:'missing-doc-id',sourcePage:1});}catch{failed=true;}assert(failed&&p.view.getReader()===reader&&reader.getCurrentPage()===3&&reader.getScrollContainer().scrollTop===before,'missing ID navigated by path');
@@ -382,7 +914,7 @@ try{
       assert(p.store.getStudyScene(p.set.id)?.interfaceMode==='scenes','second command did not restore scenes');
       assert(p.root.querySelector('.ms-workspace-toolbar.has-scene-header'),'scene header did not return');
       button(p.root,'学习集更多设置').click();
-      button(p.root.querySelector('[aria-label="StudySet - More"]')!,'切换界面模式').click();await frame();
+      button(p.root.querySelector('[aria-label="学习集"]')!,'切换界面模式').click();await frame();
       assert(p.store.getStudyScene(p.set.id)?.interfaceMode==='traditional','menu did not switch mode');
     } finally {plugin.unload();}
   });
@@ -458,9 +990,9 @@ try{
   await test('Document menu opens existing navigation tabs without replacing the reader or changing learning data',async()=>{
     const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader();
     const business=async()=>JSON.stringify({cards:p.store.cards,nodes:p.store.nodes,edges:p.store.edges,meta:p.store.getDocMeta(p.delta.path),annotations:await p.store.loadAnnotations(p.delta.path)}),before=await business();
-    for(const [id,label] of [['contents','目录'],['thumbnails','缩略图'],['bookmarks','书签'],['annotations','手写标注'],['cards','卡片']]){
+    for(const [id,label] of [['contents','目录'],['thumbnails','缩略图'],['bookmarks','书签'],['annotations','标注'],['cards','卡片']]){
       button(p.root,'文档与工作区设置').click();const menu=p.root.querySelector('.ms-document-more')!;
-      assert([...menu.querySelectorAll('.ms-document-more-row')].slice(0,5).map(item=>item.getAttribute('aria-label')).join('|')==='目录|缩略图|书签|手写标注|卡片','document navigation entry order differs from MN4');
+      assert([...menu.querySelectorAll('.ms-document-more-row')].slice(0,5).map(item=>item.getAttribute('aria-label')).join('|')==='目录|缩略图|书签|标注|卡片','document navigation entry order differs from MN4');
       button(menu,label).click();await wait(30);
       assert(p.view.getReader()===reader&&state(p).documentNavigation&&state(p).documentNavigationTab===id,'menu replaced the reader or selected the wrong tab');
       assert(p.root.querySelectorAll('.ms-document-navigation').length===1&&p.root.querySelectorAll('.ms-document-navigation-tabs').length===1,'navigation was duplicated');
@@ -642,7 +1174,7 @@ try{
   });
   await test('Card menus replace each other and close on scene change without changing objects',async()=>{
     const p=await fresh();p.store.setStudyInterface(p.set.id,'scenes');p.view.refresh(true);await frame();const before=JSON.stringify({cards:p.store.cards,nodes:p.store.nodes,annotations:await p.store.loadAnnotations(p.alpha.path)});
-    button(mapCard(p,'beta-node'),'卡片更多操作').click();assert(document.querySelectorAll('#test-menu').length===1,'card menu missing');const toolbar=p.root.querySelector<HTMLElement>('.ms-node-toolbar')!;button(toolbar,'更多').click();assert(document.querySelectorAll('#test-menu').length===1&&document.querySelector('#test-menu')?.textContent?.includes('粘贴克隆'),'selection menu did not replace card menu');
+    button(mapCard(p,'beta-node'),'卡片更多操作').click();assert(document.querySelectorAll('#test-menu').length===1,'card menu missing');const toolbar=p.root.querySelector<HTMLElement>('.ms-node-toolbar')!;button(toolbar,'更多').click();assert(document.querySelectorAll('#test-menu').length===1&&document.querySelector('#test-menu')?.textContent?.includes('复制克隆到剪贴板'),'selection menu did not replace card menu');
     button(p.root.querySelector('[aria-label="学习场景"]')!,'手写').click();assert(!document.querySelector('#test-menu'),'scene change retained card menu');assert(JSON.stringify({cards:p.store.cards,nodes:p.store.nodes,annotations:await p.store.loadAnnotations(p.alpha.path)})===before,'opening or changing scene changed business objects');
   });
   await test('Block and card menus replace each other without changing objects',async()=>{
@@ -668,7 +1200,7 @@ try{
     const before=JSON.stringify({cards:p.store.cards,nodes:p.store.nodes,annotations:await p.store.loadAnnotations(p.alpha.path)});
     const selectSource=async()=>{const range=document.createRange();range.selectNodeContents(target);window.getSelection()!.removeAllRanges();window.getSelection()!.addRange(range);document.dispatchEvent(new Event('selectionchange'));await until(()=>!!document.querySelector('.ms-ann-pop'),'selection menu missing');};
     await selectSource();button(mapCard(p,'beta-node'),'卡片更多操作').click();assert(!document.querySelector('.ms-ann-pop')&&document.querySelector('#test-menu'),'card menu did not replace selection menu');
-    await selectSource();assert(document.querySelector('.ms-ann-pop')&&!document.querySelector('#test-menu'),'selection menu did not replace card menu');window.getSelection()?.removeAllRanges();document.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));
+    await selectSource();assert(document.querySelector('.ms-ann-pop')&&!document.querySelector('#test-menu'),'selection menu did not replace card menu; menu='+(document.querySelector('#test-menu')?.textContent??'').slice(0,120));window.getSelection()?.removeAllRanges();document.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));
     assert(JSON.stringify({cards:p.store.cards,nodes:p.store.nodes,annotations:await p.store.loadAnnotations(p.alpha.path)})===before,'menu changes wrote business objects');
   });
   await test('Selecting one image block creates one region with its source and rejects a stale image',async()=>{
@@ -693,9 +1225,9 @@ try{
     menu=open();button(menu,'编辑标题').click();title=document.querySelector<HTMLInputElement>('[aria-label="编辑卡片标题"]')!;title.value='A11 title';button(document.querySelector('.ms-modal')!,'保存标题').click();assert(p.store.getCard('anchor-card')?.title==='A11 title'&&!p.store.getCard('beta-card')?.title,'title save changed wrong card');
     menu=open();button(menu,'编辑卡片').click();assert(document.querySelector('[aria-label="卡片标题"]'),'card editor missing');document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
     menu=open();button(menu,'追加批注').click();const comment=document.querySelector<HTMLTextAreaElement>('[aria-label="追加卡片批注"]')!;comment.value='New comment';p.store.updateCard('anchor-card',{back:'Existing comment'});button(document.querySelector('.ms-modal')!,'添加批注').click();assert(p.store.getCard('anchor-card')?.back==='Existing comment\n\nNew comment'&&!p.store.getCard('beta-card')?.back,'append lost current comment or changed another card');
-    menu=open();button(menu,'文本转标题').click();let fromText=document.querySelector<HTMLTextAreaElement>('[aria-label="文本转标题内容"]')!;assert(fromText.value==='Alpha anchor','title preview lost source');fromText.value='Chosen title';button(document.querySelector('.ms-modal')!,'设为标题').click();assert(p.store.getCard('anchor-card')?.title==='Chosen title'&&p.store.getCard('anchor-card')?.front==='Alpha anchor','title conversion damaged source');
-    menu=open();button(menu,'文本转标题').click();p.store.updateCard('anchor-card',{front:'Changed source'});button(document.querySelector('.ms-modal')!,'设为标题').click();assert(p.store.getCard('anchor-card')?.title==='Chosen title','stale source overwrote title');p.store.updateCard('anchor-card',{front:'Alpha anchor',image:'data:image/png;base64,AA=='});menu=open();assert(![...menu.querySelectorAll('button')].some(item=>item.textContent==='文本转标题'),'image card exposes text conversion');document.querySelector('#test-menu')?.remove();p.store.updateCard('anchor-card',{image:undefined});
-    menu=open();button(menu,'添加到复习').click();assert(p.store.getReviewDeck(deck.id)?.cardIds.includes('anchor-card')&&!p.store.getReviewDeck(deck.id)?.cardIds.includes('beta-card'),'review action changed wrong membership');
+    menu=open();cardMore(menu,'文本转标题').click();let fromText=document.querySelector<HTMLTextAreaElement>('[aria-label="文本转标题内容"]')!;assert(fromText.value==='Alpha anchor','title preview lost source');fromText.value='Chosen title';button(document.querySelector('.ms-modal')!,'设为标题').click();assert(p.store.getCard('anchor-card')?.title==='Chosen title'&&p.store.getCard('anchor-card')?.front==='Alpha anchor','title conversion damaged source');
+    menu=open();cardMore(menu,'文本转标题').click();p.store.updateCard('anchor-card',{front:'Changed source'});button(document.querySelector('.ms-modal')!,'设为标题').click();assert(p.store.getCard('anchor-card')?.title==='Chosen title','stale source overwrote title');p.store.updateCard('anchor-card',{front:'Alpha anchor',image:'data:image/png;base64,AA=='});menu=open();assert(![...menu.querySelectorAll('button')].some(item=>item.textContent==='文本转标题'),'image card exposes text conversion');;document.querySelector('#test-menu')?.remove();p.store.updateCard('anchor-card',{image:undefined});
+    menu=open();cardMore(menu,'添加到复习').click();assert(p.store.getReviewDeck(deck.id)?.cardIds.includes('anchor-card')&&!p.store.getReviewDeck(deck.id)?.cardIds.includes('beta-card'),'review action changed wrong membership');
     p.store.addNode({id:'a11-child',canvasId:p.canvasId,parentId:'anchor-node',title:'Child',x:400,y:200,collapsed:false});p.view.refresh(true);await frame();const original=JSON.stringify((await p.store.loadAnnotations(p.alpha.path)).find(a=>a.id==='anchor-a'));menu=open();button(menu,'从脑图中移除').click();assert(!p.store.getNode('anchor-node')&&p.store.getNode('a11-child')?.parentId==='parent'&&p.store.getCard('anchor-card')&&JSON.stringify((await p.store.loadAnnotations(p.alpha.path)).find(a=>a.id==='anchor-a'))===original,'removing from mindmap damaged card, annotation or children');
   });
   await test('Revealing a covered card preserves its bounding box and business data',async()=>{
@@ -716,7 +1248,7 @@ try{
   });
   await test('Card deletion confirms, preserves source and children, and undoes as one operation',async()=>{
     const p=await fresh();p.store.updateNode('parent',{collapsed:false});p.store.addNode({id:'delete-child',canvasId:p.canvasId,parentId:'anchor-node',title:'Keep child',x:400,y:200,collapsed:false});p.store.addNode({id:'delete-ref',canvasId:p.canvasId,parentId:null,cardId:'anchor-card',reference:true,title:'Reference',x:300,y:350,collapsed:false});p.view.refresh(true);await frame();const before=structuredClone((await p.store.loadAnnotations(p.alpha.path)).find(a=>a.id==='anchor-a'));
-    const open=()=>{button(mapCard(p,'anchor-node'),'卡片更多操作').click();button(document.querySelector('#test-menu')!,'删除').click();};open();button(document.querySelector('.ms-modal')!,'取消').click();assert(p.store.getCard('anchor-card')&&p.store.getNode('anchor-node'),'cancel deleted card');open();button(document.querySelector('.ms-modal')!,'确认删除卡片').click();assert(!p.store.getCard('anchor-card')&&!p.store.getNode('anchor-node')&&!p.store.getNode('delete-ref')&&p.store.getNode('delete-child')?.parentId==='parent'&&p.store.getCard('beta-card'),'delete removed wrong objects or kept references');assert((await p.store.loadAnnotations(p.alpha.path)).find(a=>a.id==='anchor-a'),'delete removed source annotation');assert(p.store.undoLibraryChange(),'delete undo missing');await until(()=>p.store.getCard('anchor-card')&&p.store.getNode('anchor-node')&&p.store.getNode('delete-ref'),'undo did not restore card references');await p.store.flush();assert(JSON.stringify((await p.store.loadAnnotations(p.alpha.path)).find(a=>a.id==='anchor-a'))===JSON.stringify(before),'undo did not restore source link');assert(p.store.getNode('delete-child')?.parentId==='anchor-node','undo did not restore child parent');
+    const open=()=>{button(mapCard(p,'anchor-node'),'卡片更多操作').click();cardMore(document.querySelector('#test-menu')!,'删除').click();};open();button(document.querySelector('.ms-modal')!,'取消').click();assert(p.store.getCard('anchor-card')&&p.store.getNode('anchor-node'),'cancel deleted card');open();button(document.querySelector('.ms-modal')!,'确认删除卡片').click();assert(!p.store.getCard('anchor-card')&&!p.store.getNode('anchor-node')&&!p.store.getNode('delete-ref')&&p.store.getNode('delete-child')?.parentId==='parent'&&p.store.getCard('beta-card'),'delete removed wrong objects or kept references');assert((await p.store.loadAnnotations(p.alpha.path)).find(a=>a.id==='anchor-a'),'delete removed source annotation');assert(p.store.undoLibraryChange(),'delete undo missing');await until(()=>p.store.getCard('anchor-card')&&p.store.getNode('anchor-node')&&p.store.getNode('delete-ref'),'undo did not restore card references');await p.store.flush();assert(JSON.stringify((await p.store.loadAnnotations(p.alpha.path)).find(a=>a.id==='anchor-a'))===JSON.stringify(before),'undo did not restore source link');assert(p.store.getNode('delete-child')?.parentId==='anchor-node','undo did not restore child parent');
   });
   await test('Card links resolve the exact vault and live card without changing data',async()=>{
     const p=await fresh();p.app.vault.getName=()=>'A11 Vault & 中文';const url=new URL(cardUrl(p.app.vault.getName(),'anchor-card'));assert(url.protocol==='obsidian:'&&url.host==='margin-study-card'&&url.searchParams.get('vault')===p.app.vault.getName()&&url.searchParams.get('msvault')===p.app.vault.getName()&&url.searchParams.get('card')==='anchor-card','card URL did not round-trip identity');const before=JSON.stringify({cards:p.store.cards,nodes:p.store.nodes});
@@ -724,14 +1256,45 @@ try{
   });
   await test('Copy card as reference or clone preserves the chosen identity without copying children',async()=>{
     const p=await fresh();p.store.updateNode('parent',{collapsed:false});p.store.addNode({id:'copy-child',canvasId:p.canvasId,parentId:'anchor-node',title:'Do not copy',x:400,y:300,collapsed:false});p.view.refresh(true);await frame();
-    const copy=(label:string)=>{button(mapCard(p,'anchor-node'),'卡片更多操作').click();button(document.querySelector('#test-menu')!,label).click();};
-    const paste=async()=>{mapCard(p,'beta-node').click();await frame();button(p.root.querySelector<HTMLElement>('.ms-node-toolbar')!,'更多').click();button(document.querySelector('#test-menu')!,'粘贴卡片').click();await frame();};
+    const copy=(label:string)=>{button(mapCard(p,'anchor-node'),'卡片更多操作').click();cardMore(document.querySelector('#test-menu')!,label).click();};
+    const paste=async()=>{mapCard(p,'beta-node').click();await frame();button(p.root.querySelector<HTMLElement>('.ms-node-toolbar')!,'更多').click();button(document.querySelector('#test-menu')!,'粘贴').click();await frame();};
     const originalCards=p.store.cards.length,originalNodes=p.store.nodes.length;copy('复制卡片引用');assert(p.store.cards.length===originalCards&&p.store.nodes.length===originalNodes,'copy created objects');await paste();let added=p.store.nodes.filter(n=>n.parentId==='beta-node');assert(added.length===1&&added[0].cardId==='anchor-card'&&added[0].reference&&p.store.cards.length===originalCards,'reference paste lost shared identity or copied descendants');
     p.store.updateNode('parent',{collapsed:false});p.view.refresh(true);await frame();copy('复制卡片克隆');await paste();added=p.store.nodes.filter(n=>n.parentId==='beta-node');const cloned=added.find(n=>n.cardId!=='anchor-card');assert(added.length===2&&cloned?.cardId&&p.store.getCard(cloned.cardId)?.front==='Alpha anchor'&&p.store.cards.length===originalCards+1,'clone paste failed independent identity');assert(!p.store.nodes.some(n=>n.title==='Do not copy'&&n.id!=='copy-child'),'card copy included child');
   });
   await test('Card toolbar exposes continuous excerpt only for a card in the active PDF',async()=>{
-    const p=await fresh();mapCard(p,'beta-node').click();await frame();let toolbar=p.root.querySelector<HTMLElement>('.ms-node-toolbar')!;button(toolbar,'更多').click();let menu=document.querySelector('#test-menu')!;assert(button(menu,'连续摘录').disabled,'non-PDF card enabled continuous excerpt');
-    document.querySelector('#test-menu')?.remove();p.store.addCard({id:'pdf-card-a11',docPath:p.delta.path,type:'excerpt',front:'PDF excerpt',color:'#ffffad',tags:[],links:[],createdAt:'2026-10-15T00:00:00Z'});p.store.addNode({id:'pdf-node-a11',cardId:'pdf-card-a11',canvasId:p.canvasId,parentId:null,title:'PDF excerpt',x:300,y:180,collapsed:false});await p.view.openFile(p.delta);p.view.refresh(true);await frame();mapCard(p,'pdf-node-a11').click();await frame();toolbar=p.root.querySelector<HTMLElement>('.ms-node-toolbar')!;button(toolbar,'更多').click();menu=document.querySelector('#test-menu')!;assert(!button(menu,'连续摘录').disabled,'matching PDF card did not expose continuous excerpt');
+    const p=await fresh();mapCard(p,'beta-node').click();await frame();let toolbar=p.root.querySelector<HTMLElement>('.ms-node-toolbar')!;button(toolbar,'更多').click();let menu=document.querySelector('#test-menu')!;assert(cardMore(menu,'连续摘录').disabled,'non-PDF card enabled continuous excerpt');
+    document.querySelector('#test-menu')?.remove();p.store.addCard({id:'pdf-card-a11',docPath:p.delta.path,type:'excerpt',front:'PDF excerpt',color:'#ffffad',tags:[],links:[],createdAt:'2026-10-15T00:00:00Z'});p.store.addNode({id:'pdf-node-a11',cardId:'pdf-card-a11',canvasId:p.canvasId,parentId:null,title:'PDF excerpt',x:300,y:180,collapsed:false});await p.view.openFile(p.delta);p.view.refresh(true);await frame();mapCard(p,'pdf-node-a11').click();await frame();toolbar=p.root.querySelector<HTMLElement>('.ms-node-toolbar')!;button(toolbar,'更多').click();menu=document.querySelector('#test-menu')!;assert(!cardMore(menu,'连续摘录').disabled,'matching PDF card did not expose continuous excerpt');
+  });
+  await test('Page-internal translation inserts one editable translated box, survives reopening and undoes once',async()=>{
+    const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;await reader.renderPage(2);
+    const service=aiServiceFor(p.plugin) as any,opened:string[]=[];const nativeOpen=window.open;window.open=((url:string)=>{opened.push(String(url));return null;}) as any;
+    try{
+      service.configuration=()=>({id:'translate-profile',revision:1,endpoint:'https://ai.example/v1',normalModel:'translate-model'});
+      service.isBound=()=>true;
+      service.request=async(input:any)=>{assert(input.task==='chat'&&String(input.text).includes('简体中文'),'translation did not use the chat translation instruction');return{text:'译文内容'};};
+      p.store.settings.translationTargetLanguage='简体中文';
+      const bytesBefore=(p.sources.get(p.delta.path)!.binary as ArrayBuffer).slice(0);
+      const annotationsBefore=JSON.stringify(await p.store.loadAnnotations(p.delta.path));
+      const {noteId,boxId}=await reader.translateSelectionIntoPage({text:'Hello world',language:'简体中文'});
+      const note=reader.getExtendNotes().find(item=>item.id===noteId)!;
+      assert(note?.translation?.sourceText==='Hello world'&&note.translation.language==='简体中文'&&note.translation.model==='translate-model','translation metadata missing');
+      assert(note.textBoxes?.length===1&&note.textBoxes[0].id===boxId&&note.textBoxes[0].text==='译文内容','translated box text or identity wrong');
+      assert(opened.length===0,'translation opened an external page');
+      assert(JSON.stringify(await p.store.loadAnnotations(p.delta.path))===annotationsBefore,'translation rewrote source annotations');
+      await p.store.flush();
+      const reopened=new ReaderView({app:p.app} as any,p.plugin);await reopened.onOpen();await reopened.loadFileByPath(p.delta.path);
+      try{
+        const kept=reopened.getExtendNotes().find(item=>item.id===noteId)!;
+        assert(kept?.translation?.language==='简体中文'&&kept.translation.sourceText==='Hello world'&&kept.textBoxes?.[0].text==='译文内容','translation did not survive reopening');
+        const keptCount=reopened.getExtendNotes().length;
+        await reopened.onClose();
+        assert(keptCount===1,'reopening lost the translated note');
+      }finally{await reopened.onClose().catch(()=>{});}
+      await reader.undoLastEdit();await frame();
+      assert(!reader.getExtendNotes().some(item=>item.id===noteId),'one undo did not remove only the inserted translation');
+      const bytesAfter=(p.sources.get(p.delta.path)!.binary as ArrayBuffer).slice(0);
+      assert(new Uint8Array(bytesAfter).join('|')===new Uint8Array(bytesBefore).join('|'),'translation changed the source PDF bytes');
+    }finally{window.open=nativeOpen;}
   });
   await test('Adjacent text blocks form a selection without writing objects; images and stale candidates remain protected',async()=>{
     const p=await fresh(),dock=p.root.querySelector<HTMLElement>('[aria-label="MN4 阅读工具栏"]')!,canvas=document.createElement('canvas');canvas.width=20;canvas.height=20;
@@ -911,13 +1474,58 @@ try{
   await test('Pinning an excerpt destination follows a selected card and survives reopening',async()=>{
     const p=await fresh();p.store.updateNode('parent',{collapsed:false});p.store.setStudyInterface(p.set.id,'scenes');p.view.refresh(true);await frame();
     mapCard(p).click();await frame();const dest=()=>p.root.querySelector<HTMLButtonElement>('[aria-label^="摘录落点："]')!;
-    dest().click();button(p.root,'固定摘录落点').click();await frame();
+    dest().click();button(document.querySelector<HTMLElement>('#test-menu')!,'固定到「Alpha anchor」').click();await frame();
     assert(p.store.studySets.find((item:any)=>item.id===p.set.id).excerptDestination?.nodeId==='anchor-node','wrong pinned destination');
     await p.store.flush();const reopened=new Store(p.store.host);await reopened.load();assert(reopened.studySets.find(item=>item.id===p.set.id)?.excerptDestination?.nodeId==='anchor-node','pinned destination did not survive reopen');
     p.store.settings.autoNodeOnCard=true;annotation(p).click();button(document.querySelector('.ms-ann-pop')!,'摘录卡').click();await frame();
     const newCard=p.store.cards[p.store.cards.length-1],node=p.store.nodes.find((item:any)=>item.cardId===newCard.id);assert(node?.parentId==='parent','new excerpt was not added next to the pinned card');
     const siblings=p.store.nodes.filter((item:any)=>item.parentId==='parent').sort((a:any,b:any)=>(a.order??0)-(b.order??0));assert(siblings.findIndex((item:any)=>item.id===node.id)===siblings.findIndex((item:any)=>item.id==='anchor-node')+1,'new excerpt was not placed after its pinned target');
-    dest().click();button(p.root,'取消固定摘录落点').click();assert(!p.store.studySets.find((item:any)=>item.id===p.set.id).excerptDestination,'unpin failed');
+    dest().click();button(document.querySelector<HTMLElement>('#test-menu')!,'后续摘录 · 跟随默认').click();assert(!p.store.studySets.find((item:any)=>item.id===p.set.id).excerptDestination,'unpin failed');
+  });
+  await test('MN5 favorites menu runs configured features and edits the saved list',async()=>{
+    const p=await fresh();
+    const favorites=()=>p.root.querySelector<HTMLButtonElement>('[aria-label="收藏"]')!;
+    favorites().click();let menu=document.querySelector<HTMLElement>('#test-menu')!;
+    assert([...menu.querySelectorAll('button')].map(item=>item.textContent).join('|')==='打开卡片管理|开始复习（到期的卡）|打开研究浏览器|编辑收藏…','default favorites menu differs from the saved feature list: '+[...menu.querySelectorAll('button')].map(item=>item.textContent).join('|'));
+    button(menu,'编辑收藏…').click();const editor=document.querySelector<HTMLElement>('.ms-modal')!;
+    const toggle=(title:string)=>{const box=[...editor.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find(input=>input.getAttribute('aria-label')==='收藏功能：'+title)!;box.click();};
+    toggle('全局检索（卡片 + 批注）');button(editor,'保存收藏').click();await frame();
+    const saved=p.store.settings.favoriteFeatures??[];assert(JSON.stringify([...saved].sort())===JSON.stringify(['global-search','open-cards','open-research-browser','start-review']),'favorite editor did not save the exact set: '+JSON.stringify(saved));
+    const order=id=>FEATURE_INDEX.findIndex((entry:any)=>entry.id===id);assert(saved.every((id:string,index:number)=>index===0||order(saved[index-1])<order(id)),'favorite editor did not preserve feature-index order: '+JSON.stringify(saved));
+    favorites().click();menu=document.querySelector<HTMLElement>('#test-menu')!;
+    const expectedTitles=saved.map((id:string)=>FEATURE_INDEX.find((entry:any)=>entry.id===id)?.title);
+    assert([...menu.querySelectorAll('button')].map(item=>item.textContent).slice(0,saved.length).join('|')===expectedTitles.join('|'),'favorites menu did not follow the saved list: '+[...menu.querySelectorAll('button')].map(item=>item.textContent).join('|'));
+    const executed:string[]=[];(p.plugin as any).manifest={id:'margin-study'};p.app.commands={commands:{'margin-study:open-cards':{callback:()=>{executed.push('open-cards');}}}};button(menu,'打开卡片管理').click();assert(executed.join('|')==='open-cards','favorite feature did not run its command');
+    document.querySelectorAll('.ms-modal-bg').forEach(node=>node.remove());
+  });
+  await test('MN5 跟着选中 modes control where new excerpts land',async()=>{
+    const p=await fresh();p.store.updateNode('parent',{collapsed:false});p.store.setStudyInterface(p.set.id,'scenes');p.view.refresh(true);await frame();
+    const dest=()=>{p.root.querySelector<HTMLButtonElement>('[aria-label^="摘录落点："]')!.click();return document.querySelector<HTMLElement>('#test-menu')!;};
+    const newExcerpt=async()=>{await until(()=>annotation(p),'source annotation missing; anns='+p.root.querySelectorAll('[data-ann-id]').length+' path='+p.view.getReader()?.getFilePath()+' reader='+!!p.root.querySelector('.ms-workspace-reader'));annotation(p).click();await until(()=>document.querySelector('.ms-ann-pop'),'annotation menu missing for excerpt');button(document.querySelector('.ms-ann-pop')!,'摘录卡').click();await frame();return p.store.cards[p.store.cards.length-1];};
+    button(dest(),'只留在文档').click();
+    let card=await newExcerpt();assert(!p.store.nodes.some((node:any)=>node.cardId===card.id),'only-in-document mode still created a mindmap node');
+    p.store.settings.autoNodeOnCard=false;button(dest(),'自动加入脑图').click();
+    card=await newExcerpt();assert(p.store.nodes.some((node:any)=>node.cardId===card.id),'auto-join mode did not create a node with autoNodeOnCard off');
+    p.store.settings.autoNodeOnCard=true;p.store.updateStudySet(p.set.id,{excerptDestination:{mode:'contents'}});const contents=button(dest(),'跟着目录，这本书没有目录');assert(contents.disabled,'contents mode without an outline should be disabled');document.querySelector('#test-menu')?.remove();
+    card=await newExcerpt();const fallback=p.store.nodes.find((node:any)=>node.cardId===card.id),docRoot=p.store.nodes.find((node:any)=>!node.parentId&&node.docPath===p.alpha.path);assert(docRoot&&fallback?.parentId===docRoot.id,'contents mode without a TOC did not fall back to the document root: '+JSON.stringify({parent:fallback?.parentId,root:docRoot?.id}));
+    linkedMode(p,'关闭');button(dest(),'跟着选中，没选中时，新卡放在当前画面').click();
+    mapCard(p,'beta-node').click();await frame();assert(p.view.getReader()?.getFilePath()===p.alpha.path,'link mode still switched the document while testing selection');
+    card=await newExcerpt();
+    const selected=p.store.nodes.find((node:any)=>node.cardId===card.id);assert(selected?.parentId==='beta-node','selection mode did not place the excerpt under the selected card');
+    assert(p.store.studySets.find((item:any)=>item.id===p.set.id).excerptDestination.mode==='selection','selection mode was not saved on the study set');
+  });
+  await test('MN5 fixed submap view reopens with the submap viewport and renders its nodes',async()=>{
+    const p=await fresh();p.store.updateNode('parent',{collapsed:false});p.store.addNode({id:'sub-child',canvasId:p.canvasId,parentId:'parent',title:'Sub child',x:300,y:300,collapsed:false});p.view.refresh(true);await frame();
+    p.store.createSubmap('parent','章节子图');const node=p.store.getNode('parent')!;
+    assert(node.submapId,'submap was not created');
+    p.store.updateStudySet(p.set.id,{fixedViews:[{id:'fixed-sub',name:'固定子图',kind:'submap',canvasId:p.canvasId,nodeId:'parent',viewport:{scale:1.4,x:120,y:80}}]});
+    p.view.refresh(true);await frame();
+    const renderer=(p.view as any).renderer;
+    const opened=renderer.openFixedView('submap','parent',{scale:1.4,x:120,y:80});assert(opened,'openFixedView rejected a valid submap target');
+    await frame();
+    const modal=document.querySelector<HTMLElement>('.ms-modal')!;assert(modal&&modal.querySelectorAll('.ms-node').length>=1,'fixed submap reopened blank: no nodes rendered');
+    assert(modal.textContent?.includes('章节子图'),'fixed submap did not open the named submap');
+    document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));document.querySelectorAll('.ms-modal-bg').forEach(node=>node.remove());
   });
   await test('Removing an excerpt from the mind map keeps its source annotation and promotes children',async()=>{
     const p=await fresh();p.store.addNode({id:'retain-child',canvasId:p.canvasId,parentId:'anchor-node',title:'Keep child',x:450,y:180,collapsed:false});p.view.refresh(true);await frame();
@@ -1057,7 +1665,13 @@ try{
       await p.view.openFile(file);if(p.view.getReader() instanceof ReaderView)await (p.view.getReader() as ReaderView).renderPage(1);button(dock,'阅读').click();button(dock,'书写').click();button(dock,'荧光笔').click();
       const overlay=p.root.querySelector<SVGSVGElement>('.ms-workspace-reader .ms-pen-overlay')!,r=overlay.getBoundingClientRect(),y=r.top+Math.min(120,r.height*.2);pointer(overlay,'pointerdown',r.left+40,y);pointer(overlay,'pointermove',r.left+100,y+12);pointer(overlay,'pointerup',r.left+140,y+20);await p.store.flush();
       const ink=(await p.store.loadAnnotations(file.path)).find(item=>item.type==='pen');assert(ink?.inkBrush==='highlight'&&ink.color==='#00aa66'&&ink.inkWidth===12.5&&ink.inkOpacity===.6&&ink.inkPreset==='highlight-1','highlighter saved ordinary-pen parameters: '+JSON.stringify(ink));
-      await p.view.openFile(p.beta);await p.view.openFile(file);await until(()=>p.root.querySelector('.ms-workspace-reader .ms-pen-render[data-ink-brush="highlight"] path'),'saved highlighter did not render after reopen');const path=p.root.querySelector<SVGPathElement>('.ms-workspace-reader .ms-pen-render[data-ink-brush="highlight"] path')!,svg=path.closest('svg')!;assert(path.getAttribute('stroke')==='#00aa66'&&Number(getComputedStyle(path).strokeWidth.replace('px',''))===12.5&&Math.abs(Number(getComputedStyle(svg).opacity)*Number(getComputedStyle(path).opacity)-.6)<.01,'highlighter render ignored parameters or applied legacy opacity twice');
+      await p.view.openFile(p.beta);await p.view.openFile(file);
+      if(p.view.getReader() instanceof ReaderView){
+        const reader=p.view.getReader() as ReaderView;await reader.renderPage(1);const raster=p.root.querySelector<HTMLCanvasElement>('.ms-workspace-reader .ms-ink-raster')!,saved=(await p.store.loadAnnotations(file.path)).find(item=>item.type==='pen')!,stroke=saved.strokes![0],point=stroke[Math.floor(stroke.length/2)],x=Math.round(point.x*raster.width),y=Math.round(point.y*raster.height),context=raster.getContext('2d')!,center=context.getImageData(x,y,1,1).data;
+        let count=0;for(let dy=-20;dy<=20;dy++){const pixel=context.getImageData(x,y+dy,1,1).data;if(pixel[3]>145)count++;}assert(center[0]===0&&Math.abs(center[1]-170)<=2&&Math.abs(center[2]-102)<=2&&Math.abs(center[3]-153)<=2&&count>=11&&count<=15,'PDF highlighter render ignored colour, width or opacity: '+JSON.stringify({center:[...center],count}));
+      }else{
+        await until(()=>p.root.querySelector('.ms-workspace-reader .ms-pen-render[data-ink-brush="highlight"] path'),'saved highlighter did not render after reopen');const path=p.root.querySelector<SVGPathElement>('.ms-workspace-reader .ms-pen-render[data-ink-brush="highlight"] path')!,svg=path.closest('svg')!;assert(path.getAttribute('stroke')==='#00aa66'&&Number(getComputedStyle(path).strokeWidth.replace('px',''))===12.5&&Math.abs(Number(getComputedStyle(svg).opacity)*Number(getComputedStyle(path).opacity)-.6)<.01,'highlighter render ignored parameters or applied legacy opacity twice');
+      }
     }
     assert(JSON.stringify({cards:p.store.cards,nodes:p.store.nodes})===before,'highlighter preset edits changed learning objects');
   });
@@ -1088,7 +1702,7 @@ try{
       const overlay=p.root.querySelector<SVGSVGElement>('.ms-workspace-reader .ms-pen-overlay')!,r=overlay.getBoundingClientRect(),y=r.top+Math.min(120,r.height*.2);assert(r.width>20&&r.height>20,'ink surface missing');
       pointer(overlay,'pointerdown',r.left+40,y);pointer(overlay,'pointermove',r.left+100,y+12);pointer(overlay,'pointerup',r.left+140,y+20);await p.store.flush();
       const ink=(await p.store.loadAnnotations(file.path)).find(item=>item.type==='pen');assert(ink?.color==='#2244aa'&&ink.inkWidth===4.2&&ink.inkOpacity===.7&&ink.inkPreset==='pen-1','edited preset did not colour saved ink on '+file.path+': '+JSON.stringify(ink));
-      await p.view.openFile(p.beta);await p.view.openFile(file);const restored=(await p.store.loadAnnotations(file.path)).find(item=>item.type==='pen');assert(restored?.color==='#2244aa','saved ink colour was lost after switching away and reopening');await until(()=>p.root.querySelector('.ms-workspace-reader path[stroke="#2244aa"]'),'reopened reader did not render saved ink in the preset colour');
+      await p.view.openFile(p.beta);await p.view.openFile(file);const restored=(await p.store.loadAnnotations(file.path)).find(item=>item.type==='pen');assert(restored?.color==='#2244aa','saved ink colour was lost after switching away and reopening');if(p.view.getReader() instanceof ReaderView){const reader=p.view.getReader() as ReaderView;await reader.renderPage(1);const raster=p.root.querySelector<HTMLCanvasElement>('.ms-workspace-reader .ms-ink-raster')!,point=restored.strokes![0][1],pixel=raster.getContext('2d')!.getImageData(Math.round(point.x*raster.width),Math.round(point.y*raster.height),1,1).data;assert(Math.abs(pixel[0]-34)<=3&&Math.abs(pixel[1]-68)<=3&&Math.abs(pixel[2]-170)<=3&&pixel[3]>0,'reopened PDF raster did not render saved ink in the preset colour: '+[...pixel]);}else await until(()=>p.root.querySelector('.ms-workspace-reader path[stroke="#2244aa"]'),'reopened reader did not render saved ink in the preset colour');
     }
     assert(JSON.stringify({cards:p.store.cards,nodes:p.store.nodes})===learningBefore,'preset edits or ink created learning objects');assert(JSON.stringify((await p.store.loadAnnotations(p.alpha.path)).filter(item=>item.type!=='pen'))===excerptBefore,'ink colour recoloured the excerpt');
   });
@@ -1379,23 +1993,23 @@ try{
     const p=await fresh();button(p.root,'文字批注').click();const body=(p.view.getReader() as DocumentReaderView).getBodyEl(),at=body.getBoundingClientRect();body.dispatchEvent(new MouseEvent('click',{clientX:at.left+40,clientY:at.top+90,bubbles:true,cancelable:true}));await frame();
     let editor=p.root.querySelector('.ms-overlay-text-editor')!;const input=editor.querySelector('[aria-label="自由文字内容"]') as HTMLElement;
     input.replaceChildren();for(const [text,color,background] of [['Neutral text ','#111111','transparent'],['colored','#ff0000','#ffbf00']]){const span=document.createElement('span');span.textContent=text;span.style.color=color;span.style.backgroundColor=background;input.append(span);}input.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText'}));button(editor,'完成文字编辑').click();
-    const before=JSON.stringify(await p.store.loadAnnotations(p.alpha.path)),open=()=>{button(p.root,'文档与工作区设置').click();button(p.root.querySelector('[aria-label="Document - More"]')!,'Read Settings').click();return p.root.querySelector<HTMLElement>('[aria-label="Read Settings"]')!;};
-    button(open(),'Dark').click();const overlay=p.root.querySelector('.ms-free-overlay')!,spans=[...overlay.querySelectorAll<HTMLElement>('.ms-free-overlay-text span')];
+    const before=JSON.stringify(await p.store.loadAnnotations(p.alpha.path)),open=()=>{button(p.root,'文档与工作区设置').click();button(p.root.querySelector('[aria-label="文档 - 更多"]')!,'阅读设置').click();return p.root.querySelector<HTMLElement>('[aria-label="阅读设置"]')!;};
+    button(open(),'暗黑').click();const overlay=p.root.querySelector('.ms-free-overlay')!,spans=[...overlay.querySelectorAll<HTMLElement>('.ms-free-overlay-text span')];
     assert(getComputedStyle(spans[0]).webkitTextFillColor==='rgb(182, 182, 182)','neutral page text disappeared against the dark reading surface');assert(getComputedStyle(spans[1]).webkitTextFillColor==='rgb(255, 0, 0)'&&getComputedStyle(spans[1]).backgroundColor==='rgb(255, 191, 0)','reading theme changed the intentional colored run');
     assert(getComputedStyle(p.root.querySelector('.ms-node-heading')!).color==='rgb(37, 37, 37)','a source-colored mindmap heading inherited unreadable light text');
     button(overlay,'编辑文字批注').click();editor=p.root.querySelector('.ms-overlay-text-editor')!;const edited=editor.querySelector<HTMLElement>('[aria-label="自由文字内容"] span')!;assert(getComputedStyle(edited).webkitTextFillColor==='rgb(182, 182, 182)'&&getComputedStyle(edited).color==='rgb(17, 17, 17)','dark editing hid neutral text or replaced its stored foreground');
     button(editor,'文字背景色').click();const white=editor.querySelector<HTMLInputElement>('[aria-label="文字批注白色背景"]')!;white.click();await frame();assert(getComputedStyle(edited).webkitTextFillColor==='rgb(17, 17, 17)','white text box lost its dark original foreground');white.click();await frame();button(editor,'完成文字编辑').click();
-    assert(JSON.stringify(await p.store.loadAnnotations(p.alpha.path))===before,'opening and closing the themed editor rewrote annotation colors or runs');button(open(),'White').click();assert(getComputedStyle(p.root.querySelector('.ms-free-overlay-text span')!).webkitTextFillColor==='rgb(17, 17, 17)','returning to White did not restore the original visible foreground');
+    assert(JSON.stringify(await p.store.loadAnnotations(p.alpha.path))===before,'opening and closing the themed editor rewrote annotation colors or runs');button(open(),'白色').click();assert(getComputedStyle(p.root.querySelector('.ms-free-overlay-text span')!).webkitTextFillColor==='rgb(17, 17, 17)','returning to White did not restore the original visible foreground');
   });
-  await test('More Settings Excerpt controls persist and apply color locking without editing document data',async()=>{
+  await test('更多设置 Excerpt controls persist and apply color locking without editing document data',async()=>{
     const p=await fresh(),before=JSON.stringify(await p.store.loadAnnotations(p.alpha.path));
-    const open=()=>{button(p.root,'文档与工作区设置').click();button(p.root.querySelector('[aria-label="Document - More"]')!,'Read Settings').click();button(p.root.querySelector('[aria-label="Read Settings"]')!,'More Settings').click();return p.root.querySelector<HTMLElement>('[aria-label="Settings"]')!;};
+    const open=()=>{button(p.root,'文档与工作区设置').click();button(p.root.querySelector('[aria-label="文档 - 更多"]')!,'阅读设置').click();button(p.root.querySelector('[aria-label="阅读设置"]')!,'更多设置').click();return p.root.querySelector<HTMLElement>('[aria-label="设置"]')!;};
     let settings=open();button(settings,'Excerpt').click();const lock=settings.querySelector<HTMLInputElement>('[aria-label="Lock excerpt color shortcuts"]');assert(lock,'excerpt color lock missing');lock!.click();button(settings,'Close').click();
     settings=open();button(settings,'Excerpt').click();assert(settings.querySelector<HTMLInputElement>('[aria-label="Lock excerpt color shortcuts"]')!.checked,'excerpt preference did not persist');button(settings,'Close').click();
     assert(p.store.settings.excerptLockColors===true&&JSON.stringify(await p.store.loadAnnotations(p.alpha.path))===before,'preference changed document annotations');
   });
   await test('Workspace document menu exposes recording and the live speech transport, restoring it on close',async()=>{
-    const p=await fresh();button(p.root,'文档与工作区设置').click();const pane=p.root.querySelector<HTMLElement>('[aria-label="Document - More"]')!;
+    const p=await fresh();button(p.root,'文档与工作区设置').click();const pane=p.root.querySelector<HTMLElement>('[aria-label="文档 - 更多"]')!;
     assert(button(pane,'录制语音批注'),'workspace recording entry missing');button(pane,'朗读控制').click();
     const dialog=document.querySelector<HTMLElement>('[aria-label="文档朗读"]')!;assert(dialog&&button(dialog,'开始朗读')&&button(dialog,'暂停朗读').disabled,'live speech controls unavailable');
     button(dialog,'关闭朗读').click();assert(!document.querySelector('[aria-label="文档朗读"]')&&p.view.getReader()?.getReaderToolbar().querySelector('[aria-label="朗读控制"]'),'closing lost reader transport');await p.view.onClose();
@@ -1411,14 +2025,14 @@ try{
     try{button(modal,'录制语音批注').click();await until(()=>!!instance,'card did not start microphone');instance.stop();await wait();button(modal,'停止并插入录音').click();await until(()=>asks>1||!!saved,'card did not finish ended recording');assert(asks===1,'device-ended card recording requested another microphone');assert(saved==='PARTIAL-DEVICE-AUDIO'&&back.value.includes('_marginstudy-audio/')&&back.value.includes('kept note')&&card.back==='kept note','card lost partial audio or mutated saved note before Save');}
     finally{editor.dispose();bg.remove();(window as any).MediaRecorder=original;if(get)Object.defineProperty(navigator.mediaDevices,'getUserMedia',get);if(enumerate)Object.defineProperty(navigator.mediaDevices,'enumerateDevices',enumerate);else delete(navigator.mediaDevices as any).enumerateDevices;}
   });
-  await test('Read Settings opens the observed controls and applies Sepia across the study surface without moving the reader',async()=>{
+  await test('阅读设置 opens the observed controls and applies Sepia across the study surface without moving the reader',async()=>{
     const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;
     reader.gotoPage(2);await until(()=>Number((reader.getState() as any).position.page)===2,'page 2 did not settle');const before=reader.getState();
-    button(p.root,'文档与工作区设置').click();button(p.root.querySelector('[aria-label="Document - More"]')!,'Read Settings').click();
-    const pane=p.root.querySelector<HTMLElement>('[aria-label="Read Settings"]');assert(pane,'Read Settings did not open');
-    assert([...pane!.querySelectorAll('[role="group"]')].map(node=>node.getAttribute('aria-label')).join('|')==='Turn Document Page|Theme','reading controls differ from the observed groups');
-    assert(button(pane!,'Vertical Scroll').getAttribute('aria-pressed')==='true'&&button(pane!,'White').getAttribute('aria-pressed')==='true','current reading choices were not selected');
-    button(pane!,'Sepia').click();assert(!pane!.isConnected,'choosing a theme did not dismiss the popup');
+    button(p.root,'文档与工作区设置').click();button(p.root.querySelector('[aria-label="文档 - 更多"]')!,'阅读设置').click();
+    const pane=p.root.querySelector<HTMLElement>('[aria-label="阅读设置"]');assert(pane,'阅读设置 did not open');
+    assert([...pane!.querySelectorAll('[role="group"]')].map(node=>node.getAttribute('aria-label')).join('|')==='文档翻页方式|主题','reading controls differ from the observed groups');
+    assert(button(pane!,'纵向滚动').getAttribute('aria-pressed')==='true'&&button(pane!,'白色').getAttribute('aria-pressed')==='true','current reading choices were not selected');
+    button(pane!,'棕褐色').click();assert(!pane!.isConnected,'choosing a theme did not dismiss the popup');
     assert(getComputedStyle(p.root.querySelector('.ms-workspace-toolbar')!).backgroundColor==='rgb(245, 239, 223)','Sepia did not tint the toolbar');
     assert(getComputedStyle(p.root.querySelector('.ms-mindmap')!).backgroundColor==='rgb(232, 226, 210)','Sepia did not tint the mindmap');
     assert(getComputedStyle(p.root.querySelector('.ms-board-card')!).backgroundColor==='rgb(245, 239, 223)','Sepia did not tint Cards');
@@ -1428,15 +2042,15 @@ try{
   });
   await test('Reading themes preserve source pixels, annotations and host theme while every choice and global UI Theme setting stay in sync',async()=>{
     const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;
-    const open=()=>{button(p.root,'文档与工作区设置').click();button(p.root.querySelector('[aria-label="Document - More"]')!,'Read Settings').click();return p.root.querySelector<HTMLElement>('[aria-label="Read Settings"]')!;};
+    const open=()=>{button(p.root,'文档与工作区设置').click();button(p.root.querySelector('[aria-label="文档 - 更多"]')!,'阅读设置').click();return p.root.querySelector<HTMLElement>('[aria-label="阅读设置"]')!;};
     const host=document.body.className,source=reader.getPageRecord(1)!.canvas.toDataURL(),meta=JSON.stringify(p.store.getDocMeta(p.delta.path)),cards=JSON.stringify(p.store.cards);
-    for(const [label,paper,canvas] of [['Sepia','rgb(245, 239, 223)','rgb(232, 226, 210)'],['Gray','rgb(65, 65, 65)','rgb(98, 98, 98)'],['Dark','rgb(0, 0, 0)','rgb(33, 33, 33)'],['Green','rgb(237, 250, 204)','rgb(223, 236, 192)'],['White','rgb(255, 255, 255)','rgb(242, 242, 242)']]){
+    for(const [label,paper,canvas] of [['棕褐色','rgb(245, 239, 223)','rgb(232, 226, 210)'],['灰色','rgb(65, 65, 65)','rgb(98, 98, 98)'],['暗黑','rgb(0, 0, 0)','rgb(33, 33, 33)'],['绿色','rgb(237, 250, 204)','rgb(223, 236, 192)'],['白色','rgb(255, 255, 255)','rgb(242, 242, 242)']]){
       button(open(),label).click();assert(getComputedStyle(p.root.querySelector('.ms-workspace-toolbar')!).backgroundColor===paper&&getComputedStyle(p.root.querySelector('.ms-board-card')!).backgroundColor===paper&&getComputedStyle(p.root.querySelector('.ms-mindmap')!).backgroundColor===canvas,label+' has inconsistent study surface colors');
       assert(button(open(),label).getAttribute('aria-pressed')==='true',label+' selection was not retained after reopening');
     }
-    button(open(),'More Settings').click();const preferences=p.root.querySelector<HTMLElement>('[aria-label="Settings"]');assert(preferences,'More Settings did not open global preferences');
-    button(preferences!,'UI Theme').click();button(preferences!,'Green').click();assert(preferences!.isConnected&&p.root.dataset.readingTheme==='green','global theme preference did not apply in place');button(preferences!,'Close').click();
-    assert(button(open(),'Green').getAttribute('aria-pressed')==='true','quick reading settings disagreed with global preferences');
+    button(open(),'更多设置').click();const preferences=p.root.querySelector<HTMLElement>('[aria-label="设置"]');assert(preferences,'更多设置 did not open global preferences');
+    button(preferences!,'界面主题').click();button(preferences!,'绿色').click();assert(preferences!.isConnected&&p.root.dataset.readingTheme==='green','global theme preference did not apply in place');button(preferences!,'关闭').click();
+    assert(button(open(),'绿色').getAttribute('aria-pressed')==='true','quick reading settings disagreed with global preferences');
     assert(document.body.className===host&&reader.getPageRecord(1)!.canvas.toDataURL()===source&&JSON.stringify(p.store.getDocMeta(p.delta.path))===meta&&JSON.stringify(p.store.cards)===cards,'a display theme mutated host appearance, source pixels, document metadata or learning cards');
   });
   await test('Deleting a PDF annotation removes its margin number and footnote immediately',async()=>{
@@ -1446,7 +2060,7 @@ try{
   });
   await test('Margin preferences show excerpt notes, hide source numbers and turn pages only at page edges',async()=>{
     const p=await fresh();await p.store.saveAnnotationsNow(p.delta.path,[{id:'margin-ann',docPath:p.delta.path,docKind:'pdf',page:1,type:'note',rects:[{x:80,y:500,w:180,h:18}],pdfCoordinateSpace:'pdf',text:'Delta margin source',noteText:'Margin footnote survives',color:'#ffff00',createdAt:'today'}]);await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;await reader.renderPage(1);await reader.setMarginCommentArea(true);const before=JSON.stringify(await p.store.loadAnnotations(p.delta.path));
-    button(p.root,'文档与工作区设置').click();button(p.root.querySelector('[aria-label="Document - More"]')!,'Read Settings').click();button(p.root.querySelector('[aria-label="Read Settings"]')!,'More Settings').click();const prefs=p.root.querySelector<HTMLElement>('[aria-label="Settings"]')!;button(prefs,'Margin').click();
+    button(p.root,'文档与工作区设置').click();button(p.root.querySelector('[aria-label="文档 - 更多"]')!,'阅读设置').click();button(p.root.querySelector('[aria-label="阅读设置"]')!,'更多设置').click();const prefs=p.root.querySelector<HTMLElement>('[aria-label="设置"]')!;button(prefs,'Margin').click();
     const show=prefs.querySelector<HTMLInputElement>('[aria-label="Show footnotes & links on margin"]'),hide=prefs.querySelector<HTMLInputElement>('[aria-label="Hide margin numbers on document"]'),edges=prefs.querySelector<HTMLInputElement>('[aria-label="Tap Page Edges to Turn Pages (Legacy)"]');assert(show&&hide&&edges,'Margin lacks functional preferences');show!.click();await until(()=>p.root.querySelector('.ms-margin-footnote')?.textContent?.includes('Margin footnote survives'),'margin note did not appear');assert(p.root.querySelector('.ms-margin-number'),'excerpt source number missing');hide!.click();await until(()=>!p.root.querySelector('.ms-margin-number'),'hide numbers did not update live');edges!.click();button(prefs,'Close').click();
     const rec=reader.getPageRecord(1)!;rec.textLayer.dispatchEvent(new MouseEvent('click',{bubbles:true,clientX:rec.canvas.getBoundingClientRect().right-2,clientY:rec.canvas.getBoundingClientRect().top+20}));await until(()=>Number((reader.getState() as any).position.page)===2,'right edge did not turn page');assert(JSON.stringify(await p.store.loadAnnotations(p.delta.path))===before,'Margin preferences mutated source annotations');
     await p.store.flush();const reloaded=new Store(p.store.host);await reloaded.load();assert(reloaded.settings.showFootnotesLinksOnMargin&&reloaded.settings.hideMarginNumbers&&reloaded.settings.tapPageEdges,'Margin preferences not persistent');
@@ -1466,8 +2080,8 @@ try{
     const body=(p.view.getReader() as DocumentReaderView).getBodyEl(),source=body.querySelector('img')!.getBoundingClientRect(),mark=body.querySelector<HTMLElement>(`[data-ann-id="${ann.id}"]`)!.getBoundingClientRect();assert(Math.abs(source.top-mark.top)<2&&Math.abs(source.width-mark.width)<2,'image annotation is anchored to nearby text');await p.view.openFile(p.gamma);await p.view.openFile(p.alpha);await until(()=>p.root.querySelector(`[data-ann-id="${ann.id}"]`),'reopened image region missing');
   });
   await test('Assistive excerpt frames select PDF text without writing until batch extraction and persist the switch',async()=>{
-    const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;await reader.renderPage(1);button(p.root,'文档与工作区设置').click();button(p.root.querySelector('[aria-label="Document - More"]')!,'Read Settings').click();button(p.root.querySelector('[aria-label="Read Settings"]')!,'More Settings').click();
-    const preferences=p.root.querySelector<HTMLElement>('[aria-label="Settings"]')!;button(preferences,'Excerpt').click();const assist=preferences.querySelector<HTMLInputElement>('[aria-label="Assistive Excerpt"]');assert(assist,'Excerpt lacks the assistive switch');assert(assist!.checked,'Assistive should default on');button(preferences,'Close').click();
+    const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;await reader.renderPage(1);button(p.root,'文档与工作区设置').click();button(p.root.querySelector('[aria-label="文档 - 更多"]')!,'阅读设置').click();button(p.root.querySelector('[aria-label="阅读设置"]')!,'更多设置').click();
+    const preferences=p.root.querySelector<HTMLElement>('[aria-label="设置"]')!;button(preferences,'Excerpt').click();const assist=preferences.querySelector<HTMLInputElement>('[aria-label="Assistive Excerpt"]');assert(assist,'Excerpt lacks the assistive switch');assert(assist!.checked,'Assistive should default on');button(preferences,'关闭').click();
     readerAction(p,'辅助识别摘录');await until(()=>p.root.querySelector('[aria-label^="辅助摘录文字"]'),'no selectable recognition frames');const saved=await p.store.loadAnnotations(p.delta.path),before=saved.length;
     const frame=p.root.querySelector<HTMLButtonElement>('[aria-label^="辅助摘录文字"]')!;
     const sourceRange=document.createRange();sourceRange.selectNodeContents(reader.getPageRecord(1)!.textLayer.querySelector('span')!);const source=sourceRange.getBoundingClientRect(),outline=frame.getBoundingClientRect();assert(Math.abs(source.left-outline.left)<2&&Math.abs(source.top-outline.top)<2,`recognition frame does not cover its source: source ${source.left},${source.top}; frame ${outline.left},${outline.top}`);
@@ -1475,40 +2089,40 @@ try{
     const anns=await p.store.loadAnnotations(p.delta.path);assert(anns.at(-1)!.text.includes('Delta')&&anns.at(-1)!.page===1,'batch excerpt lost source text or page');
   });
   await test('Keyboard Hide Accessory Bar preference hides the card editing bar and persists',async()=>{
-    const p=await fresh();button(p.root,'文档与工作区设置').click();button(p.root.querySelector('[aria-label="Document - More"]')!,'Read Settings').click();button(p.root.querySelector('[aria-label="Read Settings"]')!,'More Settings').click();
-    const preferences=p.root.querySelector<HTMLElement>('[aria-label="Settings"]')!;button(preferences,'Keyboard').click();const hide=preferences.querySelector<HTMLInputElement>('[aria-label="Hide Accessory Bar"]');assert(hide,'Keyboard lacks Hide Accessory Bar');hide!.click();button(preferences,'Close').click();
+    const p=await fresh();button(p.root,'文档与工作区设置').click();button(p.root.querySelector('[aria-label="文档 - 更多"]')!,'阅读设置').click();button(p.root.querySelector('[aria-label="阅读设置"]')!,'更多设置').click();
+    const preferences=p.root.querySelector<HTMLElement>('[aria-label="设置"]')!;button(preferences,'Keyboard').click();const hide=preferences.querySelector<HTMLInputElement>('[aria-label="隐藏辅助栏"]');assert(hide,'Keyboard lacks Hide Accessory Bar');hide!.click();button(preferences,'关闭').click();
     await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;await reader.renderPage(1);const id=await reader.createExtend(1,{x:.5,y:.45});await reader.finishExtendEditing();await reader.updateExtend(id,{text:'Keyboard preference fixture'});await reader.addExtendToMindmap(id);button(p.root,'留白菜单').click();button(p.root,'编辑卡片').click();await until(()=>document.querySelector('[aria-label="卡片正面或摘录"]'),'editor missing');
     document.querySelector<HTMLTextAreaElement>('[aria-label="卡片答案或笔记"]')!.focus();assert(!document.querySelector<HTMLElement>('[aria-label="文字格式"]')!.checkVisibility(),'hidden keyboard accessory bar reappeared on focus');button(document,'保存').click();await p.store.flush();const reloaded=new Store(p.store.host);await reloaded.load();assert(reloaded.settings.hideKeyboardAccessoryBar===true,'keyboard preference not saved');
   });
   await test('Card Style settings affect card text, preserve source content and survive reload',async()=>{
     const p=await fresh(),before=JSON.stringify(p.store.cards);
-    button(p.root,'文档与工作区设置').click();button(p.root.querySelector('[aria-label="Document - More"]')!,'Read Settings').click();button(p.root.querySelector('[aria-label="Read Settings"]')!,'More Settings').click();
-    const preferences=p.root.querySelector<HTMLElement>('[aria-label="Settings"]')!;button(preferences,'Card Style').click();
-    const family=preferences.querySelector<HTMLSelectElement>('[aria-label="Card font - (Title & Highlight & Comments)"]')!,size=preferences.querySelector<HTMLInputElement>('[aria-label="Base Font Size"]')!;
+    button(p.root,'文档与工作区设置').click();button(p.root.querySelector('[aria-label="文档 - 更多"]')!,'阅读设置').click();button(p.root.querySelector('[aria-label="阅读设置"]')!,'更多设置').click();
+    const preferences=p.root.querySelector<HTMLElement>('[aria-label="设置"]')!;button(preferences,'Card Style').click();
+    const family=preferences.querySelector<HTMLSelectElement>('[aria-label="Card font - (Title & Highlight & Comments)"]')!,size=preferences.querySelector<HTMLInputElement>('[aria-label="基础字号"]')!;
     assert(family&&size,'Card Style has no functional typography controls');family.value='Georgia';family.dispatchEvent(new Event('change'));size.value='20';size.dispatchEvent(new Event('change'));
-    (preferences.querySelector('[aria-label="Title uppercase"]') as HTMLInputElement).click();await wait(100);
+    (preferences.querySelector('[aria-label="标题大写"]') as HTMLInputElement).click();await wait(100);
     const excerpt=p.root.querySelector<HTMLElement>('.ms-node-excerpt')!;assert(getComputedStyle(excerpt).fontFamily.includes('Georgia')&&getComputedStyle(excerpt).fontSize==='20px','global card typography did not reach the mindmap');
     assert(getComputedStyle(p.root.querySelector('.ms-node-heading')!).textTransform==='uppercase','card title uppercase not applied');assert(JSON.stringify(p.store.cards)===before,'display preference rewrote card business content');
-    button(preferences,'Close').click();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;await reader.renderPage(1);const id=await reader.createExtend(1,{x:.5,y:.45});await reader.finishExtendEditing();await reader.updateExtend(id,{text:'Typography editor fixture'});button(p.root,'留白菜单').click();button(p.root,'编辑卡片').click();await until(()=>document.querySelector('[aria-label="卡片标题"]'),'card editor missing');
+    button(preferences,'关闭').click();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;await reader.renderPage(1);const id=await reader.createExtend(1,{x:.5,y:.45});await reader.finishExtendEditing();await reader.updateExtend(id,{text:'Typography editor fixture'});button(p.root,'留白菜单').click();button(p.root,'编辑卡片').click();await until(()=>document.querySelector('[aria-label="卡片标题"]'),'card editor missing');
     const editorTitle=document.querySelector<HTMLElement>('[aria-label="卡片标题"]')!;assert(getComputedStyle(editorTitle).fontSize==='20px'&&getComputedStyle(editorTitle).fontFamily.includes('Georgia'),'card editor title ignored the global font defaults');button(document,'保存').click();
     await p.store.flush();const reloaded=new Store(p.store.host);await reloaded.load();assert(reloaded.settings.cardFontFamily==='Georgia'&&reloaded.settings.cardBaseFontSize===20&&reloaded.settings.cardTitleUppercase===true,'Card Style did not persist');
   });
-  await test('Read Settings switches fixed-page modes in place, keeps the current page and scale, and restores them after a workspace reload',async()=>{
+  await test('阅读设置 switches fixed-page modes in place, keeps the current page and scale, and restores them after a workspace reload',async()=>{
     const p=await fresh();await p.view.openFile(p.delta);let reader=p.view.getReader() as ReaderView;
     reader.gotoPage(2);await until(()=>Number((reader.getState() as any).position.page)===2,'page 2 did not settle');
-    const open=()=>{button(p.root,'文档与工作区设置').click();button(p.root.querySelector('[aria-label="Document - More"]')!,'Read Settings').click();return p.root.querySelector<HTMLElement>('[aria-label="Read Settings"]')!;};
-    let pane=open();const flip=button(pane,'Horizontal Flip'),scale=reader.getScale();flip.click();
+    const open=()=>{button(p.root,'文档与工作区设置').click();button(p.root.querySelector('[aria-label="文档 - 更多"]')!,'阅读设置').click();return p.root.querySelector<HTMLElement>('[aria-label="阅读设置"]')!;};
+    let pane=open();const flip=button(pane,'横向翻页'),scale=reader.getScale();flip.click();
     await until(()=>!flip.disabled&&flip.getAttribute('aria-pressed')==='true','flip mode did not settle');
     assert(pane.isConnected&&reader.getPageLayout().continuous===false&&Number((reader.getState() as any).position.page)===2&&reader.getScale()===scale,'flip mode closed its panel or changed the page or scale');
     assert(reader.getScrollContainer().querySelectorAll('.ms-page-spread:not([hidden])').length===1&&!reader.getPageRecord(2)!.wrapper.parentElement!.hidden,'flip mode did not display only the current page');
-    button(pane,'Green').click();reader.getScrollContainer().focus();select(reader.getScrollContainer(),'PageDown');await until(()=>Number((reader.getState() as any).position.page)===3,'flip mode did not advance to the final page');
+    button(pane,'绿色').click();reader.getScrollContainer().focus();select(reader.getScrollContainer(),'PageDown');await until(()=>Number((reader.getState() as any).position.page)===3,'flip mode did not advance to the final page');
     await p.view.onClose();p.view.unload();p.view.containerEl.remove();await p.store.flush();p.store=new Store(p.store.host);await p.store.load();p.plugin.store=p.store;
     p.view=new StudyWorkspaceView(p.leaf,p.plugin);p.root=p.view.contentEl;p.view.load();await p.view.onOpen();await frame();reader=p.view.getReader() as ReaderView;
     assert(reader.getFilePath()===p.delta.path&&reader.getPageLayout().continuous===false&&Number((reader.getState() as any).position.page)===3&&reader.getScale()===scale&&p.root.dataset.readingTheme==='green','workspace reload lost flip mode, theme, page or scale');
-    pane=open();assert(button(pane,'Horizontal Flip').getAttribute('aria-pressed')==='true'&&button(pane,'Green').getAttribute('aria-pressed')==='true','reloaded choices are wrong');const vertical=button(pane,'Vertical Scroll');vertical.click();await until(()=>!vertical.disabled&&vertical.getAttribute('aria-pressed')==='true','vertical mode did not settle');
+    pane=open();assert(button(pane,'横向翻页').getAttribute('aria-pressed')==='true'&&button(pane,'绿色').getAttribute('aria-pressed')==='true','reloaded choices are wrong');const vertical=button(pane,'纵向滚动');vertical.click();await until(()=>!vertical.disabled&&vertical.getAttribute('aria-pressed')==='true','vertical mode did not settle');
     assert(pane.isConnected&&reader.getScrollContainer().querySelectorAll('.ms-page-spread:not([hidden])').length===3&&Number((reader.getState() as any).position.page)===3&&reader.getScale()===scale,'vertical mode failed to restore all pages at the same location: '+JSON.stringify({connected:pane.isConnected,groups:reader.getScrollContainer().querySelectorAll('.ms-page-spread:not([hidden])').length,state:reader.getState(),scale}));
-    await p.view.openFile(p.alpha);assert(!pane.isConnected&&p.root.dataset.readingTheme==='green','switching to another document kept a stale panel or lost the global study theme');pane=open();assert(button(pane,'Horizontal Flip').disabled&&button(pane,'Vertical Scroll').disabled,'fixed-page flip controls were enabled on flowing HTML');
-    button(pane,'White').click();assert(p.root.dataset.readingTheme==='white','theme selection stopped working for flowing documents');
+    await p.view.openFile(p.alpha);assert(!pane.isConnected&&p.root.dataset.readingTheme==='green','switching to another document kept a stale panel or lost the global study theme');pane=open();assert(button(pane,'横向翻页').disabled&&button(pane,'纵向滚动').disabled,'fixed-page flip controls were enabled on flowing HTML');
+    button(pane,'白色').click();assert(p.root.dataset.readingTheme==='white','theme selection stopped working for flowing documents');
   });
   await test('Extend Basic Edit opens its card without adding membership and saved text remains editable inline',async()=>{
     const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;await until(()=>reader.isFittedToWidth(),'PDF fit not ready');await reader.renderPage(1);const id=await reader.createExtend(1,{x:.5,y:.4});await reader.finishExtendEditing();await reader.updateExtend(id,{text:'Ordinary comment'});const nodes=p.store.nodes.length;
@@ -1527,12 +2141,12 @@ try{
     button(p.root,'留白').click();const rec=reader.getPageRecord(1)!,bounds=rec.wrapper.getBoundingClientRect();rec.canvas.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,button:0,clientX:bounds.left+bounds.width*.5,clientY:bounds.top+bounds.height*.4}));
     await until(()=>p.root.querySelector('[aria-label="留白文字"]'),'Extend toolbar did not open the inline text editor');const editor=p.root.querySelector<HTMLElement>('[aria-label="留白文字"]')!;editor.textContent='Workspace Extend';editor.dispatchEvent(new InputEvent('input',{bubbles:true}));await reader.finishExtendEditing();
     button(p.root,'留白菜单').click();button(p.root,'Add to MindMap').click();await until(()=>p.store.cards.some(card=>card.front==='Workspace Extend'),'note card missing');await wait(30);assert(button(p.root,'撤销').title==='撤销加入脑图','note membership switched top Undo to library: '+button(p.root,'撤销').title);const noteCard=p.store.cards.find(card=>card.front==='Workspace Extend')!;button(p.root,'撤销').click();await until(()=>noteCard.hidden,'Undo did not hide note card membership');assert(reader.getExtendNotes()[0].text==='Workspace Extend','membership Undo removed note');await until(()=>!button(p.root,'重做').disabled,'membership Undo did not finish');button(p.root,'重做').click();await until(()=>!noteCard.hidden,'Redo did not restore note membership');
-    button(p.root,'文档与工作区设置').click();const pane=p.root.querySelector<HTMLElement>('[aria-label="Document - More"]')!;button(pane,'Margin').click();await until(()=>button(pane,'Margin').getAttribute('aria-pressed')==='true'&&!button(pane,'Margin').disabled,'Margin choice did not settle');assert(pane.isConnected&&reader.getExtendMode()==='margin'&&p.root.querySelector('.ms-extend-margin'),'mode menu disappeared or failed to project content');button(pane,'Collapse').click();await until(()=>button(pane,'Collapse').getAttribute('aria-pressed')==='true'&&!button(pane,'Collapse').disabled,'Collapse choice did not settle');assert(reader.getExtendNotes()[0].text==='Workspace Extend'&&p.root.querySelector('[aria-label="查看留白"]'),'mode switch discarded content');
-    await p.view.openFile(p.alpha);button(p.root,'文档与工作区设置').click();assert(!p.root.querySelector('[aria-label="Document - More"] [aria-label="Margin"]'),'PDF Extend mode leaked into a flowing document');
+    button(p.root,'文档与工作区设置').click();const pane=p.root.querySelector<HTMLElement>('[aria-label="文档 - 更多"]')!;button(pane,'Margin').click();await until(()=>button(pane,'Margin').getAttribute('aria-pressed')==='true'&&!button(pane,'Margin').disabled,'Margin choice did not settle');assert(pane.isConnected&&reader.getExtendMode()==='margin'&&p.root.querySelector('.ms-extend-margin'),'mode menu disappeared or failed to project content');button(pane,'Collapse').click();await until(()=>button(pane,'Collapse').getAttribute('aria-pressed')==='true'&&!button(pane,'Collapse').disabled,'Collapse choice did not settle');assert(reader.getExtendNotes()[0].text==='Workspace Extend'&&p.root.querySelector('[aria-label="查看留白"]'),'mode switch discarded content');
+    await p.view.openFile(p.alpha);button(p.root,'文档与工作区设置').click();assert(!p.root.querySelector('[aria-label="文档 - 更多"] [aria-label="Margin"]'),'PDF Extend mode leaked into a flowing document');
   });
   await test('Margin Comment Area stays checked in step with asynchronous visibility changes without closing Document More',async()=>{
     const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;
-    button(p.root,'文档与工作区设置').click();const pane=p.root.querySelector<HTMLElement>('[aria-label="Document - More"]')!,option=button(pane,'Margin Comment Area'),initial=reader.getMarginCommentArea();
+    button(p.root,'文档与工作区设置').click();const pane=p.root.querySelector<HTMLElement>('[aria-label="文档 - 更多"]')!,option=button(pane,'Margin Comment Area'),initial=reader.getMarginCommentArea();
     assert(option.getAttribute('aria-checked')===String(initial),'initial margin check differs from the reader');option.click();
     await until(()=>reader.getMarginCommentArea()!==initial&&!option.disabled,'margin visibility did not settle');
     assert(pane.isConnected&&option.getAttribute('aria-checked')===String(!initial),'margin changed but its visible checkbox stayed stale');
@@ -1541,45 +2155,55 @@ try{
   });
   await test('Selecting Margin updates the independent comment-area checkbox in the same open menu',async()=>{
     const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;await reader.setMarginCommentArea(false);
-    button(p.root,'文档与工作区设置').click();const pane=p.root.querySelector<HTMLElement>('[aria-label="Document - More"]')!;assert(button(pane,'Margin Comment Area').getAttribute('aria-checked')==='false','fixture should start without a margin area');
+    button(p.root,'文档与工作区设置').click();const pane=p.root.querySelector<HTMLElement>('[aria-label="文档 - 更多"]')!;assert(button(pane,'Margin Comment Area').getAttribute('aria-checked')==='false','fixture should start without a margin area');
     button(pane,'Margin').click();await until(()=>reader.getExtendMode()==='margin'&&!button(pane,'Margin').disabled,'Margin mode did not settle');
     assert(reader.getMarginCommentArea()&&button(pane,'Margin Comment Area').getAttribute('aria-checked')==='true','Margin enabled the area but left its menu unchecked');
   });
+  await test('MN5 返回/前进 walk the reader navigation history through 文档 - 更多',async()=>{
+    const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;await reader.renderPage(1);
+    const open=()=>{button(p.root,'文档与工作区设置').click();return p.root.querySelector<HTMLElement>('[aria-label="文档 - 更多"]')!;};
+    let pane=open();assert(button(pane,'返回').disabled,'返回 was enabled without history');
+    await reader.navigateToReference(3,[],undefined,false);await frame();
+    pane=open();assert(!button(pane,'返回').disabled,'返回 stayed disabled after navigating');
+    button(pane,'返回').click();await until(()=>reader.getCurrentPage()===1,'返回 did not restore the previous page');
+    pane=open();assert(!button(pane,'前进').disabled,'前进 stayed disabled after going back');
+    button(pane,'前进').click();await until(()=>reader.getCurrentPage()===3,'前进 did not restore the next page');
+  });
   await test('Document More keeps notebook, board and saved document-tab actions separate from workspace management',async()=>{
     const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;
-    const open=()=>{button(p.root,'文档与工作区设置').click();return p.root.querySelector<HTMLElement>('[aria-label="Document - More"]')!;};
+    const open=()=>{button(p.root,'文档与工作区设置').click();return p.root.querySelector<HTMLElement>('[aria-label="文档 - 更多"]')!;};
     let pane=open();const labels=[...pane.querySelectorAll<HTMLButtonElement>('button')].map(row=>row.getAttribute('aria-label'));
-    assert(labels.join('|')==='目录|缩略图|书签|手写标注|卡片|Add Bookmark|Edit PDF Pages|Crop|Go to Page|Document Notebooks|Card Grouping Board|Normal|Margin|Collapse|Margin Comment Area|Audio & Video|录制语音批注|朗读控制|Read Settings|Show Document Tabs','supported document actions differ from the observed relative order or contain workspace management');
-    button(pane,'Document Notebooks').click();assert(document.querySelector('.ms-document-notebook-modal'),'notebook menu action did not open its real manager');document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
-    button(p.root,'复习卡组').click();button(open(),'Card Grouping Board').click();assert(p.root.dataset.auxiliary==='cards'&&p.root.querySelector('.ms-card-board'),'board action did not display Cards');
+    assert(labels.join('|')==='目录|缩略图|书签|标注|卡片|添加书签|编辑PDF页面|裁边|转到指定页码|回源|摘录与手写工具|合并到另一份文档…|返回|前进|文档笔记本|卡片分组看板|Normal|Margin|Collapse|Margin Comment Area|Audio & Video|录制语音批注|朗读控制|翻译|阅读设置|Show Document Tabs','supported document actions differ from the observed relative order or contain workspace management');
+    button(pane,'文档笔记本').click();assert(document.querySelector('.ms-document-notebook-modal'),'notebook menu action did not open its real manager');document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
+    button(p.root,'复习卡组').click();button(open(),'卡片分组看板').click();assert(p.root.dataset.auxiliary==='cards'&&p.root.querySelector('.ms-card-board'),'board action did not display Cards');
     reader.gotoPage(2);await until(()=>Number((reader.getState() as any).position.page)===2,'page 2 did not settle');const before=reader.getState();
     pane=open();button(pane,'Show Document Tabs').click();assert(p.root.dataset.tabs==='false'&&pane.isConnected,'tab visibility did not change with the menu still open');await p.store.flush();const reopened=new Store(p.store.host);await reopened.load();assert(reopened.getWorkspaceState().showTabs===false,'hidden document tabs were not persisted');
     const show=button(open(),'Show Document Tabs');assert(show.getAttribute('aria-checked')==='false','hidden tabs still display a checked option');show.click();assert(p.root.dataset.tabs==='true'&&JSON.stringify(reader.getState())===JSON.stringify(before),'showing tabs changed the reading state');
-    await p.view.openFile(p.alpha);pane=open();assert(![...pane.querySelectorAll('button')].some(row=>row.textContent==='Go to Page'||row.textContent==='Add Bookmark'),'fixed-page actions leaked into flowing HTML');
+    await p.view.openFile(p.alpha);pane=open();assert(![...pane.querySelectorAll('button')].some(row=>row.textContent==='转到指定页码'||row.textContent==='添加书签'),'fixed-page actions leaked into flowing HTML');
     layoutMenu(p);assert(document.querySelector('#test-menu')?.textContent?.includes('阅读与批注的全部工具'),'workspace management lost the previous tools');
   });
   await test('Document More Crop opens the eight-handle PDF sheet and cancelling leaves the reader and source annotations untouched',async()=>{
     const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;
     await until(()=>reader.isFittedToWidth(),'initial PDF fitting did not settle');
     const before=JSON.stringify(reader.getState()),annotations=JSON.stringify(await p.store.loadAnnotations(p.delta.path));
-    button(p.root,'文档与工作区设置').click();button(p.root.querySelector('[aria-label="Document - More"]')!,'Crop').click();
+    button(p.root,'文档与工作区设置').click();button(p.root.querySelector('[aria-label="文档 - 更多"]')!,'裁边').click();
     await until(()=>document.querySelector('.ms-crop-modal'),'Crop did not open');assert(document.querySelectorAll('.ms-crop-handle').length===8,'Crop has the wrong handle count');
     document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
     assert(!document.querySelector('.ms-crop-modal')&&JSON.stringify(reader.getState())===before&&JSON.stringify(await p.store.loadAnnotations(p.delta.path))===annotations,'cancelled Crop changed source state '+JSON.stringify({before:JSON.parse(before),after:reader.getState(),modal:!!document.querySelector('.ms-crop-modal'),annotations:JSON.stringify(await p.store.loadAnnotations(p.delta.path))===annotations}));
-    await p.view.openFile(p.alpha);button(p.root,'文档与工作区设置').click();assert(!p.root.querySelector('[aria-label="Document - More"] [aria-label="Crop"]'),'Crop leaked to flowing HTML');
+    await p.view.openFile(p.alpha);button(p.root,'文档与工作区设置').click();assert(!p.root.querySelector('[aria-label="文档 - 更多"] [aria-label="裁边"]'),'裁边 leaked to flowing HTML');
   });
   await test('Document More Edit PDF Pages opens page controls and Escape exits without changing paper or annotations',async()=>{
     const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;
     await until(()=>reader.isFittedToWidth(),'PDF fitting did not settle');const before=JSON.stringify(reader.getState()),annotations=JSON.stringify(await p.store.loadAnnotations(p.delta.path));
-    button(p.root,'文档与工作区设置').click();button(p.root.querySelector('[aria-label="Document - More"]')!,'Edit PDF Pages').click();
+    button(p.root,'文档与工作区设置').click();button(p.root.querySelector('[aria-label="文档 - 更多"]')!,'编辑PDF页面').click();
     assert(reader.getScrollContainer().querySelectorAll('.ms-pdf-page-editor').length===reader.getDoc().numPages,'page editor did not cover the PDF pages');
     document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
     assert(!document.querySelector('.ms-pdf-page-editor')&&JSON.stringify(reader.getState())===before&&JSON.stringify(await p.store.loadAnnotations(p.delta.path))===annotations,'closing page editor changed reader data');
-    await p.view.openFile(p.alpha);button(p.root,'文档与工作区设置').click();assert(!p.root.querySelector('[aria-label="Document - More"] [aria-label="Edit PDF Pages"]'),'PDF editing leaked to flowing text');
+    await p.view.openFile(p.alpha);button(p.root,'文档与工作区设置').click();assert(!p.root.querySelector('[aria-label="文档 - 更多"] [aria-label="编辑PDF页面"]'),'PDF editing leaked to flowing text');
   });
   await test('Document More page jump submits a valid page and keeps invalid or cancelled input from changing another reader',async()=>{
     const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;
-    const open=()=>{button(p.root,'文档与工作区设置').click();button(p.root.querySelector('[aria-label="Document - More"]')!,'Go to Page').click();const dialog=document.querySelector<HTMLElement>('[role="dialog"][aria-label="Go to Page"]');assert(dialog,'Go to Page did not open its page dialog');return dialog!;};
+    const open=()=>{button(p.root,'文档与工作区设置').click();button(p.root.querySelector('[aria-label="文档 - 更多"]')!,'转到指定页码').click();const dialog=document.querySelector<HTMLElement>('[role="dialog"][aria-label="Go to Page"]');assert(dialog,'Go to Page did not open its page dialog');return dialog!;};
     const enter=(dialog:HTMLElement,value:string)=>{const input=dialog.querySelector<HTMLInputElement>('input')!;input.value=value;input.dispatchEvent(new Event('input',{bubbles:true}));return input;};
     let dialog=open();enter(dialog,'2').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));
     await until(()=>Number((reader.getState() as any).position.page)===2&&!dialog.isConnected,'valid page Enter did not navigate and close');
@@ -1591,18 +2215,18 @@ try{
   await test('Document More anchors to its document button and changes the current-page bookmark action after adding and removing',async()=>{
     const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;
     reader.gotoPage(2);await until(()=>Number((reader.getState() as any).position.page)===2,'PDF page did not settle');
-    const open=()=>{button(p.root,'文档与工作区设置').click();const pane=p.root.querySelector<HTMLElement>('[aria-label="Document - More"]');assert(pane,'Document button did not open the original-style Document - More pane');return pane!;};
+    const open=()=>{button(p.root,'文档与工作区设置').click();const pane=p.root.querySelector<HTMLElement>('[aria-label="文档 - 更多"]');assert(pane,'Document button did not open the original-style 文档 - 更多 pane');return pane!;};
     let pane=open();const anchor=button(p.root,'文档与工作区设置').getBoundingClientRect(),bounds=pane.getBoundingClientRect();
     assert(bounds.top>=anchor.bottom&&anchor.left+anchor.width/2>=bounds.left&&anchor.left+anchor.width/2<=bounds.right,'Document More is anchored away from its document button');
-    button(pane,'Add Bookmark').click();await until(()=>reader.getPageRecord(2)!.wrapper.classList.contains('ms-page-bookmarked'),'Add Bookmark did not mark the current page');
+    button(pane,'添加书签').click();await until(()=>reader.getPageRecord(2)!.wrapper.classList.contains('ms-page-bookmarked'),'Add Bookmark did not mark the current page');
     assert(!reader.getPageRecord(1)!.wrapper.classList.contains('ms-page-bookmarked'),'bookmark action affected a different page');
-    pane=open();assert(![...pane.querySelectorAll('button')].some(row=>row.textContent==='Add Bookmark'),'bookmarked page retained Add Bookmark');button(pane,'Remove Bookmark').click();
+    pane=open();assert(![...pane.querySelectorAll('button')].some(row=>row.textContent==='添加书签'),'bookmarked page retained 添加书签');button(pane,'删除书签').click();
     await until(()=>!reader.getPageRecord(2)!.wrapper.classList.contains('ms-page-bookmarked'),'Remove Bookmark did not clear the current page');
-    button(open(),'Add Bookmark');assert(p.store.cards.length===2&&p.store.nodes.length===3,'bookmark menu changed learning cards');
+    button(open(),'添加书签');assert(p.store.cards.length===2&&p.store.nodes.length===3,'bookmark menu changed learning cards');
   });
   await test('A fitted PDF spread returns to its previous fitted scale after a narrow navigation pane closes',async()=>{
     const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;
-    await reader.setPageLayout('spread',true);reader.fitWidth();
+    await reader.setPageLayout('single',false);await reader.setPageLayout('spread',false);reader.fitWidth();
     const width=()=>reader.getPageRecord(1)!.wrapper.getBoundingClientRect().width+reader.getPageRecord(2)!.wrapper.getBoundingClientRect().width;
     await until(()=>Math.abs(width()+p.store.settings.pageGap-reader.getScrollContainer().clientWidth)<4,'initial spread width did not settle');const before=reader.getScale();
     button(p.root,'文档目录与书签').click();await frame();await wait(40);
@@ -1688,7 +2312,7 @@ try{
     assert(!nav.querySelector('[data-card-id="extra-extend-card"]'),'Extend card without an annotation leaked from another notebook');
     assert(!nav.querySelector('[data-card-id="beta-card"]'),'another document leaked into the source cards');
     button(nav,'Alpha anchor').click();await until(()=>annotation(p).classList.contains('ms-ann-flash'),'document card did not locate its saved source annotation');
-    button(p.root.querySelector('[aria-label="书页查找方式"]')!,'手写标注').click();
+    button(p.root.querySelector('[aria-label="书页查找方式"]')!,'标注').click();
     await until(()=>nav.querySelectorAll('[data-annotation-id]').length===2,'annotation list did not isolate saved ink and free text');
     const text=nav.querySelector<HTMLElement>('[data-annotation-id="nav-text"]')!;
     assert(text.textContent?.includes('Navigation rich note')&&getComputedStyle(text.querySelector('span')!).fontWeight==='700','annotation preview lost saved rich styling');
@@ -1713,13 +2337,13 @@ try{
     const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;
     await reader.setEditableOutline([{id:'a',title:'First',page:1,level:0},{id:'b',title:'Last',page:3,level:0}]);
     button(p.root,'文档目录与书签').click();const nav=p.root.querySelector<HTMLElement>('[aria-label="书页查找"]')!;
-    await until(()=>nav.querySelector('[aria-label="First"]'),'TOC missing');button(nav,'Edit').click();await until(()=>nav.querySelector('[aria-label="选择目录 Last"]'),'edit selectors missing');
+    await until(()=>nav.querySelector('[aria-label="First"]'),'TOC missing');button(nav,'编辑').click();await until(()=>nav.querySelector('[aria-label="选择目录 Last"]'),'edit selectors missing');
     (nav.querySelector('[aria-label="选择目录 Last"]') as HTMLInputElement).click();button(nav,'Indent').click();await until(()=>p.store.getDocMeta(p.delta.path).documentOutline?.[1].level===1,'indent did not persist');
     await until(()=>nav.querySelector('[aria-label="Last"]'),'indent refresh did not finish');button(nav,'Last').click();const dialog=document.querySelector('.ms-modal-bg')!,input=dialog.querySelector<HTMLInputElement>('[aria-label="目录标题"]')!;input.value='Renamed';button(dialog,'OK').click();await until(()=>nav.querySelector('[aria-label="Renamed"]'),'rename did not refresh');
     button(nav,'Outdent').click();await until(()=>p.store.getDocMeta(p.delta.path).documentOutline?.[1].level===0,'outdent failed');await frame();
     await until(()=>nav.querySelector('[aria-label="Renamed"]'),'outdent redraw unfinished');button(nav,'Renamed').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowUp',altKey:true,bubbles:true}));await until(()=>p.store.getDocMeta(p.delta.path).documentOutline?.[0].id==='b','keyboard reorder failed');await frame();
     button(nav,'Delete').click();await until(()=>!nav.querySelector('[aria-label="Renamed"]'),'delete failed');await reader.undoLastEdit();await until(()=>nav.querySelector('[aria-label="Renamed"]'),'undo did not restore deleted TOC');
-    button(nav,'Done').click();await until(()=>!nav.querySelector('input[type="checkbox"]'),'Done did not exit editor');button(nav,'Renamed').click();await until(()=>(reader.getState() as any).position.page===3,'edited TOC targets wrong page');
+    button(nav,'完成').click();await until(()=>!nav.querySelector('input[type="checkbox"]'),'Done did not exit editor');button(nav,'Renamed').click();await until(()=>(reader.getState() as any).position.page===3,'edited TOC targets wrong page');
   });
   await test('Converting a PDF TOC creates a linked hierarchy in one undoable operation',async()=>{
     const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;
@@ -1818,7 +2442,7 @@ try{
     assert(nav&&nav.getBoundingClientRect().width>100,'book button did not open an in-reader navigation pane');
     assert(!p.root.querySelector('[role="dialog"]'),'book button still opens the old tools dialog');
     const tabs=p.root.querySelector('[aria-label="书页查找方式"]')!;
-    assert([...tabs.querySelectorAll('[role="tab"]')].map(item=>item.getAttribute('aria-label')).join(',')==='目录,缩略图,书签,手写标注,卡片','navigation tab order differs from native reference');
+    assert([...tabs.querySelectorAll('[role="tab"]')].map(item=>item.getAttribute('aria-label')).join(',')==='目录,缩略图,书签,标注,卡片','navigation tab order differs from native reference');
     assert(tabs.querySelector('[role="tab"][aria-selected="true"]')?.getAttribute('aria-label')==='目录','contents is not initially selected');
     button(p.root,'文档目录与书签').click();assert(!p.root.querySelector('[aria-label="书页查找"]'),'book button did not close navigation');
   });
@@ -1985,9 +2609,9 @@ try{
     assert(p.metrics.opens.length===0&&q.metrics.opens.length===0,'document selection echoed into source opening');
   });
   await test('Submap collapse and expand use the node menu while preserving the ordinary collapsed flag',async()=>{
-    const p=await fresh(),before=JSON.stringify(p.store.nodes);mapCard(p,'parent').click();await frame();const toolbar=p.root.querySelector<HTMLElement>('.ms-node-toolbar')!;assert(toolbar.checkVisibility(),'parent selection did not expose node actions');button(toolbar,'更多').click();button(document.querySelector('#test-menu')!,'折叠为子脑图').click();
+    const p=await fresh(),before=JSON.stringify(p.store.nodes);mapCard(p,'parent').click();await frame();const toolbar=p.root.querySelector<HTMLElement>('.ms-node-toolbar')!;assert(toolbar.checkVisibility(),'parent selection did not expose node actions');button(toolbar,'更多').click();button(document.querySelector('#test-menu')!,'塌缩成子脑图').click();
     const submapId=p.store.getNode('parent')?.submapId;assert(submapId&&p.store.canvases.find(canvas=>canvas.id===p.store.activeCanvasId)?.submaps?.some(submap=>submap.id===submapId&&submap.rootNodeId==='parent'),'submap collapse did not create an independent identity');
-    assert(p.store.getNode('parent')?.submap===true&&p.store.getNode('parent')?.collapsed===true&&!mapCard(p,'anchor-node'),'submap collapse changed collapsed or left descendants visible');button(toolbar,'更多').click();button(document.querySelector('#test-menu')!,'展开子脑图').click();assert(p.store.getNode('parent')?.submap===false&&p.store.getNode('parent')?.submapId===submapId&&p.store.getNode('parent')?.collapsed===true,'submap expansion changed identity or collapsed history');const after=p.store.nodes.map(node=>{const copy=structuredClone(node);delete (copy as any).submap;delete (copy as any).submapId;return copy});const initial=JSON.parse(before).map((node:any)=>{delete node.submap;delete node.submapId;return node});assert(JSON.stringify(after)===JSON.stringify(initial),'submap UI changed unrelated node fields');
+    assert(p.store.getNode('parent')?.submap===true&&p.store.getNode('parent')?.collapsed===true&&!mapCard(p,'anchor-node'),'submap collapse changed collapsed or left descendants visible');button(toolbar,'更多').click();cardMore(document.querySelector('#test-menu')!,'展开子脑图').click();assert(p.store.getNode('parent')?.submap===false&&p.store.getNode('parent')?.submapId===submapId&&p.store.getNode('parent')?.collapsed===true,'submap expansion changed identity or collapsed history');const after=p.store.nodes.map(node=>{const copy=structuredClone(node);delete (copy as any).submap;delete (copy as any).submapId;return copy});const initial=JSON.parse(before).map((node:any)=>{delete node.submap;delete node.submapId;return node});assert(JSON.stringify(after)===JSON.stringify(initial),'submap UI changed unrelated node fields');
   });
   await test('Document linkage highlights the map without opening its action bar and direct map selection restores actions',async()=>{
     const p=await fresh();p.store.updateNode('parent',{collapsed:false});p.view.refresh(true);await frame();
@@ -2018,7 +2642,7 @@ try{
     const p=await fresh();button(p.root,'显示或隐藏学习集列表').click();assert(p.root.dataset.library==='true'&&p.root.querySelectorAll('.ms-workspace-document').length===5,'library toggle/list mismatch');
     button(p.root,'隐藏文档').click();assert(p.root.dataset.reader==='false'&&p.root.dataset.mindmap==='true','reader hide failed');button(p.root,'隐藏脑图').click();assert(p.root.dataset.reader==='true'&&p.root.dataset.mindmap==='false','both main panes became hidden');
     button(p.root,'显示或隐藏脑图').click();assert(p.root.dataset.mindmap==='true','MindMap control did not restore map');
-    button(p.root,'卡片列表').click();assert(p.root.dataset.auxiliary==='none'&&!p.root.querySelector('.ms-workspace-auxiliary .ms-card-board'),'Cards toggle did not dispose board');assert(!p.root.querySelector('[aria-label="卡片列表"]')&&!p.root.querySelector('[aria-label="复习卡组"]'),'closed auxiliary retained Cards/Review controls');morePane(p,'Review');assert(p.root.dataset.auxiliary==='review'&&p.root.querySelector('.ms-native-deck-head'),'More menu did not reopen real Review UI');
+    button(p.root,'卡片列表').click();assert(p.root.dataset.auxiliary==='none'&&!p.root.querySelector('.ms-workspace-auxiliary .ms-card-board'),'Cards toggle did not dispose board');assert(!p.root.querySelector('[aria-label="卡片列表"]')&&!p.root.querySelector('[aria-label="复习卡组"]'),'closed auxiliary retained Cards/Review controls');morePane(p,'复习');assert(p.root.dataset.auxiliary==='review'&&p.root.querySelector('.ms-native-deck-head'),'More menu did not reopen real Review UI');
     button(p.root,'关闭复习面板').click();assert(p.root.dataset.auxiliary==='none','review close did not hide pane');
   });
   await test('Document left, right and bottom placement changes actual pane geometry; reset retains tabs',async()=>{
@@ -2219,7 +2843,7 @@ try{
     assert(scroll.scrollLeft===priorScroll.left&&scroll.scrollTop===priorScroll.top,'render recalculation reset or jumped the user view');
     assert(JSON.stringify(ink())===priorInk&&JSON.stringify(p.store.nodes.slice(0,-1))===priorNodes&&new Set(p.store.nodes.map(item=>item.id)).size===p.store.nodes.length,'render recalculation changed, reordered or duplicated map content or ink');
     assert(graph.querySelector('.ms-node[data-id="g10-far-node"]')&&scroll.scrollWidth-scroll.clientWidth>=scroll.clientWidth*.5,'render recalculation did not extend canvas for far content');
-    const resetNodes=JSON.stringify(p.store.nodes),resetInk=JSON.stringify(ink());button(graph,'选择脑图').click();button(document.querySelector('#test-menu')!,'脑图工具与设置…').click();button(document.querySelector('.ms-modal')!,'适应').click();await frame();
+    const resetNodes=JSON.stringify(p.store.nodes),resetInk=JSON.stringify(ink());button(graph,'选择脑图').click();button(document.querySelector('#test-menu')!,'管理脑图').click();button(document.querySelector('.ms-modal')!,'适应').click();await frame();
     const resetBounds=world.getBoundingClientRect(),resetViewport=scroll.getBoundingClientRect();
     assert(Math.abs(mindmapScale(world)-1)<1e-6&&scroll.scrollLeft>0&&scroll.scrollTop>0,'reset did not restore scale and a two-way inset view');
     assert(resetBounds.left-resetViewport.left>=40&&resetBounds.top-resetViewport.top>=40,'reset returned the map to the top-left corner');
@@ -2260,7 +2884,7 @@ try{
     const p=await fresh(),graph=p.root.querySelector('.ms-mindmap-root') as HTMLElement,world=p.root.querySelector('.ms-mindmap-world') as HTMLElement,transform=world.style.transform;
     button(graph,'大纲').click();const floating=graph.querySelector('.ms-map-floating-panel') as HTMLElement;assert(floating,'floating map panel missing');
     const floatingWheel=new WheelEvent('wheel',{bubbles:true,cancelable:true,ctrlKey:true,deltaY:-80}),floatingAccepted=floating.dispatchEvent(floatingWheel);
-    button(graph,'选择脑图').click();button(document.querySelector('#test-menu')!,'脑图工具与设置…').click();const input=document.querySelector('.ms-modal .ms-native-tools-menu .ms-mm-search') as HTMLInputElement;assert(input,'map toolbar input missing');
+    button(graph,'选择脑图').click();button(document.querySelector('#test-menu')!,'管理脑图').click();const input=document.querySelector('.ms-modal .ms-native-tools-menu .ms-mm-search') as HTMLInputElement;assert(input,'map toolbar input missing');
     const inputWheel=new WheelEvent('wheel',{bubbles:true,cancelable:true,metaKey:true,deltaY:-80}),inputAccepted=input.dispatchEvent(inputWheel);await frame();
     assert(floatingAccepted&&!floatingWheel.defaultPrevented&&inputAccepted&&!inputWheel.defaultPrevented,'map overlay or form control wheel was claimed by the canvas');
     assert(world.style.transform===transform,'overlay or form-control wheel changed map scale');
@@ -2286,7 +2910,7 @@ try{
     p.store.updateCard('anchor-card',{front:'Latest shared content'});p.view.refresh(true);assert(graph.querySelector('.ms-map-floating-panel')!.textContent!.includes('Latest shared content'),'floating board retained stale external content');
   });
   await test('Main menu retains a real drawing card and saves one undoable image card',async()=>{
-    const p=await fresh();const cards=p.store.cards.length,nodes=p.store.nodes.length;button(p.root.querySelector('.ms-mindmap-root')!,'选择脑图').click();button(document.querySelector('#test-menu')!,'新建手绘卡片…').click();const modal=document.querySelector('.ms-modal')!;assert(modal?.querySelector('h3')?.textContent==='手绘卡片','map drawing card was routed to the document pen');
+    const p=await fresh();const cards=p.store.cards.length,nodes=p.store.nodes.length;button(p.root.querySelector('.ms-mindmap-root')!,'选择脑图').click();button(document.querySelector('#test-menu')!,'管理脑图').click();button(document.querySelector('.ms-modal')!,'新建手绘卡片…').click();const modal=document.querySelector('.ms-modal')!;assert(modal?.querySelector('h3')?.textContent==='手绘卡片','map drawing card was routed to the document pen');
     const canvas=modal.querySelector('canvas')!;assert(canvas,'drawing canvas missing');const bounds=canvas.getBoundingClientRect();pointer(canvas,'pointerdown',bounds.left+30,bounds.top+30);pointer(canvas,'pointermove',bounds.left+90,bounds.top+55);pointer(canvas,'pointerup',bounds.left+90,bounds.top+55);button(modal,'添加到脑图').click();
     const added=p.store.cards.find(card=>!['anchor-card','beta-card'].includes(card.id));assert(p.store.cards.length===cards+1&&p.store.nodes.length===nodes+1&&added?.image?.startsWith('data:image/png'),'drawing was not stored as an independent image card/node');
     assert(p.store.undoLibraryChange()&&p.store.cards.length===cards&&p.store.nodes.length===nodes,'handwriting creation needed more than one undo');
@@ -2363,7 +2987,7 @@ try{
     const expected=JSON.stringify(annotations);reader.undoLastEdit();assert((await p.store.loadAnnotations(p.delta.path)).map(ann=>ann.id).join(',')==='later-pdf-note','PDF Undo removed an unrelated note or retained empty ink');
     reader.redoLastEdit();assert(JSON.stringify(await p.store.loadAnnotations(p.delta.path))===expected,'PDF Redo changed order, identity, metadata, coordinates or pressure');await p.store.flush();
     const persisted=new Store({app:p.app,loadData:async()=>({}),saveData:async()=>{}} as any);await persisted.load();assert(JSON.stringify(await persisted.loadAnnotations(p.delta.path))===expected,'PDF restored pen did not survive a fresh Store load');
-    await p.view.closeTab(p.delta.path);await p.view.openFile(p.delta);await (p.view.getReader() as ReaderView).renderPage(1);assert(p.root.querySelector('.ms-workspace-reader .ms-pen-render path'),'PDF restored pen did not render on reader reopen');
+    await p.view.closeTab(p.delta.path);await p.view.openFile(p.delta);await (p.view.getReader() as ReaderView).renderPage(1);const raster=p.root.querySelector<HTMLCanvasElement>('.ms-workspace-reader .ms-ink-raster');assert(raster&&raster.getContext('2d')!.getImageData(0,0,raster.width,raster.height).data.some((value,index)=>index%4===3&&value>0),'PDF restored pen did not render on reader reopen');
   });
   await test('Top Undo finishes an active page-text draft before undoing its saved edit',async()=>{
     const p=await fresh();button(p.root,'文字批注').click();const body=(p.view.getReader() as DocumentReaderView).getBodyEl(),box=body.getBoundingClientRect();pointer(body,'pointerdown',box.left+35,box.top+55);body.dispatchEvent(new MouseEvent('click',{clientX:box.left+35,clientY:box.top+55,bubbles:true,cancelable:true}));
@@ -2641,7 +3265,7 @@ try{
   await test('The study library identifies the current set and lists only its ordinary mindmaps alongside its documents',async()=>{
     const p=await fresh(),second=p.store.createCanvas(p.set.id,'Chapter map');p.view.refresh(true);button(p.root,'显示或隐藏学习集列表').click();
     const library=p.root.querySelector('.ms-workspace-library')!;
-    assert(library.textContent?.includes('Workspace audit')&&library.textContent.includes('MindMaps')&&library.textContent.includes('Documents'),'library omitted the study-set tree structure');
+    assert(library.textContent?.includes('Workspace audit')&&library.textContent.includes('脑图')&&library.textContent.includes('文档'),'library omitted the study-set tree structure');
     assert(library.querySelectorAll('.ms-workspace-canvas').length===2,'ordinary maps were not listed');
     button(library,'打开脑图：Chapter map').click();assert(p.store.activeCanvasId===second.id,'library map selection did not activate the selected map');
     assert(library.querySelector('[aria-current="true"].ms-workspace-canvas')?.textContent==='Chapter map','selected map is not identified');
@@ -2683,12 +3307,12 @@ try{
   });
   await test('Scene header and Cards provide reachable touch controls at narrow widths',async()=>{
     const p=await fresh();p.store.setStudyInterface(p.set.id,'scenes');p.view.refresh(true);for(const width of [380,800,1200]){p.view.containerEl.style.width=width+'px';await frame();const toggle=button(p.root,'工作区工具'),box=toggle.getBoundingClientRect(),root=p.root.getBoundingClientRect();assert(toggle.textContent==='⋯'&&box.width>=30&&box.left>=root.left&&box.right<=root.right,'more button is not visible within the header at '+width);const hit=document.elementFromPoint(box.left+box.width/2,box.top+box.height/2);assert(hit===toggle||toggle.contains(hit),'more button is covered at '+width);}
-    const close=button(p.root,'关闭卡片面板');assert(close.checkVisibility(),'Cards close button missing');close.click();await frame();assert(p.root.dataset.auxiliary==='none','Cards close button did not close the panel');button(p.root,'工作区工具').click();await frame();button(p.root,'学习集更多设置').click();button(p.root.querySelector('[aria-label="StudySet - More"]')!,'Cards').click();await frame();assert(p.root.dataset.auxiliary==='cards'&&button(p.root,'关闭卡片面板').checkVisibility(),'Cards could not be reopened');
+    const close=button(p.root,'关闭卡片面板');assert(close.checkVisibility(),'Cards close button missing');close.click();await frame();assert(p.root.dataset.auxiliary==='none','Cards close button did not close the panel');button(p.root,'工作区工具').click();await frame();button(p.root,'学习集更多设置').click();button(p.root.querySelector('[aria-label="学习集"]')!,'卡片').click();await frame();assert(p.root.dataset.auxiliary==='cards'&&button(p.root,'关闭卡片面板').checkVisibility(),'Cards could not be reopened');
   });
   await test('A05 template manager copies and edits a scene without changing its source',async()=>{
     const p=await fresh();p.store.setStudyInterface(p.set.id,'scenes');p.view.refresh(true);await frame();
     const before=structuredClone(p.store.getSceneTemplates().find((item:any)=>item.id==='standard'));
-    button(p.root,'场景模板：标准').click();button(p.root,'管理场景模板…').click();
+    button(p.root,'场景模板：标准').click();button(document.querySelector('#test-menu')!,'更多场景模板…').click();
     const manager=()=>p.root.querySelector<HTMLElement>('[aria-label="场景模板管理"]')!;
     button(manager(),'复制标准').click();await frame();
     const editor=p.root.querySelector<HTMLElement>('[aria-label="编辑场景模板"]')!;assert(editor,'template editor missing');
@@ -2711,7 +3335,7 @@ try{
   });
   await test('A05 template manager confirms deletion and refreshes active selection',async()=>{
     const p=await fresh();const template=p.store.copySceneTemplate('standard');p.store.selectStudyScene(p.set.id,template.id,'handwriting');p.view.refresh(true);await frame();
-    button(p.root,'场景模板：'+template.name).click();button(p.root,'管理场景模板…').click();
+    button(p.root,'场景模板：'+template.name).click();button(document.querySelector('#test-menu')!,'更多场景模板…').click();
     const manager=()=>p.root.querySelector<HTMLElement>('[aria-label="场景模板管理"]')!;
     assert(![...manager().querySelectorAll('button')].some(item=>item.textContent==='删除标准'),'built-in delete is visible');
     button(manager(),'删除'+template.name).click();
@@ -2722,11 +3346,11 @@ try{
     assert(!p.store.getSceneTemplates().some((item:any)=>item.id===template.id)&&p.store.getStudyScene(p.set.id)?.templateId==='standard','active template was not deleted and reset');
     assert(!manager().textContent?.includes(template.name),'manager still shows deleted template');
     button(p.root,'场景模板：标准').click();
-    assert(!p.root.querySelector('[aria-label="StudySet - More"]')?.textContent?.includes('场景模板：'+template.name),'template remains in chooser');
+    assert(!document.querySelector('#test-menu')?.textContent?.includes(template.name),'template remains in chooser');
   });
   await test('A26 installs built-in field templates through A05 and applies them in a card',async()=>{
     const p=await fresh();p.store.setStudyInterface(p.set.id,'scenes');p.view.refresh(true);await frame();
-    button(p.root,'场景模板：标准').click();button(p.root,'管理场景模板…').click();
+    button(p.root,'场景模板：标准').click();button(document.querySelector('#test-menu')!,'更多场景模板…').click();
     const manager=()=>p.root.querySelector<HTMLElement>('[aria-label="场景模板管理"]')!;
     for(const name of ['刷题卡片','外刊生词'])for(let count=0;count<3;count++)button(manager(),'安装'+name).click();
     const fields=(id:string)=>p.store.getCardTemplates().find(item=>item.id===id)?.fields?.join('|');
@@ -2783,7 +3407,7 @@ try{
     await closeAll();const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;
     await reader.setEditableOutline([{id:'drag-first',title:'Drag first',page:1,level:0},{id:'drag-last',title:'Drag last',page:3,level:0}]);
     button(p.root,'文档目录与书签').click();const nav=p.root.querySelector<HTMLElement>('[aria-label="书页查找"]')!;
-    await until(()=>nav.querySelector('[aria-label="Drag first"]'),'drag scene missing');button(nav,'Edit').click();await until(()=>nav.querySelector('[aria-label="拖动目录 Drag last"]'),'drag handle missing');await frame();
+    await until(()=>nav.querySelector('[aria-label="Drag first"]'),'drag scene missing');button(nav,'编辑').click();await until(()=>nav.querySelector('[aria-label="拖动目录 Drag last"]'),'drag handle missing');await frame();
   };
   (window as any).showWheelScrollScene=async()=>{
     await closeAll();const p=await fresh(),scroll=p.root.querySelector('.ms-mindmap') as HTMLElement,world=p.root.querySelector('.ms-mindmap-world') as HTMLElement;
@@ -2922,7 +3546,22 @@ try{
     window.dispatchEvent(new KeyboardEvent('keydown',{key:'˚',code:'KeyK',metaKey:true,altKey:true,bubbles:true,cancelable:true}));await frame();
     assert(tool('continuous-excerpt').getAttribute('aria-pressed')==='true'&&p.root.textContent?.includes('连续摘录中 · 0 段'),'shortcut did not start continuous excerpt');
     button(p.root,'完成连续摘录').click();await frame();assert(tool('continuous-excerpt').getAttribute('aria-pressed')==='false','finish did not reset entry');
-    button(p.root,'学习集更多设置').click();await frame();button(p.root,'场景模板：读写忆（样例）').click();await frame();
+    const reader=p.view.getReader() as ReaderView,originalGet=reader.getContinuousExcerpt.bind(reader);let count=1;
+    reader.getContinuousExcerpt=()=>({...originalGet(),count});
+    tool('continuous-excerpt').click();await frame();let noticeStart=notices.length;
+    button(p.root,'完成连续摘录').click();await frame();
+    assert(!notices.slice(noticeStart).some(text=>String(text).includes('已合并')),'single excerpt finish showed merge notice');
+    tool('continuous-excerpt').click();await frame();noticeStart=notices.length;
+    tool('continuous-excerpt').click();await frame();
+    assert(!notices.slice(noticeStart).some(text=>String(text).includes('已合并')),'single excerpt toolbar close showed merge notice');
+    count=2;tool('continuous-excerpt').click();await frame();noticeStart=notices.length;
+    tool('continuous-excerpt').click();await frame();
+    assert(notices.slice(noticeStart).includes('已合并 2 段'),'two excerpts toolbar close did not show merge notice');
+    tool('continuous-excerpt').click();await frame();noticeStart=notices.length;
+    button(p.root,'完成连续摘录').click();await frame();
+    assert(notices.slice(noticeStart).includes('已合并 2 段'),'two excerpts finish did not show merge notice');
+    reader.getContinuousExcerpt=originalGet;
+    button(p.root,'场景模板：标准').click();await frame();button(document.querySelector('#test-menu')!,'读写忆（样例）').click();await frame();
     assert(!bar().querySelector('.ms-bottom-scene-capability'),'reading scene exposed internal capability placeholders');
     bar().querySelector<HTMLButtonElement>('.ms-bottom-scene-tab[data-scene-id="writing"]')!.click();await frame();
     for(const id of ['excerpt.text','excerpt.rectangle','excerpt.extend','continuous-excerpt','pen.more'])assert(tool(id),`writing missing ${id}`);

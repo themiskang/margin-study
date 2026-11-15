@@ -8,6 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { build } from "esbuild";
+import { runBrowser } from "../../scripts/ego-harness.mjs";
 
 const exec = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
@@ -41,8 +42,8 @@ const server = createServer(async (request, response) => {
   response.end(await readFile(join(temporary, name)));
 });
 await new Promise((done) => server.listen(0, "127.0.0.1", done));
-const session = (await exec("agent-browser", ["session", "id", "--scope", "worktree", "--prefix", `marginstudy-feature-search-${process.pid}`], { cwd: project })).stdout.trim();
-const browser = (...args) => exec("agent-browser", ["--session", session, ...args.map(String)], { cwd: project, maxBuffer: 4 * 1024 * 1024, timeout: 45000 });
+const session = `marginstudy-feature-search-${process.pid}`;
+const browser = (...args) => runBrowser(session, ...args);
 let failed = false;
 try {
   await browser("open", `http://127.0.0.1:${server.address().port}`);

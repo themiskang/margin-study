@@ -1,0 +1,294 @@
+import { cardCommentImage, openCardInkComment, readCardInkComment, snapshotCard } from '__PROJECT__/src/cards/inkComment';
+import { MarkdownRenderer, notices } from 'obsidian';
+import { Store } from '__PROJECT__/src/model/store';
+import { externalizeMedia, applyMediaReplacements } from '__PROJECT__/src/model/mediaMigration';
+import { nativeReviewStage } from '__PROJECT__/src/review/nativeStage';
+import { cardImages, collapsibleCardComment } from '__PROJECT__/src/review/content';
+import { paintInkStrokes } from '__PROJECT__/src/annot/pen';
+
+(HTMLElement.prototype as any).empty = function () { this.replaceChildren(); };
+(MarkdownRenderer as any).render = async (_app: unknown, text: string, host: HTMLElement) => {
+  if (text.startsWith('FIXED_HEIGHT:')) { const block = document.createElement('div'); block.style.height = `${Number(text.slice(13))}px`; host.append(block); }
+  else if (text === 'SEAM_PATTERN') {
+    for (const [height, color] of [[7975, 'white'], [1, 'red'], [1, 'blue'], [20, 'white']] as const) {
+      const row = document.createElement('div'); row.style.height = `${height}px`; row.style.backgroundColor = color; host.append(row);
+    }
+  }
+  else host.textContent = text;
+};
+const results: any[] = [];
+(window as any).results = results;
+const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+try {
+  const canvas = document.createElement('canvas'); canvas.width = 120; canvas.height = 80;
+  const context = canvas.getContext('2d', { willReadFrequently: true })!;
+  paintInkStrokes(context, [[{ x: .2, y: .5, pressure: .3 }, { x: .8, y: .5, pressure: .8 }]], 120, 80, '#000000', 'pen', 8, 1);
+  const source = canvas.toDataURL('image/png');
+  const card: any = { id: 'perf9b-snapshot', docPath: 'synthetic', front: '', images: [source], tags: [], links: [] };
+  const plugin: any = { app: { vault: { getAbstractFileByPath: () => null, adapter: { getResourcePath: (path: string) => path } } } };
+  const snapshot = await snapshotCard(plugin, card), bitmap = new Image(); bitmap.src = snapshot.image; await bitmap.decode();
+  const result = document.createElement('canvas'); result.width = bitmap.width; result.height = bitmap.height;
+  const output = result.getContext('2d')!; output.drawImage(bitmap, 0, 0);
+  const pixel = output.getImageData(84, 64, 1, 1).data;
+  if (pixel[0] > 30 || pixel[1] > 30 || pixel[2] > 30) throw new Error('整卡截图丢失由 raster 笔迹生成的图片');
+  results.push({ name: 'PERF-9b 整卡截图保留 raster 笔迹图片', passed: true });
+} catch (error) { results.push({ name: 'PERF-9b 整卡截图保留 raster 笔迹图片', passed: false, error: String(error) }); }
+try {
+  let card: any = { id: 'short-save', docPath: 'synthetic', front: '短卡', tags: [], links: [] };
+  const store: any = { settings: {}, getCard: () => card, updateCard: (_id: string, patch: any) => { card = { ...card, ...patch }; }, getLibraryHistoryState: () => ({ revision: 1, canUndo: true }) };
+  const plugin: any = { store, app: { vault: { getAbstractFileByPath: () => null, adapter: { getResourcePath: (path: string) => path } } }, activeReader: null };
+  openCardInkComment(plugin, card.id, 'snapshot');
+  for (let attempt = 0; attempt < 200 && document.querySelector<HTMLButtonElement>('[data-save-card-ink]')?.disabled; attempt++) await wait(25);
+  const modal = document.querySelector('[data-card-ink-editor]')!, drawing = modal.querySelector<HTMLCanvasElement>('canvas[aria-label="卡片批注画布"]')!;
+  const bounds = drawing.getBoundingClientRect();
+  drawing.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 42, pointerType: 'mouse', button: 0, clientX: bounds.left + 150, clientY: bounds.top + 160 }));
+  drawing.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 42, pointerType: 'mouse', button: 0, clientX: bounds.left + 150, clientY: bounds.top + 160 }));
+  modal.querySelector<HTMLButtonElement>('[data-save-card-ink]')!.click();
+  for (let attempt = 0; attempt < 200 && !card.commentMedia; attempt++) await wait(25);
+  const saved = card.commentMedia[0], reopened = await readCardInkComment(plugin, JSON.parse(JSON.stringify(saved)));
+  if (saved.strokes[0].pointsVersion !== 2 || Math.abs(saved.strokes[0].points[0].x - 30) > .01 || Math.abs(saved.strokes[0].points[0].y - 40) > .01 || JSON.stringify(reopened.strokes) !== JSON.stringify(saved.strokes)) throw new Error('短卡保存或重开内容坐标错误');
+  results.push({ name: '短卡保存版本 2 坐标并重开', passed: true });
+} catch (error) { results.push({ name: '短卡保存版本 2 坐标并重开', passed: false, error: String(error) }); }
+try {
+  const canvas = document.createElement('canvas'); canvas.width = 600; canvas.height = 800;
+  const snapshotImage = canvas.toDataURL('image/png');
+  canvas.width = 840; canvas.height = 1040;
+  const compositeImage = canvas.toDataURL('image/png');
+  const media: any = { id: 'migration', kind: 'ink', image: compositeImage, collapsed: false, snapshot: { image: snapshotImage, x: 120 / 840, y: 120 / 1040, width: 600 / 840, height: 800 / 1040, viewScale: 0.5 }, strokes: [{ id: 's', tool: 'pen', color: '#000', width: 3, points: [{ x: 0.25, y: 0.5 }] }] };
+  const original = JSON.stringify(media), host: any = { app: { vault: { getAbstractFileByPath: () => null, adapter: { getResourcePath: (path: string) => path } } } };
+  const migrated = await readCardInkComment(host, media);
+  if (migrated.strokes?.[0].pointsVersion !== 2 || migrated.strokes[0].points[0].x !== 150 || migrated.strokes[0].points[0].y !== 400 || JSON.stringify(media) !== original) throw new Error('旧笔迹读取迁移错误或更改原数据');
+  const rendered = cardCommentImage(host, media), image = rendered.querySelector('img');
+  if (image?.getAttribute('src') !== compositeImage) throw new Error('迁移改变已合成图片');
+  const downloads: string[] = [], originalClick = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function () { downloads.push(this.href); };
+  try {
+    rendered.querySelector<HTMLButtonElement>('button')!.click();
+    for (let attempt = 0; !downloads.length && attempt < 300; attempt++) await wait(50);
+  } finally { HTMLAnchorElement.prototype.click = originalClick; }
+  if (downloads.length !== 1 || downloads[0] !== compositeImage || JSON.stringify(media) !== original) throw new Error('迁移后 PNG 导出变化');
+  results.push({ name: '旧笔迹读取迁移且图片和 PNG 导出不变', passed: true });
+} catch (error) { results.push({ name: '旧笔迹读取迁移且图片和 PNG 导出不变', passed: false, error: String(error) }); }
+try {
+  const media: any = { id: 'legacy', image: '', collapsed: false, parts: [{ image: 'first.png', y: 0, height: 100 }, { image: 'second.png', y: 100, height: 100 }] };
+  const card: any = { commentMedia: [media] };
+  const host: any = { app: { vault: { getAbstractFileByPath: () => null, adapter: { getResourcePath: (path: string) => path } } } };
+  const rendered = cardCommentImage(host, media);
+  if (cardImages(card)[0] !== 'first.png' || collapsibleCardComment(card, 'first.png') !== media || rendered.querySelectorAll('img').length !== 1 || rendered.querySelector('img')?.getAttribute('src') !== 'first.png') throw new Error('只有分段的旧评论未显示首段');
+  results.push({ name: '仅有分段的旧评论显示首段', passed: true });
+} catch (error) { results.push({ name: '仅有分段的旧评论显示首段', passed: false, error: String(error) }); }
+try {
+  const background = document.createElement('div'), modal = document.createElement('div');
+  modal.className = 'ms-modal'; background.append(modal); document.body.append(background);
+  const stage = nativeReviewStage(modal, background, { name: '长卡', count: '1', detail: '', closeLabel: '关闭', onClose: () => {} });
+  const short = document.createElement('div'); short.textContent = '短卡'; stage.content.append(short);
+  if (stage.content.scrollHeight > stage.content.clientHeight + 1) throw new Error('短卡出现滚动');
+  const long = document.createElement('div'); long.style.height = '30000px';
+  const end = document.createElement('div'); end.textContent = '末尾文本';
+  stage.content.replaceChildren(long, end);
+  const grade = document.createElement('button'); grade.textContent = '评分'; stage.footer.append(grade);
+  const height = stage.content.getBoundingClientRect().height, gradeTop = grade.getBoundingClientRect().top;
+  stage.content.scrollTop = stage.content.scrollHeight;
+  if (stage.content.scrollTop < 29000 || end.getBoundingClientRect().bottom > stage.content.getBoundingClientRect().bottom + 2) throw new Error('无法滚动到末尾');
+  if (Math.abs(stage.content.getBoundingClientRect().height - height) > 1 || Math.abs(grade.getBoundingClientRect().top - gradeTop) > 1) throw new Error('卡面高度或评分位置变化');
+  background.remove();
+  results.push({ name: '复习卡面长内容滚动与评分固定，短卡不滚动', passed: true });
+} catch (error) { results.push({ name: '复习卡面长内容滚动与评分固定，短卡不滚动', passed: false, error: String(error) }); }
+try {
+  const snapshot = await snapshotCard({ app: {} } as any, { id: 'seam', docPath: 'synthetic', front: 'SEAM_PATTERN', tags: [], links: [] } as any);
+  const colors: number[][] = [];
+  for (const [index, row] of [[0, 7999], [1, 0]] as const) {
+    const image = new Image(); image.src = snapshot.parts[index].image; await image.decode();
+    const canvas = document.createElement('canvas'); canvas.width = 1; canvas.height = 1;
+    const context = canvas.getContext('2d')!; context.drawImage(image, 30, row, 1, 1, 0, 0, 1, 1);
+    colors.push([...context.getImageData(0, 0, 1, 1).data]);
+  }
+  if (colors[0][0] !== 255 || colors[0][1] !== 0 || colors[1][2] !== 255 || colors[1][0] !== 0) throw new Error(`拼缝行丢失或重影: ${JSON.stringify(colors)}`);
+  results.push({ name: '分段拼缝相邻内容行无重影或丢失', passed: true });
+} catch (error) { results.push({ name: '分段拼缝相邻内容行无重影或丢失', passed: false, error: String(error) }); }
+try {
+  const source = 'data:image/png;base64,' + btoa('x'.repeat(70000));
+  const original: any = { cards: [{ commentMedia: [{ parts: [{ image: source, y: 0, height: 1 }] }] }] };
+  const files = new Map<string, ArrayBuffer>();
+  const adapter: any = { exists: async (path: string) => files.has(path), mkdir: async (path: string) => files.set(path, new ArrayBuffer(0)), writeBinary: async (path: string, data: ArrayBuffer) => files.set(path, data), readBinary: async (path: string) => files.get(path) };
+  const result = await externalizeMedia(original, adapter);
+  const path = original.cards[0].commentMedia[0].parts[0].image;
+  const replica: any = { cards: [{ commentMedia: [{ parts: [{ image: source }] }] }] };
+  applyMediaReplacements(replica, result.replacements);
+  if (result.count !== 1 || !path.startsWith('_marginstudy-media/') || files.get(path)?.byteLength !== 70000 || replica.cards[0].commentMedia[0].parts[0].image !== path) throw new Error('分段图片迁移或替换失败');
+  results.push({ name: '分段图片外置迁移与替换', passed: true });
+} catch (error) { results.push({ name: '分段图片外置迁移与替换', passed: false, error: String(error) }); }
+try {
+  const imageCanvas = document.createElement('canvas'); imageCanvas.width = 10; imageCanvas.height = 10;
+  imageCanvas.getContext('2d')!.fillRect(0, 0, 10, 10);
+  const image = imageCanvas.toDataURL('image/png');
+  imageCanvas.getContext('2d')!.fillRect(0, 0, 5, 5); imageCanvas.getContext('2d')!.fillStyle = 'red'; imageCanvas.getContext('2d')!.fillRect(0, 0, 5, 5);
+  const card: any = { id: 'endpoint', docPath: 'synthetic', front: 'FIXED_HEIGHT:56000', back: ('长评论内容\n').repeat(100), images: [image, imageCanvas.toDataURL('image/png')], tags: [], links: [] };
+  const initial = await snapshotCard({ app: {} } as any, card);
+  card.front = `FIXED_HEIGHT:${56000 + 60000 - initial.height}`;
+  const endpoint = await snapshotCard({ app: {} } as any, card);
+  if (endpoint.height !== 60000 || endpoint.parts.length !== 8 || endpoint.parts.at(-1)!.height !== 4000) throw new Error(`60000px 端点分段错误: ${endpoint.height}`);
+  const endpointStore: any = { settings: {}, getCard: () => card };
+  openCardInkComment({ store: endpointStore, app: {}, activeReader: null } as any, card.id, 'snapshot');
+  for (let attempt = 0; attempt < 800 && document.querySelector<HTMLButtonElement>('[data-save-card-ink]')?.disabled; attempt++) await wait(25);
+  const endpointModal = document.querySelector('[data-card-ink-editor]')!;
+  const endpointCanvases = [...endpointModal.querySelectorAll<HTMLCanvasElement>('canvas[aria-label="卡片批注画布"]')];
+  if (endpointCanvases.length !== 8 || endpointCanvases.some(canvas => canvas.width !== 600 || canvas.height > 8000 || Math.abs(canvas.getBoundingClientRect().width / canvas.width - 1) > .001)) throw new Error('60000px 编辑器画布不是 1:1');
+  endpointModal.querySelector<HTMLButtonElement>('[data-save-card-ink]')!.click();
+  if (notices.at(-1) !== '请先写下批注') throw new Error('长卡空笔画提示错误');
+  const endpointViewport = endpointModal.querySelector<HTMLElement>('.ms-card-ink-viewport')!;
+  endpointViewport.scrollTop = endpointViewport.scrollHeight;
+  if (endpointViewport.scrollTop <= 0 || endpointCanvases.at(-1)!.getBoundingClientRect().bottom > endpointViewport.getBoundingClientRect().bottom + 2) throw new Error('无法滚动到末段');
+  const lastCanvas = endpointCanvases.at(-1)!, lastBounds = lastCanvas.getBoundingClientRect();
+  lastCanvas.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 33, pointerType: 'mouse', button: 0, clientX: lastBounds.left + 60, clientY: lastBounds.bottom - 60 }));
+  lastCanvas.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 33, pointerType: 'mouse', button: 0, clientX: lastBounds.left + 60, clientY: lastBounds.bottom - 60 }));
+  if (!lastCanvas.getContext('2d')!.getImageData(55, lastCanvas.height - 65, 10, 10).data.some((value, index) => index % 4 === 3 && value)) throw new Error('末段无法落笔');
+  [...endpointModal.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === '取消')!.click();
+  results.push({ name: '60000px 端点、多图和长评论完整分段', passed: true });
+  const normal: any = { id: 'threshold', docPath: 'synthetic', front: 'FIXED_HEIGHT:15000', tags: [], links: [] };
+  const base = await snapshotCard({ app: {} } as any, normal);
+  for (const target of [7759, 7761, 15759, 15761]) {
+    normal.front = `FIXED_HEIGHT:${15000 + target - base.height}`;
+    const sample = await snapshotCard({ app: {} } as any, normal);
+    if (sample.height !== target || sample.parts.reduce((sum: number, part: any) => sum + part.height, 0) !== target) throw new Error(`阈值快照错误: ${sample.height}`);
+    let current = normal;
+    const store: any = { settings: {}, getCard: () => current, getLibraryHistoryState: () => ({ revision: 0, canUndo: false }) };
+    openCardInkComment({ store, app: {}, activeReader: null } as any, normal.id, 'snapshot');
+    for (let attempt = 0; attempt < 400 && document.querySelector<HTMLButtonElement>('[data-save-card-ink]')?.disabled; attempt++) await wait(25);
+    const modal = document.querySelector('[data-card-ink-editor]')!;
+    const drawings = [...modal.querySelectorAll<HTMLCanvasElement>('canvas[aria-label="卡片批注画布"]')];
+    if (!drawings.length || drawings.some(drawing => drawing.height > 8000) || drawings.reduce((sum, drawing) => sum + drawing.height, 0) !== target + 240 || (target + 240 > 8000 && drawings.some(drawing => drawing.width !== 600))) throw new Error(`阈值画布错误: ${target}`);
+    modal.querySelector<HTMLButtonElement>('[data-save-card-ink]')!.click();
+    if (notices.at(-1) !== '请先写下批注') throw new Error('空笔画提示错误');
+    [...modal.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === '取消')!.click();
+  }
+  results.push({ name: '15760px 阈值两侧画布尺寸正确', passed: true });
+} catch (error) { results.push({ name: '端点和阈值覆盖', passed: false, error: String(error) }); }
+try {
+  const card: any = { id: 'parts', docPath: 'synthetic', front: ('长卡内容\n').repeat(1100) + '末尾文本', tags: [], links: [] };
+  const snapshot = await snapshotCard({ app: {} } as any, card);
+  if (snapshot.height < 20000 || snapshot.height > 60000) throw new Error(`高度不在范围内: ${snapshot.height}`);
+  let y = 0;
+  for (const part of snapshot.parts) {
+    if (part.y !== y || part.height > 8000) throw new Error(`分段不连续: ${JSON.stringify({ y, partY: part.y, height: part.height })}`);
+    const image = new Image(); image.src = part.image; await image.decode();
+    if (image.naturalWidth !== snapshot.width || image.naturalHeight !== part.height) throw new Error('分段分辨率不正确');
+    y += part.height;
+  }
+  if (y !== snapshot.height) throw new Error('分段总高不一致');
+  const tail = new Image(); tail.src = snapshot.parts.at(-1)!.image; await tail.decode();
+  const canvas = document.createElement('canvas'); canvas.width = tail.naturalWidth; canvas.height = tail.naturalHeight;
+  const context = canvas.getContext('2d')!; context.drawImage(tail, 0, 0);
+  const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+  let dark = 0; for (let index = 0; index < pixels.length; index += 4) if (pixels[index] < 180 && pixels[index + 1] < 180 && pixels[index + 2] < 180 && pixels[index + 3]) dark++;
+  if (!dark) throw new Error('尾段没有文本像素');
+  results.push({ name: '长卡分段连续、全分辨率且尾段非空', passed: true });
+} catch (error) { results.push({ name: '长卡分段连续、全分辨率且尾段非空', passed: false, error: String(error) }); }
+try {
+  const card: any = { id: 'long', docPath: 'synthetic', front: ('长卡内容\n').repeat(1100) + '末尾文本', tags: [], links: [] };
+  const baseline = await snapshotCard({ app: {} } as any, card);
+  let current = card, updates = 0;
+  const store: any = { settings: {}, getCard: () => current, updateCard: (_id: string, patch: any) => { current = { ...current, ...patch }; updates++; }, getLibraryHistoryState: () => ({ revision: 1, canUndo: true }) };
+  openCardInkComment({ store, app: {}, activeReader: null } as any, card.id, 'snapshot');
+  for (let attempt = 0; attempt < 200 && document.querySelector<HTMLButtonElement>('[data-save-card-ink]')?.disabled; attempt++) await wait(25);
+  const modal = document.querySelector('[data-card-ink-editor]')!;
+  const ready = !modal.querySelector<HTMLButtonElement>('[data-save-card-ink]')?.disabled;
+  if (!ready) throw new Error(`长卡编辑器未就绪: ${modal.textContent}`);
+  results.push({ name: '超过 20000px 的卡片可打开批注编辑器', passed: true });
+  const drawing = modal.querySelector<HTMLCanvasElement>('canvas[aria-label="卡片批注画布"]')!;
+  const bounds = drawing.getBoundingClientRect(), clientX = bounds.left + bounds.width / 2, clientY = bounds.top + bounds.height * .75;
+  drawing.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, pointerType: 'mouse', button: 0, clientX, clientY }));
+  drawing.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, pointerType: 'mouse', button: 0, clientX, clientY }));
+  const marginPoints = [[60, 60], [540, 60], [60, baseline.height + 180], [540, baseline.height + 180]];
+  const canvases = [...modal.querySelectorAll<HTMLCanvasElement>('canvas[aria-label="卡片批注画布"]')];
+  for (const [index, [pointX, pointY]] of marginPoints.entries()) {
+    const target = canvases[Math.floor(pointY / 8000)], targetBounds = target.getBoundingClientRect();
+    const marginX = targetBounds.left + pointX, marginY = targetBounds.top + pointY - Number(target.dataset.offsetY);
+    target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: index + 2, pointerType: 'mouse', button: 0, clientX: marginX, clientY: marginY }));
+    target.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: index + 2, pointerType: 'mouse', button: 0, clientX: marginX, clientY: marginY }));
+  }
+  const crossX = bounds.left + 590;
+  const crossStart = bounds.top + 7960;
+  const crossEnd = bounds.top + 8040;
+  drawing.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 20, pointerType: 'mouse', button: 0, clientX: crossX, clientY: crossStart }));
+  drawing.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 20, pointerType: 'mouse', button: 0, clientX: crossX, clientY: crossEnd }));
+  drawing.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 20, pointerType: 'mouse', button: 0, clientX: crossX, clientY: crossEnd }));
+  modal.querySelector<HTMLButtonElement>('[data-save-card-ink]')!.click();
+  const buttons = [...modal.querySelectorAll<HTMLButtonElement>('button')];
+  if (!buttons.find(button => button.textContent === '撤销一笔')?.disabled || !buttons.find(button => button.textContent === '清空手绘')?.disabled) throw new Error('保存期间编辑按钮未冻结');
+  drawing.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 21, pointerType: 'mouse', button: 0, clientX, clientY }));
+  drawing.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 21, pointerType: 'mouse', button: 0, clientX, clientY }));
+  for (let attempt = 0; attempt < 400 && !updates; attempt++) await wait(25);
+  if (updates !== 1 || current.commentMedia?.length !== 1) throw new Error(`保存次数或评论数量错误: ${updates}`);
+  const media = current.commentMedia[0];
+  if (!media.parts?.length || !media.strokes?.length || media.snapshot.viewScale !== 1) throw new Error(`缺少分段、笔迹或 1:1 比例: ${JSON.stringify({ parts: media.parts?.length, strokes: media.strokes?.length, scale: media.snapshot?.viewScale, baseline: baseline.height })}`);
+  if (media.strokes.length !== 6 || media.strokes[5].points.length < 2) throw new Error('保存期间笔迹发生变化或跨段笔画丢失');
+  const crossPoints = media.strokes[5].points;
+  if (media.strokes.some((stroke: any) => stroke.pointsVersion !== 2) || Math.abs(crossPoints[0].y - 7840) > .001 || Math.abs(crossPoints.at(-1).y - 7920) > .001) throw new Error('跨段笔迹不是版本 2 内容坐标');
+  for (const pointY of [7990, 8010]) {
+    const part = media.parts.find((item: any) => pointY >= item.y && pointY < item.y + item.height);
+    const bitmap = new Image(); bitmap.src = part.image; await bitmap.decode();
+    const probe = document.createElement('canvas'); probe.width = bitmap.width; probe.height = bitmap.height;
+    const probeContext = probe.getContext('2d')!; probeContext.drawImage(bitmap, 0, 0);
+    const pixels = probeContext.getImageData(580, pointY - part.y - 10, 20, 20).data;
+    const expected = media.strokes[5].color;
+    const colorCanvas = document.createElement('canvas'); colorCanvas.width = colorCanvas.height = 1;
+    const colorContext = colorCanvas.getContext('2d')!; colorContext.fillStyle = expected; colorContext.fillRect(0, 0, 1, 1);
+    const color = colorContext.getImageData(0, 0, 1, 1).data;
+    let ink = false;
+    for (let index = 0; index < pixels.length; index += 4) if ([0, 1, 2].every(channel => Math.abs(pixels[index + channel] - color[channel]) < 10)) ink = true;
+    if (!ink) throw new Error(`跨段笔迹缺失: ${pointY}, color=${expected}`);
+  }
+  let offset = 0; for (const part of media.parts) { if (part.y !== offset) throw new Error('保存分段不连续'); offset += part.height; }
+  if (Math.abs(offset - baseline.height - 240) > 1) throw new Error('保存分段总高不一致');
+  const snapshotCoverage = media.parts.reduce((sum: number, part: any) => sum + Math.max(0, Math.min(part.y + part.height, 120 + baseline.height) - Math.max(part.y, 120)), 0);
+  if (snapshotCoverage !== baseline.height) throw new Error(`快照区域拼接高度错误: ${snapshotCoverage}`);
+  const strokeY = media.strokes[0].points[0].y + 120, segment = media.parts.find((part: any) => strokeY >= part.y && strokeY < part.y + part.height);
+  const image = new Image(); image.src = segment.image; await image.decode();
+  const sample = document.createElement('canvas'); sample.width = image.naturalWidth; sample.height = image.naturalHeight;
+  const context = sample.getContext('2d')!; context.drawImage(image, 0, 0);
+  const sampleY = Math.round(strokeY - segment.y), sampleX = Math.round(media.strokes[0].points[0].x);
+  const actual = context.getImageData(sampleX - 12, sampleY - 12, 24, 24).data;
+  context.fillStyle = '#fff'; context.fillRect(0, 0, sample.width, sample.height);
+  for (const part of baseline.parts) { const original = new Image(); original.src = part.image; await original.decode(); context.drawImage(original, 0, 120 + part.y - segment.y); }
+  const before = context.getImageData(sampleX - 12, sampleY - 12, 24, 24).data;
+  if (!actual.some((value, index) => value !== before[index])) throw new Error('笔迹未落在对应分段');
+  if (media.strokes.length < 2 || Math.abs(media.strokes[1].points[0].x - 60) > .001 || Math.abs(media.strokes[1].points[0].y + 60) > .001) throw new Error('留白区笔迹坐标错误');
+  for (const [pointX, pointY] of marginPoints) {
+    const part = media.parts.find((item: any) => pointY >= item.y && pointY < item.y + item.height);
+    const image = new Image(); image.src = part.image; await image.decode();
+    const marginCanvas = document.createElement('canvas'); marginCanvas.width = image.width; marginCanvas.height = image.height;
+    const marginContext = marginCanvas.getContext('2d')!; marginContext.drawImage(image, 0, 0);
+    const marginPixels = marginContext.getImageData(pointX - 15, pointY - part.y - 15, 30, 30).data;
+    if (!marginPixels.some((value, index) => index % 4 !== 3 && value < 240)) throw new Error('留白区笔迹未保存');
+  }
+  results.push({ name: '长卡保存单条评论且分段包含对应笔迹', passed: true });
+  const request = indexedDB.open('long-card-acceptance', 1);
+  request.onupgradeneeded = () => request.result.createObjectStore('data');
+  const database: IDBDatabase = await new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+  const read = (key: string): Promise<any> => new Promise((resolve, reject) => { const operation = database.transaction('data').objectStore('data').get(key); operation.onsuccess = () => resolve(operation.result); operation.onerror = () => reject(operation.error); });
+  const write = (key: string, value: any): Promise<void> => new Promise((resolve, reject) => { const transaction = database.transaction('data', 'readwrite'); transaction.objectStore('data').put(value, key); transaction.oncomplete = () => resolve(); transaction.onerror = () => reject(transaction.error); });
+  const adapter: any = { exists: async (path: string) => (await read(path)) !== undefined, mkdir: async (path: string) => write(path, true), write: async (path: string, value: string) => write(path, value), writeBinary: async (path: string, value: ArrayBuffer) => write(path, value), readBinary: async (path: string) => read(path) };
+  const host: any = { app: { vault: { adapter } }, loadData: async () => (await read('main')) ?? null, saveData: async (value: any) => write('main', value) };
+  await write('main', { cards: [card] });
+  const persistedStore = new Store(host); await persistedStore.load();
+  persistedStore.updateCard(card.id, { commentMedia: [media] }); await persistedStore.flush();
+  const reopenedStore = new Store(host); await reopenedStore.load();
+  const reopened = reopenedStore.getCard(card.id)?.commentMedia?.[0] as any;
+  if (!reopened || JSON.stringify(reopened.parts) !== JSON.stringify(media.parts) || JSON.stringify(reopened.strokes) !== JSON.stringify(media.strokes)) throw new Error('真实存储重开后分段或笔迹不一致');
+  const reopenedContent = await readCardInkComment({ app: { vault: { getAbstractFileByPath: () => null, adapter: { getResourcePath: (path: string) => path } } } } as any, reopened);
+  if (JSON.stringify(reopenedContent.strokes) !== JSON.stringify(media.strokes)) throw new Error('重开后内容坐标发生变化');
+  if (!persistedStore.undoLibraryChange() || persistedStore.getCard(card.id)?.commentMedia?.length) throw new Error('长评论撤销失败');
+  results.push({ name: '真实存储重开保留分段与笔迹，长评论可撤销', passed: true });
+  const rendered = cardCommentImage({ app: { vault: { getAbstractFileByPath: () => null, adapter: { getResourcePath: (path: string) => path } } } } as any, reopened);
+  if (rendered.querySelectorAll('img').length !== 1 || rendered.querySelector('img')?.getAttribute('src') !== reopened.image || JSON.stringify(reopened) !== JSON.stringify(media)) throw new Error('重开后未显示单张总览');
+  const downloads: { href: string; name: string }[] = [], originalClick = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function () { downloads.push({ href: this.href, name: this.download }); };
+  try {
+    rendered.querySelector<HTMLButtonElement>('button')!.click();
+    for (let attempt = 0; downloads.length < media.parts.length && attempt < 300; attempt++) await wait(50);
+  } finally { HTMLAnchorElement.prototype.click = originalClick; }
+  if (downloads.length !== media.parts.length || downloads.some((value, index) => value.href !== new URL(media.parts[index].image, location.href).href || value.name !== `comment-${media.id}-${index + 1}.png`)) throw new Error('PNG 未按分段完整导出');
+  results.push({ name: '序列化后评论显示总览并按分段导出', passed: true });
+} catch (error) { results.push({ name: '超过 20000px 的卡片可打开批注编辑器', passed: false, error: String(error) }); }
+(window as any).done = true;

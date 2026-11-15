@@ -18,11 +18,11 @@ export function openPdfPagePicker(reader: ReaderView, afterPage: number, file: F
   const heading = modal.querySelector("h3")!;
   heading.removeAttribute("style");
   const bar = el("div",{class:"ms-pdf-import-header"});
-  const cancel = el("button",{"aria-label":"Close PDF Page Picker",title:"Close"}); setIcon(cancel,"x"); cancel.addEventListener("click",close);
-  const addSelected = el("button",{text:"Add Selected","aria-label":"Add Selected"}); addSelected.disabled = true;
-  const addAll = el("button",{text:"Add All","aria-label":"Add All"}); addAll.disabled = true;
+  const cancel = el("button",{"aria-label":"关闭 PDF 选页",title:"关闭"}); setIcon(cancel,"x"); cancel.addEventListener("click",close);
+  const addSelected = el("button",{text:"添加所选","aria-label":"添加所选"}); addSelected.disabled = true;
+  const addAll = el("button",{text:"全部添加","aria-label":"全部添加"}); addAll.disabled = true;
   const actions = el("div",{class:"ms-pdf-import-actions"}); actions.append(addSelected,addAll); bar.append(cancel,heading,actions);
-  const grid = el("div",{class:"ms-pdf-import-grid"}), status = el("div",{class:"ms-pdf-import-status",role:"status",text:"Loading…"});
+  const grid = el("div",{class:"ms-pdf-import-grid"}), status = el("div",{class:"ms-pdf-import-status",role:"status",text:"加载中…"});
   modal.append(bar,status,grid);
   const commit = (all: boolean) => {
     if (closed || !pdf) return;

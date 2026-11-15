@@ -11,4 +11,54 @@ const results:any[]=[];(window as any).results=results;
  (window as any).cardFlowPdf=Array.from(output.bytes).map(b=>String.fromCharCode(b)).join('');(window as any).cardFlowPdf=btoa((window as any).cardFlowPdf);
  const pdf=await PDFDocument.load(output.bytes);if(pdf.getPageCount()!==output.pageCount||output.pageCount<2)throw Error('invalid page count');if(output.cardIds.join(',')!=='a,b,c')throw Error('order or unique card mismatch');if(JSON.stringify({cards,nodes})!==before)throw Error('source data mutated');
  results.push({name:'PDF has ordered unique cards, correct pagination and unchanged source',passed:true});
+ const first=sample.toDataURL('image/png'),second=tall.toDataURL('image/png');
+ const segmented={...cards[0],title:'HEADING MARKER',front:'EXCERPT MARKER',back:'NOTE MARKER',image:undefined,commentMedia:[{id:'long',kind:'ink',image:first,parts:[{image:first,y:0,height:40},{image:second,y:40,height:1000}]}]};
+ const segmentStore:any={getScopedNodes:()=>[nodes[1]],getCard:()=>segmented,flush:async()=>{}};
+ const events:string[]=[];const originalFillText=CanvasRenderingContext2D.prototype.fillText,originalAddPage=PDFDocument.prototype.addPage;
+ CanvasRenderingContext2D.prototype.fillText=function(text:string,...args:any[]){events.push(`text:${text}`);return originalFillText.call(this,text,...args as [number,number]);};
+ PDFDocument.prototype.addPage=function(...args:any[]){events.push('page');return originalAddPage.apply(this,args as []);};
+ let segmentOutput;
+ try { segmentOutput=await buildCardFlowPdf({store:segmentStore,app:{vault:{getAbstractFileByPath:()=>null}}} as any,{columns:2,includeInk:true}); }
+ finally { CanvasRenderingContext2D.prototype.fillText=originalFillText;PDFDocument.prototype.addPage=originalAddPage; }
+ const segmentPdf=await PDFDocument.load(segmentOutput.bytes);
+ const dimensions=[[80,40],[100,1000]];
+ if(segmentPdf.getPageCount()!==1+dimensions.length||segmentPdf.getPageCount()!==segmentOutput.pageCount)throw Error('segmented comment must follow content page');
+ const contentPage=segmentPdf.getPage(0);if(Math.abs(contentPage.getWidth()-595.28)>.01||Math.abs(contentPage.getHeight()-841.89)>.01)throw Error('missing standard content page');
+ const positions=['HEADING MARKER','EXCERPT MARKER','NOTE MARKER'].map(text=>events.indexOf(`text:${text}`));
+ const firstPage=events.indexOf('page');if(positions.some(position=>position<0)||!(positions[0]<positions[1]&&positions[1]<positions[2]&&positions[2]<firstPage))throw Error(`text must be drawn in order before content and part pages: ${events.join(',')}`);
+ for(const [index,expected] of dimensions.entries()){const page=segmentPdf.getPage(index+1);if(page.getWidth()!==expected[0]||page.getHeight()!==expected[1])throw Error('part page dimensions mismatch');}
+ results.push({name:'segmented comment exports across PDF pages',passed:true});
+ const blank = {...segmented,title:'  ',front:' \n ',back:'\t'};
+ const blankStore:any={getScopedNodes:()=>[nodes[1]],getCard:()=>blank,flush:async()=>{}};
+ const blankOutput=await buildCardFlowPdf({store:blankStore,app:{vault:{getAbstractFileByPath:()=>null}}} as any,{columns:2,includeInk:true});
+ const blankPdf=await PDFDocument.load(blankOutput.bytes);
+ if(blankOutput.pageCount!==2||blankPdf.getPageCount()!==2)throw Error('whitespace-only text must use segmented fast path without extra page');
+ results.push({name:'whitespace-only text uses segmented fast path',passed:true});
+ const inkCanvas=document.createElement('canvas');inkCanvas.width=80;inkCanvas.height=40;
+ const inkContext=inkCanvas.getContext('2d')!;inkContext.fillStyle='white';inkContext.fillRect(0,0,80,40);inkContext.fillStyle='red';inkContext.fillRect(20,20,4,4);
+ const inkImage=inkCanvas.toDataURL('image/png');
+ const legacyStroke={id:'ink',tool:'pen',color:'#f00',width:3,points:[{x:.25,y:.5}]};
+ const legacyMedia:any={id:'ink',kind:'ink',image:inkImage,parts:[{image:inkImage,y:0,height:40}],snapshot:{image:inkImage,x:0,y:0,width:1,height:1},strokes:[legacyStroke]};
+ const modernMedia={...legacyMedia,strokes:[{...legacyStroke,pointsVersion:2,points:[{x:20,y:20}]}]};
+ const embedded:string[]=[], originalEmbed=PDFDocument.prototype.embedPng;
+ PDFDocument.prototype.embedPng=async function(data:any){embedded.push(btoa(String.fromCharCode(...new Uint8Array(data))));return originalEmbed.call(this,data);};
+ try {
+   for(const text of ['', '带标题']) {
+     const exports:string[]=[];
+     for(const media of [legacyMedia,modernMedia]) {
+       const inkCard={...cards[0],title:text,front:'',back:'',image:undefined,commentMedia:[media]};
+       const inkStore:any={getScopedNodes:()=>[nodes[1]],getCard:()=>inkCard,flush:async()=>{}};
+       embedded.length=0;
+       await buildCardFlowPdf({store:inkStore,app:{vault:{getAbstractFileByPath:()=>null}}} as any,{columns:2,includeInk:true});
+       exports.push(embedded.at(-1)!);
+     }
+     if(exports[0]!==exports[1] || exports[0]!==inkImage.split(',')[1])throw Error('旧笔迹导出分段位置与迁移后不一致');
+   }
+   const invalid={...legacyMedia,parts:[{...legacyMedia.parts[0],y:1}]};
+   const badStore:any={getScopedNodes:()=>[nodes[1]],getCard:()=>({...cards[0],image:undefined,commentMedia:[invalid]}),flush:async()=>{}};
+   let rejected=false;try{await buildCardFlowPdf({store:badStore,app:{vault:{getAbstractFileByPath:()=>null}}} as any,{columns:2,includeInk:true});}catch{rejected=true;}
+   if(!rejected)throw Error('旧笔迹未经过迁移校验');
+ } finally { PDFDocument.prototype.embedPng=originalEmbed; }
+ results.push({name:'legacy ink exports at the same position as migrated ink',passed:true});
+ (window as any).cardFlowPdf=btoa(Array.from(segmentOutput.bytes).map(b=>String.fromCharCode(b)).join(''));
  }catch(error){results.push({name:'PDF has ordered unique cards, correct pagination and unchanged source',passed:false,error:String(error)});}finally{(window as any).done=true;}})();

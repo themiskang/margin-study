@@ -10,6 +10,31 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 const NODE_W = 240;
 const NODE_H = 84;
 
+function svgToPng(svg: SVGSVGElement, width: number, height: number, filename: string, done: () => void): void {
+  const data = new XMLSerializer().serializeToString(svg);
+  const url = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(data);
+  const img = new Image();
+  img.onload = () => {
+    const scale = 2;
+    const canvas = document.createElement("canvas");
+    canvas.width = width * scale;
+    canvas.height = height * scale;
+    const ctx = canvas.getContext("2d")!;
+    ctx.scale(scale, scale);
+    ctx.drawImage(img, 0, 0);
+    canvas.toBlob((blob) => {
+      if (!blob) { new Notice("PNG 导出失败"); return; }
+      downloadBlob(blob, filename);
+      new Notice("已导出 PNG");
+      done();
+    }, "image/png");
+  };
+  img.onerror = () => new Notice("PNG 渲染失败");
+  img.src = url;
+}
+
+function svgToString(svg: SVGSVGElement): string { return new XMLSerializer().serializeToString(svg); }
+
 /** 导出当前思维导图（含连线 + 节点）为自包含 SVG（节点是 HTML div，不在 svg 内，故需按数据重建） */
 export async function exportMindmapPng(plugin: MarginStudyPlugin): Promise<void> {
   await plugin.store.flush();
@@ -28,39 +53,13 @@ export async function exportMindmapPng(plugin: MarginStudyPlugin): Promise<void>
   const pngBtn = document.createElement("button");
   pngBtn.className = "ms-btn primary";
   pngBtn.textContent = "PNG 图片";
-  pngBtn.addEventListener("click", () => {
-    const data = new XMLSerializer().serializeToString(svg);
-    const url = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(data);
-    const img = new Image();
-    img.onload = () => {
-      const scale = 2;
-      const canvas = document.createElement("canvas");
-      canvas.width = width * scale;
-      canvas.height = height * scale;
-      const ctx = canvas.getContext("2d")!;
-      ctx.scale(scale, scale);
-      ctx.drawImage(img, 0, 0);
-      canvas.toBlob((blob) => {
-        if (!blob) {
-          new Notice("PNG 导出失败");
-          return;
-        }
-        downloadBlob(blob, `marginstudy-mindmap-${Date.now()}.png`);
-        new Notice("已导出 PNG");
-        close();
-      }, "image/png");
-    };
-    img.onerror = () => new Notice("PNG 渲染失败");
-    img.src = url;
-  });
+  pngBtn.addEventListener("click", () => svgToPng(svg, width, height, `marginstudy-mindmap-${Date.now()}.png`, close));
 
   const svgBtn = document.createElement("button");
   svgBtn.className = "ms-btn";
   svgBtn.textContent = "SVG 矢量";
   svgBtn.addEventListener("click", () => {
-    const data = new XMLSerializer().serializeToString(svg);
-    const blob = new Blob([data], { type: "image/svg+xml" });
-    downloadBlob(blob, `marginstudy-mindmap-${Date.now()}.svg`);
+    downloadBlob(new Blob([svgToString(svg)], { type: "image/svg+xml" }), `marginstudy-mindmap-${Date.now()}.svg`);
     new Notice("已导出 SVG");
     close();
   });
@@ -76,11 +75,40 @@ export async function exportMindmapPng(plugin: MarginStudyPlugin): Promise<void>
   modal.append(inkLabel);
 }
 
+/** 导出选中分支或单张卡片：复用同一 SVG 重建，只保留选中节点及其之间的连线与绑定手写。 */
+export async function exportMindmapNodes(plugin: MarginStudyPlugin, nodeIds: string[], kind: "branch" | "card"): Promise<void> {
+  const ids = new Set(nodeIds);
+  if (!ids.size) { new Notice("请先选中卡片"); return; }
+  await plugin.store.flush();
+  const built = buildExportSvg(plugin, ids);
+  if (!built) { new Notice("没有可导出的内容"); return; }
+  const { svg, width, height } = built;
+  const label = kind === "branch" ? "分支" : "卡片";
+  const { modal, close } = createModal("导出" + label);
+  modal.append(el_text(`导出 ${ids.size} 个节点的${label}，仅包含所选节点及其连线。`));
+  const row = document.createElement("div");
+  row.className = "ms-modal-actions";
+  const pngBtn = document.createElement("button");
+  pngBtn.className = "ms-btn primary"; pngBtn.textContent = "PNG 图片";
+  pngBtn.addEventListener("click", () => svgToPng(svg, width, height, `marginstudy-${kind}-${Date.now()}.png`, close));
+  const svgBtn = document.createElement("button");
+  svgBtn.className = "ms-btn"; svgBtn.textContent = "SVG 矢量";
+  svgBtn.addEventListener("click", () => {
+    downloadBlob(new Blob([svgToString(svg)], { type: "image/svg+xml" }), `marginstudy-${kind}-${Date.now()}.svg`);
+    new Notice("已导出 SVG");
+    close();
+  });
+  row.append(pngBtn, svgBtn);
+  modal.append(row);
+}
+
 /** 按 store 的 nodes/edges 重建一张自包含 SVG（含白底、连线、节点） */
-function buildExportSvg(plugin: MarginStudyPlugin): { svg: SVGSVGElement; width: number; height: number } | null {
-  const all = plugin.store.getScopedNodes();
+function buildExportSvg(plugin: MarginStudyPlugin, includeIds?: Set<string>): { svg: SVGSVGElement; width: number; height: number } | null {
+  const all = plugin.store.getScopedNodes().filter(node => !includeIds || includeIds.has(node.id));
   const handwriting = plugin.store.canvases.find((canvas) => canvas.id === plugin.store.activeCanvasId)?.handwriting;
-  const visibleInk = visibleMindmapInkLayers(handwriting);
+  const visibleInk = visibleMindmapInkLayers(handwriting).map(layer => ({ ...layer, strokes: layer.strokes.filter(stroke => !includeIds
+    || (!!stroke.focusNodeId && includeIds.has(stroke.focusNodeId))
+    || (!!stroke.targetCardId && all.some(node => node.cardId === stroke.targetCardId))) }));
   if (!all.length && !visibleInk.some((layer) => layer.strokes.some((stroke) => stroke.points.length))) return null;
 
   // 尽量读取界面内实际渲染的节点尺寸（脑图节点为内容自适应宽高），让导出与屏幕一致；
@@ -141,8 +169,7 @@ function buildExportSvg(plugin: MarginStudyPlugin): { svg: SVGSVGElement; width:
   for (const e of plugin.store.edges) {
     const a = nodeMap.get(e.from);
     const b = nodeMap.get(e.to);
-    if (!a || !b) continue;
-    const sa = sizeOf(a);
+    if (!a || !b) continue;    const sa = sizeOf(a);
     const sb = sizeOf(b);
     const sx = a.x + sa.w;
     const sy = a.y + sa.h / 2;

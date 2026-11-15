@@ -1,4 +1,25 @@
+/**
+ * [INPUT]: 依赖浏览器指针事件与笔迹类型。
+ * [OUTPUT]: 提供采样、预测和掌触过滤函数。
+ * [POS]: 为手写控制器转换输入并估算预测位置。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import type { Stroke } from "../types";
+
+export interface TimedInkPoint { x: number; y: number; time: number }
+
+export function predictInkPoint(points: TimedInkPoint[], downTime: number): TimedInkPoint | null {
+  if (points.length < 3) return null;
+  const [first, middle, last] = points.slice(-3);
+  const firstDt = middle.time - first.time, lastDt = last.time - middle.time;
+  if (last.time - downTime < 30 || firstDt <= 0 || lastDt <= 0 || lastDt > 40) return null;
+  const vx = (last.x - middle.x) / lastDt, vy = (last.y - middle.y) / lastDt;
+  const previousX = (middle.x - first.x) / firstDt, previousY = (middle.y - first.y) / firstDt;
+  const speed = Math.hypot(vx, vy), previousSpeed = Math.hypot(previousX, previousY);
+  if (speed < .08 || previousSpeed < .08 || speed > previousSpeed * 2 || previousSpeed > speed * 2 ||
+      (vx * previousX + vy * previousY) / (speed * previousSpeed) < .9) return null;
+  return { x: last.x + vx * 12, y: last.y + vy * 12, time: last.time + 12 };
+}
 
 export function inkPoint(event: PointerEvent, x: number, y: number): Stroke {
   return { x, y, ...(event.pointerType === "pen" ? { pressure: Math.max(.05, Math.min(1, event.pressure || .5)) } : {}) };

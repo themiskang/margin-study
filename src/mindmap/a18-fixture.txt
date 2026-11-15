@@ -28,7 +28,9 @@ function node(p: any, id: string): HTMLElement { const found = p.host.querySelec
 function menu(p: any, id: string, action: string) {
   node(p, id).click();
   button(p.host.querySelector('.ms-node-toolbar')!, '更多').click();
-  button(document.querySelector('#test-menu')!, action).click();
+  let open = document.querySelector<HTMLElement>('#test-menu')!;
+  if (![...open.querySelectorAll('button')].some(item => item.textContent === action)) { button(open, '更多操作…').click(); open = document.querySelector<HTMLElement>('#test-menu')!; }
+  button(open, action).click();
 }
 function modal(): HTMLElement { const dialogs = document.querySelectorAll<HTMLElement>('.ms-modal'); assert(dialogs.length, 'Missing dialog'); return dialogs[dialogs.length - 1]; }
 function textDialog(value: string) { const dialog = modal(); (dialog.querySelector('textarea') as HTMLTextAreaElement).value = value; button(dialog, '确定').click(); }
@@ -53,7 +55,7 @@ async function fresh() {
   p.mount(); await wait(); return p;
 }
 function cards(p: any) { return structuredClone(p.store.cards); }
-function displayDialog(p: any) { button(p.host, '选择脑图').click(); button(document.querySelector('#test-menu')!, '脑图显示设置…').click(); return modal(); }
+function displayDialog(p: any) { button(p.host, '选择脑图').click(); button(document.querySelector('#test-menu')!, '管理脑图').click(); button(modal(), '显示设置').click(); return modal(); }
 function change(input: HTMLInputElement | HTMLSelectElement, value: string | boolean) {
   if (typeof value === 'boolean') (input as HTMLInputElement).checked = value; else input.value = value;
   input.dispatchEvent(new Event('change', { bubbles: true }));
@@ -126,10 +128,10 @@ try {
     return { nodeId: 'root', legacySubmap: true, badgeVisible: true, childCollapsed: true };
   });
   await test('A18 子图折叠展开、复制移动、撤销及根节点删除保持身份一致', async () => {
-    const p = await fresh(), original = cards(p); menu(p, 'root', '折叠为子脑图');
+    const p = await fresh(), original = cards(p); menu(p, 'root', '塌缩成子脑图');
     const submapId = p.store.getNode('root').submapId; assert(submapId, 'Collapse created no submap identity');
     menu(p, 'root', '展开子脑图'); assert(p.store.getNode('root').submapId === submapId && node(p, 'node-01'), 'Expand removed identity or hid descendants');
-    menu(p, 'root', '折叠为子脑图'); assert(p.store.getNode('root').submapId === submapId, 'Collapse replaced identity');
+    menu(p, 'root', '塌缩成子脑图'); assert(p.store.getNode('root').submapId === submapId, 'Collapse replaced identity');
     const other = p.store.createCanvas(p.store.activeStudySetId!, 'Other'), fragment = p.store.copySubtree(['root']);
     const ids = p.store.pasteSubtree(fragment, { canvasId: other.id, mode: 'reference' }), copiedRoot = p.store.getNode(ids[0]);
     assert(copiedRoot.submapId && copiedRoot.submapId !== submapId && other.submaps?.some((item: any) => item.id === copiedRoot.submapId && item.rootNodeId === copiedRoot.id), 'Copy reused or lost submap identity');

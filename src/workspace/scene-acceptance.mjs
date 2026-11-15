@@ -1,7 +1,7 @@
 // Public Store seam; all data and persistence are synthetic and in memory.
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
-import {mkdtemp,writeFile,rm} from 'node:fs/promises';
+import {mkdtemp,writeFile,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -41,6 +41,24 @@ try {
   await store.flush();writes=0;
   let importedDisk={};const importHost={app:host.app,loadData:async()=>structuredClone(importedDisk),saveData:async value=>{importedDisk=structuredClone(value);}};
   const importing=new Store(importHost);await importing.load();
+  for(const filename of ['standard.json','u-e5c5a21ba4d9.json']) {
+    const original=JSON.parse(await readFile(join(here,'../../evidence/mn5-5.0.2-data/templates',filename),'utf8'));
+    const mn5=importing.importSceneTemplate(JSON.stringify(original));
+    const actual=JSON.parse(importing.exportSceneTemplate(mn5.id,'mn5'));
+    const normalize=value=>({id:value.id,name:value.name,base:value.base,tabs:value.toolbar.tabs,
+      modes:value.bottom.modes.map(mode=>({id:mode.id,behavior:mode.behavior,tools:mode.tools??[],overflow:mode.overflow??[]})),
+      surfaces:value.surfaces,review:value.review,resume:value.resume,coach:value.coach,home:value.home,plugins:value.plugins,schema:value.schema});
+    assert.deepEqual(normalize(actual),normalize(original),filename+' round trip');
+    assert.deepEqual(mn5.scenes.map(scene=>scene.id),['reading','writing','recall']);
+    mn5.mn5.modes[0].overflow.push('act.test');mn5.review.rule.excludeToc=false;
+    importing.saveSceneTemplate(mn5);
+    const editedMn5=JSON.parse(importing.exportSceneTemplate(mn5.id,'mn5'));
+    assert.equal(editedMn5.bottom.modes[0].overflow.at(-1),'act.test');
+    assert.equal(editedMn5.review.rule.excludeToc,false);
+    importing.removeSceneTemplate(mn5.id);
+    console.log('PASS MN5 round trip and edits: '+filename);
+  }
+  await importing.flush();
   const exported=store.exportSceneTemplate(copiedTemplate.id);
   const imported=importing.importSceneTemplate(exported);
   assert.deepEqual(imported,store.getSceneTemplates().find(item=>item.id===copiedTemplate.id),'export/import lost template fields');

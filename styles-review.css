@@ -1,3 +1,9 @@
+/*
+ * [INPUT]: reviewView.ts 输出的复习和卡组界面类名，以及宿主主题变量。
+ * [OUTPUT]: 复习、卡组和评分控件样式。
+ * [POS]: 复习视觉层，与共享样式组合打包。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 /* Review and deck surfaces. Packaged with styles.css by the main integration. */
 .ms-review-modal { width:min(940px,94vw); }
 .ms-review-head,.ms-review-navigation,.ms-review-tools,.ms-deck-create,.ms-deck-bind,.ms-review-deck-badges { display:flex; align-items:center; gap:8px; }
@@ -70,6 +76,7 @@
 .ms-native-review-paper { position:absolute; left:var(--review-edge); right:var(--review-edge); top:8.45vh; bottom:10.5vh; margin:0; background:#fff; border-radius:8px; overflow:hidden; box-shadow:0 0 1px rgba(0,0,0,.15); }
 .ms-native-review-paper-tools { position:absolute; inset:12px 16px auto; height:28px; display:grid; grid-template-columns:1fr 1fr 1fr; align-items:center; z-index:1; }
 .ms-native-review .ms-native-review-edit,.ms-native-review .ms-native-review-icon { display:inline-flex; align-items:center; justify-content:center; min-height:0; height:30px; min-width:30px; padding:0; margin:0; border:0; border-radius:4px; background:transparent; color:var(--review-toolbar); box-shadow:none!important; font:inherit; cursor:pointer; }
+.theme-light .ms-native-review .ms-native-review-edit { color:#5e5f64; }
 .ms-native-review-edit { justify-self:start; font-size:15px; font-weight:400; }
 .ms-native-review-favorite { justify-self:center; }
 .ms-native-review-notes { justify-self:end; }
@@ -92,11 +99,11 @@
 .ms-native-review-close svg { width:22px; height:22px; }
 .ms-native-review .ms-review-btns { grid-column:2/span 4; grid-row:1; padding:0; margin:0; border:0; grid-template-columns:repeat(4,minmax(0,1fr)); gap:var(--review-gap); }
 .ms-native-review .ms-review-btns .ms-grade,.ms-native-review-reveal { min-width:0; height:100%; margin:0; padding:0 8px; border:0; border-radius:8px; box-shadow:none; color:#fff; font:400 14px/1.2 -apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif; cursor:pointer; }
-.ms-native-review .ms-grade.again { background:#007aff; }
+.ms-native-review .ms-grade.again { background:#1692fe; }
 .ms-native-review .ms-grade.hard { background:#f4696c; }
 .ms-native-review .ms-grade.good { background:#4fc987; }
 .ms-native-review .ms-grade.easy { background:#818181; }
-.ms-native-review-reveal { grid-column:2/span 4; grid-row:1; background:#007aff; }
+.ms-native-review-reveal { grid-column:2/span 4; grid-row:1; background:#1692fe; }
 .ms-native-review-reveal[hidden] { display:none; }
 .ms-native-review-previous { grid-column:2/span 2; grid-row:1; }
 .ms-native-review-next { grid-column:4/span 2; grid-row:1; }

@@ -77,7 +77,7 @@ export class InkLayerControls {
     this.editing = false; this.actionLayer = null;
     const bg = el("div", { class: "ms-modal-bg ms-ink-layer-backdrop" });
     const modal = el("div", { class: "ms-modal ms-ink-layer-modal" + (presetsOnly ? " ms-ink-presets-modal" : ""), role: presetsOnly ? "menu" : "dialog", "aria-label": presetsOnly ? "手写预设列表" : "文档手写设置", "aria-modal": "false" });
-    modal.append(el("h3", { text: "Document Handwriting Settings" }));
+    modal.append(el("h3", { text: "文档手写设置" }));
     this.modalBody = el("div", { class: "ms-ink-layer-body" }); modal.append(this.modalBody); bg.append(modal); document.body.append(bg);
     let closed = false;
     const close = () => {
@@ -110,15 +110,15 @@ export class InkLayerControls {
     if (this.presetsOnly) { this.renderPresetMenu(body); this.positionPanel?.(); return; }
     const state = this.actions.state();
     const header = el("div", { class: "ms-ink-layer-header" });
-    const edit = el("button", { class: "ms-ink-layer-edit", text: this.editing ? "Done" : "Edit", "aria-label": "编辑手写图层" });
-    edit.addEventListener("click", () => { this.editing = !this.editing; this.actionLayer = null; this.renderPanel(); }); header.append(el("span", { text: "Sketch Layers" }), edit); body.append(header);
+    const edit = el("button", { class: "ms-ink-layer-edit", text: this.editing ? "完成" : "编辑", "aria-label": "编辑手写图层" });
+    edit.addEventListener("click", () => { this.editing = !this.editing; this.actionLayer = null; this.renderPanel(); }); header.append(el("span", { text: "手写图层" }), edit); body.append(header);
     this.renderPresets(body);
     const list = el("div", { class: "ms-ink-layer-list", "aria-label": "手写图层" }); body.append(list);
     for (const layer of state.layers) {
       const row = el("div", { class: "ms-ink-layer-row", "data-layer-id": layer.id });
       const active = el("button", { class: "ms-ink-layer-name" + (layer.id === state.active ? " is-active" : ""), "aria-label": `切换到 ${layer.name}`, "aria-pressed": String(layer.id === state.active) });
       const check = el("span", { class: "ms-ink-layer-check", "aria-hidden": "true" }); if (layer.id === state.active) setIcon(check, "check");
-      active.append(document.createTextNode(layer.id === "default" && layer.name === "默认图层" ? "Default" : layer.name), check);
+      active.append(document.createTextNode(layer.name), check);
       active.addEventListener("click", () => this.actions.select(layer.id));
       row.append(active);
       if (this.editing) {
@@ -134,7 +134,7 @@ export class InkLayerControls {
       list.append(row);
     }
     const create = el("button", { class: "ms-ink-layer-new", "aria-label": "新建手写图层" });
-    const plus = el("span", { class: "ms-ink-layer-plus", "aria-hidden": "true" }); setIcon(plus, "plus"); create.append(plus, document.createTextNode("New Sketch Layer"));
+    const plus = el("span", { class: "ms-ink-layer-plus", "aria-hidden": "true" }); setIcon(plus, "plus"); create.append(plus, document.createTextNode("新建手写图层"));
     create.addEventListener("click", () => this.openNameEditor()); body.append(create);
     if (state.layers.length > 1) {
       const overlayRow = el("label", { class: "ms-ink-layer-reference" }), overlay = el("select", { "aria-label": "叠加层" });
@@ -144,13 +144,13 @@ export class InkLayerControls {
     const vanish = el("div", { class: "ms-ink-layer-sync ms-ink-layer-vanish" });
     const vanishToggle = el("button", { class: "ms-ink-layer-vanish-toggle", "aria-label": "消失笔", role: "switch", "aria-checked": String(this.actions.vanishPen()), text: this.actions.vanishPen() ? "开启" : "关闭" });
     vanishToggle.addEventListener("click", () => { const enabled = !this.actions.vanishPen(); this.actions.setVanishPen(enabled); vanishToggle.setAttribute("aria-checked", String(enabled)); vanishToggle.textContent = enabled ? "开启" : "关闭"; });
-    const vanishText = el("span", { text: "Vanish Pen" }); vanishText.append(el("small", { text: "仅影响当前文档；笔迹约 4 秒后消失，不保存" }));
+    const vanishText = el("span", { text: "消失笔" }); vanishText.append(el("small", { text: "仅影响当前文档；笔迹约 4 秒后消失，不保存" }));
     vanish.append(vanishText, vanishToggle); body.append(vanish);
     const sync = el("label", { class: "ms-ink-layer-sync" });
     const available = this.actions.syncAvailable();
     const checkbox = el("input", { type: "checkbox", "aria-label": "同步文档与脑图手写开关" }); checkbox.checked = this.actions.syncPreference(); checkbox.disabled = !available;
     checkbox.addEventListener("change", () => { if (this.actions.syncAvailable()) this.actions.setSyncPreference(checkbox.checked); });
-    const syncText = el("span", { text: "Synchronize the handwriting switch state between MindMap and Document" });
+    const syncText = el("span", { text: "同步脑图与文档的手写开关状态" });
     if (!available) syncText.append(el("small", { text: "当前未连接脑图手写，同步不生效" })); sync.append(syncText, checkbox); body.append(sync);
     this.positionPanel?.();
   }
@@ -187,7 +187,7 @@ export class InkLayerControls {
     for (const preset of presets) select.append(el("option", { value: preset.id, text: preset.label }));
     select.value = active.id;
     select.addEventListener("change", () => { this.actions.selectPreset(select.value); this.renderPanel(); });
-    header.append(el("strong", { text: "Sketch Presets" }), select); section.append(header);
+    header.append(el("strong", { text: "手写预设" }), select); section.append(header);
     const editor = el("div", { class: "ms-ink-preset-editor" });
     const name = el("input", { type: "text", value: active.label, maxlength: "80", "aria-label": "手写预设名称" }) as HTMLInputElement;
     name.addEventListener("change", () => {

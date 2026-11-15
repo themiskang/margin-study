@@ -8,6 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { build } from "esbuild";
+import { runBrowser } from "../../scripts/ego-harness.mjs";
 
 const exec = promisify(execFile), here = dirname(fileURLToPath(import.meta.url));
 const project = await realpath(resolve(here, "../.."));
@@ -44,8 +45,8 @@ const server = createServer(async (request, response) => {
   response.end(await readFile(join(temporary, name)));
 });
 await new Promise(done => server.listen(0, "127.0.0.1", done));
-const session = (await exec("agent-browser", ["session", "id", "--scope", "worktree", "--prefix", `marginstudy-review-ui-${process.pid}`], { cwd: project })).stdout.trim();
-const browser = (...args) => exec("agent-browser", ["--session", session, ...args.map(String)], { cwd: project, maxBuffer: 4 * 1024 * 1024, timeout: 45000 });
+const session = `marginstudy-review-ui-${process.pid}`;
+const browser = (...args) => runBrowser(session, ...args);
 const evaluate = async source => JSON.parse((await browser("eval", source)).stdout);
 const inspect = () => evaluate("window.reviewFixture.inspect()");
 const checks = [];
@@ -317,9 +318,9 @@ try {
   await browser("set", "viewport", "1512", "859"); await clickSelector("#native-visual-browse");
   await browser("wait", "--fn", "document.querySelector('.ms-native-review-browse [data-browse-card]')!==null");
   const browseLayout = await evaluate("(()=>{const rect=s=>{const r=document.querySelector(s).getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height}};return{paper:rect('.ms-native-review-paper'),content:rect('.ms-native-review-content'),font:getComputedStyle(document.querySelector('.ms-native-review-content')).fontSize,previousRect:rect('.ms-native-review-previous'),nextRect:rect('.ms-native-review-next'),previous:document.querySelector('.ms-native-review-previous').textContent,next:document.querySelector('.ms-native-review-next').textContent,previousDisabled:document.querySelector('.ms-native-review-previous').disabled,nextDisabled:document.querySelector('.ms-native-review-next').disabled,grades:document.querySelectorAll('.ms-grade').length}})()");
-  check("native pre-AQ browsing has its separate 1188 by 679 white card, 20px text, Prev/Next footer and no scoring",()=>{
+  check("native pre-AQ browsing has its separate 1188 by 679 white card, 20px text, previous/next footer and no scoring",()=>{
     assert.ok(Math.abs(browseLayout.paper.x-162)<2); assert.equal(browseLayout.paper.y,80); assert.ok(Math.abs(browseLayout.paper.width-1188)<3); assert.equal(browseLayout.paper.height,679);
-    assert.ok(Math.abs(browseLayout.content.x-200)<2); assert.equal(browseLayout.font,"20px"); assert.equal(browseLayout.previous,"Prev"); assert.equal(browseLayout.next,"Next"); assert.equal(browseLayout.previousDisabled,true); assert.equal(browseLayout.nextDisabled,true); assert.equal(browseLayout.grades,0);
+    assert.ok(Math.abs(browseLayout.content.x-200)<2); assert.equal(browseLayout.font,"20px"); assert.equal(browseLayout.previous,"上一张"); assert.equal(browseLayout.next,"下一张"); assert.equal(browseLayout.previousDisabled,true); assert.equal(browseLayout.nextDisabled,true); assert.equal(browseLayout.grades,0);
     assert.ok(Math.abs(browseLayout.previousRect.x+browseLayout.previousRect.width/2-564)<3); assert.ok(Math.abs(browseLayout.nextRect.x+browseLayout.nextRect.width/2-948)<3);
   });
   const browseButtons = await evaluate("[...document.querySelectorAll('.ms-native-review-footer button,.ms-native-review-paper-tools button')].map(button=>{const css=getComputedStyle(button);return{label:button.getAttribute('aria-label'),background:css.backgroundColor,color:css.color,shadow:css.boxShadow}})");
@@ -333,12 +334,14 @@ try {
   await clickSelector("#native-visual-score");
   await browser("wait", "--fn", "document.querySelector('.ms-native-review-paper')!==null"); await clickButton("显示答案");
   await browser("wait", "--fn", "document.querySelector('.ms-grade.easy')?.offsetParent!==null");
-  const stageLayout = await evaluate("(()=>{const rect=s=>{const r=document.querySelector(s).getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}};return {paper:rect('.ms-native-review-paper'),grades:[...document.querySelectorAll('.ms-grade')].map(b=>({color:getComputedStyle(b).backgroundColor,...rect('.ms-grade.'+[...b.classList].find(c=>c!=='ms-grade'))})),text:document.querySelector('.ms-native-review-content').textContent,labels:document.querySelectorAll('.ms-native-review-content .ms-review-section-label').length}})()");
+  const stageLayout = await evaluate("(()=>{const rect=s=>{const r=document.querySelector(s).getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}};return {paper:rect('.ms-native-review-paper'),title:document.querySelector('.ms-review-card-title')?.textContent,titleRect:rect('.ms-review-card-title'),grades:[...document.querySelectorAll('.ms-grade')].map(b=>({label:b.textContent,color:getComputedStyle(b).backgroundColor,...rect('.ms-grade.'+[...b.classList].find(c=>c!=='ms-grade'))})),text:document.querySelector('.ms-native-review-content').textContent,labels:document.querySelectorAll('.ms-native-review-content .ms-review-section-label').length}})()");
   check("native reference scoring uses the measured full white card, top counter and four equal bottom controls", () => {
     assert.ok(Math.abs(stageLayout.paper.x-162)<2); assert.ok(Math.abs(stageLayout.paper.y-80.5)<2); assert.ok(Math.abs(stageLayout.paper.width-1188)<3); assert.ok(Math.abs(stageLayout.paper.height-768.5)<3);
     assert.ok(stageLayout.grades.every(grade=>Math.abs(grade.y-874)<2 && Math.abs(grade.height-44)<1));
     assert.ok(Math.max(...stageLayout.grades.map(g=>g.width))-Math.min(...stageLayout.grades.map(g=>g.width))<1);
-    assert.deepEqual(stageLayout.grades.map(g=>g.color),["rgb(0, 122, 255)","rgb(244, 105, 108)","rgb(79, 201, 135)","rgb(129, 129, 129)"]);
+    assert.deepEqual(stageLayout.grades.map(g=>g.color),["rgb(22, 146, 254)","rgb(244, 105, 108)","rgb(79, 201, 135)","rgb(129, 129, 129)"]);
+    assert.equal(stageLayout.title,"验收卡片标题"); assert.ok(stageLayout.titleRect.width>0 && stageLayout.titleRect.height>0);
+    assert.deepEqual(stageLayout.grades.map(g=>g.label.split(" ")[0]),["重复","难","良好","易"]);
     assert.ok(stageLayout.text.includes("Unique sentence U2: beta marker.")); assert.equal(stageLayout.labels,0);
   });
   await browser("screenshot",join(evidence,"review-native-reference.png")); await clickButton("结束复习");

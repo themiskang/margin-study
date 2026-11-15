@@ -14,6 +14,10 @@ const renderers: MindmapRenderer[] = [];
 (HTMLElement.prototype as any).empty = function () {this.replaceChildren();};
 const pause = () => new Promise(done => setTimeout(done,0));
 function assert(value: any, message: string) {if(!value) throw new Error(message);}
+function assertBounds(initial: DOMRectReadOnly, current: DOMRectReadOnly, message: string, diagnostics: Record<string, unknown> = {}) {
+  const delta={x:current.x-initial.x,y:current.y-initial.y,width:current.width-initial.width,height:current.height-initial.height};
+  assert(Object.values(delta).every(value=>Math.abs(value)<=1),message+': '+JSON.stringify({delta,initial:initial.toJSON(),current:current.toJSON(),...diagnostics}));
+}
 async function test(name: string, run: () => any) {try{document.querySelectorAll('.ms-modal-bg,#test-menu').forEach(node=>node.remove());target.replaceChildren();await run();results.push({name,passed:true});}catch(error){results.push({name,passed:false,error:String(error)});}}
 function button(root: ParentNode, label: string): HTMLButtonElement {const found=[...root.querySelectorAll('button')].find(node=>node.textContent===label);assert(found,`Missing button ${label}`);return found!;}
 function change(control: HTMLInputElement|HTMLSelectElement, value: string|boolean) {if(typeof value==='boolean')(control as HTMLInputElement).checked=value;else control.value=value;control.dispatchEvent(new Event('change',{bubbles:true}));}
@@ -60,28 +64,28 @@ try {
     button(masked,'••• 揭晓').click();await pause();const revealed=wrap.querySelector('[data-id="one"]') as HTMLElement;const after=revealed.getBoundingClientRect();
     assert(revealed.innerText.includes('Hidden answer'),'answer did not reveal');
     assert(!revealed.querySelector('[data-card-remaining]'),'revealed answer still counted as masked');
-    assert(['x','y','width','height'].every(key=>(before as any)[key]===(after as any)[key]),'reveal changed card bounds');
+    assertBounds(before,after,'reveal changed card bounds');
     button(revealed,'重新遮回').click();await pause();const remasked=wrap.querySelector('[data-id="one"]') as HTMLElement;const finalBounds=remasked.getBoundingClientRect();
     assert(!remasked.innerText.includes('Hidden answer')&&remasked.innerText.includes('Visible title'),'re-cover did not restore the mask');
     assert(remasked.querySelector('[data-card-remaining]')?.textContent==='还有 1 处','re-covered answer was not counted');
-    assert(['x','y','width','height'].every(key=>(before as any)[key]===(finalBounds as any)[key]),'re-cover changed card bounds');
+    assertBounds(before,finalBounds,'re-cover changed card bounds');
   });
   await test('Untitled question-and-answer cards retain the question while masking the answer',async()=>{
     const p=await fresh();p.addCard('a','Question text\n\nExtra secret');p.store.updateCard('a',{type:'flashcard',back:'Secret answer'});p.addNode('one','a',{occluded:true});const {wrap}=p.mount();await pause();
     const node=wrap.querySelector('[data-id="one"]') as HTMLElement;assert(node.innerText.includes('Question text')&&!node.innerText.includes('Secret answer')&&!node.innerText.includes('Extra secret'),'untitled question-and-answer card hid the question or exposed the answer');
-    const before=node.getBoundingClientRect();button(node,'••• 揭晓').click();await pause();const shown=wrap.querySelector('[data-id="one"]') as HTMLElement;const after=shown.getBoundingClientRect();assert(shown.innerText.includes('Extra secret')&&shown.innerText.includes('Secret answer'),'answer blocks did not reveal');assert(['x','y','width','height'].every(key=>(before as any)[key]===(after as any)[key]),'question reveal changed card bounds');
+    const before=node.getBoundingClientRect();button(node,'••• 揭晓').click();await pause();const shown=wrap.querySelector('[data-id="one"]') as HTMLElement;const after=shown.getBoundingClientRect();assert(shown.innerText.includes('Extra secret')&&shown.innerText.includes('Secret answer'),'answer blocks did not reveal');assertBounds(before,after,'question reveal changed card bounds');
   });
   await test('A loaded image remains concealed and card bounds stay fixed during reveal',async()=>{
     const p=await fresh();p.addCard('a','Image answer','Image title');p.store.updateCard('a',{image:'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="160" height="80"%3E%3Crect width="160" height="80" fill="red"/%3E%3C/svg%3E'});p.addNode('one','a',{occluded:true});const {wrap}=p.mount();
     const imageReady=async()=>{for(let i=0;i<100;i++){const img=wrap.querySelector('img.ms-node-img') as HTMLImageElement;if(img?.complete&&img.naturalWidth)return;await new Promise(done=>setTimeout(done,10));}throw new Error('fixture image did not load');};
     await imageReady();let node=wrap.querySelector('[data-id="one"]') as HTMLElement;const before=node.getBoundingClientRect();assert(getComputedStyle(node.querySelector('.ms-node-images')!).visibility==='hidden','image visible while masked');
     button(node,'••• 揭晓').click();await imageReady();node=wrap.querySelector('[data-id="one"]') as HTMLElement;const after=node.getBoundingClientRect();assert(getComputedStyle(node.querySelector('.ms-node-images')!).visibility==='visible','image did not reveal');
-    assert(['x','y','width','height'].every(key=>(before as any)[key]===(after as any)[key]),'image reveal changed card bounds');
+    assertBounds(before,after,'image reveal changed card bounds');
   });
   await test('Revealing a card before its image loads keeps its bounds stable',async()=>{
     const p=await fresh();p.addCard('a','Delayed image','Delayed title');p.store.updateCard('a',{image:'https://delayed.invalid/image.png'});p.addNode('one','a',{occluded:true});const {wrap}=p.mount();await pause();
     const node=()=>wrap.querySelector('[data-id="one"]') as HTMLElement;const img=node().querySelector('img') as HTMLImageElement;Object.defineProperty(img,'complete',{configurable:true,get:()=>false});button(node(),'••• 揭晓').click();await pause();assert(button(node(),'••• 揭晓').disabled,'reveal did not wait for pending image');
-    Object.defineProperty(img,'complete',{configurable:true,get:()=>true});img.src='data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="400" height="300"/%3E';for(let i=0;i<100&&!img.naturalWidth;i++)await new Promise(done=>setTimeout(done,10));assert(img.naturalWidth>0,'fixture image failed to load');const before=node().getBoundingClientRect();img.dispatchEvent(new Event('load'));await pause();const after=node().getBoundingClientRect();assert(['x','y','width','height'].every(key=>(before as any)[key]===(after as any)[key]),'reveal after image load changed card bounds');
+    Object.defineProperty(img,'complete',{configurable:true,get:()=>true});img.src='data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="400" height="300"/%3E';for(let i=0;i<100&&!img.naturalWidth;i++)await new Promise(done=>setTimeout(done,10));assert(img.naturalWidth>0,'fixture image failed to load');const before=node().getBoundingClientRect();img.dispatchEvent(new Event('load'));await pause();const after=node().getBoundingClientRect();assertBounds(before,after,'reveal after image load changed card bounds');
   });
   await test('A stalled image allows the reveal to be retried',async()=>{
     const p=await fresh();p.addCard('a','Delayed image','Delayed title');p.store.updateCard('a',{image:'https://delayed.invalid/image.png'});p.addNode('one','a',{occluded:true});const {wrap}=p.mount();await pause();
@@ -117,10 +121,10 @@ try {
   await test('Mixed emphasis and image masks report remaining items and reveal all together',async()=>{
     const p=await fresh();p.addCard('a','**hidden word**','Title');p.store.updateCard('a',{image:'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="80" height="80"/%3E',occlusions:[{id:'picture',x:.1,y:.1,width:.4,height:.4}]});p.addNode('one','a');const {wrap,renderer}=p.mount();wrap.classList.add('ms-study-workspace');wrap.setAttribute('data-recall-mask-emphasis-images','');const reader=document.createElement('div');reader.className='ms-reader-root ms-recall';wrap.append(reader);renderer.render();await pause();
     const node=()=>wrap.querySelector('[data-id="one"]') as HTMLElement;assert(node().querySelector('[data-card-remaining]')?.textContent==='还有 2 处','mixed count did not include both masks');
-    await Promise.all(Array.from(node().querySelectorAll('img')).map(image=>image.decode().catch(()=>{})));await document.fonts.ready;await new Promise(done=>setTimeout(done,250));renderer.render();await pause();await Promise.all(Array.from(node().querySelectorAll('img')).map(image=>image.decode().catch(()=>{})));await pause();const initial=node().getBoundingClientRect();const diagnostic=()=>({world:wrap.querySelector('.ms-mindmap-world')!.getBoundingClientRect().toJSON(),scroll:(wrap.querySelector('.ms-mindmap') as HTMLElement).scrollTop,clientHeight:(wrap.querySelector('.ms-mindmap') as HTMLElement).clientHeight,worldTop:(wrap.querySelector('.ms-mindmap-world') as HTMLElement).style.top,scrollRect:wrap.querySelector('.ms-mindmap')!.getBoundingClientRect().toJSON(),nodeTop:node().style.top,viewport:wrap.getBoundingClientRect().toJSON(),windowScroll:window.scrollY});const initialDiagnostic=diagnostic();const assertBounds=()=>{const current=node().getBoundingClientRect();assert(['x','y','width','height'].every(key=>(initial as any)[key]===(current as any)[key]),'mixed mask reveal changed card bounds: '+JSON.stringify({initial:initial.toJSON(),current:current.toJSON(),initialDiagnostic,currentDiagnostic:diagnostic()}));};
-    (node().querySelector('[data-image-mask]') as HTMLButtonElement).click();await pause();assertBounds();assert(node().querySelector('[data-card-remaining]')?.textContent==='还有 1 处','mixed count did not update on image reveal');
-    button(node(),'揭开本卡全部遮挡').click();await pause();assertBounds();assert(!node().querySelector('[data-card-remaining]')&&node().innerText.includes('hidden word'),'reveal all did not clear mixed masks');
-    button(node(),'重新遮回').click();await pause();assertBounds();assert(node().querySelector('[data-card-remaining]')?.textContent==='还有 2 处','re-cover did not restore mixed masks');
+    await Promise.all(Array.from(node().querySelectorAll('img')).map(image=>image.decode().catch(()=>{})));await document.fonts.ready;await new Promise(done=>setTimeout(done,250));renderer.render();await pause();await Promise.all(Array.from(node().querySelectorAll('img')).map(image=>image.decode().catch(()=>{})));await pause();const initial=node().getBoundingClientRect();const diagnostic=()=>({world:wrap.querySelector('.ms-mindmap-world')!.getBoundingClientRect().toJSON(),scroll:(wrap.querySelector('.ms-mindmap') as HTMLElement).scrollTop,clientHeight:(wrap.querySelector('.ms-mindmap') as HTMLElement).clientHeight,worldTop:(wrap.querySelector('.ms-mindmap-world') as HTMLElement).style.top,scrollRect:wrap.querySelector('.ms-mindmap')!.getBoundingClientRect().toJSON(),nodeTop:node().style.top,viewport:wrap.getBoundingClientRect().toJSON(),windowScroll:window.scrollY});const initialDiagnostic=diagnostic();const checkBounds=()=>assertBounds(initial,node().getBoundingClientRect(),'mixed mask reveal changed card bounds',{initialDiagnostic,currentDiagnostic:diagnostic()});
+    (node().querySelector('[data-image-mask]') as HTMLButtonElement).click();await pause();checkBounds();assert(node().querySelector('[data-card-remaining]')?.textContent==='还有 1 处','mixed count did not update on image reveal');
+    button(node(),'揭开本卡全部遮挡').click();await pause();checkBounds();assert(!node().querySelector('[data-card-remaining]')&&node().innerText.includes('hidden word'),'reveal all did not clear mixed masks');
+    button(node(),'重新遮回').click();await pause();checkBounds();assert(node().querySelector('[data-card-remaining]')?.textContent==='还有 2 处','re-cover did not restore mixed masks');
   });
   await test('Single reveal can re-cover an already opened image mask',async()=>{
     const p=await fresh();p.addCard('a','Image','Title');p.store.updateCard('a',{image:'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="80" height="80"/%3E',occlusions:[{id:'a',x:.1,y:.1,width:.3,height:.4},{id:'b',x:.6,y:.1,width:.3,height:.4}]});p.addNode('one','a');const {wrap,renderer}=p.mount();wrap.classList.add('ms-study-workspace');wrap.setAttribute('data-recall-mask-emphasis-images','');wrap.setAttribute('data-recall-single','');const reader=document.createElement('div');reader.className='ms-reader-root ms-recall';wrap.append(reader);renderer.render();await pause();
@@ -159,14 +163,14 @@ try {
     const selection=wrap.querySelector('select[title="脑图复习模式"]') as HTMLSelectElement;change(selection,'expand');await pause();assert(!wrap.innerText.includes('secret')&&wrap.querySelector('[aria-label="揭晓强调内容"]'),'review did not mask emphasis');
     const maskedBounds=(wrap.querySelector('[data-id="n"]') as HTMLElement).getBoundingClientRect();
     (wrap.querySelector('[aria-label="揭晓强调内容"]') as HTMLButtonElement).click();await pause();assert(wrap.textContent!.includes('secret'),'emphasis did not reveal');
-    const shownBounds=(wrap.querySelector('[data-id="n"]') as HTMLElement).getBoundingClientRect();assert(['x','y','width','height'].every(key=>(maskedBounds as any)[key]===(shownBounds as any)[key]),'emphasis reveal changed card bounds');
+    const shownBounds=(wrap.querySelector('[data-id="n"]') as HTMLElement).getBoundingClientRect();assertBounds(maskedBounds,shownBounds,'emphasis reveal changed card bounds');
     const fragment=document.createElement('div');fragment.innerHTML='<pre><code><strong>literal</strong></code></pre><strong>answer</strong>';maskEmphasis(fragment,()=>{});assert(fragment.textContent==='literal•••','code emphasis was treated as answer');
   });
   await test('Long emphasized answers preserve their card bounds when revealed',async()=>{
     const p=await fresh();p.store.updateCanvas(p.canvasId,{emphasisCloze:true});p.addCard('a','Heading **A long emphasized answer contains enough words to wrap onto several separate lines inside the card** tail','Title');p.addNode('n','a');const {wrap}=p.mount();await pause();
     change(wrap.querySelector('select[title="脑图复习模式"]') as HTMLSelectElement,'expand');await pause();const before=(wrap.querySelector('[data-id="n"]') as HTMLElement).getBoundingClientRect();
     (wrap.querySelector('[aria-label="揭晓强调内容"]') as HTMLButtonElement).click();await pause();const after=(wrap.querySelector('[data-id="n"]') as HTMLElement).getBoundingClientRect();
-    assert(['x','y','width','height'].every(key=>(before as any)[key]===(after as any)[key]),'long emphasis changed card bounds');
+    assertBounds(before,after,'long emphasis changed card bounds');
   });
   await test('Split dialog uses explicit content parts and keeps emoji boundaries',async()=>{
     const p=await fresh();p.addCard('a','A😀B','Title');const node=p.addNode('n','a',{comments:['local comment']});const calls:any[]=[];

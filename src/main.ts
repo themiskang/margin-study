@@ -8,6 +8,8 @@ import { SidebarView, VIEW_TYPE_SIDEBAR } from "./sidebar/sidebarView";
 import { MindmapView, VIEW_TYPE_MINDMAP } from "./mindmap/mindmapView";
 import { exportMarkdown, exportHtml, openStats, exportAnkiTsv, exportAllHtml, exportAnkiApkg } from "./export/exporter";
 import { exportMindmapPng } from "./export/mindmapExport";
+import { importStudySetPackage, openStudySetImport } from "./export/studySetImport";
+import type { StudySetImportOptions, StudySetImportSummary } from "./export/studySetImport";
 import { detectDuplicateCards } from "./cards/dedup";
 import { exportPdfOutline } from "./pdf/outline";
 import { exportCanvas, importCanvas } from "./canvas/canvasIo";
@@ -32,6 +34,7 @@ import { openCardLink } from "./study/cardLink";
 import { aiServiceFor } from "./ai/panel";
 import { condenseServiceFor } from "./ai/condense";
 import type { LocalCliService } from "./ai/contracts";
+import { exportPenPerf, resetPenPerf, startPenPerf } from "./annot/pen";
 
 /** 视图间事件回调（侧边栏大纲需要监听阅读器翻页） */
 export interface ViewEvents {
@@ -66,6 +69,7 @@ export default class MarginStudyPlugin extends Plugin {
   }, text => { new Notice(text, 10000); });
 
   async onload(): Promise<void> {
+    resetPenPerf();
     this.localCliUnloaded = false;
     await initPdfWorker(this.app);
     this.store = new Store(this);
@@ -81,6 +85,7 @@ export default class MarginStudyPlugin extends Plugin {
     this.registerExtensions(["msref"], VIEW_TYPE_READER);
     this.registerView(VIEW_TYPE_STUDY_WORKSPACE, (leaf) => new StudyWorkspaceView(leaf, this));
     this.registerObsidianProtocolHandler("margin-study-card", params => openCardLink(this, { vault: params["msvault"], card: params["card"] }));
+    this.registerObsidianProtocolHandler("margin-study-state", params => { void this.openStudyWorkspace().then(view => view.openFromStateParams(params)); });
 
     // Replace views in their existing tabs; each callback checks the current setting.
     this.registerEvent(this.app.workspace.on("file-open", (file) => {
@@ -156,6 +161,17 @@ export default class MarginStudyPlugin extends Plugin {
     this.registerDomEvent(window, "blur", () => { void this.store.flush().catch(() => {}); });
     this.registerDomEvent(document, "visibilitychange", () => { if (document.visibilityState === "hidden") void this.store.flush().catch(() => {}); });
 
+    this.addCommand({ id: "start-pen-perf", name: "开启性能记录", callback: () => { startPenPerf(); new Notice("性能记录已开启，请画三笔后导出"); } });
+    this.addCommand({ id: "export-pen-perf", name: "导出性能日志", callback: () => {
+      void this.app.vault.adapter.write("MarginStudy-perf.json", exportPenPerf())
+        .then(() => new Notice("性能日志已导出到库根目录"))
+        .catch(error => new Notice("导出性能日志失败：" + String(error)));
+    } });
+    this.addCommand({
+      id: "import-study-set",
+      name: "导入学习集（.marginstudy-set.zip）",
+      callback: () => openStudySetImport(this, () => this.refreshSidebar()),
+    });
     this.addCommand({
       id: "open-reader",
       name: "在 MarginStudy 中打开当前 PDF",
@@ -337,7 +353,10 @@ export default class MarginStudyPlugin extends Plugin {
 
     this.addSettingTab(new MarginStudySettingTab(this.app, this));
 
-    this.addCommand({ id: "save-now", name: "立即保存学习库", callback: () => { void this.store.flush().then(() => new Notice("学习库已保存")).catch(() => {}); } });
+    this.addCommand({ id: "save-now", name: "立即保存学习库", callback: () => {
+      if (this.store.settings.diagnosticNoPersist) { new Notice("诊断模式：不会写盘。请先关闭诊断开关。"); return; }
+      void this.store.flush().then(() => new Notice("学习库已保存")).catch(() => {});
+    } });
     this.addCommand({ id: "restore-backup", name: "选择保护快照恢复对象", callback: () => this.showLocalStatus() });
     this.addCommand({ id: "resolve-save-conflict", name: "处理保存冲突", callback: () => this.showSaveConflict() });
     this.addCommand({ id: "undo-library", name: "撤销最近一次学习库操作", callback: () => { if (!this.store.undoLibraryChange()) new Notice("没有可撤销的操作"); } });
@@ -354,6 +373,7 @@ export default class MarginStudyPlugin extends Plugin {
   }
 
   onunload(): void {
+    resetPenPerf();
     this.localCliUnloaded = true;
     void this.localCli?.stop().catch(() => {});
     this.recoveryPrompts.dispose();
@@ -617,9 +637,23 @@ export default class MarginStudyPlugin extends Plugin {
   async ensureSplitLayout(): Promise<void> { if (!this.studyWorkspace) await this.openSidebar(); }
 
   /** 刷新当前激活的脑图视图（右侧独立脑图或侧边栏脑图页签） */
+  /** 供命令与自动化调用：把学习集包字节导入当前库。 */
+  async importStudySetBytes(bytes: ArrayBuffer, options?: StudySetImportOptions): Promise<StudySetImportSummary> {
+    return importStudySetPackage(this, bytes, options);
+  }
+
   refreshMindmap(): void {
     this.sidebar?.refreshMindmap();
     this.mindmapView?.refresh();
     this.studyWorkspace?.refresh();
+  }
+
+  /** 5.0.2：从摘录提示定位新卡——此时才打开脑图并选中。 */
+  async locateCard(cardId: string): Promise<boolean> {
+    const workspace = this.studyWorkspace ?? await this.openStudyWorkspace();
+    if (!workspace.revealCardInMap(cardId)) throw new Error("当前脑图中找不到这张卡");
+    await this.app.workspace.revealLeaf(workspace.leaf);
+    this.app.workspace.setActiveLeaf(workspace.leaf, { focus: true });
+    return true;
   }
 }

@@ -8,6 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { build } from "esbuild";
+import { runBrowser } from "../../scripts/ego-harness.mjs";
 const exec = promisify(execFile), here = dirname(fileURLToPath(import.meta.url)), project = resolve(here,"../.."), temporary = await mkdtemp(join(tmpdir(),"marginstudy-ai-ui-"));
 const evidence=join(process.env.MARGINSTUDY_VERIFY_DIR||tmpdir(),"ai-ui-acceptance-evidence");await mkdir(evidence,{recursive:true});
 const red="iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR4nO3NsQ0AAAzCMP5/un0CNkuZ41wybXsHAAAAAAAAAAAAxR4yw/wuPL6QkAAAAABJRU5ErkJggg==";
@@ -40,8 +41,8 @@ const server=createServer(async(request,response)=>{
   const name=pathname.slice(1)||"index.html";if(!["index.html","fixture.js","styles.css"].includes(name)){response.writeHead(404).end();return;}
   response.setHeader("Content-Type",name.endsWith(".js")?"text/javascript":name.endsWith(".css")?"text/css":"text/html;charset=utf-8");response.end(await readFile(join(temporary,name)));
 });await new Promise(done=>server.listen(0,"127.0.0.1",done));
-const origin=`http://127.0.0.1:${server.address().port}`,session=(await exec("agent-browser",["session","id","--scope","worktree","--prefix",`marginstudy-ai-ui-${process.pid}`],{cwd:project})).stdout.trim();
-const browser=(...args)=>exec("agent-browser",["--session",session,...args.map(String)],{cwd:project,maxBuffer:4*1024*1024,timeout:45000});
+const origin=`http://127.0.0.1:${server.address().port}`,session=`marginstudy-ai-ui-${process.pid}`;
+const browser=(...args)=>runBrowser(session,...args);
 const evaluate=async source=>JSON.parse((await browser("eval",source)).stdout),inspect=()=>evaluate("window.aiFixture.inspect()");
 const click=async name=>{await browser("find","role","button","click","--name",name,"--exact");};
 const fill=(label,value)=>browser("find","label",label,"fill",value);
@@ -58,10 +59,18 @@ try{
   await click("附加文字或图片");await click("使用当前选择");await fill("AI 问题","解释当前选择");await click("发送 AI 请求");await idle();
   check("real composer sends only explicit selected text and keeps the library unchanged",()=>{assert.ok(JSON.stringify(requests.at(-1)).includes("ONLY_SELECTED_PARAGRAPH"));assert.ok(!JSON.stringify(requests).includes("CANARY_NOT_SELECTED"));});assert.equal((await inspect()).cards.length,2);
   await fill("AI 问题","继续解释");await click("发送 AI 请求");await idle();assert.equal(requests.at(-1).messages.length,4);
+  const draggedReply=await evaluate("(()=>{const message=document.querySelector('.ms-ai-message-assistant');const data=new DataTransfer();message.dispatchEvent(new DragEvent('dragstart',{bubbles:true,cancelable:true,dataTransfer:data}));return {draggable:message.draggable,payload:JSON.parse(data.getData('application/x-marginstudy-ai-reply'))}})()");
+  check("AI reply exposes its text as a draggable mindmap payload",()=>{assert.equal(draggedReply.draggable,true);assert.ok(draggedReply.payload.text.includes("合成 AI 回复"));});
   await browser("select","[aria-label=\"AI 对话模式\"]","ask");await fill("AI 问题","独立问答");await click("发送 AI 请求");await idle();
   check("Chat includes the previous exchange and Ask starts a separate request",()=>assert.equal(requests.at(-1).messages.length,2));
   const presets=await evaluate("[...document.querySelector('[aria-label=\"AI 提问模板\"]').options].map(option=>option.textContent)");
-  check("AI presets follow the observed native None, Guide, Quiz and Explain menu",()=>assert.deepEqual(presets,["Template: None","Template: Guide Mode","Template: Quiz Mode","Template: Explain Mode"]));
+  check("AI presets include None, Guide, Quiz, Explain and Mind Map",()=>assert.deepEqual(presets,["模板：无","模板：引导模式","模板：测验模式","模板：解释模式","模板：脑图"]));
+  await click("管理 AI 模板");assert.ok(await evaluate("Boolean(document.querySelector('[aria-label=\"整理成脑图提示词\"]'))"));await click("完成");
+  await click("更多 AI 功能");assert.ok(await evaluate("[...document.querySelectorAll('[aria-label=\"更多 AI 功能菜单\"] button')].map(button=>button.textContent).join('|')==='对当前文档|AI 生成目录'"));await click("AI 生成目录");
+  assert.ok((await evaluate("document.querySelector('.ms-ai-status').textContent")).includes('请先打开当前文档'));
+  await evaluate("window.aiFixture.setReader(true); true");await click("更多 AI 功能");await click("AI 生成目录");await browser("wait","--fn","document.querySelector('.ms-ai-context-chip')?.textContent.includes('当前文档')");assert.equal(await evaluate("document.querySelector('[aria-label=\"AI 任务\"]').value"),"outline");
+  await click("移除文字上下文");await evaluate("window.aiFixture.setReader(false); true");
+  await browser("select","[aria-label=\"AI 提问模板\"]","mindmap");assert.equal(await evaluate("document.querySelector('[aria-label=\"AI 任务\"]').value"),"outline");await browser("select","[aria-label=\"AI 任务\"]","chat");
   await click("附加文字或图片");await click("使用当前选择");await browser("select","[aria-label=\"AI 提问模板\"]","guide");await fill("AI 问题","Guide this synthetic concept");await click("发送 AI 请求");await idle();
   check("Guide requests one step at a time using only explicitly attached context",()=>{const sent=JSON.stringify(requests.at(-1));assert.ok(sent.includes("Guide this synthetic concept")&&sent.includes("每次只问一个问题"));assert.ok(sent.includes("ONLY_SELECTED_PARAGRAPH")&&!sent.includes("CANARY_NOT_SELECTED"));assert.equal((requests.at(-1)).messages.length,2);});
   await browser("select","[aria-label=\"AI 提问模板\"]","");

@@ -54,6 +54,9 @@ function assertEvidence(store) {
     assert.ok(event.id && event.at && event.kind && Array.isArray(event.objectIds) && typeof event.detail === "string");
   }
   assert.ok(status.length >= 5);
+  assert.ok(status.some(item => item.key === "pending-upload"), "pending-upload status missing");
+  assert.ok(status.every(item => !/已上传|已同步云端|已同步到云端/.test(item.text)), "status text falsely claims an upload");
+  assert.match(status.find(item => item.key === "pending-upload").text, /等待上传|无未落盘/);
   for (const item of status) {
     assert.ok(item.evidenceEventIds?.length, `missing evidence for ${item.key}`);
     for (const id of item.evidenceEventIds) assert.ok(ids.has(id), `unknown event ${id} for ${item.key}`);
@@ -75,7 +78,7 @@ await check("1 status items trace to persisted local events", async () => {
   assert.match(assertEvidence(f.store).find(item => item.key === "local").text, /已保存/);
   f.store.markDocumentMissing("source.pdf"); await f.store.flush();
   const missing = assertEvidence(f.store).find(item => item.key === "missing");
-  assert.match(missing.text, /文件缺失/);
+  assert.match(missing.text, /本机未找到/);
   assert.ok(f.disk().localEvents.some(event => event.kind === "file-missing" && event.objectIds.includes("doc-one")));
   const reopened = await f.reopen(); assertEvidence(reopened);
   assert.ok(reopened.getLocalEvents().some(event => event.kind === "file-missing" && event.objectIds.includes("doc-one")));
@@ -149,7 +152,7 @@ await check("3 missing file and deleted object use different text and actions", 
   const f = await fresh(); requireStatus(f.store);
   f.store.markDocumentMissing("source.pdf"); f.store.removeCard("card-one");
   const status = assertEvidence(f.store), missing = status.find(item => item.key === "missing"), deleted = status.find(item => item.key === "deleted");
-  assert.match(missing.text, /文件缺失/); assert.doesNotMatch(missing.text, /删除/);
+  assert.match(missing.text, /本机未找到/); assert.doesNotMatch(missing.text, /删除/);
   assert.match(deleted.text, /对象已删除/); assert.doesNotMatch(deleted.text, /缺失/);
   assert.ok(missing.action && deleted.action); assert.notEqual(missing.action, deleted.action);
   assert.ok(f.store.getLocalEvents().some(event => event.kind === "object-deleted" && event.objectIds.includes("card-one")));
@@ -250,6 +253,30 @@ await check("8 status evidence survives conflict choices, reload and repeated sa
   await assert.rejects(collide.store.resolveDataConflict("merge"), /事件 ID 冲突/);
   assert.equal(collide.store.getCard("card-one").front, "local survives duplicate"); assert.ok(collide.store.conflictPath);
   return { conflictEventPersisted: true, remoteChoice: true, missingEvidenceRetained: true, writes: 30, duplicateEventIdRejected: true };
+});
+
+await check("diagnostic mode defers main and annotation writes until disabled", async () => {
+  const f = await fresh();
+  assert.equal(f.store.settings.diagnosticNoPersist, false);
+  await f.store.flush();
+  const before = JSON.stringify(f.disk()), writes = f.writes.length;
+  f.store.updateCard("card-one", { front: "pending diagnostic" });
+  f.store.settings.diagnosticNoPersist = true;
+  f.store.save();
+  const annotations = [{ id: "diag-annotation", docPath: "source.pdf", docKind: "pdf", page: 1, type: "note", rects: [], text: "pending", color: "#000", createdAt: stamp }];
+  f.store.saveAnnotationsDebounced("source.pdf", annotations);
+  await new Promise(resolve => setTimeout(resolve, 900));
+  await f.store.flush();
+  assert.equal(JSON.stringify(f.disk()), before);
+  assert.equal(f.writes.length, writes);
+  assert.equal(f.store.getCard("card-one").front, "pending diagnostic");
+  assert.equal((await f.store.loadAnnotations("source.pdf"))[0].text, "pending");
+  f.store.settings.diagnosticNoPersist = false;
+  f.store.save();
+  await f.store.flush();
+  assert.equal(f.disk().cards[0].front, "pending diagnostic");
+  assert.ok(f.writes.length > writes);
+  return { defaultOff: true, pendingTimerCancelled: true, explicitFlushBlocked: true, resumed: true };
 });
 
 for (const store of stores) if (store.saveTimer !== null) clearTimeout(store.saveTimer);

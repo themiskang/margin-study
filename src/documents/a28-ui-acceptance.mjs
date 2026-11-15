@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { build } from "esbuild";
+import { runBrowser } from "../../scripts/ego-harness.mjs";
 
 const exec = promisify(execFile), here = dirname(fileURLToPath(import.meta.url)), root = await realpath(resolve(here, "../.."));
 const temporary = await realpath(await mkdtemp(join(tmpdir(), "marginstudy-a28-ui-")));
@@ -21,8 +22,8 @@ const server = createServer(async (request, response) => {
   response.end(await readFile(name === "styles.css" ? join(root, name) : join(temporary, name)));
 });
 await new Promise(done => server.listen(0, "127.0.0.1", done));
-const session = (await exec("agent-browser", ["session", "id", "--scope", "worktree", "--prefix", `marginstudy-a28-${process.pid}`], { cwd: root })).stdout.trim();
-const browser = (...args) => exec("agent-browser", ["--session", session, ...args], { cwd: root, maxBuffer: 4 * 1024 * 1024, timeout: 45000 });
+const session = `marginstudy-a28-${process.pid}`;
+const browser = (...args) => runBrowser(session, ...args);
 try {
   await browser("open", `http://127.0.0.1:${server.address().port}`);
   await browser("wait", "--fn", "window.done === true");

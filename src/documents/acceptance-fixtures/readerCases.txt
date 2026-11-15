@@ -43,7 +43,7 @@ export async function runReaderAcceptance({test,assert,wait,plugin,add,app}:any)
   try{await v.renderPage(1);const spans=[...v.getPageRecord(1).textLayer.querySelectorAll('span')];assert(spans.map((node:any)=>node.textContent).join('|')==='Left 0|Left 1|Left 2|Left 3|Right 0|Right 1|Right 2|Right 3','text layer interleaves independent columns');assert(spans.every((span:any)=>span.nextElementSibling?.tagName==='BR'),'text line breaks detached from their glyphs');const range=document.createRange();range.setStart(spans[0].firstChild,0);range.setEnd(spans[3].firstChild,6);assert(!range.toString().includes('Right'),'left column selection included right column');}finally{await v.onClose();}
  });
  await test('A fitted PDF retains fit intent after saving and reopening at a changed pane width',async()=>{
-  add('fit-reopen.pdf',{name:'Fitted reopen',pages:3});const p=plugin(),v:any=new ReaderView({app} as any,p);await v.onOpen();await v.loadFileByPath('fit-reopen.pdf');await v.setPageLayout('spread',true);await v.fitWidth();await wait(60);
+  add('fit-reopen.pdf',{name:'Fitted reopen',pages:3});const p=plugin(),v:any=new ReaderView({app} as any,p);await v.onOpen();await v.loadFileByPath('fit-reopen.pdf');await v.setPageLayout('spread',false);await v.fitWidth();await wait(60);
   const saved=v.getState();try{assert(saved.pdfFitWidth===true,'saved reader state lost fit intent');const reopen:any=new ReaderView({app} as any,p);reopen.containerEl.style.width='1000px';await reopen.setState(saved);await reopen.onOpen();try{assert(reopen.isFittedToWidth()&&(reopen.getState() as any).pdfFitWidth===true,'reopen lost fitted mode');}finally{await reopen.onClose();reopen.containerEl.remove();}}finally{await v.onClose();v.containerEl.remove();}
  });
  await test('PDF user can edit TOC, undo redo and reopen without changing source PDF',async()=>{
@@ -85,12 +85,12 @@ export async function runReaderAcceptance({test,assert,wait,plugin,add,app}:any)
   assert((v.getState() as any).position.page===3,'paged final page was not selected');await v.setPageLayout('single',true);await wait(50);
   const saved=v.getState();assert((saved as any).position.page===3,'returning to scroll saved an earlier visible page: '+JSON.stringify(saved));
   const reopened=new ReaderView({app} as any,p);await reopened.setState(saved);await reopened.onOpen();await wait(50);
-  try{assert((reopened.getState() as any).position.page===3&&reopened.getScale()===.3&&reopened.getPageLayout().continuous,'reloading lost the selected final page or mode');reopened.getScrollContainer().scrollTo({top:0,behavior:'instant' as ScrollBehavior});await wait(50);assert((reopened.getState() as any).position.page===1,'an explicit final-page anchor ignored later manual scrolling');}finally{await reopened.onClose();await v.onClose();}
+  try{assert((reopened.getState() as any).position.page===3&&reopened.isFittedToWidth()&&reopened.getPageLayout().continuous,'reloading lost the selected final page or fitted vertical mode');reopened.getScrollContainer().scrollTo({top:0,behavior:'instant' as ScrollBehavior});await wait(50);assert((reopened.getState() as any).position.page===1,'an explicit final-page anchor ignored later manual scrolling');}finally{await reopened.onClose();await v.onClose();}
  });
- await test('PDF four layouts preserve shells, group odd final page, persist modes and restore location',async()=>{
+ await test('PDF layouts preserve shells, group odd final page, persist modes and restore location',async()=>{
   add('layout.pdf',{name:'Layout',pages:5});const p=plugin();const v:any=new ReaderView({app} as any,p);
   await v.onOpen();await v.loadFileByPath('layout.pdf');const shell=v.getPageRecord(2).wrapper;
-  await v.setPageLayout('spread',true);
+  await v.setPageLayout('spread',false);
   assert(v.scrollEl.querySelectorAll('.ms-page-spread').length===3,'incorrect spread grouping');
   assert(v.getPageRecord(2).wrapper===shell,'layout recreated annotation shells');
   const a=v.getPageRecord(1).wrapper.getBoundingClientRect(),b=v.getPageRecord(2).wrapper.getBoundingClientRect();
@@ -108,7 +108,7 @@ export async function runReaderAcceptance({test,assert,wait,plugin,add,app}:any)
   await reopened.navigateToReference(5,[]);assert(reopened.scrollEl.querySelector('.ms-page-spread:not([hidden])').children.length===1,'odd final page wrong');
   await reopened.setPageLayout('single',false);assert(reopened.scrollEl.querySelectorAll('.ms-page-spread').length===5,'single paged rows');
   await reopened.setPageLayout('single',true);assert(![...reopened.pageRows.values()].some((row:any)=>row.hidden),'single continuous hidden pages');
-  assert(p.store.getDocMeta('layout.pdf').pdfLayout==='single'&&p.store.getDocMeta('layout.pdf').pdfContinuous===true,'mode not saved');
+  assert(p.store.settings.doublePage===false&&p.store.settings.readingMode==='vertical','global mode not saved');
   await reopened.onClose();await v.onClose();
  });
  await test('PDF paged source jumps/history, focused keyboard steps, limits and spread fit width',async()=>{

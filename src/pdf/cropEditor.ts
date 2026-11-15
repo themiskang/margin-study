@@ -11,14 +11,14 @@ export function openPageCropEditor(reader: ReaderView, page: any, onClose: () =>
   const rotation = page.marginStudyRotation ?? 0;
   let draft = rotatePageCrop(reader.getPageCrop(), rotation), closed = false, task: any = null, moving: (() => void) | null = null;
   const original = page.getViewport({ scale: 1 });
-  const { bg, modal, close } = createModal("Crop", () => {
+  const { bg, modal, close } = createModal("裁剪", () => {
     if (closed) return; closed = true; moving?.(); observer.disconnect();
     try { task?.cancel(); } catch { /* noop */ } onClose();
   });
   bg.classList.add("ms-crop-backdrop"); modal.classList.add("ms-crop-modal");
-  modal.setAttribute("role", "dialog"); modal.setAttribute("aria-label", "Crop"); modal.setAttribute("aria-modal", "true");
-  const header = el("header", { class: "ms-crop-header" }), title = el("h3", { text: "Crop" });
-  const done = el("button", { text: "Done", "aria-label": "Done" }); header.append(title, done);
+  modal.setAttribute("role", "dialog"); modal.setAttribute("aria-label", "裁剪"); modal.setAttribute("aria-modal", "true");
+  const header = el("header", { class: "ms-crop-header" }), title = el("h3", { text: "裁剪" });
+  const done = el("button", { text: "完成", "aria-label": "完成" }); header.append(title, done);
   const stage = el("div", { class: "ms-crop-stage" }), band = el("div", { class: "ms-crop-band" });
   const selection = el("div", { class: "ms-crop-selection" });
   const canvas = el("canvas", { class: "ms-crop-paper", "aria-label": "原始页面预览" }) as HTMLCanvasElement;

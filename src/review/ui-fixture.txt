@@ -34,7 +34,7 @@ async function main() {
   document.getElementById("begin")!.onclick = () => startReview(plugin, { scopeId: "a" });
   document.getElementById("history")!.onclick = () => openReviewHistory(plugin, card.id);
   renderCardList(document.getElementById("cards")!, plugin);
-  const nativeCard = { ...card, id: "native-style-card", front: "Unique sentence U2: beta marker. Selection dragging works over these lines", back: "" };
+  const nativeCard = { ...card, id: "native-style-card", title: "验收卡片标题", front: "Unique sentence U2: beta marker. Selection dragging works over these lines", back: "" };
   const nativeScore = document.createElement("button"); nativeScore.id = "native-visual-score"; nativeScore.textContent = "原版评分布局样例";
   nativeScore.onclick = () => {
     if (!store.getCard(nativeCard.id)) store.addCard(nativeCard);

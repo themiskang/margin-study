@@ -23,7 +23,30 @@ function button(root: ParentNode, name: string): HTMLButtonElement {
   const found = [...root.querySelectorAll<HTMLButtonElement>('button')].find(node => node.getAttribute('aria-label') === name || node.textContent === name);
   assert(found, `Missing button ${name}`); return found!;
 }
-const action = (root: ParentNode, name: string) => root.querySelector<HTMLButtonElement>(`.ms-selection-actions [data-action="${name}"]`)!;
+const action = (root: ParentNode, name: string) => {
+  if (name === 'close' && root.querySelector('[data-selection-mode="multiple"]')) {
+    button(root.querySelector('.ms-selection-actions')!, '更多').click();
+    return button(document.querySelector('#test-menu')!, '退出多选');
+  }
+  return root.querySelector<HTMLButtonElement>(`.ms-selection-actions [data-action="${name}"]`)!;
+};
+/** 概要/重新分组/合并按 MN5 收在节点「更多 → 更多操作…」内。 */
+const moreAction = (root: ParentNode, label: string) => {
+  const bar = root.querySelector<HTMLElement>('.ms-node-toolbar'); assert(bar, 'node toolbar missing');
+  button(bar!, '更多').click();
+  const first = document.querySelector<HTMLElement>('#test-menu'); assert(first, 'more menu missing for ' + label);
+  button(first!, '更多操作…').click();
+  const second = document.querySelector<HTMLElement>('#test-menu'); assert(second, 'more operations menu missing');
+  return button(second!, label);
+};
+/** 无选中时「更多」不打开菜单，等价于动作不可用。 */
+const moreDisabled = (root: ParentNode, label: string) => {
+  const bar = root.querySelector<HTMLElement>('.ms-node-toolbar');
+  if (!Number(bar?.getAttribute('data-selection') ?? 0)) return true;
+  const node = moreAction(root, label), value = node.disabled;
+  document.querySelector('#test-menu')?.remove();
+  return value;
+};
 const card = (root: ParentNode, id: string) => root.querySelector<HTMLElement>(`.ms-node[data-id="${id}"]`)!;
 async function test(name: string, run: () => any) {
   try {
@@ -52,20 +75,49 @@ async function fresh(host?: any) {
       collapsed: false, x: 90 + store.nodes.length * 290, y: 100, ...patch }); return store.getNode(id)!;
   };
   const mount = () => { const wrap = document.createElement('div'); wrap.style.height = '650px'; target.append(wrap);
-    const renderer = new MindmapRenderer(plugin); renderer.mount(wrap); renderers.push(renderer); return { renderer, wrap }; };
+    const renderer = new MindmapRenderer(plugin); renderer.mount(wrap); renderers.push(renderer); (wrap as any).__renderer = renderer; return { renderer, wrap }; };
   return { store, plugin, set, canvasId, addCard, addNode, mount, host, jumps, opens: () => opens };
 }
 try {
+  await test('AI reply drop creates a card and node and supports undo', async () => {
+    const p = await fresh(); const { wrap } = p.mount();
+    const transfer = new DataTransfer();
+    transfer.setData('application/x-marginstudy-ai-reply', JSON.stringify({text:'AI 回复正文',docPath:'synthetic.pdf'}));
+    wrap.querySelector('.ms-mindmap')!.dispatchEvent(new DragEvent('drop', { bubbles:true, cancelable:true, dataTransfer:transfer, clientX:200, clientY:200 }));
+    assert(p.store.cards.some(item => item.front === 'AI 回复正文'), 'reply card missing');
+    assert(p.store.nodes.some(item => p.store.cards.some(card => card.id === item.cardId && card.front === 'AI 回复正文')), 'reply node missing');
+    assert(p.store.undoLibraryChange(), 'reply drop not undoable');
+    assert(!p.store.cards.some(item => item.front === 'AI 回复正文'), 'undo retained reply card');
+  });
+  await test('MN5: collapse remains closed until canvas expand all', async () => {
+    const p = await fresh(); p.addNode('one'); p.addNode('child', undefined, { parentId: 'one' }); const { wrap } = p.mount();
+    const arrow = () => card(wrap, 'one').querySelector<HTMLButtonElement>('[title="折叠/展开"]')!;
+    arrow().click(); assert(!card(wrap, 'child') && p.store.getNode('one')!.collapsed, 'first click did not collapse');
+    arrow().click(); assert(!card(wrap, 'child') && p.store.getNode('one')!.collapsed, 'second click expanded branch');
+    wrap.querySelector('.ms-mindmap')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
+    const menu = document.querySelector('#test-menu')!;
+    assert([...menu.querySelectorAll('button')].map(item => item.textContent).join(',') === '新建卡片,粘贴,排列,缩放至合适大小,展开到层级', 'canvas menu order differs');
+    button(menu, '展开到层级').click(); button(document.querySelector('#test-menu')!, '全部展开').click();
+    assert(card(wrap, 'child') && !p.store.getNode('one')!.collapsed, 'expand all did not restore branch');
+  });
+  await test('MN5: multi-select toolbar order and selected-node right click', async () => {
+    const p = await fresh(); p.addNode('one'); p.addNode('two'); const { wrap } = p.mount();
+    button(wrap, '多选').click(); card(wrap, 'one').click(); card(wrap, 'two').click();
+    const labels = [...wrap.querySelectorAll('.ms-selection-actions button')].map(item => item.getAttribute('aria-label'));
+    assert(labels.join(',') === '剪切,复制,颜色,标签,链接,概要,重组,合并,对话,删除,更多', `toolbar differs: ${labels}`);
+    card(wrap, 'one').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    assert(!document.querySelector('#test-menu') && !wrap.querySelector('.ms-node.is-selected'), 'selected node right click opened a menu or retained selection');
+  });
   await test('L4: explicit multi-select accumulates ordinary clicks, enables Merge for pairs, and exits', async () => {
     const p = await fresh(); p.addCard('a', 'Alpha'); p.addCard('b', 'Beta'); p.addNode('one', 'a'); p.addNode('two', 'b'); const { wrap } = p.mount();
     card(wrap, 'one').click(); card(wrap, 'two').click();
     assert(wrap.querySelectorAll('.ms-node.is-selected').length === 1 && card(wrap, 'two').classList.contains('is-selected'), 'normal clicks accumulated');
-    assert(action(wrap, 'merge').disabled, 'Merge enabled outside explicit mode');
+    assert(moreDisabled(wrap, '合并'), 'Merge enabled outside explicit mode');
     action(wrap, 'close').click(); button(wrap, '多选').click();
     assert(wrap.querySelector('[data-selection-mode="multiple"]'), 'multi-select mode was not entered');
-    assert(action(wrap, 'merge').disabled, 'empty Merge enabled'); card(wrap, 'one').click();
-    assert(action(wrap, 'merge').disabled, 'single-card Merge enabled'); card(wrap, 'two').click();
-    assert(wrap.querySelectorAll('.ms-node.is-selected').length === 2 && !action(wrap, 'merge').disabled, 'ordinary clicks did not accumulate or enable Merge');
+    assert(moreDisabled(wrap, '合并'), 'empty Merge enabled'); card(wrap, 'one').click();
+    assert(moreDisabled(wrap, '合并'), 'single-card Merge enabled'); card(wrap, 'two').click();
+    assert(wrap.querySelectorAll('.ms-node.is-selected').length === 2 && !moreDisabled(wrap, '合并'), 'ordinary clicks did not accumulate or enable Merge');
     card(wrap, 'two').dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); assert(!document.querySelector('.ms-modal'), 'multi-select double click edited content');
     action(wrap, 'close').click(); assert(!wrap.querySelector('.ms-node.is-selected') && wrap.querySelector('[data-selection-mode="single"]'), 'close did not exit multi-select');
     button(wrap, '多选').click(); card(wrap, 'one').click(); card(wrap, 'one').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -96,9 +148,10 @@ try {
   await test('Action bar routes copy, colors, tags and links through existing model operations', async () => {
     const p = await fresh(); p.addCard('a', 'Alpha'); p.addCard('b', 'Beta'); p.addNode('one', 'a'); p.addNode('two', 'b'); const { wrap } = p.mount();
     button(wrap, '多选').click(); card(wrap, 'one').click(); card(wrap, 'two').click();
-    for (const id of ['copy', 'color', 'tag', 'link', 'summary', 'regroup', 'merge', 'delete']) assert(action(wrap, id), `missing action ${id}`);
+    for (const id of ['copy', 'color', 'tag', 'link', 'delete']) assert(action(wrap, id), `missing action ${id}`);
+    for (const label of ['概要', '重新分组', '合并']) { moreAction(wrap, label); document.querySelector('#test-menu')?.remove(); }
     action(wrap, 'copy').click(); assert(p.store.nodes.length === 2, 'copy changed the source');
-    action(wrap, 'color').click(); (document.querySelector('.ms-modal button[style*="width:32px"]') as HTMLButtonElement).click();
+    action(wrap, 'color').click(); const colorSheet = document.querySelector<HTMLElement>('.ms-modal'); assert(colorSheet, 'color sheet missing'); const swatch = colorSheet!.querySelector<HTMLButtonElement>('button[style*="width:32px"]'); assert(swatch, 'color swatch missing: ' + (colorSheet!.innerHTML ?? '').slice(0, 200)); swatch!.click();
     assert(p.store.getCard('a')!.color === CARD_COLORS[0] && p.store.getCard('a')!.colorIndex === 0 && p.store.getCard('b')!.color === CARD_COLORS[0], 'color action ignored the selection');
     action(wrap, 'tag').click(); (document.querySelector('.ms-modal textarea') as HTMLTextAreaElement).value = 'same, selected'; button(document.querySelector('.ms-modal')!, '确定').click();
     assert(p.store.getCard('a')!.tags.join(',') === 'same,selected' && p.store.getCard('b')!.tags.join(',') === 'same,selected', 'tag action missed a selected card');
@@ -118,7 +171,7 @@ try {
   await test('Action bar summary and regroup preserve selected branches as children', async () => {
     for (const kind of ['summary', 'regroup']) {
       const p = await fresh(); p.addNode('one'); p.addNode('two'); const { wrap } = p.mount();
-      button(wrap, '多选').click(); card(wrap, 'one').click(); card(wrap, 'two').click(); action(wrap, kind).click();
+      button(wrap, '多选').click(); card(wrap, 'one').click(); card(wrap, 'two').click(); moreAction(wrap, kind === 'summary' ? '概要' : '重新分组').click();
       const modal = document.querySelector('.ms-modal')!; (modal.querySelector('textarea') as HTMLTextAreaElement).value = `${kind} parent`; button(modal, '确定').click();
       const parent = p.store.nodes.find(node => node.title === `${kind} parent`)!;
       assert(parent && p.store.getNode('one')!.parentId === parent.id && p.store.getNode('two')!.parentId === parent.id, `${kind} lost or misparented a branch`);
@@ -127,7 +180,7 @@ try {
   await test('L4: Merge acts directly and Unmerge re-exposes members while preserving the head badge', async () => {
     const p = await fresh(); p.addCard('a', 'Alpha'); p.addCard('b', 'Beta'); p.addNode('one', 'a'); p.addNode('two', 'b');
     const deck = p.store.createReviewDeck('Memory deck', p.set.id); p.store.enqueueReviewInDeck(['a'], deck.id, p.canvasId);
-    const { wrap } = p.mount(); button(wrap, '多选').click(); card(wrap, 'one').click(); card(wrap, 'two').click(); action(wrap, 'merge').click(); await pause();
+    const { wrap } = p.mount(); button(wrap, '多选').click(); card(wrap, 'one').click(); card(wrap, 'two').click(); moreAction(wrap, '合并').click(); await pause();
     assert(!document.querySelector('.ms-modal'), 'Merge inserted an extra confirmation step');
     assert(wrap.querySelectorAll('.ms-node').length === 1 && card(wrap, 'one').querySelector('.ms-node-merged'), 'merged member remained independently visible');
     assert(card(wrap, 'one').querySelector('.ms-node-review-badge')?.textContent === 'Memory deck', 'merge lost the head deck badge');

@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖 Obsidian 工作区、学习集数据和阅读器组件。
+ * [OUTPUT]: 导出学习集工作区视图及其视图类型。
+ * [POS]: 协调学习集工作区的导航、菜单和辅助面板。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import { ItemView, Menu, Notice, Scope, TFile, WorkspaceLeaf, setIcon, Platform } from "obsidian";
 import { setNativeIcon } from "./nativeIcons";
 import { builtinSceneTemplates, installableSceneTemplateIds } from "./scenes";
@@ -5,6 +11,7 @@ import { openVocabularyLookup } from "../vocabulary/view";
 import { clearOcrBuffer } from "../ocr/ocr";
 import { useStudySidebarSpace } from "./hostSidebars";
 import { DocumentNavigation, documentNavigationTabs } from "./documentNavigation";
+import { appendPageReferences, createPageCollection, parsePageRange } from "../documents/pageCollection";
 import type { DocumentNavigationTab } from "./documentNavigation";
 import type MarginStudyPlugin from "../main";
 import { handwritingPresets } from "../annot/handwritingPresets";
@@ -13,6 +20,9 @@ import { closeCardActionMenu } from "../study/nodeActions";
 import type { HandwritingPresetId, HandwritingPresetSpec, MindNode, ReaderLike, ReadingTheme, StudySceneId, StudySceneSelection, StudySceneTemplate } from "../types";
 import { CardBoardRenderer } from "../board/cardBoardRenderer";
 import { openNewNotebook } from "../documents/notebook";
+import { openStudySetImport } from "../export/studySetImport";
+import { openStudySetExport } from "../export/studySetExport";
+import { exportStudySetToNotes } from "../export/studySetNotes";
 import { ReaderView } from "../pdf/readerView";
 import { WordReaderView } from "../word/wordReader";
 import { DocumentReaderView } from "../documents/documentReader";
@@ -26,9 +36,11 @@ import type { ResearchHandle, ResearchSession } from "../research/browser";
 import { mountAiPanel, openAiSettings } from "../ai";
 import type { AiPanelHandle, AiContext } from "../ai";
 import { importLocalDocuments, openWebImport } from "../import/webImport";
+import { openBaiduNetdisk } from "../import/baiduNetdiskUi";
+import { openExternalSources } from "../import/externalSources";
 import type { ImportConflictPolicy } from "../import/webImport";
 import { openGlobalSearch } from "../search/globalSearch";
-import { openSettingAndReveal } from "../search/featureSearch";
+import { FEATURE_INDEX, favoriteFeatureIds, openSettingAndReveal, runFeature } from "../search/featureSearch";
 import { toggleStudyInterface } from "./scenes";
 import { createModal, openConfirm, openTextModal } from "../utils/modal";
 import { el } from "../utils/dom";
@@ -42,6 +54,7 @@ type AuxiliaryKind="cards"|"review"|"research"|"ai"|"none";
 type LinkMode = "both" | "document" | "mindmap" | "off";
 type BottomMode = "reading" | "writing" | "recall";
 interface DocumentTab { path: string; documentId?: string; state?: Record<string, unknown>; }
+interface ComparisonView { reader: ChildReader; panel: HTMLElement; divider: HTMLElement; cleanup: (() => void) | null; }
 interface WorkspaceState {
   tabs: DocumentTab[]; activePath?: string;
   library: boolean; auxiliary: AuxiliaryKind;
@@ -63,7 +76,7 @@ const supported = (file: TFile) => isStudyDocumentPath(file.path);
 const studyDocumentDragType = "application/x-marginstudy-document-paths";
 const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
 const readingThemes: {id: ReadingTheme; label: string}[] = [
-  {id:"white",label:"White"},{id:"sepia",label:"Sepia"},{id:"gray",label:"Gray"},{id:"dark",label:"Dark"},{id:"green",label:"Green"},
+  {id:"white",label:"白色"},{id:"sepia",label:"棕褐色"},{id:"gray",label:"灰色"},{id:"dark",label:"暗黑"},{id:"green",label:"绿色"},
 ];
 
 /** One owned reader at a time; its public view state survives tab switches. */
@@ -81,9 +94,11 @@ export class StudyWorkspaceView extends ItemView {
   private libraryQuery = "";
   private readerPane!: HTMLElement;
   private readerHost!: HTMLElement;
-  private comparisonReader: ChildReader | null = null;
-  private comparisonPanel: HTMLElement | null = null;
-  private comparisonCleanup: (() => void) | null = null;
+  private comparisons: ComparisonView[] = [];
+  private comparisonDirection: "auto" | "horizontal" | "vertical" = "auto";
+  private comparisonSwapped = false;
+  private cleanView = false;
+  private cleanPenStrip: HTMLElement | null = null;
   private tabBar!: HTMLElement;
   private readerTabRow!: HTMLElement;
   private documentNavigation: DocumentNavigation | null = null;
@@ -238,11 +253,12 @@ export class StudyWorkspaceView extends ItemView {
     this.plugin.studyWorkspace = this;
     this.root = this.contentEl ?? this.containerEl.children[1] as HTMLElement;
     this.root.replaceChildren(); this.root.classList.add("ms-study-workspace");
+    this.root.dataset.hideHostTabBar = String(this.plugin.store.settings.hideHostTabBar ?? true);
     this.toolbar = el("header", { class: "ms-workspace-toolbar", "aria-label": "学习工作区" });
     this.body = el("div", { class: "ms-workspace-body" });
     this.library = el("aside", { class: "ms-workspace-library", "aria-label": "学习集文档" });
     const libraryHead = el("div", { class: "ms-workspace-panel-head" });
-    libraryHead.append(el("strong", { text: "StudySet" }), this.toolbarButton("plus", "添加文档", () => this.chooseDocument()), this.toolbarButton("download", "从电脑导入文档", () => this.importFiles()));
+    libraryHead.append(el("strong", { text: "学习集" }), this.toolbarButton("plus", "添加文档", () => this.chooseDocument()), this.toolbarButton("download", "从电脑导入文档", () => this.importFiles()));
     const search = el("input", { type: "search", class: "ms-search", placeholder: "查找文档", "aria-label": "查找学习集文档" });
     search.addEventListener("input", () => { this.libraryQuery = search.value; this.drawLibrary(); });
     this.libraryList = el("div", { class: "ms-workspace-document-list" });
@@ -274,8 +290,22 @@ export class StudyWorkspaceView extends ItemView {
     documentShortcut.classList.add("ms-workspace-floating-action");aiShortcut.classList.add("ms-workspace-floating-action");
     this.workspaceFloatingActions.append(documentShortcut,aiShortcut);
     this.mapPane.append(this.workspaceFloatingActions);
-    this.root.append(this.toolbar, this.body, this.bottomCapsule, this.workspaceNoticeLayer);
-    this.renderer = new MindmapRenderer(this.plugin, { nativeChrome: true, onSelectionChange: nodes => this.onMindmapSelectionChange(nodes) }); this.renderer.mount(this.mapHost);
+    this.root.append(this.toolbar, this.body, this.bottomCapsule, this.workspaceNoticeLayer, this.cleanViewHandle(), this.drawCleanPenStrip());
+    const positionFloatingActions = () => {
+      const root = this.root.getBoundingClientRect();
+      const map = this.mapPane.getBoundingClientRect();
+      const useWorkspaceCenter = this.root.classList.contains("has-scene-header") && root.width <= 900 &&
+        this.state.placement === "left" && this.state.reader && this.state.mindmap && this.state.auxiliary === "none";
+      this.workspaceFloatingActions.style.top = useWorkspaceCenter
+        ? `${root.top + root.height / 2 - (window.innerHeight <= 600 ? 38 : 62) - map.top}px` : "";
+    };
+    const floatingResize = new ResizeObserver(positionFloatingActions);
+    floatingResize.observe(this.root); floatingResize.observe(this.mapPane);
+    this.register(() => floatingResize.disconnect());
+    this.renderer = new MindmapRenderer(this.plugin, { nativeChrome: true, onSelectionChange: nodes => this.onMindmapSelectionChange(nodes),
+      onCloseMindmap: () => { this.state.mindmap=false; this.state.reader=true; this.layoutChanged(); },
+      onShowMindmap: () => { if(!this.state.mindmap){this.state.mindmap=true;this.layoutChanged();} },
+      onOpenSceneTemplates: () => this.openSceneTemplateManager() }); this.renderer.mount(this.mapHost);
     this.fixedViewsHost=el("div",{class:"ms-fixed-views"});this.mapPane.append(this.fixedViewsHost);this.drawFixedViews();
     this.register(this.renderer.subscribeHandwritingModeChange(mode=>{if(this.reader&&!this.syncingHandwriting&&this.reader.getHandwritingSyncPreference()){this.syncingHandwriting=true;try{this.reader.setHandwritingMode(mode);}finally{this.syncingHandwriting=false;}}}));
     this.readerHost.append(this.readerLayersButton());
@@ -438,17 +468,80 @@ export class StudyWorkspaceView extends ItemView {
     return task;
   }
   async openMobileComparison(file: TFile, sync: boolean): Promise<void> {
-    if (!this.reader || file.path === this.reader.getFilePath()) throw new Error("请选择另一份文档");
     await this.closeComparison();
+    await this.appendComparison(file, sync);
+  }
+  private async appendComparison(file: TFile, sync: boolean): Promise<void> {
+    const primaryReader = this.reader;
+    if (!primaryReader || file.path === primaryReader.getFilePath() || this.comparisons.some(item => item.reader.getFilePath() === file.path)) throw new Error("请选择另一份文档");
     const reader = ["pdf", "msref"].includes(file.extension.toLowerCase()) ? new ReaderView(this.leaf, this.plugin) : file.extension.toLowerCase() === "docx" ? new WordReaderView(this.leaf, this.plugin) : new DocumentReaderView(this.leaf, this.plugin);
-    const panel = el("section", { "aria-label": "对照阅读面板", style: "flex:1 1 50%;width:50%;height:100%;display:flex;flex-direction:column;min-width:0;min-height:0;max-width:80%;background:var(--background-primary);border-left:1px solid var(--background-modifier-border);overflow:hidden" });
-    const close = el("button", { text: "关闭对照", "aria-label": "关闭对照" }); close.addEventListener("click",()=>{void this.closeComparison();});
+    const panel = el("section", { "aria-label": "对照阅读面板", "data-document-path": file.path });
+    panel.style.cssText = "display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--background-primary);overflow:hidden";
+    const close = el("button", { text: "关闭对照", "aria-label": "关闭对照" }); close.addEventListener("click", () => { void this.closeComparison(); });
     const syncLabel = el("label", { text: "同步滚动" }), syncToggle = el("input", { type: "checkbox", "aria-label": "同步滚动" }) as HTMLInputElement;
     syncToggle.checked = sync; syncLabel.prepend(syncToggle);
-    const host=el("div",{class: "ms-workspace-child-view",style: "flex:1;min-height:0"}), content=el("div",{class: "view-content"}); host.append(el("div",{style: "display:none"}),content); reader.containerEl.replaceWith(host);reader.containerEl=host;reader.contentEl=content;panel.append(close,syncLabel,host);this.readerHost.append(panel);const primary=this.reader.containerEl;primary.style.flex="1 1 50%";primary.style.width="50%";const divider=el("div",{role: "separator","aria-label": "调整对照文档宽度",style: "width:8px;flex:0 0 8px;cursor:col-resize;touch-action:none;background:var(--background-modifier-border)"});this.readerHost.insertBefore(divider,panel);divider.addEventListener("pointerdown",event=>{event.preventDefault();divider.setPointerCapture(event.pointerId);});divider.addEventListener("pointermove",event=>{if(!divider.hasPointerCapture(event.pointerId))return;const rect=this.readerHost.getBoundingClientRect();const ratio=Math.max(.2,Math.min(.8,(event.clientX-rect.left)/rect.width));primary.style.flex="1 1 0";panel.style.flex="0 0 "+(100*(1-ratio))+"%";});this.comparisonReader=reader;this.comparisonPanel=panel;this.addChild(reader);
-    try {reader.setWorkspaceChrome(true);await reader.setState({filePath:file.path});await reader.onOpen();if(reader.getFilePath()!==file.path)throw new Error("对照文档未加载");{const a=this.reader.getScrollContainer(),b=reader.getScrollContainer();let busy=false;const move=(from:HTMLElement,to:HTMLElement)=>{if(busy||!syncToggle.checked)return;busy=true;const range=from.scrollHeight-from.clientHeight;to.scrollTop=range>0?from.scrollTop/range*Math.max(0,to.scrollHeight-to.clientHeight):0;requestAnimationFrame(()=>busy=false);};const ab=()=>move(a,b),ba=()=>move(b,a);a.addEventListener("scroll",ab);b.addEventListener("scroll",ba);this.comparisonCleanup=()=>{a.removeEventListener("scroll",ab);b.removeEventListener("scroll",ba);};}}catch(error){await this.closeComparison();throw error;}
+    const host = el("div", { class: "ms-workspace-child-view", style: "flex:1;min-height:0" }), content = el("div", { class: "view-content" });
+    host.append(el("div", { style: "display:none" }), content); reader.containerEl.replaceWith(host); reader.containerEl = host; reader.contentEl = content;
+    panel.append(close, syncLabel, host);
+    const divider = el("div", { role: "separator", "aria-label": "调整对照文档宽度" });
+    this.readerHost.append(divider, panel);
+    const entry: ComparisonView = { reader, panel, divider, cleanup: null }; this.comparisons.push(entry); this.addChild(reader);
+    divider.addEventListener("pointerdown", event => { event.preventDefault(); divider.setPointerCapture(event.pointerId); });
+    divider.addEventListener("pointermove", event => {
+      if (!divider.hasPointerCapture(event.pointerId) || !this.reader) return;
+      const rect = this.readerHost.getBoundingClientRect(), vertical = this.readerHost.style.flexDirection === "column";
+      const ratio = clamp(vertical ? (event.clientY - rect.top) / Math.max(1, rect.height) : (event.clientX - rect.left) / Math.max(1, rect.width), .2, .8);
+      this.reader.containerEl.style.flex = "0 0 " + ratio * 100 + "%"; panel.style.flex = "0 0 " + (1 - ratio) * 100 + "%";
+    });
+    try {
+      reader.setWorkspaceChrome(true); await reader.setState({ filePath: file.path }); await reader.onOpen();
+      if (reader.getFilePath() !== file.path) throw new Error("对照文档未加载");
+      const a = primaryReader.getScrollContainer(), b = reader.getScrollContainer(); let busy = false;
+      const move = (from: HTMLElement, to: HTMLElement) => { if (busy || !syncToggle.checked) return; busy = true; const range = from.scrollHeight - from.clientHeight; to.scrollTop = range > 0 ? from.scrollTop / range * Math.max(0, to.scrollHeight - to.clientHeight) : 0; requestAnimationFrame(() => busy = false); };
+      const ab = () => move(a, b), ba = () => move(b, a); a.addEventListener("scroll", ab); b.addEventListener("scroll", ba);
+      entry.cleanup = () => { a.removeEventListener("scroll", ab); b.removeEventListener("scroll", ba); };
+      this.layoutComparisons();
+    } catch (error) { await this.closeComparison(); throw error; }
   }
-  private async closeComparison(): Promise<void> {this.comparisonCleanup?.();this.comparisonCleanup=null;const reader=this.comparisonReader;this.comparisonReader=null;if(reader){try{await reader.onClose();}finally{this.removeChild(reader);}}this.comparisonPanel?.previousElementSibling?.remove();this.comparisonPanel?.remove();this.comparisonPanel=null;if(this.reader){this.plugin.activeReader=this.reader;this.reader.containerEl.style.flex="";this.reader.containerEl.style.width="";}}
+  private async setDocumentViewCount(count: 1 | 2 | 3): Promise<void> {
+    if (!this.reader) throw new Error("请先打开文档");
+    this.state.reader = true; this.applyLayout();
+    const candidates = this.documents().filter(file => file.path !== this.reader?.getFilePath());
+    if (candidates.length < count - 1) throw new Error("单/双/三视图需要学习集中有足够文档");
+    await this.closeComparison();
+    for (const file of candidates.slice(0, count - 1)) await this.appendComparison(file, false);
+    this.layoutComparisons();
+  }
+  private setComparisonDirection(direction: "auto" | "horizontal" | "vertical"): void {
+    this.comparisonDirection = direction; this.layoutComparisons();
+  }
+  private layoutComparisons(): void {
+    if (!this.readerHost) return;
+    const vertical = this.comparisonDirection === "vertical";
+    this.readerHost.style.flexDirection = vertical ? "column" : "row";
+    this.readerHost.dataset.viewCount = String(this.comparisons.length + 1); this.readerHost.dataset.comparisonDirection = vertical ? "vertical" : "horizontal";
+    const primary = this.reader?.containerEl;
+    if (primary) { primary.style.flex = "1 1 0"; primary.style.width = ""; primary.style.height = ""; primary.style.maxWidth = "none"; primary.style.maxHeight = "none"; }
+    for (const item of this.comparisons) {
+      item.panel.style.flex = "1 1 0"; item.panel.style.maxWidth = "none"; item.panel.style.maxHeight = "none";
+      item.panel.style.borderLeft = vertical ? "none" : "1px solid var(--background-modifier-border)"; item.panel.style.borderTop = vertical ? "1px solid var(--background-modifier-border)" : "none";
+      item.divider.style.cssText = vertical ? "height:8px;flex:0 0 8px;cursor:row-resize;touch-action:none;background:var(--background-modifier-border)" : "width:8px;flex:0 0 8px;cursor:col-resize;touch-action:none;background:var(--background-modifier-border)";
+    }
+  }
+  private swapComparisonPositions(): void {
+    const item = this.comparisons[0], primary = this.reader?.containerEl;
+    if (!item || this.comparisons.length !== 1 || !primary) return;
+    if (this.comparisonSwapped) { this.readerHost.insertBefore(primary, item.panel); this.readerHost.insertBefore(item.divider, item.panel); }
+    else { this.readerHost.insertBefore(item.panel, primary); this.readerHost.insertBefore(item.divider, primary); }
+    this.comparisonSwapped = !this.comparisonSwapped; this.layoutComparisons();
+  }
+  private async closeComparison(): Promise<void> {
+    const items = this.comparisons.splice(0).reverse();
+    for (const item of items) { item.cleanup?.(); item.cleanup = null; try { await item.reader.onClose(); } finally { this.removeChild(item.reader); item.divider.remove(); item.panel.remove(); } }
+    this.comparisonSwapped = false;
+    if (this.reader) { this.plugin.activeReader = this.reader; const primary = this.reader.containerEl; primary.style.flex = ""; primary.style.width = ""; primary.style.height = ""; primary.style.maxWidth = ""; primary.style.maxHeight = ""; }
+    if (this.readerHost) { this.readerHost.style.flexDirection = ""; this.readerHost.dataset.viewCount = "1"; delete this.readerHost.dataset.comparisonDirection; }
+  }
   private captureReader(): void {
     if (!this.reader) return;
     const path = this.reader.getFilePath();
@@ -601,7 +694,7 @@ export class StudyWorkspaceView extends ItemView {
     const main = el("div", { class: "ms-native-main-tools" });
     const divider = () => el("span", { class: "ms-native-tool-divider", "aria-hidden": "true" });
     const tool = (icon: string, label: string, action: () => void, active?: boolean) => this.toolbarButton(icon,label,action,active);
-    const map = el("button", { class: "ms-native-text-tool" + (this.state.mindmap ? " is-active" : ""), text: "MindMap", "aria-label": "显示或隐藏脑图", "aria-pressed": String(this.state.mindmap) });
+    const map = el("button", { class: "ms-native-text-tool" + (this.state.mindmap ? " is-active" : ""), text: "脑图", "aria-label": "显示或隐藏脑图", "aria-pressed": String(this.state.mindmap) });
     map.addEventListener("click", () => { this.state.mindmap=!this.state.mindmap; if(!this.state.mindmap)this.state.reader=true; this.layoutChanged(); });
     const selectTool = (icon:string, label:string, mode:string) => {
       const button=tool(icon,label,()=>this.useReaderTool(mode),this.readerTool===mode);
@@ -627,7 +720,7 @@ export class StudyWorkspaceView extends ItemView {
       tool("more-vertical","文档与工作区设置",()=>this.openLayoutMenu())
     );
     const side=el("div",{class:"ms-native-side-tools"});
-    if(this.state.auxiliary!=="none")for(const [key,label] of [["cards","Cards"],["review","Review"]] as const){
+    if(this.state.auxiliary!=="none")for(const [key,label] of [["cards","卡片"],["review","复习"]] as const){
       const button=el("button",{class:"ms-native-text-tool"+(this.state.auxiliary===key?" is-active":""),text:label,"aria-label":key==="cards"?"卡片列表":"复习卡组","aria-pressed":String(this.state.auxiliary===key)});
       button.addEventListener("click",()=>{this.selectAuxiliary(this.state.auxiliary===key?"none":key);}); side.append(button);
     }
@@ -640,28 +733,33 @@ export class StudyWorkspaceView extends ItemView {
     const sceneHeader=selection?.interfaceMode==="scenes";
     this.toolbar.classList.toggle("has-scene-header",sceneHeader);
     this.root.classList.toggle("has-scene-header",sceneHeader);
+    this.root.dataset.statusBar = sceneHeader ? (template?.statusBar ?? "full") : "full";
     const canvas=store.canvases.find(item=>item.id===store.activeCanvasId);
     const context=el("div",{class:"ms-workspace-context", "aria-label":"当前工作区信息"});
     const contextIcon=(icon:string,label:string,action:()=>void)=>{const button=this.toolbarButton(icon,label,action);button.classList.add("ms-workspace-context-icon");return button;};
     context.append(contextIcon("house","打开学习集与文档",()=>this.showStudyHome()));
-    const contextItem=(label:string,value:string,icon:string|undefined,action:(item:HTMLButtonElement)=>void)=>{
+    const contextItem=(label:string,value:string,icon:string|undefined,action:(item:HTMLButtonElement,event:MouseEvent)=>void)=>{
       const item=el("button",{type:"button",class:"ms-workspace-context-item","aria-label":label+"："+value,title:value}) as HTMLButtonElement;
       if(icon){const glyph=el("span",{class:"ms-workspace-context-glyph","aria-hidden":"true"});setNativeIcon(glyph,icon);item.append(glyph);}
       const text=el("span",{class:"ms-workspace-context-text"});text.append(el("span",{class:"ms-workspace-context-label",text:label}),el("span",{class:"ms-workspace-context-value",text:value}));
-      item.append(text,el("span",{class:"ms-workspace-context-chevron","aria-hidden":"true",text:"⌄"}));item.addEventListener("click",()=>action(item));context.append(item);
+      item.append(text,el("span",{class:"ms-workspace-context-chevron","aria-hidden":"true",text:"⌄"}));item.addEventListener("click",event=>action(item,event));context.append(item);
     };
     contextItem("学习集",activeSet?.name??"未选择",undefined,()=>this.openStudyMenu());
-    contextItem("场景模板",template?.name??"传统界面",undefined,()=>this.openStudyMore());
-    contextItem("文档",this.state.activePath?.split("/").pop()??"未打开","file-text",()=>this.chooseDocument());
-    contextItem("脑图",canvas?.name??"未选择","share-2",item=>{const target=this.mapPane.querySelector<HTMLButtonElement>('[aria-label="选择脑图"]');if(target){const rect=item.getBoundingClientRect();target.dispatchEvent(new MouseEvent("click",{bubbles:true,clientX:rect.left,clientY:rect.bottom}));}});
-    context.append(contextIcon("star","固定视图入口",()=>{this.fixedViewsOpen=!this.fixedViewsOpen;this.drawFixedViews();}),contextIcon("search","搜索文档",()=>this.openReaderSearch()));
+    contextItem("场景模板",template?.name??"传统界面",undefined,item=>this.openSceneTemplateMenu(item));
+    contextItem("文档",this.state.activePath?.split("/").pop()??"未打开","file-text",item=>this.openDocumentMenu(item));
+    contextItem("脑图",canvas?.name??"未选择","share-2",(_item,event)=>this.renderer?.openCanvasMenu(event));
+    const favoritesButton=contextIcon("star","收藏",()=>this.openFavoritesMenu(favoritesButton));
+    const searchButton=contextIcon("search","全局搜索",()=>openGlobalSearch(this.plugin,()=>this.reader,true));
+    const followButton=el("button",{type:"button",class:"ms-workspace-follow-selection",text:"跟着选中 ▾","aria-label":"跟着选中",title:"跟着选中，没选中时，新卡放在当前画面"});
+    followButton.addEventListener("click",()=>this.openExcerptDestinationMenu(followButton));
+    context.append(favoritesButton, searchButton);
     const controlsId=uid("workspace-tools");
     const controls=el("div",{class:"ms-workspace-toolbar-controls",id:controlsId});controls.append(main,side);
     controls.hidden=sceneHeader&&!this.workspaceToolsOpen;
     const extraTools=this.toolbarButton("ellipsis","工作区工具",()=>{this.workspaceToolsOpen=!this.workspaceToolsOpen;controls.hidden=!this.workspaceToolsOpen;extraTools.setAttribute("aria-expanded",String(this.workspaceToolsOpen));});
     extraTools.classList.add("ms-workspace-extra-tools-toggle");extraTools.textContent="⋯";extraTools.style.fontSize="24px";extraTools.style.lineHeight="1";extraTools.setAttribute("aria-expanded",String(this.workspaceToolsOpen));extraTools.setAttribute("aria-controls",controlsId);
-    this.toolbar.append(context);if(sceneHeader){this.toolbar.append(extraTools);const destination=activeSet?.excerptDestination,target=destination&&destination.canvasId===store.activeCanvasId?store.getNode(destination.nodeId):undefined;
-      const label=target?`固定 · ${target.title}`:"目录 · 屏幕位置";const button=el("button",{type:"button",class:"ms-excerpt-destination","aria-label":"摘录落点："+label,title:label,text:label+" ▾"});button.addEventListener("click",()=>this.openExcerptDestination());this.toolbar.append(button);}
+    this.toolbar.append(context);this.toolbar.append(followButton);if(sceneHeader){this.toolbar.append(extraTools);const destination=activeSet?.excerptDestination,target=destination?.nodeId&&destination.mode!=="document"&&destination.canvasId===store.activeCanvasId?store.getNode(destination.nodeId):undefined;
+      const label=destination?.mode==="mindmap"?"自动加入脑图":destination?.mode==="document"?"只留在文档":destination?.mode==="contents"?"跟着目录":destination?.mode==="selection"?"跟着选中":target?`固定 · ${target.title}`:"目录 · 屏幕位置";const button=el("button",{type:"button",class:"ms-excerpt-destination","aria-label":"摘录落点："+label,title:label,text:label+" ▾"});button.addEventListener("click",()=>this.openExcerptDestinationMenu(button));this.toolbar.append(button);}
     this.toolbar.append(controls);
     this.syncHistoryButtons();
     this.drawBottomCapsule();
@@ -671,20 +769,174 @@ export class StudyWorkspaceView extends ItemView {
     const store=this.plugin.store;
     return JSON.stringify([store.activeStudySetId,store.activeCanvasId,store.studySets.map(set=>[set.id,set.name,set.excerptDestination]),store.getStudyScene(store.activeStudySetId??""),store.canvases.map(canvas=>[canvas.id,canvas.name]),this.state.library,this.state.reader,this.state.mindmap,this.state.auxiliary,this.state.linkMode,this.state.bottomMode,this.state.bottomCollapsed,this.getReadingTheme(),this.readerTool,this.reader?.getFilePath(),this.reader?.getBlockSelectionMode(),this.historyScope,this.handwritingPresets(),this.reader?.getActiveHandwritingPreset?.()]);
   }
-  private openExcerptDestination():void {
-    const store=this.plugin.store,set=store.studySets.find(item=>item.id===store.activeStudySetId);if(!set)return;
-    const pane=this.popover("摘录落点"),selected=this.renderer?.selectedViewNode(),fixed=set.excerptDestination;
-    const describe=fixed?store.getNode(fixed.nodeId):undefined;
-    pane.append(el("p",{text:describe?`当前固定到：${describe.title}`:"当前：目录 · 屏幕位置"}));
-    const pin=el("button",{text:selected?`固定到「${selected.title}」`:"先在脑图中选中一张卡","aria-label":"固定摘录落点"}) as HTMLButtonElement;pin.disabled=!selected||!selected.cardId;
-    pin.addEventListener("click",()=>{if(!selected||!selected.cardId||selected.canvasId!==store.activeCanvasId)return;store.updateStudySet(set.id,{excerptDestination:{canvasId:selected.canvasId!,nodeId:selected.id}});this.dismissPopup();this.drawToolbar();});pane.append(pin);
-    if(fixed){const clear=el("button",{text:"取消固定","aria-label":"取消固定摘录落点"});clear.addEventListener("click",()=>{store.updateStudySet(set.id,{excerptDestination:undefined});this.dismissPopup();this.drawToolbar();});pane.append(clear);}
+  /** 跟随摘录去向时的“跟着选中”定位；未选中时由调用方回退到当前画面。 */
+  public isMindmapVisible(): boolean { return this.state.mindmap; }
+  /** 打开脑图并选中指定卡片（不改变阅读位置，除非卡片属于另一文档）。 */
+  public revealCardInMap(cardId: string): boolean {
+    const card = this.plugin.store.getCard(cardId);
+    if (!card) return false;
+    const node = this.plugin.store.nodes.find(item => item.cardId === cardId && item.canvasId === this.plugin.store.activeCanvasId)
+      ?? this.plugin.store.nodes.find(item => item.cardId === cardId);
+    if (!node) return false;
+    if (node.canvasId) this.plugin.store.setActiveCanvas(node.canvasId);
+    this.state.reader = true; this.state.mindmap = true; this.applyLayout(); this.drawToolbar();
+    const revealed = this.renderer?.revealCard(cardId) ?? false;
+    this.saveLayout();
+    return revealed;
+  }
+  public excerptPlacement(): { parentId?: string; x?: number; y?: number } {
+    const node = this.renderer?.selectedViewNode();
+    if (!node) return {};
+    return { parentId: node.id, x: node.x, y: node.y + 150 };
+  }
+  /** MN5「摘录与手写工具」：把前 4 个摘录颜色与前 4 个手写预设做成槽位面板。 */
+  private openExcerptToolSlots(reader: ReaderLike | null): void {
+    if (!reader) return;
+    const { modal: pane, close } = createModal("摘录与手写工具");
+    const colors = this.plugin.store.getEffectiveSceneSettings().colors.slice(0, 4);
+    pane.append(el("h4", { text: "摘录工具" }));
+    colors.forEach((color, index) => {
+      const button = el("button", { class: "ms-native-menu-row", text: `摘录工具${index + 1}`, "data-excerpt-color": color });
+      button.addEventListener("click", () => {
+        const toolbar = (reader as unknown as { getReaderToolbar?: () => HTMLElement }).getReaderToolbar?.();
+        const swatch = toolbar ? [...toolbar.querySelectorAll<HTMLButtonElement>(".ms-swatch")].find(item => item.getAttribute("aria-label") === "标注颜色 " + color) : undefined;
+        if (swatch) swatch.click();
+        this.plugin.store.settings.defaultColor = color; this.plugin.store.save();
+        close();
+      });
+      pane.append(button);
+    });
+    pane.append(el("h4", { text: "手写工具" }));
+    const presets = (this.plugin.store.settings.handwritingPresets ?? []).slice(0, 4);
+    presets.forEach((preset, index) => {
+      const button = el("button", { class: "ms-native-menu-row", text: `手写工具${index + 1}`, "data-pen-preset": preset.id });
+      if ((reader as unknown as { getActiveHandwritingPreset?: () => string }).getActiveHandwritingPreset?.() === preset.id) button.classList.add("is-active");
+      button.addEventListener("click", () => {
+        (reader as unknown as { setActiveHandwritingPreset?: (id: string) => void }).setActiveHandwritingPreset?.(preset.id);
+        close(); this.drawToolbar();
+      });
+      pane.append(button);
+    });
+  }
+
+  /** 5.0.2 简洁显示：顶部把手长按临时隐藏工具栏与浮窗，轻点恢复。 */
+  private cleanViewHandle(): HTMLElement {
+    const handle = el("button", { type: "button", class: "ms-clean-view-handle", "aria-label": "简洁显示把手", title: "长按隐藏工具栏；轻点恢复" });
+    handle.append(el("span", { "aria-hidden": "true" }));
+    let timer: number | null = null, longPressed = false;
+    const clear = () => { if (timer !== null) { window.clearTimeout(timer); timer = null; } };
+    handle.addEventListener("pointerdown", event => {
+      if (event.button !== 0) return;
+      longPressed = false; clear();
+      timer = window.setTimeout(() => { longPressed = true; timer = null; this.setCleanView(true); }, 420);
+    });
+    for (const type of ["pointercancel", "pointerleave"]) handle.addEventListener(type, clear);
+    handle.addEventListener("pointerup", () => {
+      clear();
+      // The click generated by the long-press release must be swallowed once; the next tap restores.
+      if (longPressed) window.setTimeout(() => { longPressed = false; }, 0);
+    });
+    handle.addEventListener("click", event => {
+      event.stopPropagation();
+      if (longPressed) { longPressed = false; return; }
+      if (this.cleanView) this.setCleanView(false);
+    });
+    handle.addEventListener("keydown", event => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault(); this.setCleanView(!this.cleanView);
+    });
+    return handle;
+  }
+  /** 5.0.2 手写时的精简笔条：只保留笔/荧光笔/铅笔/橡皮。 */
+  private drawCleanPenStrip(): HTMLElement {
+    const strip = el("div", { class: "ms-clean-pen-strip", role: "toolbar", "aria-label": "精简笔条" });
+    strip.hidden = true;
+    for (const [label, text] of [["普通笔 1", "笔"], ["荧光笔", "荧光"], ["铅笔", "铅笔"], ["橡皮擦", "橡皮"]] as const) {
+      const button = el("button", { type: "button", class: "ms-clean-pen-action", text, "aria-label": label, title: label });
+      button.addEventListener("click", () => { this.readerAction(label); this.drawToolbar(); });
+      strip.append(button);
+    }
+    this.cleanPenStrip = strip;
+    return strip;
+  }
+  private setCleanView(enabled: boolean): void {
+    if (this.cleanView === enabled) return;
+    this.cleanView = enabled;
+    this.root.classList.toggle("is-clean-view", enabled);
+    this.root.dataset.cleanView = String(enabled);
+    if (this.cleanPenStrip) this.cleanPenStrip.hidden = !(enabled && this.readerTool === "pen");
+    if (enabled) this.dismissPopup();
+    this.showWorkspaceNotice(enabled ? "已进入简洁显示，轻点顶部把手恢复" : "已退出简洁显示");
+  }
+  public isCleanView(): boolean { return this.cleanView; }
+
+  private openFavoritesMenu(anchor: HTMLElement): void {
+    const menu = new Menu();
+    for (const id of favoriteFeatureIds(this.plugin.store.settings)) {
+      const feature = FEATURE_INDEX.find(item => item.id === id)!;
+      menu.addItem(item => item.setTitle(feature.title).onClick(() => { if (!runFeature(this.plugin, id)) new Notice("该功能当前不可用：" + feature.title); }));
+    }
+    menu.addSeparator();
+    menu.addItem(item => item.setTitle("编辑收藏…").onClick(() => this.openFavoriteFeaturesEditor()));
+    const box = anchor.getBoundingClientRect(); menu.showAtPosition({ x: box.left, y: box.bottom });
+  }
+  private openFavoriteFeaturesEditor(): void {
+    const selected = new Set(favoriteFeatureIds(this.plugin.store.settings));
+    const { modal, close } = createModal("编辑收藏");
+    modal.append(el("p", { class: "ms-muted", text: "勾选后显示在顶部「收藏」菜单；顺序与这里一致。" }));
+    const list = el("div", { style: "max-height:55vh;overflow:auto" });
+    for (const feature of FEATURE_INDEX) {
+      const label = el("label", { class: "ms-study-row ms-row" });
+      const box = el("input", { type: "checkbox", "aria-label": "收藏功能：" + feature.title }) as HTMLInputElement;
+      box.checked = selected.has(feature.id);
+      box.addEventListener("change", () => { if (box.checked) selected.add(feature.id); else selected.delete(feature.id); });
+      label.append(box, el("span", { text: feature.title })); list.append(label);
+    }
+    const cancel = el("button", { class: "ms-btn", text: "取消" }); cancel.addEventListener("click", close);
+    const save = el("button", { class: "ms-btn primary", text: "保存收藏" });
+    save.addEventListener("click", () => {
+      this.plugin.store.settings.favoriteFeatures = FEATURE_INDEX.filter(feature => selected.has(feature.id)).map(feature => feature.id);
+      this.plugin.store.save(); this.drawToolbar(); close();
+    });
+    modal.append(list, cancel, save);
+  }
+  private async openExcerptDestinationMenu(anchor: HTMLElement): Promise<void> {
+    const store = this.plugin.store, set = store.studySets.find(item => item.id === store.activeStudySetId);
+    if (!set) { new Notice("请先选择学习集"); return; }
+    const destination = set.excerptDestination, mode = destination?.mode ?? (destination?.nodeId ? "fixed" : "default");
+    const reader = this.reader instanceof ReaderView ? this.reader : null;
+    const outline = reader ? await reader.getEditableOutline() : this.plugin.store.getDocMeta(this.state.activePath ?? "").documentOutline ?? [];
+    const selected = this.renderer?.selectedViewNode();
+    const menu = new Menu();
+    menu.addItem(item => item.setTitle("摘录去向").setIsLabel(true));
+    menu.addItem(item => item.setTitle("后续摘录 · 跟随默认").setChecked(mode === "default").onClick(() => {
+      store.updateStudySet(set.id, { excerptDestination: undefined }); this.drawToolbar();
+    }));
+    menu.addItem(item => item.setTitle("自动加入脑图").setChecked(mode === "mindmap").onClick(() => {
+      store.updateStudySet(set.id, { excerptDestination: { mode: "mindmap" } }); this.drawToolbar();
+    }));
+    menu.addItem(item => item.setTitle("只留在文档").setChecked(mode === "document").onClick(() => {
+      store.updateStudySet(set.id, { excerptDestination: { mode: "document" } }); this.drawToolbar();
+    }));
+    menu.addItem(item => item.setTitle("加入时放在哪里（保留设置）").setIsLabel(true));
+    menu.addItem(item => item.setTitle(outline.length ? "跟着目录" : "跟着目录，这本书没有目录").setChecked(mode === "contents").setDisabled(!outline.length).onClick(() => {
+      store.updateStudySet(set.id, { excerptDestination: { mode: "contents" } }); this.drawToolbar();
+    }));
+    menu.addItem(item => item.setTitle("跟着选中，没选中时，新卡放在当前画面").setChecked(mode === "selection").onClick(() => {
+      store.updateStudySet(set.id, { excerptDestination: { mode: "selection" } }); this.drawToolbar();
+    }));
+    menu.addItem(item => item.setTitle(selected?.cardId ? `固定到「${selected.title}」` : "固定到一张卡，先在脑图上选中一张卡").setChecked(mode === "fixed").setDisabled(!selected?.cardId || selected.canvasId !== store.activeCanvasId).onClick(() => {
+      if (!selected?.cardId || selected.canvasId !== store.activeCanvasId) return;
+      store.updateStudySet(set.id, { excerptDestination: { mode: "fixed", canvasId: selected.canvasId!, nodeId: selected.id } }); this.drawToolbar();
+    }));
+    const box = anchor.getBoundingClientRect(); menu.showAtPosition({ x: box.left, y: box.bottom });
   }
   private drawBottomCapsule(): void {
     if (!this.bottomCapsule) return;
     this.bottomPressDisposers.splice(0).forEach(dispose=>dispose());
     const dock=this.bottomCapsule;
-    dock.dataset.mode=this.state.bottomMode;
+    const effectiveMode = this.cleanView && this.readerTool === "pen" ? "writing" : this.state.bottomMode;
+    dock.dataset.mode=effectiveMode;
     dock.dataset.collapsed=String(this.state.bottomCollapsed);
     dock.replaceChildren();
     const collapse=el("button",{type:"button",class:"ms-bottom-collapse",title:this.state.bottomCollapsed?"展开底部工具栏":"收合底部工具栏","aria-label":this.state.bottomCollapsed?"展开底部工具栏":"收合底部工具栏","aria-expanded":String(!this.state.bottomCollapsed)});
@@ -732,7 +984,7 @@ export class StudyWorkspaceView extends ItemView {
     const normalPens=this.handwritingPresets().filter(preset=>preset.type!=="pencil"&&preset.type!=="highlighter");
     const penOne=normalPens[0],penTwo=normalPens[1];
     const marker=this.handwritingPresets().find(preset=>preset.type==="highlighter");
-    const writing=el("div",{class:"ms-bottom-expanded ms-bottom-writing",role:"toolbar","aria-label":"书写工具","aria-hidden":String(this.state.bottomMode!=="writing")});
+    const writing=el("div",{class:"ms-bottom-expanded ms-bottom-writing",role:"toolbar","aria-label":"书写工具","aria-hidden":String(effectiveMode!=="writing")});
     writing.append(
       action("baseline","文本",()=>this.useReaderTool("text"),this.readerTool==="text",!hasReader),
       action("scan","矩形",()=>this.useReaderTool("region"),this.readerTool==="region",!hasReader),
@@ -890,7 +1142,7 @@ export class StudyWorkspaceView extends ItemView {
       for(const key of order){const item=items.find(candidate=>candidate.dataset.msTool===key);if(item&&item.parentElement===tools)tools.append(item);}
     }
     const continuous=this.reader instanceof ReaderView?this.reader.getContinuousExcerpt():null;
-    if(continuous?.active){const status=el("div",{role:"status",text:`连续摘录中 · ${continuous.count} 段`});const finish=el("button",{type:"button",text:"完成","aria-label":"完成连续摘录"});finish.addEventListener("click",()=>{if(!(this.reader instanceof ReaderView))return;const count=this.reader.getContinuousExcerpt().count;this.reader.setContinuousExcerpt(false);if(count)new Notice(`已合并 ${count} 段摘录`);});status.append(finish);primary.append(status);}
+    if(continuous?.active){const status=el("div",{role:"status",text:`连续摘录中 · ${continuous.count} 段`});const finish=el("button",{type:"button",text:"完成","aria-label":"完成连续摘录"});finish.addEventListener("click",()=>this.finishContinuousExcerpt());status.append(finish);primary.append(status);}
     primary.append(sceneNav,tools);
     dock.replaceChildren(collapse,primary);
   }
@@ -983,7 +1235,8 @@ export class StudyWorkspaceView extends ItemView {
   }
   private canContinuousExcerpt():boolean { return this.reader instanceof ReaderView && !!this.reader.getFilePath() && (this.readerTool==="text"||this.readerTool==="region"); }
   private continuousExcerptActive():boolean { return this.reader instanceof ReaderView && this.reader.getContinuousExcerpt().active; }
-  private toggleContinuousExcerpt():void { if(this.canContinuousExcerpt() && this.reader instanceof ReaderView)this.reader.setContinuousExcerpt(!this.reader.getContinuousExcerpt().active); }
+  private finishContinuousExcerpt():void { if(!(this.reader instanceof ReaderView))return;const count=this.reader.getContinuousExcerpt().count;this.reader.setContinuousExcerpt(false);if(count>=2)new Notice(`已合并 ${count} 段`); }
+  private toggleContinuousExcerpt():void { if(this.canContinuousExcerpt() && this.reader instanceof ReaderView){if(this.reader.getContinuousExcerpt().active)this.finishContinuousExcerpt();else this.reader.setContinuousExcerpt(true);} }
   private cycleReadingTheme():void {
     const index=readingThemes.findIndex(theme=>theme.id===this.getReadingTheme());
     this.setReadingTheme(readingThemes[(index+1)%readingThemes.length].id);this.drawToolbar();
@@ -1125,24 +1378,145 @@ export class StudyWorkspaceView extends ItemView {
     this.reader?.refreshSceneSettings?.();
     this.refresh(true);
   }
+  private openDocumentMenu(anchor: HTMLElement): void {
+    const menu = new Menu(), reader = this.reader, pdf = reader instanceof ReaderView ? reader : null;
+    const activePath = this.state.activePath, activeFile = activePath ? this.app.vault.getAbstractFileByPath(activePath) : null;
+    const run = (callback: () => void | Promise<void>) => {
+      try { void Promise.resolve(callback()).catch(error => new Notice("文档操作失败：" + String(error), 10000)); }
+      catch (error) { new Notice("文档操作失败：" + String(error), 10000); }
+    };
+    const action = (title: string, callback: () => void | Promise<void>, enabled = true, checked?: boolean) => menu.addItem(item => {
+      item.setTitle(title).setDisabled(!enabled).onClick(() => run(callback)); if (checked !== undefined) item.setChecked(checked);
+    });
+    const displayName = (path: string) => (path.split("/").pop() ?? path).replace(/\.[^.]+$/, "");
+    action("关闭文档视图", async () => { await this.closeComparison(); this.state.reader = false; this.state.mindmap = true; this.layoutChanged(); }, !!reader);
+    action("文档浮窗", async () => {
+      if (!(activeFile instanceof TFile)) throw new Error("请先打开文档");
+      const leaf = this.app.workspace.openPopoutLeaf(); await leaf.openFile(activeFile);
+    }, activeFile instanceof TFile);
+    menu.addSeparator();
+    const documents = this.documents(), others = documents.filter(file => file.path !== activePath);
+    for (const file of others) action(`和《${file.basename}》对照`, () => this.openMobileComparison(file, false), !!reader);
+    menu.addSeparator();
+    action("单视图", () => this.setDocumentViewCount(1), !!reader, this.comparisons.length === 0);
+    action("双视图", () => this.setDocumentViewCount(2), !!reader && others.length >= 1, this.comparisons.length === 1);
+    action("三视图", () => this.setDocumentViewCount(3), !!reader && others.length >= 2, this.comparisons.length === 2);
+    action("自动方向", () => this.setComparisonDirection("auto"), this.comparisons.length > 0, this.comparisonDirection === "auto");
+    action("左右排列", () => this.setComparisonDirection("horizontal"), this.comparisons.length > 0, this.comparisonDirection === "horizontal");
+    action("上下排列", () => this.setComparisonDirection("vertical"), this.comparisons.length > 0, this.comparisonDirection === "vertical");
+    action("交换两篇文档的位置", () => this.swapComparisonPositions(), this.comparisons.length === 1);
+    action("结束对照，保留此文档", () => this.closeComparison(), this.comparisons.length > 0);
+    menu.addSeparator();
+    const orderedDocuments = [...documents.filter(file => file.path === activePath), ...others];
+    for (const file of orderedDocuments) action(file.basename, async () => { this.state.reader = true; this.applyLayout(); await this.openPath(file.path); }, true, file.path === activePath);
+    menu.addSeparator();
+    action("文档与目录", () => this.toggleDocumentNavigation("contents"), !!reader, this.state.documentNavigation);
+    action("从资料库…", () => { this.homeSection = "资料库"; this.showStudyHome(); });
+    action("从文件", () => this.importFiles());
+    action("新建笔记本", () => openNewNotebook(this.plugin));
+    action("从Web", () => openWebImport(this.plugin));
+    action("从百度网盘", () => openBaiduNetdisk(this.plugin, { activePath: () => this.state.activePath, onChanged: () => this.refresh(true) }));
+    action("添加外部源", () => openExternalSources(this.plugin));
+    action("管理文档…", () => {
+      const set = this.plugin.store.studySets.find(item => item.id === this.plugin.store.activeStudySetId);
+      if (set) editDocuments(this.plugin, set.id, () => this.refresh(true), () => this.importFiles(set.id)); else this.chooseDocument();
+    });
+    action("AI 拆书", () => { this.toggleDocumentNavigation("contents"); this.documentNavigation?.openAiOutline(); }, !!pdf);
+
+    action("转到指定页码", () => { if (pdf) this.openPageJump(pdf); }, !!pdf);
+    const set = this.plugin.store.studySets.find(item => item.id === this.plugin.store.activeStudySetId);
+    for (const path of set?.documentAttachments?.[activePath ?? ""] ?? []) {
+      const file = this.app.vault.getAbstractFileByPath(path);
+      action("附件 · " + displayName(path), () => this.openPath(path), file instanceof TFile);
+    }
+    const layout = pdf?.getPageLayout();
+    action("竖向阅读", async () => { if (pdf) { await pdf.setPageLayout(pdf.getPageLayout().layout, true); this.saveLayout(); } }, !!pdf, layout?.continuous === true);
+    action("翻页阅读", async () => { if (pdf) { await pdf.setPageLayout(pdf.getPageLayout().layout, false); this.saveLayout(); } }, !!pdf, layout?.continuous === false);
+    action(layout?.continuous ? "双页模式 (PDF)（请先切回翻页阅读）" : "双页模式 (PDF)", async () => { if (pdf) { await pdf.setPageLayout(layout?.layout === "spread" ? "single" : "spread", false); this.saveLayout(); } }, !!pdf && !layout?.continuous, !!this.plugin.store.settings.doublePage);
+    action("裁边", async () => { if (pdf) await pdf.openCrop(); }, !!pdf);
+    action("PDF OCR设置", () => this.openReadingPreferences("OCR"), !!pdf);
+    action("编辑PDF页面", () => pdf?.openPdfPageEditor(), !!pdf?.getPdfPageEdits());
+    action("导出文档", () => pdf?.openPdfExport(), !!pdf?.getPdfExportPageEdits());
+    menu.addSeparator();
+    action("在场景模板里设置…", () => this.openSceneTemplateManager());
+    const box = anchor.getBoundingClientRect(); menu.showAtPosition({ x: box.left, y: box.bottom });
+  }
+  private openSceneTemplateMenu(anchor:HTMLElement):void {
+    const store=this.plugin.store,studySetId=store.activeStudySetId,selection=studySetId?store.getStudyScene(studySetId):undefined;
+    const templates=store.getSceneTemplates(),systemIds=new Set(builtinSceneTemplates().filter(template=>template.id!=="read-write-recall").map(template=>template.id));
+    const menu=new Menu();
+    const group=(label:string,items:StudySceneTemplate[])=>{
+      menu.addItem(item=>item.setTitle(label).setIsLabel(true));
+      for(const template of items)menu.addItem(item=>item.setTitle(template.name).setChecked(selection?.templateId===template.id).setDisabled(!studySetId).onClick(()=>{
+        if(!studySetId)return;
+        store.selectStudyScene(studySetId,template.id,template.scenes[0].id);this.reader?.refreshSceneSettings?.();this.drawToolbar();this.saveLayout();
+      }));
+    };
+    group("系统场景模板",templates.filter(template=>systemIds.has(template.id)));
+    group("我的场景模板",templates.filter(template=>!systemIds.has(template.id)));
+    menu.addSeparator();
+    menu.addItem(item=>item.setTitle("摆放界面").onClick(()=>this.openWorkspaceSettings()));
+    menu.addItem(item=>item.setTitle("更多场景模板…").onClick(()=>this.openSceneTemplateManager()));
+    menu.addItem(item=>item.setTitle("编辑场景模板…").onClick(()=>this.openSceneTemplateManager()));
+    menu.addSeparator();
+    menu.addItem(item=>item.setTitle(selection?.interfaceMode==="traditional"?"切换到场景界面":"切换到传统界面").setDisabled(!selection).onClick(()=>this.toggleInterfaceMode()));
+    const box=anchor.getBoundingClientRect();menu.showAtPosition({x:box.left,y:box.bottom});
+  }
+  /** MN5「UI状态URL」：深链恢复学习集/脑图/文档/页码。 */
+  public uiStateUrl(): string {
+    const store = this.plugin.store, params = new URLSearchParams();
+    const vaultName = typeof (this.app.vault as { getName?: () => string }).getName === "function" ? this.app.vault.getName() : "";
+    if (vaultName) params.set("vault", vaultName);
+    if (store.activeStudySetId) params.set("set", store.activeStudySetId);
+    if (store.activeCanvasId) params.set("canvas", store.activeCanvasId);
+    const path = this.state.activePath ?? this.reader?.getFilePath();
+    if (path) params.set("doc", path);
+    const page = this.reader instanceof ReaderView ? this.reader.getCurrentPage() : undefined;
+    if (page) params.set("page", String(page));
+    return `obsidian://margin-study-state?${params.toString()}`;
+  }
+  private async copyUiStateUrl(): Promise<void> {
+    const url = this.uiStateUrl();
+    try { await navigator.clipboard.writeText(url); new Notice("已复制 UI 状态链接：" + url); }
+    catch { new Notice("无法写入剪贴板。状态链接为：" + url, 10000); }
+  }
+  /** 协议入口：按链接恢复学习集、脑图、文档与页码。 */
+  public async openFromStateParams(params: Record<string, string | undefined>): Promise<boolean> {
+    const store = this.plugin.store, setId = params.set, canvasId = params.canvas, doc = params.doc;
+    if (setId && store.studySets.some(set => set.id === setId)) {
+      if (store.activeStudySetId !== setId) store.setActiveStudySet(setId);
+      if (canvasId && store.canvases.some(canvas => canvas.id === canvasId && canvas.studySetId === setId)) store.setActiveCanvas(canvasId);
+    }
+    this.refresh(true);
+    if (!doc) return true;
+    await this.openPath(decodeURIComponent(doc));
+    const page = Number(params.page);
+    if (Number.isInteger(page) && page > 0 && this.reader instanceof ReaderView) await this.reader.navigateToReference(page, [], undefined, false);
+    return true;
+  }
   private openStudyMore():void {
-    const pane=this.popover("StudySet - More");pane.classList.add("ms-native-study-more");
+    const pane=this.popover("学习集");pane.classList.add("ms-native-study-more");
     const action=(text:string,icon:string,callback:()=>void)=>{const row=el("button",{class:"ms-native-menu-row",text});const glyph=el("span",{class:"ms-native-menu-icon"});setIcon(glyph,icon);row.prepend(glyph);row.addEventListener("click",()=>{this.dismissPopup();callback();});pane.append(row);};
-    action(this.focusedStage?"Exit Immersive Mode":"Enter Immersive Mode","scan-line",()=>this.toggleFocus());
-    action("Cards","panels-top-left",()=>this.selectAuxiliary("cards"));
-    action("Review","clipboard-list",()=>this.selectAuxiliary("review"));
-    action("Research","globe",()=>this.selectAuxiliary("research"));
+    action(this.focusedStage?"退出沉浸模式":"进入沉浸模式","scan-line",()=>this.toggleFocus());
+    action("卡片","panels-top-left",()=>this.selectAuxiliary("cards"));
+    action("复习","clipboard-list",()=>this.selectAuxiliary("review"));
+    action("研究","globe",()=>this.selectAuxiliary("research"));
     action("AI","sparkles",()=>this.selectAuxiliary("ai"));
     action("自定义 AI…","settings-2",()=>openAiSettings(this.plugin));
     action("全局搜索…","search",()=>openGlobalSearch(this.plugin));
     action("管理复习卡组…","clipboard-list",()=>openReviewDecks(this.plugin));
     action("导入网页 / 微信文章…","download",()=>openWebImport(this.plugin));
     action("外刊生词 · 离线查询…","book-open",()=>openVocabularyLookup(this.plugin,this.selectedContext()?.text?.trim()??"",this.state.activePath??""));
-    const studySetId=this.plugin.store.activeStudySetId;
     action("切换界面模式","layout-template",()=>this.toggleInterfaceMode());
     action("固定视图…","pin",()=>{this.fixedViewsOpen=!this.fixedViewsOpen;this.drawFixedViews();});
-    if(studySetId)for(const template of this.plugin.store.getSceneTemplates())action(`场景模板：${template.name}`,"layout-template",()=>{this.plugin.store.selectStudyScene(studySetId,template.id,template.scenes[0].id);this.reader?.refreshSceneSettings?.();this.drawToolbar();this.saveLayout();});
-    action("管理场景模板…","layout-template",()=>this.openSceneTemplateManager());
+    const syncDelete=el("button",{class:"ms-native-menu-row",text:(this.plugin.store.settings.syncDeleteCardOnSourceRemoval?"✓ ":"")+"删除源标注时同步删除卡片"});
+    syncDelete.addEventListener("click",()=>{const settings=this.plugin.store.settings;settings.syncDeleteCardOnSourceRemoval=!settings.syncDeleteCardOnSourceRemoval;this.plugin.store.save();this.dismissPopup();this.drawToolbar();});
+    pane.append(syncDelete);
+    action("复制 UI 状态链接","link",()=>{void this.copyUiStateUrl();});
+    action("导出学习集备份","upload",()=>openStudySetExport(this.plugin,{},()=>new Notice("学习集备份已导出")));
+    action("导出学习集备份（不含 PDF）","upload",()=>openStudySetExport(this.plugin,{includePdf:false},()=>new Notice("备份未包含 PDF；当前导入功能不能自动恢复其批注。",10000)));
+    action("导出到笔记数据库","file-output",()=>{void exportStudySetToNotes(this.plugin).then(path=>new Notice("已导出笔记："+path)).catch(error=>new Notice("导出笔记失败："+String(error),10000));});
+    action("导入学习集…","download",()=>openStudySetImport(this.plugin,()=>this.refresh(true)));
     action("工作区设置…","settings-2",()=>this.openWorkspaceSettings());
   }
   private openSceneTemplateManager():void {
@@ -1167,7 +1541,8 @@ export class StudyWorkspaceView extends ItemView {
           },"删除模板");
         });row.append(remove);
       }
-      const download=el("button",{text:"导出"+template.name});download.addEventListener("click",()=>{const url=URL.createObjectURL(new Blob([store.exportSceneTemplate(template.id)],{type:"application/json"}));const a=document.createElement("a");a.href=url;a.download="margin-study-scene-template.json";a.click();window.setTimeout(()=>URL.revokeObjectURL(url),1000);});row.append(download);pane.append(row);
+      const download=el("button",{text:"导出"+template.name});download.addEventListener("click",()=>{const url=URL.createObjectURL(new Blob([store.exportSceneTemplate(template.id)],{type:"application/json"}));const a=document.createElement("a");a.href=url;a.download="margin-study-scene-template.json";a.click();window.setTimeout(()=>URL.revokeObjectURL(url),1000);});row.append(download);
+      const mn5Download=el("button",{text:"导出 MN5"});mn5Download.addEventListener("click",()=>{const url=URL.createObjectURL(new Blob([store.exportSceneTemplate(template.id,"mn5")],{type:"application/json"}));const a=document.createElement("a");a.href=url;a.download="mn5-scene-template.json";a.click();window.setTimeout(()=>URL.revokeObjectURL(url),1000);});row.append(mn5Download);pane.append(row);
     }
     const input=el("input",{type:"file",accept:"application/json,.json","aria-label":"导入模板文件"}) as HTMLInputElement;
     input.addEventListener("change",()=>{const file=input.files?.[0];if(!file)return;void file.text().then(text=>{const imported=store.importSceneTemplate(text);new Notice("模板已导入");this.editSceneTemplate(imported);}).catch(error=>new Notice("导入失败："+String(error)));});pane.append(input);
@@ -1193,11 +1568,16 @@ export class StudyWorkspaceView extends ItemView {
     }
     const colors=el("input",{type:"text","aria-label":"摘录颜色"}) as HTMLInputElement;colors.value=(draft.colors??this.plugin.store.settings.colors).join(", ");pane.append(el("label",{text:"摘录颜色（#RRGGBB，逗号分隔）"}),colors);
     const popup=el("input",{type:"checkbox","aria-label":"摘录后显示浮窗"}) as HTMLInputElement;popup.checked=draft.excerptPopup??this.plugin.store.settings.excerptPopup??false;const popupLabel=el("label",{text:"摘录后显示浮窗"});popupLabel.prepend(popup);pane.append(popupLabel);
+    // 5.0.2：每个场景模板可单独设置状态栏
+    const statusBar=el("select",{"aria-label":"状态栏",class:"ms-select"}) as HTMLSelectElement;
+    for(const [value,text] of [["full","完整状态栏"],["compact","精简状态栏"],["hidden","隐藏状态栏"]] as const)statusBar.append(el("option",{value,text}));
+    statusBar.value=draft.statusBar??"full";
+    const statusLabel=el("label",{text:"状态栏 "});statusLabel.append(statusBar);pane.append(statusLabel);
     const menuGroup=el("fieldset");menuGroup.append(el("legend",{text:"选区菜单"}));const menuIds=draft.textSelectionMenuActions??this.plugin.store.settings.textSelectionMenuActions??["copy","fold","extend-ink","extend-text","ask","research"];
     let menuChanged=false;const menuOptions=[["copy","复制"],["fold","折叠"],["extend-ink","手写留白"],["extend-text","文字留白"],["ask","向 AI 提问"],["research","研究"],["speech","朗读"]] as const;const menuInputs=menuOptions.map(([id,label])=>{const box=el("input",{type:"checkbox","aria-label":"选区菜单："+label}) as HTMLInputElement;box.checked=menuIds.includes(id);box.addEventListener("change",()=>{menuChanged=true;});const row=el("label",{text:label});row.prepend(box);menuGroup.append(row);return{id,box};});pane.append(menuGroup);
     const presets=JSON.parse(JSON.stringify(draft.handwritingPresets??handwritingPresets(this.plugin.store.settings))) as HandwritingPresetSpec[];
     const penInputs=presets.map(preset=>{const row=el("div"),label=el("input",{type:"text","aria-label":"笔名称 "+preset.id}) as HTMLInputElement,color=el("input",{type:"color","aria-label":"笔颜色 "+preset.id}) as HTMLInputElement,width=el("input",{type:"number",min:"0.5",max:preset.type==="highlighter"?"64":"24",step:"0.1","aria-label":"笔宽 "+preset.id}) as HTMLInputElement;label.value=preset.label;color.value=preset.color;width.value=String(preset.width);row.append(label,color,width);pane.append(row);return{preset,label,color,width};});
-    const save=el("button",{class:"ms-scene-template-save",text:"保存模板"});save.addEventListener("click",()=>{try{draft.name=name.value.trim();draft.colors=colors.value.split(",").map(value=>value.trim());draft.excerptPopup=popup.checked;if(cardFields&&cardFront&&cardBack)draft.cardTemplate={fields:cardFields.value.split(/[,，]/).map(value=>value.trim()).filter(Boolean),front:cardFront.value,back:cardBack.value};if(menuChanged||draft.textSelectionMenuActions)draft.textSelectionMenuActions=[...menuInputs.filter(item=>item.box.checked).map(item=>item.id),...menuIds.filter(id=>!menuOptions.some(option=>option[0]===id))];draft.handwritingPresets=penInputs.map(({preset,label,color,width})=>({...preset,label:label.value.trim(),color:color.value,width:Number(width.value),...(Number(width.value)===preset.width?{}:{documentWidth:Number(width.value),mindmapWidth:Number(width.value),cardWidth:Number(width.value)})}));this.plugin.store.saveSceneTemplate(draft);this.reader?.refreshSceneSettings?.();this.drawToolbar();new Notice("模板已保存");this.openSceneTemplateManager();}catch(error){new Notice("保存失败："+String(error));}});pane.append(save);
+    const save=el("button",{class:"ms-scene-template-save",text:"保存模板"});save.addEventListener("click",()=>{try{draft.name=name.value.trim();draft.colors=colors.value.split(",").map(value=>value.trim());draft.excerptPopup=popup.checked;draft.statusBar=statusBar.value as "full"|"compact"|"hidden";if(cardFields&&cardFront&&cardBack)draft.cardTemplate={fields:cardFields.value.split(/[,，]/).map(value=>value.trim()).filter(Boolean),front:cardFront.value,back:cardBack.value};if(menuChanged||draft.textSelectionMenuActions)draft.textSelectionMenuActions=[...menuInputs.filter(item=>item.box.checked).map(item=>item.id),...menuIds.filter(id=>!menuOptions.some(option=>option[0]===id))];draft.handwritingPresets=penInputs.map(({preset,label,color,width})=>({...preset,label:label.value.trim(),color:color.value,width:Number(width.value),...(Number(width.value)===preset.width?{}:{documentWidth:Number(width.value),mindmapWidth:Number(width.value),cardWidth:Number(width.value)})}));this.plugin.store.saveSceneTemplate(draft);this.reader?.refreshSceneSettings?.();this.drawToolbar();new Notice("模板已保存");this.openSceneTemplateManager();}catch(error){new Notice("保存失败："+String(error));}});pane.append(save);
   }
   private toggleFocus(restoreReader = true): void {
     const reader=this.reader, state=restoreReader?reader?.getState():null;
@@ -1268,7 +1648,7 @@ export class StudyWorkspaceView extends ItemView {
   }
   private openStudyMenu(): void {
     const homeScreen=!!this.popup?.classList.contains("ms-study-home-screen");
-    const pane=this.popover("StudySet");
+    const pane=this.popover("学习集");
     pane.classList.add("ms-study-home");
     if(homeScreen)pane.classList.add("ms-study-home-screen");
     const store=this.plugin.store;
@@ -1346,7 +1726,7 @@ export class StudyWorkspaceView extends ItemView {
     }
     const reader=this.reader;
     if(reader instanceof ReaderView&&reader.getPdfExportPageEdits()){
-      const path=reader.getFilePath(),exportDocument=el("button",{class:"ms-native-menu-row",text:"Export Document…","aria-label":"Export Document"});
+      const path=reader.getFilePath(),exportDocument=el("button",{class:"ms-native-menu-row",text:"导出文档…","aria-label":"Export Document"});
       exportDocument.addEventListener("click",()=>{this.dismissPopup();if(this.reader===reader&&reader.getFilePath()===path)reader.openPdfExport();});pane.append(exportDocument);
     }
     if(homeScreen)this.enhanceStudyHome(pane);
@@ -1433,7 +1813,7 @@ export class StudyWorkspaceView extends ItemView {
       }
     }
     if(kind==="annotation"){
-      const settings=el("button",{class:"ms-native-menu-row",text:"Handwriting Settings…","aria-label":"手写设置"});settings.addEventListener("click",()=>{this.dismissPopup();this.reader?.openHandwritingSettings();});list.append(settings);
+      const settings=el("button",{class:"ms-native-menu-row",text:"手写设置…","aria-label":"手写设置"});settings.addEventListener("click",()=>{this.dismissPopup();this.reader?.openHandwritingSettings();});list.append(settings);
     }
     if(!list.childElementCount)list.append(el("p",{class:"ms-muted",text:"此类文档没有可用的相关工具。"}));
   }
@@ -1476,7 +1856,8 @@ export class StudyWorkspaceView extends ItemView {
         for (const parent of set.docPaths.filter(path => path !== tab.path && !parents.some(([existing]) => existing === path))) menu.addItem(entry => entry.setTitle("夹到 " + parent).onClick(() => {
           const links = { ...(set.documentAttachments ?? {}) }; for (const key of Object.keys(links)) { links[key] = links[key].filter(path => path !== tab.path); if (!links[key].length) delete links[key]; } links[parent] = [...(links[parent] ?? []), tab.path]; store.updateStudySet(set.id, { documentAttachments: links }); this.drawTabs();
         }));
-        menu.showAtMouseEvent(new MouseEvent("click", { clientX: relation.getBoundingClientRect().left, clientY: relation.getBoundingClientRect().bottom }));
+        const bounds = relation.getBoundingClientRect();
+        menu.showAtPosition({ x: bounds.left, y: bounds.bottom });
       });
       item.append(relation);
       item.addEventListener("dragstart", event => { event.dataTransfer?.setData("application/x-marginstudy-tab",tab.path); });
@@ -1493,7 +1874,7 @@ export class StudyWorkspaceView extends ItemView {
       const file = this.app.vault.getAbstractFileByPath(path); if (!(file instanceof TFile)) attachment.setAttribute("disabled", "");
       this.tabBar.append(attachment);
     }
-    this.tabBar.append(this.toolbarButton("chevrons-up-down", "管理文档标签", () => this.manageTabs()), this.toolbarButton("plus", "打开或添加文档", () => this.chooseDocument()));
+    this.tabBar.append(this.toolbarButton("library", "书脊：滚动与检索文档", () => this.openDocumentSpine()), this.toolbarButton("chevrons-up-down", "管理文档标签", () => this.manageTabs()), this.toolbarButton("plus", "打开或添加文档", () => this.chooseDocument()));
     this.drawReaderAttachmentCapsule();
     this.revealActiveTab();
   }
@@ -1541,7 +1922,7 @@ export class StudyWorkspaceView extends ItemView {
     current.addEventListener("click",()=>this.openStudyMenu());this.libraryList.append(current);
     if(set){
       const maps=el("div",{class:"ms-workspace-library-group"});
-      maps.append(el("strong",{text:"MindMaps"}),this.toolbarButton("plus","新建脑图",()=>openTextModal({title:"新建脑图",initial:"新脑图",onOk:name=>{
+      maps.append(el("strong",{text:"脑图"}),this.toolbarButton("plus","新建脑图",()=>openTextModal({title:"新建脑图",initial:"新脑图",onOk:name=>{
         if(!name.trim()||!store.studySets.some(item=>item.id===set.id))return;
         store.setActiveCanvas(store.createCanvas(set.id,name.trim()).id);this.refresh(true);this.saveLayout();
       }})));this.libraryList.append(maps);
@@ -1552,7 +1933,7 @@ export class StudyWorkspaceView extends ItemView {
       }
     }
     const documents=el("div",{class:"ms-workspace-library-group"});
-    documents.append(el("strong",{text:"Documents"}),this.toolbarButton("plus","添加学习集文档",()=>this.chooseDocument()));this.libraryList.append(documents);
+    documents.append(el("strong",{text:"文档"}),this.toolbarButton("plus","添加学习集文档",()=>this.chooseDocument()));this.libraryList.append(documents);
     const files = this.documents().filter(file => file.path.toLocaleLowerCase().includes(this.libraryQuery.toLocaleLowerCase()));
     for (const file of files) {
       const row = el("button", { class: "ms-workspace-document" + (file.path === this.state.activePath ? " is-active" : ""), title: file.path });
@@ -1635,14 +2016,14 @@ export class StudyWorkspaceView extends ItemView {
     const choose=el("button",{class:"ms-native-deck-name",text:(deck?.name??"Select Review Card Deck")+" ▾","aria-label":"选择复习卡组"});choose.addEventListener("click",()=>openReviewDecks(this.plugin));
     head.append(play,choose,this.toolbarButton("x","关闭复习面板",()=>this.selectAuxiliary("none")));this.auxiliary.append(head);
     const controls=el("div",{class:"ms-native-deck-controls"});
-    const sort=el("button",{class:"ms-native-quiet",text:"Sort","aria-label":"复习卡片排序"});sort.addEventListener("click",()=>{this.deckFilter=!this.deckFilter;this.drawAuxiliary();});
+    const sort=el("button",{class:"ms-native-quiet",text:"排序","aria-label":"复习卡片排序"});sort.addEventListener("click",()=>{this.deckFilter=!this.deckFilter;this.drawAuxiliary();});
     const count=deck?store.reviewDeckSummary(deck.id).due:0;
     const filter=this.toolbarButton("filter",`筛选到期复习卡片（${count}）`,()=>{this.deckFilter=!this.deckFilter;this.drawAuxiliary();},this.deckFilter);filter.prepend(el("span",{text:`(${count})`}));
     controls.append(sort,el("span",{class:"ms-workspace-spacer"}),filter);this.auxiliary.append(controls);
-    if(this.deckFilter){const query=el("input",{type:"search",class:"ms-search ms-native-deck-search",placeholder:"Search Cards","aria-label":"筛选复习卡片"});query.value=this.deckQuery;query.addEventListener("input",()=>{this.deckQuery=query.value;draw();});this.auxiliary.append(query);}
+    if(this.deckFilter){const query=el("input",{type:"search",class:"ms-search ms-native-deck-search",placeholder:"搜索卡片","aria-label":"筛选复习卡片"});query.value=this.deckQuery;query.addEventListener("input",()=>{this.deckQuery=query.value;draw();});this.auxiliary.append(query);}
     const list=el("div",{class:"ms-native-deck-list"});this.auxiliary.append(list);
     const draw=()=>{
-      list.replaceChildren();if(!deck){const add=el("button",{class:"ms-native-add-deck",text:"＋ Add Review Card Deck"});add.addEventListener("click",()=>openReviewDecks(this.plugin));list.append(add);return;}
+      list.replaceChildren();if(!deck){const add=el("button",{class:"ms-native-add-deck",text:"＋ 添加复习卡组"});add.addEventListener("click",()=>openReviewDecks(this.plugin));list.append(add);return;}
       const ids=new Set(store.pendingQuestionsForDeck(deck.id).map(question=>question.cardId));
       for(const id of deck.cardIds){const card=store.getCard(id);if(!card||!ids.has(id)||this.deckQuery&&![card.title,card.front,card.back,card.tags.join(" ")].join(" ").toLowerCase().includes(this.deckQuery.toLowerCase()))continue;
         const row=el("article",{class:"ms-native-list-card","data-review-card":id,tabindex:"0"});row.style.setProperty("--card-color",card.color??"#ffffad");
@@ -1653,11 +2034,11 @@ export class StudyWorkspaceView extends ItemView {
       }
     };draw();
     const footer=el("footer",{class:"ms-native-deck-footer"});
-    const select=el("button",{class:"ms-native-quiet",text:"Select","aria-label":"选择复习卡片"});select.addEventListener("click",()=>{if(deck)openReviewDeckBrowser(this.plugin,deck.id);});
+    const select=el("button",{class:"ms-native-quiet",text:"选择","aria-label":"选择复习卡片"});select.addEventListener("click",()=>{if(deck)openReviewDeckBrowser(this.plugin,deck.id);});
     footer.append(this.toolbarButton("list-filter","复习筛选与排序",()=>{this.deckFilter=!this.deckFilter;this.drawAuxiliary();}),select,el("span",{class:"ms-workspace-spacer"}),this.toolbarButton("ellipsis","管理复习卡组",()=>openReviewDecks(this.plugin)));this.auxiliary.append(footer);
   }
   private openLayoutMenu(): void {
-    const pane = this.popover("Document - More"); pane.classList.add("ms-document-more");
+    const pane = this.popover("文档 - 更多"); pane.classList.add("ms-document-more");
     pane.querySelector(".ms-native-popover-head button")?.remove();
     const list = el("div", { class: "ms-document-more-list" }); pane.append(list);
     const reader = this.reader, path = reader?.getFilePath(), notebook = reader?.getDocumentNotebookId();
@@ -1696,19 +2077,35 @@ export class StudyWorkspaceView extends ItemView {
     const page = Number((pdf?.getState().position as {page?: number} | undefined)?.page ?? 1);
     if (pdf) {
       const bookmarked = pdf.isPageBookmarked(page);
-      row(bookmarked ? "Remove Bookmark" : "Add Bookmark", "bookmark", () => pdf.setPageBookmarked(page, !bookmarked));
-      if (pdf.getPdfPageEdits()) row("Edit PDF Pages", "file-pen", () => pdf.openPdfPageEditor());
-      row("Crop", "crop", () => { void pdf.openCrop().catch(error => new Notice("无法打开裁边：" + String(error))); });
-      row("Go to Page", "file-input", () => this.openPageJump(pdf));
+      row(bookmarked ? "删除书签" : "添加书签", "bookmark", () => pdf.setPageBookmarked(page, !bookmarked));
+      if (pdf.getPdfPageEdits()) row("编辑PDF页面", "file-pen", () => pdf.openPdfPageEditor());
+      row("裁边", "crop", () => { void pdf.openCrop().catch(error => new Notice("无法打开裁边：" + String(error))); });
+      row("转到指定页码", "file-input", () => this.openPageJump(pdf));
+      const shortcut = (label: string, icon: string, run: () => void, disabled = false) => {
+        const button = el("button", { class: "ms-document-more-row", text: label, "aria-label": label });
+        const glyph = el("span", { class: "ms-document-more-icon", "aria-hidden": "true" }); setNativeIcon(glyph, icon); button.prepend(glyph);
+        button.disabled = disabled;
+        button.addEventListener("click", () => { if (button.disabled) return; this.dismissPopup(); run(); });
+        list.append(button);
+      };
+      shortcut("回源", "undo-2", () => {
+        const node = this.renderer?.selectedViewNode(), card = node?.cardId ? this.plugin.store.getCard(node.cardId) : undefined;
+        if (!card) { new Notice("请先在脑图选中一张卡片"); return; }
+        jumpToCardSource(this.plugin, card);
+      }, !this.renderer?.selectedViewNode()?.cardId);
+      shortcut("摘录与手写工具", "pen-tool", () => this.openExcerptToolSlots(reader), !reader);
+      shortcut("合并到另一份文档…", "copy-plus", () => this.openMergeIntoDocument(), !pdf);
+      row("返回", "undo-2", () => pdf.goBack(), !pdf.canGoBack());
+      row("前进", "redo-2", () => pdf.goForward(), !pdf.canGoForward());
     }
-    row("Document Notebooks", "layers", () => reader?.openDocumentNotebooks(), !reader);
-    row("Card Grouping Board", "panels-top-left", () => this.selectAuxiliary("cards"), !reader);
+    row("文档笔记本", "layers", () => reader?.openDocumentNotebooks(), !reader);
+    row("卡片分组看板", "panels-top-left", () => this.selectAuxiliary("cards"), !reader);
     const divider = el("div", { class: "ms-document-more-divider", role: "separator" }); list.append(divider);
     if (pdf?.getPdfPageEdits()) {
       const row = el("div", {class:"ms-document-more-extend"});
       const glyph = el("span",{class:"ms-document-more-icon","aria-hidden":"true"});setNativeIcon(glyph,"between-horizontal-start");
-      const choices = el("div",{class:"ms-reading-segments",role:"group","aria-label":"Extend"});
-      row.append(glyph,el("span",{text:"Extend"}),choices);list.append(row);
+      const choices = el("div",{class:"ms-reading-segments",role:"group","aria-label":"留白"});
+      row.append(glyph,el("span",{text:"留白"}),choices);list.append(row);
       for (const [mode,label] of [["normal","Normal"],["margin","Margin"],["collapse","Collapse"]] as const) {
         const button = el("button",{text:label,"aria-label":label,"aria-pressed":String(pdf.getExtendMode()===mode)});
         button.addEventListener("click",async()=>{
@@ -1723,7 +2120,14 @@ export class StudyWorkspaceView extends ItemView {
     row("Audio & Video", "music", () => this.readerAction("添加音视频"), !reader);
     row("录制语音批注", "mic", () => this.readerAction("语音批注"), !reader?.getReaderToolbar().querySelector('[aria-label="语音批注"]'));
     row("朗读控制", "volume-2", () => this.openSpeechControls(), !reader);
-    row("Read Settings", "type", () => this.openReadSettings(), !reader);
+    row("翻译", "languages", async () => {
+      const text = this.selection?.text?.trim();
+      if (!text) throw new Error("请先在文档中选择要翻译的文字");
+      const { translateIntoPage } = await import("../ai/translate");
+      await translateIntoPage(this.plugin, { text, language: this.plugin.store.settings.translationTargetLanguage ?? "简体中文" });
+      new Notice("译文已插入当前页，可双击编辑");
+    }, !pdf);
+    row("阅读设置", "type", () => this.openReadSettings(), !reader);
     row("Show Document Tabs", "panel-top", () => { this.state.showTabs = !this.state.showTabs; this.layoutChanged(); }, false, () => this.state.showTabs);
     this.anchorDocumentPopup(pane);
   }
@@ -1738,7 +2142,7 @@ export class StudyWorkspaceView extends ItemView {
     this.plugin.store.settings.readingTheme = theme; this.applyReadingTheme(); this.plugin.store.save();
   }
   private openReadSettings(): void {
-    const pane = this.popover("Read Settings"); pane.classList.add("ms-read-settings");
+    const pane = this.popover("阅读设置"); pane.classList.add("ms-read-settings");
     pane.querySelector(".ms-native-popover-head")?.remove();
     const reader = this.reader, path = reader?.getFilePath(), notebook = reader?.getDocumentNotebookId();
     const current = () => this.reader === reader && reader?.getFilePath() === path && reader?.getDocumentNotebookId() === notebook;
@@ -1746,8 +2150,8 @@ export class StudyWorkspaceView extends ItemView {
       const section = el("section", {class:"ms-reading-setting-group"}); section.append(el("h3",{text:label}));
       const choices = el("div",{class:"ms-reading-segments",role:"group","aria-label":label});section.append(choices);pane.append(section);return choices;
     };
-    const pages = group("Turn Document Page"), pdf = reader instanceof ReaderView ? reader : null;
-    for (const [continuous,label] of [[false,"Horizontal Flip"],[true,"Vertical Scroll"]] as const) {
+    const pages = group("文档翻页方式"), pdf = reader instanceof ReaderView ? reader : null;
+    for (const [continuous,label] of [[false,"横向翻页"],[true,"纵向滚动"]] as const) {
       const button = el("button", {text:label,"aria-label":label,"aria-pressed":String(pdf?.getPageLayout().continuous === continuous)});
       button.disabled = !pdf;
       button.addEventListener("click", async () => {
@@ -1760,27 +2164,27 @@ export class StudyWorkspaceView extends ItemView {
         finally { if (current()) pages.querySelectorAll<HTMLButtonElement>("button").forEach(node => node.disabled = false); }
       });pages.append(button);
     }
-    const themes = group("Theme");
+    const themes = group("主题");
     for (const theme of readingThemes) {
-      const button = el("button", {text:theme.label,"aria-label":theme.label,"aria-pressed":String(this.getReadingTheme() === theme.id)});
+      const button = el("button", {text:theme.label,title:theme.label,"aria-label":theme.label,"aria-pressed":String(this.getReadingTheme() === theme.id)});
       button.addEventListener("click", () => { if (current()) { this.setReadingTheme(theme.id); this.dismissPopup(); } });themes.append(button);
     }
-    const more = el("button",{class:"ms-reading-more",text:"More Settings","aria-label":"More Settings"});
+    const more = el("button",{class:"ms-reading-more",text:"更多设置","aria-label":"更多设置"});
     more.addEventListener("click",()=>{if(current())this.openReadingPreferences();});pane.append(more);
     this.anchorDocumentPopup(pane,350);
   }
-  private openReadingPreferences(): void {
-    const pane = this.popover("Settings"); pane.classList.add("ms-reading-preferences");
+  private openReadingPreferences(initialCategory = "UI Theme"): void {
+    const pane = this.popover("设置"); pane.classList.add("ms-reading-preferences");
     pane.querySelector(".ms-native-popover-head")?.remove();
-    const close = el("button",{text:"Close","aria-label":"Close"});close.addEventListener("click",()=>this.dismissPopup());
+    const close = el("button",{text:"关闭","aria-label":"关闭"});close.addEventListener("click",()=>this.dismissPopup());
     const head = el("header",{class:"ms-reading-preferences-head"}), title = el("div");
-    title.append(close,el("strong",{text:"Settings"}));head.append(title,el("strong",{text:"UI Theme"}));
+    title.append(close,el("strong",{text:"设置"}));head.append(title,el("strong",{text:"界面主题"}));
     const body = el("div",{class:"ms-reading-preferences-body"}), sidebar = el("nav",{"aria-label":"设置类别"});
-    const content = el("section",{class:"ms-reading-theme-preferences","aria-label":"UI Theme"});
+    const content = el("section",{class:"ms-reading-theme-preferences","aria-label":"界面主题"});
     const categories: HTMLButtonElement[]=[];
     const show=(name:string)=>{
-      content.replaceChildren();content.setAttribute("aria-label",name);head.lastElementChild!.textContent=name;
-      categories.forEach(button=>button.setAttribute("aria-pressed",String(button.textContent===name)));
+      content.replaceChildren();content.setAttribute("aria-label",name==="UI Theme"?"界面主题":name);head.lastElementChild!.textContent=name==="UI Theme"?"界面主题":name;
+      categories.forEach(button=>button.setAttribute("aria-pressed",String(button.textContent===(name==="UI Theme"?"界面主题":name))));
       const heading=(text:string)=>content.append(el("h3",{text}));
       const toggle=(label:string,key:"showFootnotesLinksOnMargin"|"hideMarginNumbers"|"tapPageEdges"|"assistiveExcerpt"|"excerptPopup"|"excerptLockColors"|"excerptAutoExpandRect"|"autoCardOnHighlight"|"autoCardOnRegion"|"appleOcrEngine"|"ocrSelectionCorrection")=>{
         const row=el("label",{class:"ms-reading-preference-row"}),input=el("input",{type:"checkbox","aria-label":label});input.checked=!!this.plugin.store.settings[key];
@@ -1791,40 +2195,40 @@ export class StudyWorkspaceView extends ItemView {
         for(const face of ["Helvetica","Georgia","Courier New"])font.append(el("option",{text:face,value:face}));
         font.value=this.plugin.store.settings.cardFontFamily??"Helvetica";
         font.addEventListener("change",()=>{this.plugin.store.settings.cardFontFamily=font.value as "Helvetica"|"Georgia"|"Courier New";this.plugin.store.save();});row.append(el("span",{text:fontLabel}),font);content.append(row);
-        const upperRow=el("label",{class:"ms-reading-preference-row"}),upper=el("input",{type:"checkbox","aria-label":"Title uppercase"});upper.checked=!!this.plugin.store.settings.cardTitleUppercase;
-        upper.addEventListener("change",()=>{this.plugin.store.settings.cardTitleUppercase=upper.checked;this.plugin.store.save();});upperRow.append(el("span",{text:"Title uppercase"}),upper);content.append(upperRow);
-        const sizeRow=el("label",{class:"ms-reading-preference-row"}),size=el("input",{type:"number",min:"12",max:"32",step:"1","aria-label":"Base Font Size",value:String(this.plugin.store.settings.cardBaseFontSize??16)});
-        size.addEventListener("change",()=>{const value=Number(size.value);if(!Number.isInteger(value)||value<12||value>32){size.value=String(this.plugin.store.settings.cardBaseFontSize??16);return;}this.plugin.store.settings.cardBaseFontSize=value;this.plugin.store.save();});sizeRow.append(el("span",{text:"Base Font Size"}),size);content.append(sizeRow);
+        const upperRow=el("label",{class:"ms-reading-preference-row"}),upper=el("input",{type:"checkbox","aria-label":"标题大写"});upper.checked=!!this.plugin.store.settings.cardTitleUppercase;
+        upper.addEventListener("change",()=>{this.plugin.store.settings.cardTitleUppercase=upper.checked;this.plugin.store.save();});upperRow.append(el("span",{text:"标题大写"}),upper);content.append(upperRow);
+        const sizeRow=el("label",{class:"ms-reading-preference-row"}),size=el("input",{type:"number",min:"12",max:"32",step:"1","aria-label":"基础字号",value:String(this.plugin.store.settings.cardBaseFontSize??16)});
+        size.addEventListener("change",()=>{const value=Number(size.value);if(!Number.isInteger(value)||value<12||value>32){size.value=String(this.plugin.store.settings.cardBaseFontSize??16);return;}this.plugin.store.settings.cardBaseFontSize=value;this.plugin.store.save();});sizeRow.append(el("span",{text:"基础字号"}),size);content.append(sizeRow);
       }else if(name==="Margin"){
         heading("Footnotes & Links");toggle("Show footnotes & links on margin","showFootnotesLinksOnMargin");toggle("Hide margin numbers on document","hideMarginNumbers");heading("Turning Pages");toggle("Tap Page Edges to Turn Pages (Legacy)","tapPageEdges");
       }else if(name==="OCR"){
         heading("OCR");toggle("Selection Correction","ocrSelectionCorrection");toggle("Apple OCR Engine","appleOcrEngine");
-        const clear=el("button",{text:"Clear OCR Buffer","aria-label":"Clear OCR Buffer"});clear.addEventListener("click",()=>{clearOcrBuffer(this.app);if(this.reader instanceof ReaderView)this.reader.refreshOcr(true);new Notice("已清除 OCR 缓存");});content.append(clear);
+        const clear=el("button",{text:"清除 OCR 缓存","aria-label":"清除 OCR 缓存"});clear.addEventListener("click",()=>{clearOcrBuffer(this.app);if(this.reader instanceof ReaderView)this.reader.refreshOcr(true);new Notice("已清除 OCR 缓存");});content.append(clear);
       }else if(name==="Keyboard"){
-        heading("Hide Accessory Bar");const row=el("label",{class:"ms-reading-preference-row"}),hide=el("input",{type:"checkbox","aria-label":"Hide Accessory Bar"});hide.checked=!!this.plugin.store.settings.hideKeyboardAccessoryBar;
-        hide.addEventListener("change",()=>{this.plugin.store.settings.hideKeyboardAccessoryBar=hide.checked;this.plugin.store.save();});row.append(el("span",{text:"Hide Accessory Bar"}),hide);content.append(row);
+        heading("隐藏辅助栏");const row=el("label",{class:"ms-reading-preference-row"}),hide=el("input",{type:"checkbox","aria-label":"隐藏辅助栏"});hide.checked=!!this.plugin.store.settings.hideKeyboardAccessoryBar;
+        hide.addEventListener("change",()=>{this.plugin.store.settings.hideKeyboardAccessoryBar=hide.checked;this.plugin.store.save();});row.append(el("span",{text:"隐藏辅助栏"}),hide);content.append(row);
       }else if(name==="UI Theme"){
         heading("UI theme select");
         for(const theme of readingThemes){
-          const row=el("button",{text:theme.label,"aria-label":theme.label,"aria-pressed":String(this.getReadingTheme()===theme.id)});row.append(el("span",{text:"✓","aria-hidden":"true"}));
+          const row=el("button",{text:theme.label,title:theme.label,"aria-label":theme.label,"aria-pressed":String(this.getReadingTheme()===theme.id)});row.append(el("span",{text:"✓","aria-hidden":"true"}));
           row.addEventListener("click",()=>{this.setReadingTheme(theme.id);content.querySelectorAll("button").forEach(button=>button.setAttribute("aria-pressed",String(button===row)));});content.append(row);
         }
       }else if(name==="Excerpt"){
         heading("Assistive Excerpt");toggle("Assistive Excerpt","assistiveExcerpt");
         heading("Highlight operation");toggle("Pop up menu after add excerpt","excerptPopup");toggle("Auto expand the rect selection horizontally","excerptAutoExpandRect");
         heading("Excerpt color shortcuts");
-        const reset=el("button",{text:"Reset excerpt color shortcuts","aria-label":"Reset excerpt color shortcuts"});reset.addEventListener("click",()=>{
+        const reset=el("button",{text:"重置摘录颜色快捷键","aria-label":"重置摘录颜色快捷键"});reset.addEventListener("click",()=>{
           this.plugin.store.settings.colors=["#ffd54f","#ff8a80","#80cbc4","#9fa8da","#ce93d8","#a5d6a7"];this.plugin.store.settings.defaultColor="#ffd54f";this.plugin.store.save();new Notice("已重置摘录颜色快捷栏");
         });content.append(reset);toggle("Lock excerpt color shortcuts","excerptLockColors");
         heading("摘录卡片");toggle("文字摘录自动成卡","autoCardOnHighlight");toggle("区域摘录自动成卡","autoCardOnRegion");
       }else if(name==="Handwriting"){
-        heading("Document Handwriting");const open=el("button",{text:"Document Handwriting Settings…","aria-label":"Document Handwriting Settings"});open.disabled=!this.reader;
+        heading("Document Handwriting");const open=el("button",{text:"文档手写设置…","aria-label":"文档手写设置"});open.disabled=!this.reader;
         open.addEventListener("click",()=>{this.dismissPopup();this.reader?.openHandwritingSettings();});content.append(open);
       }
     };
-    sidebar.append(el("h3",{text:"UI Style"}));
-    for(const name of ["Card Style","UI Theme","Handwriting","Keyboard","OCR","Margin","Excerpt"]){if(name==="OCR")sidebar.append(el("h3",{text:"Read & Excerpt"}));const button=el("button",{text:name,"aria-label":name});button.addEventListener("click",()=>show(name));categories.push(button);sidebar.append(button);}
-    show("UI Theme");
+    sidebar.append(el("h3",{text:"界面样式"}));
+    for(const name of ["Card Style","UI Theme","Handwriting","Keyboard","OCR","Margin","Excerpt"]){if(name==="OCR")sidebar.append(el("h3",{text:"阅读与摘录"}));const label=name==="UI Theme"?"界面主题":name;const button=el("button",{text:label,"aria-label":label});button.addEventListener("click",()=>show(name));categories.push(button);sidebar.append(button);}
+    show(["Card Style","UI Theme","Handwriting","Keyboard","OCR","Margin","Excerpt"].includes(initialCategory) ? initialCategory : "UI Theme");
     body.append(sidebar,content);pane.append(head,body);
   }
   private anchorDocumentPopup(pane: HTMLElement, preferredWidth = 320): void {
@@ -1838,6 +2242,66 @@ export class StudyWorkspaceView extends ItemView {
     pane.style.setProperty("--ms-document-menu-height", Math.max(70, root.height - top - 12) + "px");
     pane.style.setProperty("--ms-document-menu-arrow", clamp(center - left, 16, width - 16) + "px");
   }
+  /** 5.0.2 合并：把当前页 / 页范围 / 整本 PDF 合并进另一份文档（目标为 .msref 时追加引用，否则新建集合）。 */
+  private openMergeIntoDocument(): void {
+    const reader = this.reader;
+    if (!(reader instanceof ReaderView) || !reader.getPdfPageEdits()) { new Notice("合并需要先打开 PDF 文档"); return; }
+    const sourcePath = reader.getFilePath()!, sourcePages = reader.getDisplayPages().length || reader.getDoc()?.numPages || 0;
+    if (!sourcePages) { new Notice("当前 PDF 尚未加载完成"); return; }
+    const targets = this.documents().filter(file => file.path !== sourcePath && ["pdf", "msref"].includes(file.extension.toLowerCase()));
+    if (!targets.length) { new Notice("当前学习集里没有可合并到的另一份文档"); return; }
+    const { modal, close } = createModal("合并到另一份文档");
+    const scope = el("select", { class: "ms-select", "aria-label": "合并范围" }) as HTMLSelectElement;
+    scope.append(el("option", { value: "page", text: "当前页" }), el("option", { value: "range", text: "页范围" }), el("option", { value: "document", text: "整本 PDF" }));
+    const range = el("input", { type: "text", class: "ms-search", "aria-label": "合并页范围", placeholder: "例如 1-3, 5" }) as HTMLInputElement;
+    range.disabled = true;
+    scope.addEventListener("change", () => { range.disabled = scope.value !== "range"; });
+    const target = el("select", { class: "ms-select", "aria-label": "合并目标文档" }) as HTMLSelectElement;
+    for (const file of targets) target.append(el("option", { value: file.path, text: `${file.basename}（${file.extension.toUpperCase()}）` }));
+    const status = el("p", { class: "ms-muted", role: "status" });
+    const cancel = el("button", { class: "ms-btn", text: "取消" }); cancel.addEventListener("click", close);
+    const confirm = el("button", { class: "ms-btn primary", text: "合并" });
+    confirm.addEventListener("click", () => {
+      confirm.disabled = true;
+      void (async () => {
+        const targetPath = target.value, file = this.app.vault.getAbstractFileByPath(targetPath);
+        if (!(file instanceof TFile)) throw new Error("目标文档不存在");
+        let pages: number[];
+        if (scope.value === "page") pages = [Number((reader.getState().position as { page?: number } | undefined)?.page ?? reader.getCurrentPage())];
+        else if (scope.value === "range") pages = [...new Set<number>(parsePageRange(range.value, sourcePages))].sort((a, b) => a - b);
+        else pages = Array.from({ length: sourcePages }, (_, index) => index + 1);
+        if (!pages.length) throw new Error("请选择至少一页");
+        const inputs = pages.map(page => ({ sourcePath, sourcePage: page, origin: "page" as const }));
+        if (file.extension.toLowerCase() === "msref") {
+          await appendPageReferences(this.plugin, file, inputs);
+          status.textContent = `已合并 ${pages.length} 页到「${file.basename}」`;
+          new Notice(`已合并 ${pages.length} 页到「${file.basename}」`);
+        } else {
+          const targetPages = await this.pdfPageCount(file);
+          const created = await createPageCollection(this.plugin, {
+            title: `${file.basename} + ${(sourcePath.split("/").pop() ?? "文档").replace(/\.[^.]+$/, "")}`,
+            pages: [...Array.from({ length: targetPages }, (_, index) => ({ sourcePath: file.path, sourcePage: index + 1, origin: "document" as const })), ...inputs],
+            origin: "document", studySetId: this.plugin.store.activeStudySetId ?? undefined,
+          });
+          status.textContent = `已新建合并文档「${created.basename}」`;
+          new Notice(`已新建合并文档「${created.basename}」`);
+          this.refresh(true);
+          void this.openPath(created.path).catch(error => new Notice("合并文档已创建，但未能打开：" + String(error)));
+        }
+        close();
+      })().catch(error => { status.textContent = "合并失败：" + String((error as Error).message ?? error); confirm.disabled = false; });
+    });
+    const actions = el("div", { class: "ms-modal-actions" }); actions.append(cancel, confirm);
+    modal.append(el("p", { class: "ms-muted", text: "合并只写入新的页集合引用，不修改源 PDF 与目标原文件。" }), el("label", { text: "范围 " }), scope, range, el("label", { text: "目标 " }), target, status, actions);
+    scope.focus();
+  }
+  private async pdfPageCount(file: TFile): Promise<number> {
+    const { loadPdf } = await import("../pdf/pdfjs");
+    const bytes = await this.app.vault.readBinary(file);
+    const doc = await loadPdf(bytes, undefined);
+    try { return doc.numPages; } finally { void doc.destroy(); }
+  }
+
   private openPageJump(reader: ReaderView): void {
     this.closePageDialog?.();
     const path = reader.getFilePath(), notebook = reader.getDocumentNotebookId();
@@ -1874,6 +2338,35 @@ export class StudyWorkspaceView extends ItemView {
     const bounds = this.toolbar.lastElementChild?.getBoundingClientRect();
     menu.showAtPosition({x:bounds?.left ?? 0,y:bounds?.bottom ?? 0});
   }
+  /** 5.0.2 书脊：竖向滚动列出学习集文档，按标题/路径检索后打开（封面位待补）。 */
+  private openDocumentSpine(): void {
+    const pane = this.popover("书脊");
+    const query = el("input", { type: "search", class: "ms-search", placeholder: "搜索文档标题或路径", "aria-label": "搜索书脊文档" }) as HTMLInputElement;
+    const list = el("div", { class: "ms-document-spine-list", role: "list", "aria-label": "书脊文档列表", tabindex: "0" });
+    const status = el("p", { class: "ms-muted", role: "status" });
+    const files = this.documents();
+    const draw = () => {
+      list.replaceChildren();
+      const term = query.value.trim().toLocaleLowerCase();
+      const matches = files.filter(file => !term || file.path.toLocaleLowerCase().includes(term) || file.basename.toLocaleLowerCase().includes(term));
+      for (const file of matches) {
+        const row = el("button", { type: "button", class: "ms-document-spine-row", role: "listitem", "data-document-path": file.path, title: file.path });
+        row.append(el("span", { class: "ms-document-spine-cover", "aria-hidden": "true", text: file.extension.toUpperCase() }));
+        const text = el("span", { class: "ms-document-spine-title" });
+        text.append(el("strong", { text: file.basename }), el("span", { class: "ms-muted", text: file.path }));
+        row.append(text);
+        if (file.path === this.state.activePath) row.classList.add("is-active");
+        row.addEventListener("click", () => { this.dismissPopup(); void this.openPath(file.path); });
+        list.append(row);
+      }
+      if (!matches.length) list.append(el("p", { class: "ms-muted", text: "没有匹配的文档" }));
+      status.textContent = `${matches.length} / ${files.length} 份文档`;
+    };
+    query.addEventListener("input", draw);
+    pane.append(query, status, list);
+    draw();
+    query.focus();
+  }
   private manageTabs(): void {
     const {modal} = createModal("管理文档标签");
     modal.append(el("p",{class:"ms-muted",text:"关闭标签只收起阅读页面。文档与笔记仍保留在学习集中。拖动顶部标签可调整顺序。"}));
@@ -1891,6 +2384,9 @@ export class StudyWorkspaceView extends ItemView {
     this.root.dataset.library=String(this.state.library); this.root.dataset.auxiliary=this.state.auxiliary;
     this.root.dataset.reader=String(this.state.reader); this.root.dataset.mindmap=String(this.state.mindmap);
     this.root.dataset.placement=this.state.placement; this.root.dataset.tabs=String(this.state.showTabs);
+    this.root.classList.toggle("is-clean-view", this.cleanView);
+    this.root.dataset.readerTool = this.readerTool;
+    if (this.cleanPenStrip) this.cleanPenStrip.hidden = !(this.cleanView && this.readerTool === "pen");
     const link=this.root.querySelector<HTMLElement>(".ms-native-divider-link");if(link){(link as HTMLButtonElement).disabled=!this.state.reader||!this.state.mindmap;link.title=this.linkModeLabel();link.setAttribute("aria-description",this.linkModeLabel());link.textContent=this.state.linkMode==="both"?"⇄":this.state.linkMode==="document"?"→":this.state.linkMode==="mindmap"?"←":"·";link.dataset.link=this.state.linkMode;}
     this.root.dataset.link=this.state.linkMode;
     this.root.style.setProperty("--ms-library-width",this.state.libraryWidth+"px");

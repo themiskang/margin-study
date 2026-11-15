@@ -10,7 +10,7 @@ import { requestClaudian } from "../ai/claudianRequest";
 import { aiErrorText } from "../ai/contracts";
 import { aiServiceFor } from "../ai/panel";
 import { uid } from "../utils/id";
-import { createModal } from "../utils/modal";
+import { createModal, openTextModal } from "../utils/modal";
 import { getOutline } from "../pdf/outline";
 import { annotationNotebook, documentNotebookState, notebookMeta } from "../annot/documentNotebooks";
 import { annotationTextRuns, renderTextRuns } from "../annot/textRuns";
@@ -22,7 +22,7 @@ export const documentNavigationTabs: { id: DocumentNavigationTab; label: string;
   { id: "contents", label: "目录", icon: "book-open" },
   { id: "thumbnails", label: "缩略图", icon: "grid-3x3" },
   { id: "bookmarks", label: "书签", icon: "bookmark" },
-  { id: "annotations", label: "手写标注", icon: "scribble" },
+  { id: "annotations", label: "标注", icon: "scribble" },
   { id: "cards", label: "卡片", icon: "sticky-note" },
 ];
 
@@ -208,13 +208,30 @@ export class DocumentNavigation {
           drag.addEventListener("pointerup",up);drag.addEventListener("pointercancel",cancel);
         });row.append(drag);
       }
-      const title=el("button", {class:"ms-document-outline-entry",text:item.title,"aria-label":item.title});
+      const title=el("button", {class:"ms-document-outline-entry",text:item.title,"aria-label":item.title,"data-toc-focus":item.id});
       title.disabled=!this.editingOutline&&!item.page;
       title.addEventListener("click",()=>{if(this.editingOutline)this.renameOutline(item);else{this.reader.navigateToOutline?.(item);this.markSelected(row);}});
-      title.addEventListener("keydown",event=>{if(this.editingOutline&&event.altKey&&["ArrowUp","ArrowDown"].includes(event.key)){
-        event.preventDefault();const index=items.findIndex(entry=>entry.id===item.id),target=items[index+(event.key==="ArrowUp"?-1:1)];
-        if(target)this.moveOutline(item.id,target.id,event.key==="ArrowDown");
-      }});row.append(title);
+      title.addEventListener("keydown",event=>{
+        const index=items.findIndex(entry=>entry.id===item.id);
+        // 5.0.2 目录键盘：上下浏览、Enter 定位、Alt+左右改层级、空格多选、Delete 删除。
+        if(event.key==="ArrowDown"||event.key==="ArrowUp"){
+          if(event.altKey&&this.editingOutline){event.preventDefault();const target=items[index+(event.key==="ArrowUp"?-1:1)];if(target)this.moveOutline(item.id,target.id,event.key==="ArrowDown");return;}
+          event.preventDefault();
+          const next=items[index+(event.key==="ArrowDown"?1:-1)];const button=next?this.list.querySelector<HTMLButtonElement>(`[data-toc-focus="${next.id}"]`):null;
+          button?.focus();button?.scrollIntoView({block:"nearest"});return;
+        }
+        if(event.altKey&&(event.key==="ArrowLeft"||event.key==="ArrowRight")&&this.editingOutline){
+          event.preventDefault();this.changeOutlineLevel(event.shiftKey?new Set(this.outlineSelection.size?this.outlineSelection:[item.id]):new Set([item.id]),event.key==="ArrowRight"?1:-1);return;
+        }
+        if(event.key===" "&&this.editingOutline){
+          event.preventDefault();const checkbox=row.querySelector<HTMLInputElement>('input[type="checkbox"]');
+          if(checkbox){checkbox.checked=!checkbox.checked;checkbox.dispatchEvent(new Event("change"));}return;
+        }
+        if(event.key==="Enter"){event.preventDefault();if(this.editingOutline)this.renameOutline(item);else{this.reader.navigateToOutline?.(item);this.markSelected(row);}return;}
+        if(event.key==="Delete"&&this.editingOutline){
+          event.preventDefault();const ids=this.outlineSelection.size?new Set(this.outlineSelection):new Set([item.id]);this.deleteOutline(ids);return;
+        }
+      });row.append(title);
       if(!this.editingOutline&&this.reader.toggleOutlineFold&&item.page>0){
         const next=items.slice(items.indexOf(item)+1).find(entry=>entry.level<=item.level&&entry.page>0),end=next?.page??(this.reader.getDoc?.()?.numPages??0)+1;
         const folded=new Set(notebookMeta(this.plugin.store.getDocMeta(this.reader.getFilePath()!)).foldedPages??[]),expanded=end>item.page&&Array.from({length:end-item.page},(_,offset)=>item.page+offset).every(page=>folded.has(page));
@@ -223,27 +240,57 @@ export class DocumentNavigation {
       }
       const more=el("button", {class:"ms-toc-more",text:"…","aria-label":"目录菜单 "+item.title});
       more.addEventListener("click",event=>{const menu=new Menu();
-        menu.addItem(entry=>entry.setTitle("Rename").onClick(()=>this.renameOutline(item)));
-        menu.addItem(entry=>entry.setTitle("Indent").onClick(()=>this.changeOutlineLevel(new Set([item.id]),1)));
-        menu.addItem(entry=>entry.setTitle("Outdent").onClick(()=>this.changeOutlineLevel(new Set([item.id]),-1)));
-        menu.addItem(entry=>entry.setTitle("Delete").onClick(()=>this.deleteOutline(new Set([item.id]))));menu.showAtMouseEvent(event);
+        menu.addItem(entry=>entry.setTitle("重命名").onClick(()=>this.renameOutline(item)));
+        menu.addItem(entry=>entry.setTitle("增加缩进").onClick(()=>this.changeOutlineLevel(new Set([item.id]),1)));
+        menu.addItem(entry=>entry.setTitle("减少缩进").onClick(()=>this.changeOutlineLevel(new Set([item.id]),-1)));
+        menu.addItem(entry=>entry.setTitle("删除").onClick(()=>this.deleteOutline(new Set([item.id]))));menu.showAtMouseEvent(event);
       });row.append(more);this.list.append(row);
     }
     if(!items.length)this.empty("文档没有目录");
     const toolbar=el("div", {class:"ms-toc-toolbar"});
     const action=(label:string,run:()=>void,disabled=false)=>{const b=el("button",{text:label,"aria-label":label});b.disabled=disabled;b.addEventListener("click",run);toolbar.append(b);};
     if(this.editingOutline){
-      action("All",()=>{this.outlineSelection=new Set(items.map(item=>item.id));this.signature="";void this.refresh();},!items.length);
-      action("Delete",()=>this.deleteOutline(this.outlineSelection),!items.length);
-      action("Indent",()=>this.changeOutlineLevel(this.outlineSelection,1),!items.length);
-      action("Outdent",()=>this.changeOutlineLevel(this.outlineSelection,-1),!items.length);
-      action("+",()=>new Notice('请选择 PDF 页面上的文字，再点击 Insert into TOC'));
+      action("全选",()=>{this.outlineSelection=new Set(items.map(item=>item.id));this.signature="";void this.refresh();},!items.length);
+      action("删除",()=>this.deleteOutline(this.outlineSelection),!items.length);
+      action("增加缩进",()=>this.changeOutlineLevel(this.outlineSelection,1),!items.length);
+      action("减少缩进",()=>this.changeOutlineLevel(this.outlineSelection,-1),!items.length);
+      action("插入目录",()=>{void this.insertSelectionToOutline();});
+      action("分割折页",()=>{void this.splitAtChapter().catch(error=>new Notice("分割折页失败："+String(error)));});
     }
-    if(!this.editingOutline)action("AI TOC",()=>this.generateOutline());
+    if(!this.editingOutline)action("AI 目录",()=>this.generateOutline());
     if(!this.editingOutline)action("目录转脑图",()=>{void this.outlineToMindmap().catch(error=>new Notice(String(error)));},!items.length);
-    action(this.editingOutline?"Done":"Edit",()=>{this.editingOutline=!this.editingOutline;this.outlineSelection.clear();this.signature="";void this.refresh();});
+    action(this.editingOutline?"完成":"编辑",()=>{this.editingOutline=!this.editingOutline;this.outlineSelection.clear();this.signature="";void this.refresh();});
     this.list.append(toolbar);
   }
+  /** MN5「插入目录」：把当前页/选区文字插入目录，记入撤销历史。 */
+  private async insertSelectionToOutline(): Promise<void> {
+    const path = this.reader.getFilePath(); if (!path || !this.reader.setEditableOutline) return;
+    const page = this.reader instanceof Object && "getCurrentPage" in this.reader ? Number((this.reader as unknown as { getCurrentPage(): number }).getCurrentPage()) : 1;
+    const selection = (this.reader.getScrollContainer?.()?.ownerDocument ?? document).getSelection();
+    const text = selection && !selection.isCollapsed ? selection.toString().trim().slice(0, 200) : "";
+    openTextModal({ title: "插入目录", initial: text || "", placeholder: "目录标题", onOk: async (title: string) => {
+      if (!title.trim()) return;
+      const items = await this.reader.getEditableOutline?.() ?? [];
+      const current = this.reader.getFilePath();
+      if (current !== path) return;
+      const next = [...items, { id: uid("toc"), title: title.trim(), page: Number.isFinite(page) ? page : 1, level: 0 }]
+        .sort((a, b) => a.page - b.page || a.title.localeCompare(b.title, "zh-CN"));
+      await this.reader.setEditableOutline?.(next);
+      this.signature = ""; await this.refresh();
+    } });
+  }
+
+  /** MN5「分割折页」：把当前页所在章节的页面折起（可撤销）。 */
+  private async splitAtChapter(): Promise<void> {
+    const items = await this.reader.getEditableOutline?.() ?? [];
+    if (!items.length) { new Notice("文档没有目录，无法按章节分割折页"); return; }
+    const page = "getCurrentPage" in this.reader ? Number((this.reader as unknown as { getCurrentPage(): number }).getCurrentPage()) : 1;
+    let chapter = items[0];
+    for (const item of items) if (item.page > 0 && item.page <= page) chapter = item;
+    await this.reader.toggleOutlineFold?.(chapter, items);
+    this.signature = ""; await this.refresh();
+  }
+
   private async outlineToMindmap():Promise<void> {
     const path=this.reader.getFilePath(),canvasId=this.plugin.store.activeCanvasId,items=structuredClone(this.outlineItems);
     if(!path||!canvasId||!items.length)throw new Error("请先打开文档并选择脑图");
@@ -262,10 +309,11 @@ export class DocumentNavigation {
       if(next.length!==annotations.length)this.plugin.store.saveAnnotationsDebounced(path,next);
     });
   }
+  openAiOutline(): void { this.generateOutline(); }
   private generateOutline():void {
     this.closeOutlineEditor?.();const path=this.reader.getFilePath(),doc=this.reader.getDoc?.(),service=aiServiceFor(this.plugin),controller=new AbortController();
-    const {modal,close}=createModal("AI TOC",()=>{controller.abort();this.closeOutlineEditor=null;});this.closeOutlineEditor=close;
-    modal.setAttribute("aria-label","AI TOC");const status=el("p",{role:"status"}),cancel=el("button",{text:"Cancel"});cancel.addEventListener("click",close);modal.append(status,cancel);
+    const {modal,close}=createModal("AI 目录",()=>{controller.abort();this.closeOutlineEditor=null;});this.closeOutlineEditor=close;
+    modal.setAttribute("aria-label","AI 目录");const status=el("p",{role:"status"}),cancel=el("button",{text:"取消"});cancel.addEventListener("click",close);modal.append(status,cancel);
     if(!doc){status.textContent="请先打开 PDF 文档";return;}
     const current=()=>!this.disposed&&!controller.signal.aborted&&path===this.reader.getFilePath()&&doc===this.reader.getDoc?.();
     const instructions="Extract a hierarchical document TOC. Copy heading titles exactly from the source. Put the source [Pnumber] marker in every item's note. Do not invent headings or pages.";
@@ -285,7 +333,7 @@ export class DocumentNavigation {
       }catch(error){if(current())status.textContent=String(error);}});
     };
     if(service.isBound()){
-      const generate=el("button",{text:"Generate TOC through AI"});modal.append(generate);status.textContent="生成后先预览和编辑目录标题、层级与页码，确认后保存。";
+      const generate=el("button",{text:"用 AI 生成目录"});modal.append(generate);status.textContent="生成后先预览和编辑目录标题、层级与页码，确认后保存。";
       generate.addEventListener("click",async()=>{if(!current())return;generate.disabled=true;status.textContent="正在读取文档…";try{
         const text=await sourceText();if(!current())return;status.textContent="正在生成目录…";const response=await service.request({task:"outline",text:instructions,context:{text,docPath:path??undefined},signal:controller.signal});if(!current())return;
         const draft=response.drafts.find(item=>item.kind==="outline");if(!draft||draft.kind!=="outline")throw new Error("AI 没有返回目录预览");showPreview(draft);
@@ -297,7 +345,7 @@ export class DocumentNavigation {
       const prompt=el("textarea",{"aria-label":"Claudian 目录提问",placeholder:"点击预填后在此保留完整提问，亦可复制到已有 Claudian。"});prompt.readOnly=true;modal.append(prompt);
       prefill.addEventListener("click",async()=>{if(!current())return;prefill.disabled=true;status.textContent="正在准备文档文字…";try{
         const text=await sourceText();if(!current())return;prompt.value=buildClaudianPrompt({task:"outline",text:instructions,context:{text,label:"当前 PDF 文档（含页码）"}});
-        const result=await prefillClaudian(this.plugin.app,prompt.value,{signal:controller.signal});if(current())status.textContent=result.kind==="prefilled"?"已预填，未自动发送。请关闭此窗口，在 Claudian 中发送；返回 AI TOC 粘贴回复。":result.reason;
+        const result=await prefillClaudian(this.plugin.app,prompt.value,{signal:controller.signal});if(current())status.textContent=result.kind==="prefilled"?"已预填，未自动发送。请关闭此窗口，在 Claudian 中发送；返回 AI 目录粘贴回复。":result.reason;
       }catch(error){if(current())status.textContent=String(error);}finally{if(current())prefill.disabled=false;}});
     }
     if(bridge.available){
@@ -347,8 +395,8 @@ export class DocumentNavigation {
   }
   private renameOutline(item:DocumentOutlineItem):void {
     this.closeOutlineEditor?.();const path=this.reader.getFilePath();
-    const {modal,close}=createModal("Rename",()=>{this.closeOutlineEditor=null;});this.closeOutlineEditor=close;
-    const input=el("input",{type:"text",value:item.title,"aria-label":"目录标题"}),ok=el("button",{text:"OK"}),cancel=el("button",{text:"Cancel"});
+    const {modal,close}=createModal("重命名",()=>{this.closeOutlineEditor=null;});this.closeOutlineEditor=close;
+    const input=el("input",{type:"text",value:item.title,"aria-label":"目录标题"}),ok=el("button",{text:"确定"}),cancel=el("button",{text:"取消"});
     const save=()=>{if(!input.value.trim()||this.disposed||path!==this.reader.getFilePath())return;
       this.commitOutline(this.outlineItems.map(entry=>entry.id===item.id?{...entry,title:input.value.trim()}:entry));close();};
     ok.addEventListener("click",save);cancel.addEventListener("click",close);input.addEventListener("keydown",event=>{if(event.key==="Enter")save();});modal.append(input,cancel,ok);input.focus();input.select();

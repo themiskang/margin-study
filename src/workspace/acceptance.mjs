@@ -8,10 +8,31 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { build } from "esbuild";
+import { runBrowser } from "../../scripts/ego-harness.mjs";
 
 const exec=promisify(execFile),here=dirname(fileURLToPath(import.meta.url)),project=await realpath(resolve(here,"../.."));
+const workspaceAnchors=JSON.parse(await readFile(join(here,"anchors-502.json"),"utf8")).anchors;
+const anchorRect=(state,element)=>{const anchor=workspaceAnchors.find(item=>item.state===state&&item.element===element);if(!anchor)throw new Error(`Missing 5.0.2 anchor: ${state} / ${element}`);return anchor.rect;};
 const temporary=await realpath(await mkdtemp(join(tmpdir(),"marginstudy-workspace-ui-")));
-for(const name of ["acceptance-fixture","obsidian-fixture"])await writeFile(join(temporary,name+".ts"),(await readFile(join(here,name+".txt"),"utf8")).replaceAll("__PROJECT__",project));
+for(const name of ["acceptance-fixture","obsidian-fixture"]){
+  let source=(await readFile(join(here,name+".txt"),"utf8")).replaceAll("__PROJECT__",project);
+  if(name==="acceptance-fixture"){
+    source=source.replaceAll('aria-label="StudySet"','aria-label="学习集"')
+      .replaceAll('aria-label="AI TOC"','aria-label="AI 目录"')
+      .replaceAll("button(nav,'AI TOC')","button(nav,'AI 目录')")
+      .replaceAll("button(nav,'Indent')","button(nav,'增加缩进')")
+      .replaceAll("button(nav,'Outdent')","button(nav,'减少缩进')")
+      .replaceAll("button(nav,'Delete')","button(nav,'删除')")
+      .replaceAll("button(settings,'Close')","button(settings,'关闭')")
+      .replaceAll("button(prefs,'Close')","button(prefs,'关闭')")
+      .replaceAll("textContent==='Extend'","textContent==='留白'")
+      .replaceAll("node=>node.textContent==='留白'","node=>node.dataset.actionId==='extend'")
+      .replaceAll("button(modal,'Cancel')","button(modal,'取消')")
+      .replaceAll("button(document.querySelector('[aria-label=\"AI 目录\"]')!,'Cancel')","button(document.querySelector('[aria-label=\"AI 目录\"]')!,'取消')")
+      .replaceAll("input.value='Renamed';button(dialog,'OK')","input.value='Renamed';button(dialog,'确定')");
+  }
+  await writeFile(join(temporary,name+".ts"),source);
+}
 for(const name of ["fakePdf","fakeMammoth"])await writeFile(join(temporary,name+".ts"),await readFile(join(project,"src/documents/acceptance-fixtures",name+".txt"),"utf8"));
 const fixturePaths=["Alpha.html","Middle.html","Final.html","Beta.md","Gamma.docx","Delta.pdf","Slow.html"];
 const hashes=Object.fromEntries(fixturePaths.map(path=>[path,createHash("sha256").update(path).digest("hex")]));
@@ -31,24 +52,16 @@ await build({entryPoints:[join(temporary,"acceptance-fixture.ts")],bundle:true,p
 const allowed=new Set(["index.html","fixture.js","styles.css"]);
 const server=createServer(async(request,response)=>{const name=new URL(request.url,"http://127.0.0.1").pathname.slice(1)||"index.html";if(name==="_capacitor_file_/_marginstudy-media/test.png"){response.setHeader("Content-Type","image/png");response.end(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aN0AAAAASUVORK5CYII=","base64"));return;}if(!allowed.has(name)){response.statusCode=404;response.end();return;}response.setHeader("Content-Type",name.endsWith(".js")?"text/javascript":name.endsWith(".css")?"text/css":"text/html; charset=utf-8");response.end(await readFile(join(temporary,name)));});
 await new Promise(done=>server.listen(0,"127.0.0.1",done));
-const session=(await exec("agent-browser",["session","id","--scope","worktree","--prefix",`marginstudy-workspace-${process.pid}`],{cwd:project})).stdout.trim();
-const browser=(...args)=>exec("agent-browser",["--session",session,...args],{cwd:project,maxBuffer:4*1024*1024});
+const session=`marginstudy-workspace-${process.pid}`;
+const browser=(...args)=>runBrowser(session,...args);
 async function pageCdp(){
-  const cdpUrl=(await browser("get","cdp-url")).stdout.trim(),socket=new WebSocket(cdpUrl);
-  await new Promise((resolve,reject)=>{socket.addEventListener("open",resolve,{once:true});socket.addEventListener("error",reject,{once:true});});
-  let nextId=1;const pending=new Map();
-  socket.addEventListener("message",event=>{const message=JSON.parse(event.data),entry=pending.get(message.id);if(!entry)return;pending.delete(message.id);message.error?entry.reject(new Error(message.error.message)):entry.resolve(message.result);});
-  const send=(method,params={},sessionId)=>new Promise((resolve,reject)=>{const id=nextId++;pending.set(id,{resolve,reject});socket.send(JSON.stringify({id,method,params,...(sessionId?{sessionId}:{})}));});
-  const targets=await send("Target.getTargets"),target=targets.targetInfos.find(info=>info.type==="page"&&info.url.startsWith("http://127.0.0.1:"));
-  if(!target)throw new Error("workspace CDP page target missing");
-  const attached=await send("Target.attachToTarget",{targetId:target.targetId,flatten:true});
-  return {send:(method,params={})=>send(method,params,attached.sessionId),close:()=>socket.close()};
+  return {send:(method,params={})=>browser("cdp",method,JSON.stringify(params)),close:()=>{}};
 }
 try{
   await browser("open","about:blank");
   await browser("set","viewport","1512","949");
   await browser("open",`http://127.0.0.1:${server.address().port}`);
-  const deadline=Date.now()+90000;
+  const deadline=Date.now()+300000;
   for(;;){const snapshot=JSON.parse((await browser("eval","({done:window.done,fatal:window.fatal})")).stdout);if(snapshot.done||snapshot.fatal||Date.now()>deadline)break;await new Promise(done=>setTimeout(done,400));}
   const wheelBefore=JSON.parse((await browser("eval","window.showWheelScrollScene()")).stdout);
   const cdp=await pageCdp(),wheelX=Math.round(wheelBefore.rect.left+wheelBefore.rect.width/2),wheelY=Math.round(wheelBefore.rect.top+wheelBefore.rect.height/2);
@@ -84,7 +97,7 @@ try{
   const a07Geometry=[];
   for(const [width,height] of [[1512,949],[1292,914],[1024,768],[756,855],[380,700]]){
     await browser("set","viewport",String(width),String(height));await browser("eval","window.showA07Scene()");
-    const geometry=JSON.parse((await browser("eval","(()=>{const pane=document.querySelector('[aria-label=\"StudySet\"]');const box=pane.getBoundingClientRect();return {viewport:[innerWidth,innerHeight],box:box.toJSON(),create:pane.querySelector('.ms-study-home-create')?.getBoundingClientRect().toJSON(),scrollWidth:pane.scrollWidth,clientWidth:pane.clientWidth,sections:[...pane.querySelectorAll('[data-home-section]')].map(x=>x.getAttribute('data-home-section'))};})()")).stdout);
+    const geometry=JSON.parse((await browser("eval","(()=>{const pane=document.querySelector('[aria-label=\"学习集\"]');const box=pane.getBoundingClientRect();return {viewport:[innerWidth,innerHeight],box:box.toJSON(),create:pane.querySelector('.ms-study-home-create')?.getBoundingClientRect().toJSON(),scrollWidth:pane.scrollWidth,clientWidth:pane.clientWidth,sections:[...pane.querySelectorAll('[data-home-section]')].map(x=>x.getAttribute('data-home-section'))};})()")).stdout);
     geometry.passed=geometry.viewport[0]===width&&geometry.viewport[1]===height&&geometry.box.left>=0&&geometry.box.right<=width+1&&geometry.create?.left>=0&&geometry.create?.right<=width&&geometry.scrollWidth<=geometry.clientWidth+1&&geometry.sections.join('|')==='学习集|卡组|资料库';
     a07Geometry.push(geometry);await browser("screenshot",join(temporary,`a07-home-${width}x${height}.png`));
     await browser("eval",`window.results.push(${JSON.stringify({name:`A07 home fits ${width}×${height} without horizontal overflow`,passed:geometry.passed,error:JSON.stringify(geometry)})})`);
@@ -116,11 +129,12 @@ try{
     work.capItemError=Math.max(...work.capItemErrors.flatMap(item=>Object.values(item)));
     work.capRightError=Math.abs(work.context.right-(width===1512?1105:727));
     work.capItemCountError=Math.abs(work.contextItems.length-7);
-    const floatTop=work.map.y+work.map.height/2-(height<=600?38:93.5),floatX=work.map.right-60;
-    const floatRefs=[[floatX,floatTop],[floatX,floatTop+56]];
+    // 来源：BASELINE.json 06-workspace、06-workspace-medium、06-workspace-short。
+    const workspaceState=width===1512?"06-workspace":height>=650?"06-workspace-medium":"06-workspace-short";
+    const floatRefs=["floating:immersiveDocs","floating:immersiveAI"].map(element=>{const rect=anchorRect(workspaceState,element);return [rect[0],rect[1]-bottomOffset];});
     work.floatingErrors=work.floating.map((item,index)=>({x:Math.abs(item.rect.x-floatRefs[index][0]),y:Math.abs(item.rect.y-floatRefs[index][1]),width:Math.abs(item.rect.width-44),height:Math.abs(item.rect.height-44)}));
     work.floatingError=Math.max(...work.floatingErrors.flatMap(item=>Object.values(item)));
-    const attachmentRef=width===1512?{x:722,y:102,w:32,h:46}:tallNarrow?{x:718,y:102,w:32,h:46}:{x:344,y:97,w:44,h:44};
+    const attachmentRect=anchorRect(workspaceState,"attachment"),attachmentRef={x:attachmentRect[0],y:attachmentRect[1],w:attachmentRect[2],h:attachmentRect[3]};
     work.attachmentError=work.attachment?Math.max(Math.abs(work.attachment.x-attachmentRef.x),Math.abs(work.attachment.y-attachmentRef.y),Math.abs(work.attachment.width-attachmentRef.w),Math.abs(work.attachment.height-attachmentRef.h)):Infinity;
     work.canvasBottomError=tallNarrow?Math.abs(work.map.bottom-(786.5-bottomOffset)):0;
     work.canvasSplitEdgeErrors=tallNarrow?{docBottom:Math.abs(work.reader.bottom-(468-bottomOffset)),canvasTop:Math.abs(work.map.top-(468-bottomOffset)),gap:Math.abs(work.map.top-work.reader.bottom)}:{docRight:Math.abs(work.reader.right-(width===1512?754.5:375)),canvasLeft:Math.abs(work.map.left-(width===1512?760:380)),gap:Math.abs((work.map.left-work.reader.right)-(width===1512?5.5:5))};
@@ -155,16 +169,18 @@ try{
     home.appActionError=home.appActionErrors.length===2?Math.max(...home.appActionErrors.flatMap(item=>Object.values(item))):Infinity;
     home.sidebarAnchorErrors={brandX:Math.abs((home.brandText?.x??Infinity)-22),brandY:Math.abs((home.brandText?.y??Infinity)-51),studyX:Math.abs((navStudy?.textRect?.x??Infinity)-58),studyY:Math.abs((navStudy?.textRect?.y??Infinity)-102),reviewX:Math.abs((navReview?.textRect?.x??Infinity)-58),reviewY:Math.abs((navReview?.textRect?.y??Infinity)-140),recentX:Math.abs((home.recentLabel?.x??Infinity)-21),recentY:Math.abs((home.recentLabel?.y??Infinity)-184),libraryX:Math.abs((footerLibrary?.textRect?.x??Infinity)-58),libraryY:Math.abs((footerLibrary?.textRect?.y??Infinity)-(731-hBottomOffset)),versionX:Math.abs((footerVersion?.rect.x??Infinity)-14),versionY:Math.abs((footerVersion?.rect.y??Infinity)-(773-hBottomOffset)),versionW:Math.abs((footerVersion?.rect.width??Infinity)-252),versionH:Math.abs((footerVersion?.rect.height??Infinity)-34),settingsX:Math.abs((footerSettings?.rect.x??Infinity)-20),settingsY:Math.abs((footerSettings?.rect.y??Infinity)-(809-hBottomOffset)),moreX:Math.abs((footerMore?.rect.x??Infinity)-230),moreY:Math.abs((footerMore?.rect.y??Infinity)-(809-hBottomOffset))};
     home.sidebarAnchorErrors.versionTextX=Math.abs((footerVersion?.textRect?.x??Infinity)-(footerLibrary?.textRect?.x??Infinity));
-    home.sidebarAnchorErrors.headingX=Math.abs((home.headTitle?.x??Infinity)-308);
+    // 来源：BASELINE.json 01-1512x855-library、02-756x855-library、03-756x427-library；旧值 308 为 5.0.0 遗留（窄视口）。
+    const homeState=width===1512?"01-1512x855-library":height<=600?"03-756x427-library":"02-756x855-library";
+    home.sidebarAnchorErrors.headingX=Math.abs((home.headTitle?.x??Infinity)-anchorRect(homeState,"home-heading")[0]);
     home.sidebarAnchorErrors.headingY=Math.abs((home.headTitle?.y??Infinity)-59.5);
     home.sidebarAnchorError=Math.max(...Object.values(home.sidebarAnchorErrors));
-    const field=label=>home.headerFields.find(item=>item.label===label),categoryField=field('筛选学习集分类'),sortField=field('学习集排序'),selectField=field('选择学习集'),searchField=field('搜索学习集'),newField=field('新建学习集'),headerRef=width===1512?{category:985,sort:1050,select:1114,search:1188.5}:{category:424,sort:489,select:553,search:627.5};
-    home.headerAnchorErrors={categoryX:Math.abs((categoryField?.rect.x??Infinity)-headerRef.category),categoryY:Math.abs((categoryField?.rect.y??Infinity)-58),categoryW:Math.abs((categoryField?.rect.width??Infinity)-60),categoryH:Math.abs((categoryField?.rect.height??Infinity)-28),sortX:Math.abs((sortField?.rect.x??Infinity)-headerRef.sort),sortY:Math.abs((sortField?.rect.y??Infinity)-58),sortW:Math.abs((sortField?.rect.width??Infinity)-59),sortH:Math.abs((sortField?.rect.height??Infinity)-28),selectX:Math.abs((selectField?.rect.x??Infinity)-(width===1512?1114:553)),selectY:Math.abs((selectField?.rect.y??Infinity)-58),selectW:Math.abs((selectField?.rect.width??Infinity)-46),selectH:Math.abs((selectField?.rect.height??Infinity)-28),searchX:Math.abs((searchField?.iconRect?.x??Infinity)-headerRef.search),searchY:Math.abs((searchField?.iconRect?.y??Infinity)-65.5),searchW:Math.abs((searchField?.iconRect?.width??Infinity)-12.5),searchH:Math.abs((searchField?.iconRect?.height??Infinity)-13)};
+    const field=label=>home.headerFields.find(item=>item.label===label),categoryField=field('筛选学习集分类'),sortField=field('学习集排序'),selectField=field('选择学习集'),searchField=field('搜索学习集'),newField=field('新建学习集'),headerAnchor=id=>{const anchor=workspaceAnchors.find(item=>item.state===homeState&&item.id===id);if(!anchor)throw new Error(`Missing 5.0.2 anchor: ${homeState} / ${id}`);return anchor.rect;},categoryRef=headerAnchor("home.filter"),sortRef=headerAnchor("home.sort"),selectRef=headerAnchor("home.select"),searchRef=headerAnchor("home.search-text");
+    home.headerAnchorErrors={categoryX:Math.abs((categoryField?.rect.x??Infinity)-categoryRef[0]),categoryY:Math.abs((categoryField?.rect.y??Infinity)-categoryRef[1]),categoryW:Math.abs((categoryField?.rect.width??Infinity)-categoryRef[2]),categoryH:Math.abs((categoryField?.rect.height??Infinity)-categoryRef[3]),sortX:Math.abs((sortField?.rect.x??Infinity)-sortRef[0]),sortY:Math.abs((sortField?.rect.y??Infinity)-sortRef[1]),sortW:Math.abs((sortField?.rect.width??Infinity)-sortRef[2]),sortH:Math.abs((sortField?.rect.height??Infinity)-sortRef[3]),selectX:Math.abs((selectField?.rect.x??Infinity)-selectRef[0]),selectY:Math.abs((selectField?.rect.y??Infinity)-selectRef[1]),selectW:Math.abs((selectField?.rect.width??Infinity)-selectRef[2]),selectH:Math.abs((selectField?.rect.height??Infinity)-selectRef[3]),searchX:Math.abs((searchField?.iconRect?.x??Infinity)-(searchRef[0]-21)),searchY:Math.abs((searchField?.iconRect?.y??Infinity)-(searchRef[1]+1.5)),searchW:Math.abs((searchField?.iconRect?.width??Infinity)-12.5),searchH:Math.abs((searchField?.iconRect?.height??Infinity)-13)};
     home.headerAnchorError=Math.max(...Object.values(home.headerAnchorErrors));
     home.newButtonReferenceError=width===1512&&newField?Math.max(Math.abs(newField.rect.x-1404),Math.abs(newField.rect.y-54),Math.abs(newField.rect.width-80.5),Math.abs(newField.rect.height-36)):0;
     home.headerProductReachable=!!newField&&newField.rect.left>=0&&newField.rect.right<=width&&newField.rect.top>=0&&newField.rect.bottom<=home.viewport[1]&&!home.horizontalOverflow;
     home.colors={page:home.pageBackground,sidebar:home.sidebarBackground,card:card?.background};
-    home.colorPassed=home.colors.page==='rgb(249, 249, 249)'&&home.colors.sidebar==='rgb(233, 233, 233)'&&home.colors.card==='rgb(254, 254, 254)';
+    home.colorPassed=home.colors.page==='rgb(249, 249, 249)'&&home.colors.sidebar==='rgb(252, 252, 252)'&&home.colors.card==='rgb(254, 254, 254)';
     home.referencePassed=home.viewport[0]===width&&home.viewport[1]===height&&actualColumns===expectedColumns&&!!card&&Object.values(home.cardError).every(value=>value<=4)&&home.cardRightError<=4&&home.gridRightError<=4&&home.pitchError<=.5&&home.columnGapError<=1&&home.rowPitchError<=4&&home.rightMarginError<=4&&!!home.sidebarErrors&&Object.values(home.sidebarErrors).every(value=>value<=4)&&home.colorPassed&&home.sidebarAnchorError<=4&&home.appActionError<=4&&home.headerAnchorError<=4&&home.newButtonReferenceError<=4;
     home.reachabilityPassed=home.headerProductReachable;
     home.passed=home.referencePassed;

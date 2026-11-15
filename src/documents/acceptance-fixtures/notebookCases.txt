@@ -26,7 +26,7 @@ export async function runNotebookAcceptance({test,assert,wait,plugin,app,realPdf
    view.annController.createPenAnnotation(1,[[{x:.2,y:.2,pressure:.2},{x:.4,y:.25,pressure:.8}]]);
    view.annController.commitRegion({kind:'pdf',pageNum:1,rects:[{x:100,y:500,w:150,h:100}],pdfCoordinateSpace:'pdf'},'data:image/png;base64,c3ludGhldGlj','合成手写摘录');
    const before=await p.store.loadAnnotations(file.path),ids=before.map((ann:any)=>ann.id).join(','),source=p.store.cards[0].anchorAnnId;
-   await view.updateNotebook({style:'dots'});assert(readNotebookMetadata(await app.vault.readBinary(file)).style==='dots'&&view.getPageRecord(1).annLayer.querySelector('.ms-ann-pen'),'paper change lost ink');
+   await view.updateNotebook({style:'dots'});const inkCanvas=view.getPageRecord(1).annLayer.querySelector('.ms-ink-raster') as HTMLCanvasElement;assert(readNotebookMetadata(await app.vault.readBinary(file)).style==='dots'&&inkCanvas?.getContext('2d')!.getImageData(0,0,inkCanvas.width,inkCanvas.height).data.some((value,index)=>index%4===3&&value>0),'paper change lost ink');
    await view.updateNotebook({pageCount:3});assert(view.getDoc().numPages===3,'page append failed');
    assert((await p.store.loadAnnotations(file.path)).map((ann:any)=>ann.id).join(',')===ids&&p.store.cards[0].anchorAnnId===source,'notebook update changed source IDs');
    const original=await app.vault.readBinary(file),external=new Uint8Array(original.byteLength+12);external.set(new Uint8Array(original));external.set(new TextEncoder().encode('% external\n'),original.byteLength);configs.get(file.path).bytes=external.buffer;

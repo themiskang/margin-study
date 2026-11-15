@@ -94,12 +94,33 @@ export function openInlineTextEditor(options: {
     if (JSON.stringify(next) !== JSON.stringify(state.runs)) { checkpoint(state); state.runs = next; }
     pending = null; render();
   };
-  const replaceSelection = (value: string) => {
+  const replaceSelection = (value: string, html?: string) => {
     readInput(); rememberSelection(); const { start, end } = state.selection, available = 100_000 - (length() - end + start);
-    const inserted = value.replace(/\r\n?/g, "\n").slice(0, Math.max(0, available));
-    const next = normalizeTextRuns([...sliceTextRuns(state.runs, 0, start), { text: inserted, style: { ...(pending ?? selectedStyles()[0] ?? fallback) } }, ...sliceTextRuns(state.runs, end, length())], fallback);
+    const base = pending ?? selectedStyles()[0] ?? fallback;
+    let insertedRuns: AnnotationTextRun[] = [];
+    if (html) {
+      const documentFragment = new DOMParser().parseFromString(html, "text/html");
+      const walk = (node: Node, style: AnnotationTextStyle) => {
+        if (node.nodeType === Node.TEXT_NODE) { insertedRuns.push({ text: node.textContent ?? "", style }); return; }
+        if (!(node instanceof HTMLElement) || /^(SCRIPT|STYLE|IFRAME|OBJECT|IMG)$/.test(node.tagName)) return;
+        if (node.tagName === "BR") { insertedRuns.push({ text: "\n", style }); return; }
+        const size = node.style.fontSize.match(/^([\d.]+)(px|pt|em|rem|%)$/i);
+        const number = size ? Number(size[1]) : 0;
+        const fontSize = size ? number * (size[2].toLowerCase() === "pt" ? 4 / 3 : size[2].toLowerCase() === "em" ? style.fontSize : size[2].toLowerCase() === "rem" ? 16 : size[2] === "%" ? style.fontSize / 100 : 1) : style.fontSize;
+        const nextStyle = normalizeTextStyle({ ...style, fontSize }, base);
+        if (/^(DIV|P)$/.test(node.tagName) && insertedRuns.length && !insertedRuns[insertedRuns.length - 1].text.endsWith("\n")) insertedRuns.push({ text: "\n", style });
+        for (const child of node.childNodes) walk(child, nextStyle);
+      };
+      for (const child of documentFragment.body.childNodes) walk(child, base);
+      if (value && insertedRuns.map(run => run.text).join("").replace(/\r\n?/g, "\n") !== value.replace(/\r\n?/g, "\n")) insertedRuns = [];
+    }
+    if (!insertedRuns.length) insertedRuns = [{ text: value.replace(/\r\n?/g, "\n"), style: base }];
+    let remaining = Math.max(0, available);
+    insertedRuns = insertedRuns.map(run => { const text = run.text.replace(/\r\n?/g, "\n").slice(0, remaining); remaining -= text.length; return { text, style: run.style }; });
+    const insertedLength = insertedRuns.reduce((sum, run) => sum + run.text.length, 0);
+    const next = normalizeTextRuns([...sliceTextRuns(state.runs, 0, start), ...insertedRuns, ...sliceTextRuns(state.runs, end, length())], fallback);
     if (JSON.stringify(next) !== JSON.stringify(state.runs)) { checkpoint(state); state.runs = next; }
-    state.selection = { start: start + inserted.length, end: start + inserted.length }; render();
+    state.selection = { start: start + insertedLength, end: start + insertedLength }; render();
   };
   const history = (forward: boolean) => {
     if (composing) return; const source = forward ? redo : undo, destination = forward ? undo : redo, previous = source.pop();
@@ -158,7 +179,17 @@ export function openInlineTextEditor(options: {
   };
   text.addEventListener("compositionstart", () => { readInput(); rememberSelection(); compositionBefore = clone(state); compositionStyle = pending ? { ...pending } : null; composing = true; });
   text.addEventListener("compositionend", finishComposition);
-  text.addEventListener("paste", event => { event.preventDefault(); replaceSelection(event.clipboardData?.getData("text/plain") ?? ""); });
+  text.addEventListener("copy", event => {
+    if (!event.clipboardData) return;
+    readInput(); rememberSelection();
+    const runs = sliceTextRuns(state.runs, state.selection.start, state.selection.end);
+    if (!runs.length) return;
+    const container = document.createElement("div"); renderTextRuns(container, runs);
+    event.clipboardData.setData("text/plain", runs.map(run => run.text).join(""));
+    event.clipboardData.setData("text/html", container.innerHTML);
+    event.preventDefault();
+  });
+  text.addEventListener("paste", event => { event.preventDefault(); replaceSelection(event.clipboardData?.getData("text/plain") ?? "", event.clipboardData?.getData("text/html")); });
   text.addEventListener("drop", event => { event.preventDefault(); const value = event.dataTransfer?.getData("text/plain"); if (value) replaceSelection(value); });
   const selectionChanged = () => { if (composing) return; const selection = window.getSelection(); if (!selection?.anchorNode || !text.contains(selection.anchorNode)) return; const previous = state.selection; rememberSelection(); if (previous.start !== state.selection.start || previous.end !== state.selection.end) pending = null; updateBar(); };
   const outside = (event: PointerEvent) => { if (popup && !bar.contains(event.target as Node)) closePopup(); };

@@ -80,10 +80,10 @@ export function questionsForReview(plugin: MarginStudyPlugin, options: ReviewOpt
 }
 
 const RATINGS = [
-  { grade: 1, label: "Again", className: "again" },
-  { grade: 2, label: "Hard", className: "hard" },
-  { grade: 3, label: "Good", className: "good" },
-  { grade: 4, label: "Easy", className: "easy" },
+  { grade: 1, label: "重复", className: "again" },
+  { grade: 2, label: "难", className: "hard" },
+  { grade: 3, label: "良好", className: "good" },
+  { grade: 4, label: "易", className: "easy" },
 ];
 
 class ReviewModal {
@@ -98,11 +98,17 @@ class ReviewModal {
   private speech = createSpeechSession("review");
   private unsubscribeSpeech = () => {};
   private contextReturn?: HTMLElement;
+  private remainingFirstPass: Set<string>;
+  private gradedQuestions: { id: string; first: boolean }[] = [];
+  private removeKeys = () => {};
 
-  constructor(private plugin: MarginStudyPlugin, private questions: ReviewQuestion[], private options: ReviewOptions) { this.session = new ReviewSession(questions); }
+  constructor(private plugin: MarginStudyPlugin, private questions: ReviewQuestion[], private options: ReviewOptions) {
+    this.session = new ReviewSession(questions);
+    this.remainingFirstPass = new Set(questions.map(question => question.id));
+  }
 
   open(): void {
-    const result = createModal("复习", () => { this.closed = true; this.generation++; this.clearTimer(); this.contextReturn?.remove(); this.unsubscribeSpeech(); this.speech.dispose(); });
+    const result = createModal("复习", () => { this.closed = true; this.generation++; this.clearTimer(); this.removeKeys(); this.contextReturn?.remove(); this.unsubscribeSpeech(); this.speech.dispose(); });
     this.modal = result.modal; this.bg = result.bg; this.close = result.close;
     void this.render();
   }
@@ -130,17 +136,17 @@ class ReviewModal {
     button.disabled = !this.session.lastLogId || this.latestLogId() !== this.session.lastLogId;
     button.addEventListener("click", () => {
       if (this.latestLogId() !== this.session.lastLogId) { new Notice("复习记录已变化，请重新打开复习"); return; }
-      if (this.plugin.store.undoLastReview()) { this.session.undo(); this.speech.stop(); void this.render(); }
+      if (this.plugin.store.undoLastReview()) { this.session.undo(); const graded = this.gradedQuestions.pop(); if (graded?.first) this.remainingFirstPass.add(graded.id); this.speech.stop(); void this.render(); }
     });
     return button;
   }
 
   private async render(): Promise<void> {
     if (this.closed) return;
-    this.clearTimer(); this.speech.stop(); this.unsubscribeSpeech();
+    this.clearTimer(); this.removeKeys(); this.speech.stop(); this.unsubscribeSpeech();
     const generation = ++this.generation;
     clear(this.modal);
-    const question = this.session.current(), deckId = question?.deckId ?? this.questions[0]?.deckId;
+    const question = this.remainingFirstPass.size ? this.session.current() : undefined, deckId = question?.deckId ?? this.questions[0]?.deckId;
     const name = deckId ? this.plugin.store.getReviewDeck(deckId)?.name || "复习" : "复习";
     const stage = nativeReviewStage(this.modal, this.bg, { name, count: `${Math.min(this.session.answered + 1, this.questions.length)} / ${this.questions.length}`, detail: `已评分 ${this.session.answered} 次 · 待复习 ${this.session.remaining} 题`, closeLabel: "结束复习", onClose: this.close });
     this.modal.classList.add("ms-review-score");
@@ -154,12 +160,12 @@ class ReviewModal {
     if (!question) {
       stage.edit.disabled = true; stage.favorite.disabled = true;
       const completion = el("div", { class: "ms-native-review-completion", role: "status" });
-      if (!this.session.remaining) {
-        completion.append(el("h3", { text: "本轮复习完成" }));
+      if (!this.remainingFirstPass.size || !this.session.remaining) {
+        completion.append(el("h3", { text: "已到最后一张卡片" }));
         const actions = el("div", { class: "ms-native-review-completion-actions" });
-        const restart = el("button", { text: "Start Over", "aria-label": "重新开始本轮复习" });
-        restart.addEventListener("click", () => { this.session = new ReviewSession(this.questions); void this.render(); });
-        const done = el("button", { text: "Done", "aria-label": "完成" }); done.addEventListener("click", this.close);
+        const restart = el("button", { text: "从头再来一遍", "aria-label": "从头再来一遍" });
+        restart.addEventListener("click", () => { this.session = new ReviewSession(this.questions); this.remainingFirstPass = new Set(this.questions.map(item => item.id)); this.gradedQuestions = []; void this.render(); });
+        const done = el("button", { text: "完成", "aria-label": "完成" }); done.addEventListener("click", this.close);
         actions.append(restart, done); completion.append(actions);
       } else {
         completion.append(el("p", { text: "短期学习中，到期后继续。" }));
@@ -176,7 +182,7 @@ class ReviewModal {
       stage.paper.append(completion); return;
     }
     const card = this.plugin.store.getCard(question.cardId);
-    if (!card || card.hidden || card.groupId) { this.session.discard(question.id); void this.render(); return; }
+    if (!card || card.hidden || card.groupId) { this.session.discard(question.id); this.remainingFirstPass.delete(question.id); void this.render(); return; }
     if (card.typography) { stage.content.style.fontFamily = card.typography.fontFamily; stage.content.style.fontSize = `${card.typography.fontSize}px`; }
     stage.edit.addEventListener("click", () => {
       if (editReviewCard(this.plugin, card, () => { this.close(); startReview(this.plugin, { ...this.options, presentation: "score" }); })) this.speech.stop();
@@ -186,6 +192,7 @@ class ReviewModal {
     appendSources(stage.inspector, this.plugin, card);
     let revealed = false;
     const content = el("div", { class: "ms-review-q" }); stage.content.append(content);
+    if (card.title?.trim()) content.append(el("h3", { class: "ms-review-card-title", text: card.title }));
     const face = el("section", { class: "ms-review-question-panel", "aria-label": "复习问题" }); content.append(face);
     let contentGeneration = 0;
     const renderContent = async () => {
@@ -241,10 +248,11 @@ class ReviewModal {
       if (!await workspace.revealReviewCardContext(card.id, question.scopeId, this.options.studySetId)) throw new Error("当前学习集没有此卡片的脑图节点");
     }); });
     context.append(documentButton, mindmapButton); stage.paper.append(context);
-    reveal.addEventListener("click", () => {
-      revealed = true; this.speech.stop(); void renderContent(); clozeToggle.disabled = true;
-      reveal.disabled = true; reveal.hidden = true; grades.style.display = "grid"; context.hidden = false; stage.paper.classList.add("has-review-context-actions"); stage.hideTools();
-    });
+    const flip = () => {
+      revealed = !revealed; this.speech.stop(); void renderContent(); clozeToggle.disabled = revealed;
+      reveal.disabled = revealed; reveal.hidden = revealed; grades.style.display = revealed ? "grid" : "none"; context.hidden = !revealed; stage.paper.classList.toggle("has-review-context-actions", revealed); if (revealed) stage.hideTools();
+    };
+    reveal.addEventListener("click", flip);
     const state = this.plugin.store.getReviewState(card.id, question.id), previewAt = new Date();
     for (const rating of RATINGS) {
       const interval = previewInterval(state, rating.grade, previewAt, deckId ? this.plugin.store.getReviewDeck(deckId)?.maxInterval : undefined);
@@ -256,10 +264,24 @@ class ReviewModal {
         try {
           const next = this.plugin.store.gradeCard(card.id, rating.grade, { questionId: question.id, scopeId: question.scopeId, deckId: question.deckId, elapsedMs: Math.max(0, Date.now() - startedAt), commentText: comment.value.trim() || undefined, drawing: drawing.value() });
           const logId = this.latestLogId(); if (!logId) throw new Error("评分日志未写入");
-          this.session.grade(question, next, logId); this.speech.stop(); void this.render();
+          this.session.grade(question, next, logId); this.gradedQuestions.push({ id: question.id, first: this.remainingFirstPass.delete(question.id) }); this.speech.stop(); void this.render();
         } catch (error) { new Notice(`评分失败：${String(error)}`); for (const node of grades.querySelectorAll("button")) (node as HTMLButtonElement).disabled = false; }
       }); grades.append(button);
     }
     stage.footer.append(reveal, grades);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || this.bg.hidden || !this.bg.isConnected) return;
+      const layers = [...document.querySelectorAll<HTMLElement>(".ms-modal-bg")].filter(layer => !layer.hidden);
+      if (layers[layers.length - 1] !== this.bg) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest("input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='textbox']")) return;
+      if (event.key === " ") { event.preventDefault(); flip(); return; }
+      if (revealed && /^[1-4]$/.test(event.key)) {
+        event.preventDefault();
+        grades.querySelectorAll<HTMLButtonElement>("button")[Number(event.key) - 1]?.click();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    this.removeKeys = () => document.removeEventListener("keydown", onKey);
   }
 }

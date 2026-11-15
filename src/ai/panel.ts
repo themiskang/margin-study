@@ -71,6 +71,7 @@ export interface AiPanelOptions {
   mode?: "ask" | "chat";
   initialText?: string;
   context?: AiContext;
+  getReader?: () => import("../types").ReaderLike | null;
   getContext?: () => AiContext | undefined | Promise<AiContext | undefined>;
   getSelectedNodeId?: () => string | undefined;
   onClose?: () => void;
@@ -98,17 +99,23 @@ export function mountAiPanel(container: HTMLElement, host: AiHost, options: AiPa
   const root = el("section", { class: "ms-ai-panel", "aria-label": "AI 学习助手" });
   const header = el("header", { class: "ms-ai-header" });
   const historyButton = iconButton("本次会话历史", "history"), newButton = iconButton("新建 AI 对话", "plus"), closeButton = iconButton("关闭 AI 侧栏", "close");
-  const mode = el("select", { class: "ms-ai-mode", "aria-label": "AI 对话模式" }, [el("option", { value: "chat", text: "Chat" }), el("option", { value: "ask", text: "Ask" })]); mode.value = options.mode ?? "chat";
+  const mode = el("select", { class: "ms-ai-mode", "aria-label": "AI 对话模式" }, [el("option", { value: "chat", text: "对话" }), el("option", { value: "ask", text: "提问" })]); mode.value = options.mode ?? "chat";
   header.append(historyButton, newButton, mode, closeButton);
   const template = el("select", { class: "ms-ai-template", "aria-label": "AI 提问模板" });
-  for (const [value, text] of [["", "Template: None"], ["guide", "Template: Guide Mode"], ["quiz", "Template: Quiz Mode"], ["explain", "Template: Explain Mode"]]) template.append(el("option", { value, text }));
+  for (const [value, text] of [["", "模板：无"], ["guide", "模板：引导模式"], ["quiz", "模板：测验模式"], ["explain", "模板：解释模式"], ["mindmap", "模板：脑图"]]) template.append(el("option", { value, text }));
+  const prefixes: Record<string, string> = { guide: "请用引导式问题帮助我逐步理解当前材料。每次只问一个问题，等待我的回答后再继续，先不要直接给出完整答案。", explain: "请解释核心概念，并给出例子。", quiz: "请用问题帮助我检验理解，先不要展示答案。", mindmap: "请将材料整理成层次清晰的脑图。" };
+  const manageTemplates = el("button", { type: "button", text: "管理", "aria-label": "管理 AI 模板" });
+  const moreFunctions = el("button", { type: "button", text: "更多 AI 功能", "aria-expanded": "false" });
+  const moreMenu = el("div", { class: "ms-ai-attachment-menu", "aria-label": "更多 AI 功能菜单" }); moreMenu.hidden = true;
+  const currentDocument = el("button", { type: "button", text: "对当前文档" });
+  const generateToc = el("button", { type: "button", text: "AI 生成目录" }); moreMenu.append(currentDocument, generateToc);
   const body = el("div", { class: "ms-ai-body", "aria-label": "AI 对话内容" });
-  const empty = el("div", { class: "ms-ai-empty", text: "拖入卡片、选中文字或图片，提问并生成可编辑的目录、卡片与 Markdown。保存前可修改。" });
+  const empty = el("div", { class: "ms-ai-empty" });
   const sessions: Conversation[] = [], drawer = el("div", { class: "ms-ai-history", "aria-label": "本次会话历史列表" }); drawer.hidden = true;
   let current: Conversation = { label: "新对话", history: [], elements: [] }; sessions.push(current);
   const connection = el("button", { type: "button", class: "ms-ai-connect", text: "连接自定义 AI" });
   const composer = el("div", { class: "ms-ai-composer" }), attachments = el("div", { class: "ms-ai-attachments" });
-  const tools = el("div", { class: "ms-ai-tools" }), mini = el("button", { class: "ms-ai-tier", type: "button", text: "Mini ›", "aria-label": "使用 Mini 模型", "aria-pressed": "false" }), normal = el("button", { class: "ms-ai-tier", type: "button", text: "Normal", "aria-label": "使用 Normal 模型", "aria-pressed": "true" });
+  const tools = el("div", { class: "ms-ai-tools" }), mini = el("button", { class: "ms-ai-tier", type: "button", text: "Mini ›", "aria-label": "使用 Mini 模型", "aria-pressed": "false" }), normal = el("button", { class: "ms-ai-tier", type: "button", text: "普通", "aria-label": "使用普通模型", "aria-pressed": "true" });
   let tier: "mini" | "normal" = "normal";
   const providerSelect = el("select", { class: "ms-ai-service", "aria-label": "AI 服务" }, [el("option", { value: "claudian", text: "Claudian（现有插件）" }), el("option", { value: "custom", text: "自定义 API" })]);
   providerSelect.value = provider; providerSelect.hidden = !bridge.available;
@@ -116,21 +123,21 @@ export function mountAiPanel(container: HTMLElement, host: AiHost, options: AiPa
   const pasteText = el("button", { type: "button", text: "附加文字" }), fromSelection = el("button", { type: "button", text: "使用当前选择" }), chooseImage = el("button", { type: "button", text: "附加图片" }), pasteReply = el("button", { type: "button", text: "粘贴 AI 回复" });
   fromSelection.hidden = !options.getContext; attachmentMenu.append(fromSelection, pasteText, chooseImage, pasteReply);
   const imageInput = el("input", { type: "file", accept: "image/png,image/jpeg,image/webp,image/gif", multiple: true, "aria-label": "选择 AI 图片" }); imageInput.hidden = true;
-  const task = el("select", { class: "ms-ai-task", "aria-label": "AI 任务" }, [el("option", { value: "chat", text: "Ask" }), el("option", { value: "outline", text: "AI 目录" }), el("option", { value: "cards", text: "生成卡片" }), el("option", { value: "markdown", text: "识别为 Markdown" })]);
+  const task = el("select", { class: "ms-ai-task", "aria-label": "AI 任务" }, [el("option", { value: "chat", text: "提问" }), el("option", { value: "outline", text: "AI 目录" }), el("option", { value: "cards", text: "生成卡片" }), el("option", { value: "markdown", text: "识别为 Markdown" })]);
   const syncReplies = iconButton("自动接收下一条 Claudian 回复", "sync");
   tools.append(providerSelect, mini, normal, task, attachmentButton, syncReplies);
-  const row = el("div", { class: "ms-ai-input-row" }), settings = iconButton("AI 设置", "more"), input = el("textarea", { class: "ms-ai-input", rows: 1, placeholder: "Ask a question", "aria-label": "AI 问题" }), down = iconButton("滚动到最新回复", "down"), send = el("button", { class: "ms-ai-send", type: "button", text: "Send", "aria-label": "发送 AI 请求" });
+  const row = el("div", { class: "ms-ai-input-row" }), settings = iconButton("AI 设置", "more"), input = el("textarea", { class: "ms-ai-input", rows: 1, placeholder: "提出问题", "aria-label": "AI 问题" }), down = iconButton("滚动到最新回复", "down"), send = el("button", { class: "ms-ai-send", type: "button", text: "发送", "aria-label": "发送 AI 请求" });
   input.value = options.initialText ?? "";
   const status = el("div", { class: "ms-ai-status", role: "status", "aria-live": "polite" });
   row.append(settings, input, down, send); composer.append(attachments, tools, row, status, attachmentMenu, imageInput);
-  root.append(header, el("div", { class: "ms-ai-template-row" }, [template]), drawer, body, composer); container.append(root);
+  root.append(header, el("div", { class: "ms-ai-template-row" }, [template, manageTemplates, moreFunctions]), moreMenu, drawer, body, composer); container.append(root);
   const scrollBottom = () => { body.scrollTop = body.scrollHeight; };
   const refresh = () => {
     const claudian = provider === "claudian", bound = service.isBound();
     send.disabled = !controller && ((!claudian && !bound) || claudian && images.length > 0 && !supportsClaudianImages(host.app) || !input.value.trim() && !context?.text && !images.length);
-    send.textContent = controller ? "Stop" : "Send"; send.setAttribute("aria-label", controller ? "停止 AI 生成" : "发送 AI 请求");
+    send.textContent = controller ? "停止" : "发送"; send.setAttribute("aria-label", controller ? "停止 AI 生成" : "发送 AI 请求");
     connection.hidden = claudian || bound;
-    for (const control of [providerSelect, mini, normal, task, mode, attachmentButton, template, newButton, historyButton]) control.disabled = !!controller;
+    for (const control of [providerSelect, mini, normal, task, mode, attachmentButton, template, manageTemplates, moreFunctions, currentDocument, generateToc, newButton, historyButton]) control.disabled = !!controller;
     input.disabled = !!controller;
     attachments.querySelectorAll<HTMLButtonElement>("button").forEach(button => button.disabled = !!controller);
     mini.hidden = normal.hidden = claudian;
@@ -138,7 +145,7 @@ export function mountAiPanel(container: HTMLElement, host: AiHost, options: AiPa
     mode.disabled = !!controller || claudian;
     chooseImage.disabled = claudian && !supportsClaudianImages(host.app);
     chooseImage.title = chooseImage.disabled ? "请在 Claudian 聊天中手动附加图片" : "";
-    empty.textContent = claudian ? supportsClaudianImages(host.app) ? "使用 Claudian 已选模型处理文字和图片，回复显示在此处；目录和卡片先预览再保存。" : "使用 Claudian 已选模型直接生成，回复显示在此处；目录和卡片先预览再保存。图片请在 Claudian 中附加。" : "拖入卡片、选中文字或图片，提问并生成可编辑的目录、卡片与 Markdown。保存前可修改。";
+    empty.textContent = "可拖入卡片、选区、文本或图片提问。回复可制作卡片预览或转为脑图分支，保存前可修改。" + (claudian && !supportsClaudianImages(host.app) ? "图片请在 Claudian 中附加。" : "");
     mini.disabled = !!controller || task.value === "cards" || task.value === "outline";
     syncReplies.hidden = !claudian || bridge.version !== "2.3.30";
     syncReplies.disabled = !!controller;
@@ -230,6 +237,14 @@ export function mountAiPanel(container: HTMLElement, host: AiHost, options: AiPa
     replySubscription.dispose(); replySubscription = null; refresh();
     if (announce && !disposed) status.textContent = "已停止同步 Claudian 回复。";
   };
+  const makeAnswerDraggable = (message: HTMLElement, reply: string, sourceDocPath?: string) => {
+    message.draggable = true;
+    message.addEventListener("dragstart", event => {
+      if (!event.dataTransfer || !reply.trim()) { event.preventDefault(); return; }
+      event.dataTransfer.effectAllowed = "copy";
+      event.dataTransfer.setData("application/x-marginstudy-ai-reply", JSON.stringify({ text: reply, docPath: sourceDocPath ?? "" }));
+    });
+  };
   const addAnswerActions = (message: HTMLElement, reply: string, sourceDocPath?: string) => {
     const branch = el("button", { type: "button", text: "回答转脑图分支" });
     branch.addEventListener("click", () => {
@@ -256,6 +271,7 @@ export function mountAiPanel(container: HTMLElement, host: AiHost, options: AiPa
       if (disposed || suspended) return;
       const reply = raw.trim(); if (!reply) return;
       const replyMessage = addMessage("assistant", reply);
+      makeAnswerDraggable(replyMessage, reply, sourceDocPath);
       if (task.value === "chat") {
         const preview = el("button", { type: "button", class: "ms-ai-response-to-card", text: "制作卡片预览" });
         preview.addEventListener("click", () => { if (preview.disabled) return; draftView({ kind: "cards", cards: [{ title: "", excerpt: reply, note: "", tags: [] }] }, sourceDocPath); preview.disabled = true; });
@@ -263,7 +279,7 @@ export function mountAiPanel(container: HTMLElement, host: AiHost, options: AiPa
         addAnswerActions(replyMessage, reply, sourceDocPath);
       } else {
         try { draftView(draftFromPastedReply(task.value as AiDraft["kind"], reply), sourceDocPath); }
-        catch { status.textContent = "Claudian 回复已回流；内容未能解析为所选预览类型，请切换到 Ask 查看原文。"; }
+        catch { status.textContent = "Claudian 回复已回流；内容未能解析为所选预览类型，请切换到提问查看原文。"; }
       }
       if (!suspended) status.textContent = "Claudian 回复已自动回流到 MarginStudy。";
     }, () => { if (!disposed && !suspended) status.textContent = "未能读取这条 Claudian 回复；请检查当前会话后重试。"; });
@@ -285,7 +301,7 @@ export function mountAiPanel(container: HTMLElement, host: AiHost, options: AiPa
         next.push(data);
       }
       if (next.reduce((sum, image) => sum + image.length, 0) > 12 * 1024 * 1024) throw new AiError("image", "图片总大小超过约 9 MB，请减少附加图片。" );
-      if (!disposed) { images = next; attachmentView(); status.textContent = "图片已附加，点击 Send 后发送。"; }
+      if (!disposed) { images = next; attachmentView(); status.textContent = "图片已附加，点击发送按钮。"; }
     } catch (error) { if (!disposed) status.textContent = aiErrorText(error); }
   };
   const submit = async () => {
@@ -293,7 +309,6 @@ export function mountAiPanel(container: HTMLElement, host: AiHost, options: AiPa
     if (provider === "claudian" && images.length && !supportsClaudianImages(host.app)) { status.textContent = "请先移除图片；Claudian 此处仅支持文字，图片请在 Claudian 中手动附加。"; return; }
     if (provider === "custom" && !service.isBound()) { openSettings(); return; }
     const typed = input.value, selectedTask = task.value as AiTask, selectedContext = context ? { ...context } : undefined, selectedImages = [...images];
-    const prefixes: Record<string, string> = { guide: "请用引导式问题帮助我逐步理解当前材料。每次只问一个问题，等待我的回答后再继续，先不要直接给出完整答案。", explain: "请解释核心概念，并给出例子。", quiz: "请用问题帮助我检验理解，先不要展示答案。" };
     const text = [prefixes[template.value] ?? "", typed].filter(Boolean).join("\n");
     if (!text.trim() && !selectedContext?.text && !selectedImages.length) return;
     if(provider === "claudian" && !supportsClaudianRequest(host.app)){
@@ -319,6 +334,7 @@ export function mountAiPanel(container: HTMLElement, host: AiHost, options: AiPa
         for (const draft of result.drafts) draftView(draft,selectedContext?.docPath);
         if (mode.value === "chat" && selectedTask === "chat") current.history = result.messages;
         if (!result.text) replyText.textContent = result.drafts.length ? "预览已准备好。请检查并保存。" : "未收到文本。";
+        if (result.text) makeAnswerDraggable(reply, result.text, selectedContext?.docPath);
         if (result.text && selectedTask === "chat") {
           const previewCard = el("button", { type: "button", class: "ms-ai-response-to-card", text: "制作卡片预览" });
           previewCard.addEventListener("click", () => { if (previewCard.disabled) return; draftView({ kind: "cards", cards: [{ title: "", excerpt: result.text, note: "", tags: [] }] }, selectedContext?.docPath); previewCard.disabled = true; }); reply.append(previewCard);
@@ -337,6 +353,44 @@ export function mountAiPanel(container: HTMLElement, host: AiHost, options: AiPa
   mini.addEventListener("click", () => { tier = "mini"; mini.setAttribute("aria-pressed", "true"); normal.setAttribute("aria-pressed", "false"); });
   normal.addEventListener("click", () => { tier = "normal"; mini.setAttribute("aria-pressed", "false"); normal.setAttribute("aria-pressed", "true"); });
   task.addEventListener("change", () => { if (task.value === "cards" || task.value === "outline") { tier = "normal"; mini.setAttribute("aria-pressed", "false"); normal.setAttribute("aria-pressed", "true"); } refresh(); });
+  template.addEventListener("change", () => { if (template.value === "mindmap") { task.value = "outline"; task.dispatchEvent(new Event("change")); } });
+  manageTemplates.addEventListener("click", () => {
+    settingClose?.();
+    const { modal, close } = createModal("管理 AI 模板", () => { settingClose = undefined; }); settingClose = close;
+    modal.append(el("p", { text: "修改仅用于当前面板会话。" }));
+    for (const [value, label] of [["guide", "引导模式"], ["quiz", "测验模式"], ["explain", "解释模式"], ["mindmap", "整理成脑图"]]) {
+      const editor = el("textarea", { rows: 2, "aria-label": `${label}提示词` }); editor.value = prefixes[value];
+      editor.addEventListener("input", () => { prefixes[value] = editor.value; }); modal.append(field(label, editor));
+    }
+    const done = el("button", { type: "button", text: "完成" }); done.addEventListener("click", close); modal.append(done);
+  });
+  moreFunctions.addEventListener("click", () => { moreMenu.hidden = !moreMenu.hidden; moreFunctions.setAttribute("aria-expanded", String(!moreMenu.hidden)); });
+  const attachDocument = async (outline: boolean) => {
+    moreMenu.hidden = true; moreFunctions.setAttribute("aria-expanded", "false");
+    const getReader = () => options.getReader?.() ?? (host as AiHost & { activeReader?: import("../types").ReaderLike | null }).activeReader;
+    const reader = getReader();
+    const path = reader?.getFilePath();
+    if (!reader || !path) { status.textContent = "请先打开当前文档。"; return; }
+    try {
+      const doc = reader.getDoc?.(); let text = "";
+      if (doc) {
+        const pages: string[] = []; let length = 0;
+        for (let page = 1; page <= doc.numPages; page++) {
+          const content = await (await doc.getPage(page)).getTextContent();
+          const chunk = `[P${page}] ${content.items.map((item: { str?: string }) => item.str ?? "").join(" ")}`;
+          length += chunk.length; if (length > 180000) throw new Error("文档文字过长，请选择部分文字。"); pages.push(chunk);
+        }
+        text = pages.join("\n");
+      } else text = reader.getScrollContainer().textContent?.trim().slice(0, 180000) ?? "";
+      if (disposed || reader !== getReader() || reader.getFilePath() !== path) return;
+      if (!text.trim()) throw new Error("当前文档没有可提取的文字。");
+      context = { text, docPath: path, label: "当前文档" }; attachmentView();
+      if (outline) { task.value = "outline"; task.dispatchEvent(new Event("change")); }
+      status.textContent = "当前文档已附加；确认内容后点击发送。";
+    } catch (error) { if (!disposed) status.textContent = error instanceof Error ? error.message : "无法读取当前文档。"; }
+  };
+  currentDocument.addEventListener("click", () => void attachDocument(false));
+  generateToc.addEventListener("click", () => void attachDocument(true));
   attachmentButton.addEventListener("click", () => { attachmentMenu.hidden = !attachmentMenu.hidden; });
   chooseImage.addEventListener("click", () => { attachmentMenu.hidden = true; imageInput.click(); });
   imageInput.addEventListener("change", () => { void addImages([...imageInput.files ?? []]); imageInput.value = ""; });
@@ -360,7 +414,7 @@ export function mountAiPanel(container: HTMLElement, host: AiHost, options: AiPa
   });
   fromSelection.addEventListener("click", async () => {
     attachmentMenu.hidden = true;
-    try { context = await options.getContext?.(); if (!disposed) { attachmentView(); status.textContent = context ? "当前选择已附加，点击 Send 后发送。" : "当前没有选中文字或卡片。"; } }
+    try { context = await options.getContext?.(); if (!disposed) { attachmentView(); status.textContent = context ? "当前选择已附加，点击发送按钮。" : "当前没有选中文字或卡片。"; } }
     catch { if (!disposed) status.textContent = "无法取得当前选择，请直接粘贴文字。"; }
   });
   newButton.addEventListener("click", () => { stopReplySync(); current = { label: "新对话", history: [], elements: [] }; sessions.push(current); drawer.hidden = true; input.value = ""; context = undefined; images = []; attachmentView(); showConversation(); });
@@ -381,7 +435,7 @@ export function mountAiPanel(container: HTMLElement, host: AiHost, options: AiPa
       text: cards.map(card => [card.title, card.front, card.back].filter(Boolean).join("\n")).join("\n\n") } : plain ? { text: plain, label: "拖入文字" } : undefined;
     const attachedImages = cards.flatMap(card => [card.image, ...card.images ?? []]).filter((image): image is string => !!image && image.startsWith("data:image/"));
     if (attachedImages.length) images = attachedImages.slice(0, 4);
-    attachmentView(); status.textContent = context ? "材料已附加，点击 Send 后发送。" : "请拖入文字、卡片或图片。";
+    attachmentView(); status.textContent = context ? "材料已附加，点击发送按钮。" : "请拖入文字、卡片或图片。";
   };
   root.addEventListener("dragover", onDragOver); root.addEventListener("drop", onDrop); root.addEventListener("dragleave", () => root.classList.remove("ms-ai-dragover"));
   const handle: AiPanelHandle = {

@@ -14,6 +14,7 @@ import { CARD_COLORS } from "../model/cardColors";
 import { openCardInkComment } from "../cards/inkComment";
 
 export type NodeContentPart = "title" | "excerpt" | "note";
+export type CardInkMode = "snapshot" | "blank";
 
 // MN5 outline color-strip measurements; rendered samples can vary slightly by card.
 let activeCardMenu: Menu | null = null;
@@ -35,14 +36,171 @@ export function trackCardActionMenu(menu: Menu): void {
   menu.onHide(() => { document.removeEventListener("ms-block-menu-opening", closeForBlock); document.removeEventListener("ms-reader-menu-opening", closeForBlock); if (activeCardMenu === menu) activeCardMenu = null; });
 }
 
-/** Card actions shared by the graph toolbar, graph card menu and outline. */
+/** 复制卡片为克隆/引用片段，供脑图粘贴。 */
+export function copyCardFragment(plugin: MarginStudyPlugin, nodeId: string, mode: "clone" | "reference"): boolean {
+  return copySingleCard(plugin, nodeId, mode);
+}
+
+export function openCardColorPicker(plugin: MarginStudyPlugin, cardId: string, onChange: () => void): void {
+  if (!plugin.store.getCard(cardId)) return;
+  const { modal, close } = createModal("选择卡片颜色");
+  for (const [index, color] of CARD_COLORS.entries()) {
+    const option = el("button", { type: "button", "aria-label": `卡片颜色 ${index + 1}`, title: color, style: `width:32px;height:32px;margin:4px;border-radius:50%;background:${color}` });
+    option.addEventListener("click", () => {
+      if (plugin.store.getCard(cardId)) { plugin.store.updateCard(cardId, { color, colorIndex: index }); onChange(); }
+      close();
+    });
+    modal.append(option);
+  }
+  const cancel = el("button", { type: "button", text: "取消" });
+  cancel.addEventListener("click", close); modal.append(cancel);
+}
+
+export function openCardTagsEditor(plugin: MarginStudyPlugin, cardId: string, onChange: () => void): void {
+  const current = plugin.store.getCard(cardId); if (!current) return;
+  const { modal, close } = createModal("编辑卡片标签");
+  const input = el("textarea", { "aria-label": "卡片标签", placeholder: "每行一个标签，或用逗号分隔" }) as HTMLTextAreaElement;
+  input.value = current.tags.join(", ");
+  const cancel = el("button", { type: "button", text: "取消" });
+  const save = el("button", { type: "button", text: "保存标签" });
+  cancel.addEventListener("click", close);
+  save.addEventListener("click", () => {
+    if (plugin.store.getCard(cardId)) { plugin.store.updateCard(cardId, { tags: [...new Set(input.value.split(/[\n,，]/).map(tag => tag.trim()).filter(Boolean))] }); onChange(); }
+    close();
+  });
+  modal.append(input, cancel, save);
+}
+
+export function openCardTitleEditor(plugin: MarginStudyPlugin, cardId: string, onChange: () => void): void {
+  const current = plugin.store.getCard(cardId);
+  if (!current) return;
+  const { modal, close } = createModal("编辑卡片标题");
+  const input = el("input", { type: "text", "aria-label": "编辑卡片标题", class: "ms-search" }) as HTMLInputElement;
+  input.value = current.title ?? "";
+  const cancel = el("button", { type: "button", text: "取消" });
+  const save = el("button", { type: "button", text: "保存标题" });
+  cancel.addEventListener("click", close);
+  save.addEventListener("click", () => {
+    if (!plugin.store.getCard(cardId)) { close(); new Notice("卡片已不存在"); return; }
+    plugin.store.updateCard(cardId, { title: input.value.trim() });
+    close(); onChange();
+  });
+  modal.append(input, cancel, save);
+}
+
+export function openCardEditor(plugin: MarginStudyPlugin, cardId: string, onChange: () => void): void {
+  const current = plugin.store.getCard(cardId);
+  if (current) openDetail(plugin, current, onChange);
+}
+
+export function openCardInk(plugin: MarginStudyPlugin, cardId: string, mode: CardInkMode, onChange: () => void): void {
+  if (!plugin.store.getCard(cardId)) return;
+  openCardInkComment(plugin, cardId, mode, onChange);
+}
+
+export function appendCardAnnotation(plugin: MarginStudyPlugin, cardId: string, onChange: () => void): void {
+  if (!plugin.store.getCard(cardId)) return;
+  const { modal, close } = createModal("追加卡片批注");
+  const input = el("textarea", { "aria-label": "追加卡片批注", placeholder: "输入批注" }) as HTMLTextAreaElement;
+  const cancel = el("button", { type: "button", text: "取消" });
+  const save = el("button", { type: "button", text: "添加批注" });
+  cancel.addEventListener("click", close);
+  save.addEventListener("click", () => {
+    const current = plugin.store.getCard(cardId), text = input.value.trim();
+    if (!current) { close(); new Notice("卡片已不存在"); return; }
+    if (!text) { new Notice("请输入批注"); return; }
+    plugin.store.updateCard(cardId, { back: [current.back, text].filter(Boolean).join("\n\n") });
+    close(); onChange();
+  });
+  modal.append(input, cancel, save);
+}
+
+export function convertCardTextToTitle(plugin: MarginStudyPlugin, cardId: string, onChange: () => void): void {
+  const current = plugin.store.getCard(cardId);
+  if (!current || current.image || current.images?.length || !current.front.trim()) return;
+  const source = current.front;
+  const { modal, close } = createModal("文本转标题");
+  const input = el("textarea", { "aria-label": "文本转标题内容" }) as HTMLTextAreaElement;
+  input.value = source;
+  const cancel = el("button", { type: "button", text: "取消" });
+  const save = el("button", { type: "button", text: "设为标题" });
+  cancel.addEventListener("click", close);
+  save.addEventListener("click", () => {
+    const latest = plugin.store.getCard(cardId);
+    if (!latest || latest.front !== source || latest.image || latest.images?.length) { close(); new Notice("卡片内容已变化，请重新选择"); return; }
+    const title = input.value.trim(); if (!title) { new Notice("标题不能为空"); return; }
+    plugin.store.updateCard(cardId, { title }); close(); onChange();
+  });
+  modal.append(input, cancel, save);
+}
+
+export function speakCard(plugin: MarginStudyPlugin, cardId: string): void {
+  const current = plugin.store.getCard(cardId); if (!current) return;
+  stopCardActionSpeech();
+  closeCardSpeech = openExtendSpeech(document.body, [current.title, current.front, current.back].filter(Boolean).join("\n\n"), "卡片朗读");
+}
+
+export function clearCardRichFormat(plugin: MarginStudyPlugin, cardId: string, onChange: () => void): void {
+  const current = plugin.store.getCard(cardId); if (!current) return;
+  const front = current.front, back = current.back;
+  const plainFront = extendTextFromCard(front).text, plainBack = back === undefined ? undefined : extendTextFromCard(back).text;
+  const { modal, close } = createModal("清除富文本格式");
+  modal.append(el("p", { text: "清除卡片正文与批注中受支持的文字格式，保留文字和图片。" }));
+  const cancel = el("button", { type: "button", text: "取消" });
+  const confirm = el("button", { type: "button", text: "确认清除格式" });
+  cancel.addEventListener("click", close);
+  confirm.addEventListener("click", () => {
+    const latest = plugin.store.getCard(cardId);
+    if (!latest || latest.front !== front || latest.back !== back) { close(); new Notice("卡片内容已变化，请重新选择"); return; }
+    if (plainFront !== front || plainBack !== back) { plugin.store.updateCard(cardId, { front: plainFront, back: plainBack }); onChange(); }
+    close();
+  });
+  modal.append(cancel, confirm);
+}
+
+export function resetCardTypography(plugin: MarginStudyPlugin, cardId: string, onChange: () => void): void {
+  const current = plugin.store.getCard(cardId); if (!current?.typography) return;
+  const fontSize = plugin.store.settings.cardBaseFontSize ?? 16;
+  if (current.typography.fontSize !== fontSize) { plugin.store.updateCard(cardId, { typography: { ...current.typography, fontSize } }); onChange(); }
+}
+
+export function addCardToReview(plugin: MarginStudyPlugin, cardId: string, onChange: () => void): void {
+  if (plugin.store.getCard(cardId)) enrollCardsForReview(plugin, [cardId], onChange);
+}
+
+export function toggleCardOcclusion(plugin: MarginStudyPlugin, nodes: MindNode[], onChange: () => void): void {
+  const first = nodes[0]; if (!first) return;
+  const card = first.cardId ? plugin.store.getCard(first.cardId) : undefined;
+  const current = plugin.store.getNode(first.id);
+  if (!current || !card || current.cardId !== card.id) return;
+  plugin.store.toggleNodeOcclusion([current.id]); onChange();
+}
+
+export function removeCardFromMindmap(plugin: MarginStudyPlugin, node: MindNode, onChange: () => void): void {
+  const current = plugin.store.getNode(node.id);
+  if (!current) return;
+  if (plugin.store.removeExcerptFromMindmap(current.id)) { onChange(); new Notice("已从脑图中移除，卡片和源标注保留"); }
+}
+
+export function deleteCardWithNodes(plugin: MarginStudyPlugin, cardId: string, onChange: () => void, onClose: () => void): void {
+  if (!plugin.store.getCard(cardId)) { onClose(); return; }
+  try {
+    plugin.store.libraryTransaction("删除卡片及脑图引用", () => {
+      for (const node of [...plugin.store.nodes].filter(node => node.cardId === cardId)) plugin.store.removeExcerptFromMindmap(node.id);
+      plugin.store.removeCard(cardId);
+    });
+    onClose(); onChange();
+  } catch (error) { new Notice("无法删除卡片：" + String(error)); }
+}
+
+/** Flat card-action list shared by the graph card menu, outline menu and 更多操作…. */
 export function addCommonCardActions(menu: Menu, plugin: MarginStudyPlugin, nodes: MindNode[], onChange: () => void): void {
   const cardId = nodes.length === 1 ? nodes[0].cardId : undefined;
   const card = cardId ? plugin.store.getCard(cardId) : undefined;
   if (!card) return;
   for (const [mode, label] of [["clone", "复制卡片克隆"], ["reference", "复制卡片引用"]] as const) {
     menu.addItem(item => item.setTitle(label).onClick(() => {
-      if (copySingleCard(plugin, nodes[0].id, mode)) new Notice(`已复制卡片${mode === "clone" ? "克隆" : "引用"}，可在脑图中粘贴`);
+      if (copyCardFragment(plugin, nodes[0].id, mode)) new Notice(`已复制卡片${mode === "clone" ? "克隆" : "引用"}，可在脑图中粘贴`);
     }));
   }
   menu.addItem(item => item.setTitle("复制卡片URL").onClick(() => {
@@ -58,143 +216,24 @@ export function addCommonCardActions(menu: Menu, plugin: MarginStudyPlugin, node
     const cancel = el("button", { type: "button", text: "取消" });
     const remove = el("button", { type: "button", text: "确认删除卡片" });
     cancel.addEventListener("click", close);
-    remove.addEventListener("click", () => {
-      if (!plugin.store.getCard(card.id)) { close(); return; }
-      remove.setAttribute("disabled", "");
-      try {
-        plugin.store.libraryTransaction("删除卡片及脑图引用", () => {
-          for (const node of [...plugin.store.nodes].filter(node => node.cardId === card.id)) plugin.store.removeExcerptFromMindmap(node.id);
-          plugin.store.removeCard(card.id);
-        });
-        close(); onChange();
-      } catch (error) { remove.removeAttribute("disabled"); new Notice("无法删除卡片：" + String(error)); }
-    });
+    remove.addEventListener("click", () => { remove.setAttribute("disabled", ""); deleteCardWithNodes(plugin, card.id, onChange, close); });
     modal.append(cancel, remove);
   }));
-  menu.addItem(item => item.setTitle("颜色").onClick(() => {
-    const { modal, close } = createModal("选择卡片颜色");
-    for (const [index, color] of CARD_COLORS.entries()) {
-      const option = el("button", { type: "button", "aria-label": `卡片颜色 ${index + 1}`, title: color, style: `width:32px;height:32px;margin:4px;border-radius:50%;background:${color}` });
-      option.addEventListener("click", () => {
-        if (plugin.store.getCard(card.id)) { plugin.store.updateCard(card.id, { color, colorIndex: index }); onChange(); }
-        close();
-      });
-      modal.append(option);
-    }
-    const cancel = el("button", { type: "button", text: "取消" });
-    cancel.addEventListener("click", close); modal.append(cancel);
-  }));
-  menu.addItem(item => item.setTitle("标签").onClick(() => {
-    const current = plugin.store.getCard(card.id); if (!current) return;
-    const { modal, close } = createModal("编辑卡片标签");
-    const input = el("textarea", { "aria-label": "卡片标签", placeholder: "每行一个标签，或用逗号分隔" }) as HTMLTextAreaElement;
-    input.value = current.tags.join(", ");
-    const cancel = el("button", { type: "button", text: "取消" });
-    const save = el("button", { type: "button", text: "保存标签" });
-    cancel.addEventListener("click", close);
-    save.addEventListener("click", () => {
-      if (plugin.store.getCard(card.id)) { plugin.store.updateCard(card.id, { tags: [...new Set(input.value.split(/[\n,，]/).map(tag => tag.trim()).filter(Boolean))] }); onChange(); }
-      close();
-    });
-    modal.append(input, cancel, save);
-  }));
-  menu.addItem(item => item.setTitle("编辑标题").onClick(() => {
-    const current = plugin.store.getCard(card.id);
-    if (!current) return;
-    const { modal, close } = createModal("编辑卡片标题");
-    const input = el("input", { type: "text", "aria-label": "编辑卡片标题", class: "ms-search" }) as HTMLInputElement;
-    input.value = current.title ?? "";
-    const cancel = el("button", { type: "button", text: "取消" });
-    const save = el("button", { type: "button", text: "保存标题" });
-    cancel.addEventListener("click", close);
-    save.addEventListener("click", () => {
-      if (!plugin.store.getCard(card.id)) { close(); new Notice("卡片已不存在"); return; }
-      plugin.store.updateCard(card.id, { title: input.value.trim() });
-      close(); onChange();
-    });
-    modal.append(input, cancel, save);
-  }));
-  menu.addItem(item => item.setTitle("编辑卡片").onClick(() => {
-    const current = plugin.store.getCard(card.id);
-    if (current) openDetail(plugin, current, onChange);
-  }));
+  menu.addItem(item => item.setTitle("颜色").onClick(() => openCardColorPicker(plugin, card.id, onChange)));
+  menu.addItem(item => item.setTitle("标签").onClick(() => openCardTagsEditor(plugin, card.id, onChange)));
+  menu.addItem(item => item.setTitle("编辑标题").onClick(() => openCardTitleEditor(plugin, card.id, onChange)));
+  menu.addItem(item => item.setTitle("编辑卡片").onClick(() => openCardEditor(plugin, card.id, onChange)));
   for (const [mode, label] of [["snapshot", "整卡截图批注"], ["blank", "空白手写"]] as const) {
-    menu.addItem(item => item.setTitle(label).onClick(() => openCardInkComment(plugin, card.id, mode, onChange)));
+    menu.addItem(item => item.setTitle(label).onClick(() => openCardInk(plugin, card.id, mode, onChange)));
   }
-  menu.addItem(item => item.setTitle("追加批注").onClick(() => {
-    if (!plugin.store.getCard(card.id)) return;
-    const { modal, close } = createModal("追加卡片批注");
-    const input = el("textarea", { "aria-label": "追加卡片批注", placeholder: "输入批注" }) as HTMLTextAreaElement;
-    const cancel = el("button", { type: "button", text: "取消" });
-    const save = el("button", { type: "button", text: "添加批注" });
-    cancel.addEventListener("click", close);
-    save.addEventListener("click", () => {
-      const current = plugin.store.getCard(card.id), text = input.value.trim();
-      if (!current) { close(); new Notice("卡片已不存在"); return; }
-      if (!text) { new Notice("请输入批注"); return; }
-      plugin.store.updateCard(card.id, { back: [current.back, text].filter(Boolean).join("\n\n") });
-      close(); onChange();
-    });
-    modal.append(input, cancel, save);
-  }));
-  if (!card.image && !card.images?.length && card.front.trim()) menu.addItem(item => item.setTitle("文本转标题").onClick(() => {
-    const current = plugin.store.getCard(card.id);
-    if (!current || current.image || current.images?.length || !current.front.trim()) return;
-    const source = current.front;
-    const { modal, close } = createModal("文本转标题");
-    const input = el("textarea", { "aria-label": "文本转标题内容" }) as HTMLTextAreaElement;
-    input.value = source;
-    const cancel = el("button", { type: "button", text: "取消" });
-    const save = el("button", { type: "button", text: "设为标题" });
-    cancel.addEventListener("click", close);
-    save.addEventListener("click", () => {
-      const latest = plugin.store.getCard(card.id);
-      if (!latest || latest.front !== source || latest.image || latest.images?.length) { close(); new Notice("卡片内容已变化，请重新选择"); return; }
-      const title = input.value.trim(); if (!title) { new Notice("标题不能为空"); return; }
-      plugin.store.updateCard(card.id, { title }); close(); onChange();
-    });
-    modal.append(input, cancel, save);
-  }));
-  menu.addItem(item => item.setTitle("朗读").onClick(() => {
-    const current = plugin.store.getCard(card.id); if (!current) return;
-    stopCardActionSpeech();
-    closeCardSpeech = openExtendSpeech(document.body, [current.title, current.front, current.back].filter(Boolean).join("\n\n"), "卡片朗读");
-  }));
-  menu.addItem(item => item.setTitle("清除富文本格式").onClick(() => {
-    const current = plugin.store.getCard(card.id); if (!current) return;
-    const front = current.front, back = current.back;
-    const plainFront = extendTextFromCard(front).text, plainBack = back === undefined ? undefined : extendTextFromCard(back).text;
-    const { modal, close } = createModal("清除富文本格式");
-    modal.append(el("p", { text: "清除卡片正文与批注中受支持的文字格式，保留文字和图片。" }));
-    const cancel = el("button", { type: "button", text: "取消" });
-    const confirm = el("button", { type: "button", text: "确认清除格式" });
-    cancel.addEventListener("click", close);
-    confirm.addEventListener("click", () => {
-      const latest = plugin.store.getCard(card.id);
-      if (!latest || latest.front !== front || latest.back !== back) { close(); new Notice("卡片内容已变化，请重新选择"); return; }
-      if (plainFront !== front || plainBack !== back) { plugin.store.updateCard(card.id, { front: plainFront, back: plainBack }); onChange(); }
-      close();
-    });
-    modal.append(cancel, confirm);
-  }));
-  menu.addItem(item => item.setTitle("重置尺寸和字体比例").onClick(() => {
-    const current = plugin.store.getCard(card.id); if (!current?.typography) return;
-    const fontSize = plugin.store.settings.cardBaseFontSize ?? 16;
-    if (current.typography.fontSize !== fontSize) { plugin.store.updateCard(card.id, { typography: { ...current.typography, fontSize } }); onChange(); }
-  }));
-  menu.addItem(item => item.setTitle("添加到复习").onClick(() => {
-    if (plugin.store.getCard(card.id)) enrollCardsForReview(plugin, [card.id], onChange);
-  }));
-  menu.addItem(item => item.setTitle("摘录遮挡").setChecked(!!(nodes[0].occluded ?? card.occluded)).onClick(() => {
-    const current = plugin.store.getNode(nodes[0].id);
-    if (!current || current.cardId !== card.id || !plugin.store.getCard(card.id)) return;
-    plugin.store.toggleNodeOcclusion([current.id]); onChange();
-  }));
-  menu.addItem(item => item.setTitle("从脑图中移除").onClick(() => {
-    const current = plugin.store.getNode(nodes[0].id);
-    if (!current || current.cardId !== card.id) return;
-    if (plugin.store.removeExcerptFromMindmap(current.id)) { onChange(); new Notice("已从脑图中移除，卡片和源标注保留"); }
-  }));
+  menu.addItem(item => item.setTitle("追加批注").onClick(() => appendCardAnnotation(plugin, card.id, onChange)));
+  if (!card.image && !card.images?.length && card.front.trim()) menu.addItem(item => item.setTitle("文本转标题").onClick(() => convertCardTextToTitle(plugin, card.id, onChange)));
+  menu.addItem(item => item.setTitle("朗读").onClick(() => speakCard(plugin, card.id)));
+  menu.addItem(item => item.setTitle("清除富文本格式").onClick(() => clearCardRichFormat(plugin, card.id, onChange)));
+  menu.addItem(item => item.setTitle("重置尺寸和字体比例").onClick(() => resetCardTypography(plugin, card.id, onChange)));
+  menu.addItem(item => item.setTitle("添加到复习").onClick(() => addCardToReview(plugin, card.id, onChange)));
+  menu.addItem(item => item.setTitle("摘录遮挡").setChecked(!!(nodes[0].occluded ?? card.occluded)).onClick(() => toggleCardOcclusion(plugin, nodes, onChange)));
+  menu.addItem(item => item.setTitle("从脑图中移除").onClick(() => removeCardFromMindmap(plugin, nodes[0], onChange)));
 }
 
 /** These parts must match splitNodeContent; local node comments are separate. */

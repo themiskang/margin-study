@@ -118,12 +118,16 @@ export function openSyncStatusPanel(store: Store, actions: { findSource: () => v
       const row = el("section", { class: "ms-sync-row", "data-status": item.key, "data-evidence-event-ids": item.evidenceEventIds.join(",") });
       row.append(el("div", { text: item.text }));
       if (item.action) {
-        const labels = { "find-source": "查找或重定位来源文件", "resolve-conflict": "处理冲突", "show-deletions": "查看可恢复对象", "save-local": "立即保存" };
+        const labels: Record<string, string> = {
+          "find-source": "查找或重定位来源文件", "resolve-conflict": "处理冲突", "show-deletions": "查看可恢复对象",
+          "save-local": "立即保存", "relink-source": "重新链接来源文件", "reimport-source": "重新导入来源文件",
+        };
         const button = el("button", { class: "ms-btn", text: labels[item.action] });
         button.addEventListener("click", () => {
-          if (item.action === "find-source") actions.findSource();
+          if (item.action === "find-source" || item.action === "relink-source") actions.findSource();
           else if (item.action === "resolve-conflict") actions.resolveConflict();
           else if (item.action === "save-local") void store.flush().then(() => actions.notify("本地修改已保存。")).catch(error => actions.notify("本地修改尚未保存：" + String(error)));
+          else if (item.action === "reimport-source") actions.notify("请从学习集「管理文档…」或「从文件」重新导入来源文档。");
           else void showSnapshots();
         });
         row.append(button);

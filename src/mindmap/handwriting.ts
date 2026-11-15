@@ -29,6 +29,7 @@ interface CanvasInkOptions {
   binding(point: MindmapInkPoint): Partial<MindmapInkStroke>;
   frame(stroke: MindmapInkStroke): InkFrame | undefined;
   source(stroke: MindmapInkStroke): void;
+  recognize(image: string): void;
 }
 
 /** Canvas ink owns pointer gestures and its palette; persistence stays behind the map adapter. */
@@ -49,6 +50,7 @@ export class MindmapHandwritingController {
   private selected = new Set<string>();
   private deleteButton = el("button", { type: "button", "aria-label": "删除选中笔迹", title: "删除选中笔迹", text: "×" });
   private sourceButton = el("button", { type: "button", "aria-label": "笔迹回源", title: "笔迹回源", text: "↗" });
+  private recognizeButton = el("button", { type: "button", "aria-label": "AI 转文本", title: "AI 转文本", text: "AI 转文本" });
   private penColor = "#30343b";
   private penColorOverride = false;
   private highlightColor = "#ffd54f";
@@ -86,6 +88,7 @@ export class MindmapHandwritingController {
     });
     this.palette.append(this.colorInput, this.widthInput);
     this.deleteButton.hidden = true; this.deleteButton.addEventListener("click", () => this.deleteSelection()); this.palette.append(this.deleteButton);
+    this.recognizeButton.hidden = true; this.recognizeButton.addEventListener("click", () => this.recognizeSelection()); this.palette.append(this.recognizeButton);
     this.sourceButton.hidden = true; this.sourceButton.addEventListener("click", () => {
       const canvasId = this.options.canvasId(), data = canvasId ? this.options.read(canvasId) : undefined;
       const stroke = data?.layers.find(layer => layer.id === data.activeLayerId)?.strokes.find(item => this.selected.has(item.id));
@@ -115,7 +118,7 @@ export class MindmapHandwritingController {
   }
 
   setMode(mode: HandwritingMode): void {
-    if (this.mode !== mode) { this.commitDrawing(); this.cancel(); this.clearSelection(); }
+    if (this.mode !== mode) { if (mode !== "eraser") this.commitDrawing(); this.cancel(); this.clearSelection(); }
     this.mode = mode; this.surface.style.pointerEvents = mode === "off" ? "none" : "auto";
     this.palette.hidden = mode === "off"; this.root.classList.toggle("is-map-handwriting", mode !== "off");
     if (mode === "off") { this.closeSettings(); this.penColorOverride = false; }
@@ -175,21 +178,21 @@ export class MindmapHandwritingController {
     const canvasId = this.options.canvasId(), data = canvasId ? cloneInk(this.options.read(canvasId)) : emptyInk();
     this.settings.replaceChildren(); const header = el("div", { class: "ms-map-ink-settings-header" });
     const close = el("button", { type: "button", text: "×", "aria-label": "关闭脑图手写设置" }); close.addEventListener("click", () => this.closeSettings());
-    header.append(el("strong", { text: "MindMap Handwriting Settings" }), close); this.settings.append(header);
+    header.append(el("strong", { text: "脑图手写设置" }), close); this.settings.append(header);
     const brush = el("fieldset", { class: "ms-map-brush-settings" });
     brush.append(el("legend", { text: this.mode === "highlight" ? "荧光笔设置" : "画笔设置" }));
-    const opacityLabel = el("label", { text: "Opacity / 透明度" }), opacity = el("input", { type: "range", min: "0", max: "1", step: ".05", "aria-label": "脑图画笔透明度" });
+    const opacityLabel = el("label", { text: "透明度" }), opacity = el("input", { type: "range", min: "0", max: "1", step: ".05", "aria-label": "脑图画笔透明度" });
     opacity.value = String(this.mode === "highlight" ? this.highlightOpacity : this.penOpacity);
     const amount = el("output", { text: opacity.value });
     opacity.addEventListener("input", () => { const value = Number(opacity.value); if (this.mode === "highlight") this.highlightOpacity = value; else this.penOpacity = value; amount.textContent = opacity.value; });
     opacityLabel.append(opacity, amount);
-    const lineLabel = el("label", { text: "Straight Line / 直线" }), line = el("select", { "aria-label": "脑图直线模式" });
-    for (const [value, text] of [["off", "Off"], ["auto", "Auto"], ["always", "Always"]]) line.append(el("option", { value, text }));
+    const lineLabel = el("label", { text: "直线" }), line = el("select", { "aria-label": "脑图直线模式" });
+    for (const [value, text] of [["off", "关闭"], ["auto", "自动"], ["always", "始终"]]) line.append(el("option", { value, text }));
     line.value = this.lineMode; line.addEventListener("change", () => { this.lineMode = line.value as typeof this.lineMode; }); lineLabel.append(line);
-    brush.append(opacityLabel, lineLabel, el("p", { class: "ms-map-ink-layer-hint", text: "仅影响新脑图笔迹。Auto 将接近直线的轨迹拉直；偏好保留至关闭此视图。文档与卡片画笔独立。" }));
+    brush.append(opacityLabel, lineLabel, el("p", { class: "ms-map-ink-layer-hint", text: "仅影响新脑图笔迹。自动模式将接近直线的轨迹拉直；偏好保留至关闭此视图。文档与卡片画笔独立。" }));
     this.settings.append(brush);
-    const title = el("div", { class: "ms-map-ink-layer-title" }), edit = el("button", { type: "button", text: this.editingLayers ? "完成" : "Edit", "aria-label": "编辑手写图层", "aria-pressed": String(this.editingLayers) });
-    edit.addEventListener("click", () => { this.editingLayers = !this.editingLayers; this.renderSettings(); }); title.append(el("span", { text: "Sketch Layers" }), edit); this.settings.append(title);
+    const title = el("div", { class: "ms-map-ink-layer-title" }), edit = el("button", { type: "button", text: this.editingLayers ? "完成" : "编辑", "aria-label": "编辑手写图层", "aria-pressed": String(this.editingLayers) });
+    edit.addEventListener("click", () => { this.editingLayers = !this.editingLayers; this.renderSettings(); }); title.append(el("span", { text: "手写图层" }), edit); this.settings.append(title);
     const list = el("div", { class: "ms-map-ink-layers", role: "radiogroup", "aria-label": "当前编辑的手写图层" });
     for (const layer of data.layers) {
       const row = el("div", { class: "ms-map-ink-layer-row" }), choose = el("button", { type: "button", role: "radio", "aria-checked": String(layer.id === data.activeLayerId), "aria-label": `编辑图层 ${layer.name}`, "data-ink-layer": layer.id });
@@ -214,7 +217,22 @@ export class MindmapHandwritingController {
       list.append(row);
     }
     this.settings.append(list);
-    const create = el("button", { type: "button", class: "ms-map-ink-new-layer", "aria-label": "新建手写图层", text: "+  New Sketch Layer" });
+    const selected = data.layers.find((layer) => layer.id === data.activeLayerId)?.strokes.filter((stroke) => this.selected.has(stroke.id)) ?? [];
+    const unlink = el("button", { type: "button", text: "解除手写绑定", "aria-label": "解除手写绑定" });
+    unlink.disabled = !selected.some((stroke) => stroke.focusNodeId || stroke.targetCardId || stroke.targetFrame);
+    unlink.title = unlink.disabled ? "请先选中已绑定的笔迹" : "解除手写绑定";
+    unlink.addEventListener("click", () => {
+      const ids = new Set(this.selected);
+      this.changeData("解除手写绑定", (next) => {
+        for (const stroke of next.layers.find((layer) => layer.id === next.activeLayerId)?.strokes ?? []) {
+          if (!ids.has(stroke.id) || !(stroke.focusNodeId || stroke.targetCardId || stroke.targetFrame)) continue;
+          stroke.points = projectBoundInk(stroke.points, stroke.targetFrame, this.options.frame(stroke));
+          delete stroke.focusNodeId; delete stroke.targetCardId; delete stroke.targetFrame;
+        }
+      });
+    });
+    this.settings.append(unlink);
+    const create = el("button", { type: "button", class: "ms-map-ink-new-layer", "aria-label": "新建手写图层", text: "+  新建手写图层" });
     create.addEventListener("click", () => openTextModal({ title: "新建手写图层", initial: `Sketch Layer ${data.layers.length + 1}`, onOk: (name) => { if (name.trim()) this.changeData("新建脑图手写图层", (next) => { const id = uid("ink-layer"); next.layers.push({ id, name: name.trim().slice(0, 120), strokes: [] }); next.activeLayerId = id; }); } }));
     this.settings.append(create);
     const overlayLabel = el("label", { class: "ms-map-ink-overlay-label", text: "只读叠加图层" }), overlay = el("select", { "aria-label": "只读叠加手写图层" });
@@ -368,7 +386,25 @@ export class MindmapHandwritingController {
     preview.rendered = points.length;
   }
   private history(redo: boolean): void { this.commitDrawing(); this.cancel(); this.clearSelection(); if (redo) this.options.redo(); else this.options.undo(); this.render(); }
-  private clearSelection(): void { this.selected.clear(); this.selectionGroup.replaceChildren(); this.deleteButton.hidden = true; this.sourceButton.hidden = true; }
+  private clearSelection(): void { this.selected.clear(); this.selectionGroup.replaceChildren(); this.deleteButton.hidden = true; this.sourceButton.hidden = true; this.recognizeButton.hidden = true; this.renderSettings(); }
+  private recognizeSelection(): void {
+    const bounds = this.selectionBounds(), id = this.options.canvasId(), data = id ? this.options.read(id) : undefined;
+    if (!bounds || !data) return;
+    const strokes = data.layers.find(layer => layer.id === data.activeLayerId)?.strokes.filter(stroke => this.selected.has(stroke.id)).map(stroke => this.project(stroke)) ?? [];
+    const canvas = document.createElement("canvas"), padding = 16, scale = Math.min(1, 2000 / Math.max(1, bounds.right - bounds.left, bounds.bottom - bounds.top));
+    canvas.width = Math.ceil((bounds.right - bounds.left) * scale + padding * 2); canvas.height = Math.ceil((bounds.bottom - bounds.top) * scale + padding * 2);
+    const context = canvas.getContext("2d"); if (!context) return;
+    context.fillStyle = "white"; context.fillRect(0, 0, canvas.width, canvas.height);
+    context.strokeStyle = "black"; context.lineWidth = 3; context.lineCap = "round"; context.lineJoin = "round";
+    for (const stroke of strokes) {
+      if (!stroke.points.length) continue;
+      context.beginPath();
+      stroke.points.forEach((point, index) => { const x = padding + (point.x - bounds.left) * scale, y = padding + (point.y - bounds.top) * scale; if (index) context.lineTo(x, y); else context.moveTo(x, y); });
+      if (stroke.points.length === 1) context.lineTo(padding + (stroke.points[0].x - bounds.left) * scale + .1, padding + (stroke.points[0].y - bounds.top) * scale);
+      context.stroke();
+    }
+    this.options.recognize(canvas.toDataURL("image/png"));
+  }
   private selectionBounds(): { left: number; right: number; top: number; bottom: number } | null {
     const id = this.options.canvasId(), data = id ? this.options.read(id) : undefined;
     const selected = data?.layers.find((layer) => layer.id === data.activeLayerId)?.strokes.filter((stroke) => this.selected.has(stroke.id)) ?? [];
@@ -384,7 +420,7 @@ export class MindmapHandwritingController {
     return { x: Math.max(-(bounds?.left ?? 0), last.x - trail[0].x), y: Math.max(-(bounds?.top ?? 0), last.y - trail[0].y) };
   }
   private drawSelection(delta: MindmapInkPoint = { x: 0, y: 0 }): void {
-    this.selectionGroup.replaceChildren(); const bounds = this.selectionBounds(); this.deleteButton.hidden = !bounds;
+    this.selectionGroup.replaceChildren(); const bounds = this.selectionBounds(); this.deleteButton.hidden = !bounds; this.recognizeButton.hidden = !bounds;
     if (!bounds) return;
     this.selectionGroup.append(svg("rect", { "aria-label": "已选中的脑图笔迹", x: bounds.left + delta.x - 5, y: bounds.top + delta.y - 5, width: bounds.right - bounds.left + 10, height: bounds.bottom - bounds.top + 10, fill: "#448aff0c", stroke: "#448aff", "stroke-width": "1.5", "stroke-dasharray": "5 4" }));
   }

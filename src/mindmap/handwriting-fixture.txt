@@ -6,6 +6,7 @@ import { createMindmapInkStroke } from '__PROJECT__/src/mindmap/handwritingSvg';
 import { PenController } from '__PROJECT__/src/annot/pen';
 import { reviewDrawingInput } from '__PROJECT__/src/review/drawing';
 import { handwritingPresets, handwritingPresetWidth } from '__PROJECT__/src/annot/handwritingPresets';
+import { aiServiceFor } from '__PROJECT__/src/ai/panel';
 
 const target=document.querySelector('#fixtures') as HTMLElement,results:any[]=[],mounted:MindmapRenderer[]=[],stores:Store[]=[],errors:string[]=[];
 (window as any).results=results;
@@ -19,8 +20,9 @@ function button(root:ParentNode,label:string):HTMLButtonElement{
   let node=[...root.querySelectorAll<HTMLButtonElement>('button')].find(value=>value.getAttribute('aria-label')===label||value.textContent===label);
   if(!node&&['连接卡片','多选','脑图手写','手形工具'].includes(label)){
     button(root,'选择脑图').click();
-    if(label!=='多选')button(document.querySelector('#test-menu')!,'工具 ▸').click();
-    node=button(document.querySelector('#test-menu')!,label==='多选'?'多选 ⌥⌘M':label);
+    button(document.querySelector('#test-menu')!,'管理脑图').click();
+    if(label==='多选')node=button(document.querySelector('.ms-modal')!,'多选 ⌥⌘M');
+    else{button(document.querySelector('.ms-modal')!,'工具 ▸').click();node=button(document.querySelector('#test-menu')!,label);}
   }
   assert(node,'Missing button '+label);return node!;
 }
@@ -51,6 +53,66 @@ function withPalmClock(action:(setTime:(time:number)=>void)=>void){
  try{action(value=>{time=value;});}finally{if(original)Object.defineProperty(performance,'now',original);else delete (performance as any).now;}
 }
  try{
+ await test('selected map ink sends a PNG to the shared AI recognition request',async()=>{
+  const p=await fresh();p.view.setHandwritingMode('pen');gesture(p,[[100,100],[160,120]]);p.view.setHandwritingMode('lasso');gesture(p,[[80,80],[180,80],[180,140],[80,140],[80,80]]);
+  p.plugin.app.loadLocalStorage=()=>null;p.plugin.app.saveLocalStorage=()=>{};const calls:any[]=[];const service=aiServiceFor(p.plugin);service.request=async(request:any)=>{calls.push(request);return {text:'识别结果'} as any;};
+  const action=button(p.host,'AI 转文本');assert(!action.hidden,'recognition action hidden after selection');action.click();
+  await pause();assert(calls.length===1&&calls[0].images[0].startsWith('data:image/png;base64,')&&calls[0].text==='请识别图片中的手写文字。'&&calls[0].task==='markdown','recognition request missing selected PNG or task');assert(document.querySelector<HTMLTextAreaElement>('[aria-label="识别文字"]')?.value==='识别结果','recognition result missing');button(document.querySelector('.ms-modal')!,'关闭').click();
+ });
+ await test('5.0.2 unlink retains visible position after its bound node has moved',async()=>{
+  const p=await fresh();p.store.addNode({id:'unlink-moved',canvasId:p.canvasId,parentId:null,title:'Moved target',collapsed:false,x:100,y:100});p.view.render();p.view.setHandwritingMode('pen');gesture(p,[[120,115],[150,120]]);gesture(p,[[120,145],[150,145]]);
+  const id=ink(p).layers[0].strokes[0].id;p.store.moveNode('unlink-moved',200,100);p.view.render();const original=structuredClone(ink(p)),controller=(p.view as any).handwriting,project=(stroke:any)=>controller.project(stroke).points,visual=project(original.layers[0].strokes[0]);
+  const path=()=>p.host.querySelector(`[data-map-ink-stroke="${id}"] path`)!.getAttribute('d');const before=path();
+  p.view.setHandwritingMode('lasso');gesture(p,[[210,105],[270,105],[270,135],[210,135],[210,105]]);button(p.host,'脑图手写设置').click();button(p.host,'解除手写绑定').click();
+  assert(path()===before,'unlink moved visible ink from '+before+' to '+path());
+  const after=structuredClone(ink(p)),stroke=after.layers[0].strokes[0],equalVisual=(points:any[])=>points.length===visual.length&&points.every((point:any,index:number)=>Math.hypot(point.x-visual[index].x,point.y-visual[index].y)<.5);
+  assert(equalVisual(project(stroke)),'unlink changed projected coordinates');assert(after.layers[0].strokes.length===original.layers[0].strokes.length&&stroke.id===id,'unlink changed stroke count or ID');
+  assert(JSON.stringify(after.layers[0].strokes[1])===JSON.stringify(original.layers[0].strokes[1]),'unlink changed unselected stroke');
+  assert(!stroke.focusNodeId&&!stroke.targetCardId&&!stroke.targetFrame,'unlink retained binding');
+  button(p.host,'撤销脑图手写').click();assert(JSON.stringify(ink(p))===JSON.stringify(original)&&equalVisual(project(ink(p).layers[0].strokes[0])),'undo failed to restore binding and coordinates');
+  button(p.host,'重做脑图手写').click();await p.store.flush();const reopened=await fresh(p.storage),reopenedStroke=ink(reopened).layers[0].strokes[0];
+  assert(JSON.stringify(ink(reopened))===JSON.stringify(after)&&equalVisual((reopened.view as any).handwriting.project(reopenedStroke).points),'reopen lost unlink or visual coordinates');
+  for(const missing of ['targetFrame','node']){
+   const current=structuredClone(ink(p)),candidate=current.layers[0].strokes[0];candidate.focusNodeId=missing==='node'?'deleted-node':'unlink-moved';candidate.targetFrame=missing==='node'?original.layers[0].strokes[0].targetFrame:undefined;
+   p.store.updateCanvas(p.canvasId,{handwriting:current});p.view.render();const points=JSON.stringify(candidate.points);gesture(p,[[210,105],[270,105],[270,135],[210,135],[210,105]]);button(p.host,'解除手写绑定').click();
+   const result=ink(p).layers[0].strokes[0];assert(JSON.stringify(result.points)===points&&!result.focusNodeId&&!result.targetFrame,'missing '+missing+' changed points or retained binding');
+  }
+ });
+ await test('5.0.2 unlink selected bound ink preserves strokes, undo, reopen and export',async()=>{
+  const p=await fresh();p.store.addNode({id:'unlink-focus',canvasId:p.canvasId,parentId:null,title:'Unlink target',collapsed:false,x:100,y:100});p.view.render();p.view.setHandwritingMode('pen');
+  gesture(p,[[115,110],[140,110],[160,110]]);gesture(p,[[115,130],[140,130],[160,130]]);
+  button(p.host,'脑图手写设置').click();button(p.host,'新建手写图层').click();let modal=document.querySelector('.ms-modal')!;(modal.querySelector('textarea') as HTMLTextAreaElement).value='Other';button(modal,'确定').click();
+  gesture(p,[[115,120],[140,120],[160,120]]);button(p.host,'编辑图层 Default').click();
+  const before=structuredClone(ink(p));assert(before.layers[0].strokes.every((stroke:any)=>stroke.focusNodeId==='unlink-focus'&&stroke.targetFrame),'test strokes lack binding');
+  let unlink=button(p.host,'解除手写绑定');assert(unlink.disabled&&unlink.title,'unselected unlink must be disabled with reason');
+  p.view.setHandwritingMode('lasso');gesture(p,[[105,100],[170,100],[170,115],[105,115],[105,100]]);
+  unlink=button(p.host,'解除手写绑定');assert(!unlink.disabled,'selected bound ink cannot be unlinked');unlink.click();
+  let after=structuredClone(ink(p));const expected=structuredClone(before),selected=expected.layers[0].strokes[0];delete selected.focusNodeId;delete selected.targetCardId;delete selected.targetFrame;
+  assert(JSON.stringify(after)===JSON.stringify(expected),'unlink changed other stroke data, coordinates or layers');
+  unlink=button(p.host,'解除手写绑定');assert(unlink.disabled&&unlink.title,'unbound selection must disable unlink with reason');
+  button(p.host,'撤销脑图手写').click();assert(JSON.stringify(ink(p))===JSON.stringify(before),'undo did not restore exact binding');
+  button(p.host,'重做脑图手写').click();assert(JSON.stringify(ink(p))===JSON.stringify(expected),'redo did not restore unlink');
+  gesture(p,[[105,100],[170,100],[170,115],[105,115],[105,100]]);unlink=button(p.host,'解除手写绑定');assert(unlink.disabled&&unlink.title,'selected unbound ink must disable unlink with reason');
+  await p.store.flush();const reopened=await fresh(p.storage);assert(JSON.stringify(ink(reopened))===JSON.stringify(expected),'reopen lost unlinked ink');
+  assert(reopened.host.querySelector(`[data-map-ink-stroke="${selected.id}"]`),'reopened renderer lost unlinked stroke');
+  p.store.moveNode('unlink-focus',200,100);p.view.render();const unboundPath=p.host.querySelector(`[data-map-ink-stroke="${selected.id}"] path`)!.getAttribute('d');assert(unboundPath!.startsWith('M 115 110'),'moving target moved unlinked ink: '+unboundPath);
+  const blobs:Blob[]=[],create=URL.createObjectURL,revoke=URL.revokeObjectURL,click=HTMLAnchorElement.prototype.click;URL.createObjectURL=(blob:any)=>{blobs.push(blob);return 'blob:unlink';};URL.revokeObjectURL=()=>{};HTMLAnchorElement.prototype.click=function(){};
+  try{await exportMindmapPng(p.plugin);button(document.querySelector('.ms-modal')!,'SVG 矢量').click();const doc=new DOMParser().parseFromString(await blobs[0].text(),'image/svg+xml');assert(doc.querySelector(`[data-map-ink-stroke="${selected.id}"] path`)?.getAttribute('d')?.startsWith('M 115 110'),'export lost or moved unlinked ink');}finally{URL.createObjectURL=create;URL.revokeObjectURL=revoke;HTMLAnchorElement.prototype.click=click;}
+ });
+ await test('5.0.2 switching map pen to eraser cancels unfinished stroke',async()=>{
+  const p=await fresh();p.view.setHandwritingMode('pen');gesture(p,[[100,100],[150,100],[200,100]]);gesture(p,[[100,200],[150,200],[200,200]]);const before=JSON.stringify(ink(p)),ids=ink(p).layers[0].strokes.map((stroke:any)=>stroke.id);
+  const node=surface(p),rect=node.getBoundingClientRect();p.view.setHandwritingMode('eraser');pointer(node,'pointermove',rect.left+150,rect.top+100);pointer(node,'pointerup',rect.left+150,rect.top+100);assert(JSON.stringify(ink(p))===before,'hover after switch changed ink');
+  p.view.setHandwritingMode('pen');pointer(node,'pointerdown',rect.left+150,rect.top+100);p.view.setHandwritingMode('eraser');pointer(node,'pointermove',rect.left+150,rect.top+110);pointer(node,'pointerup',rect.left+150,rect.top+120);
+  assert(JSON.stringify(ink(p))===before,'tool switch saved unfinished map stroke or erased existing ink');assert((p.view as any).handwriting.pointerId===null&&(p.view as any).handwriting.drawing===null&&(p.view as any).handwriting.editing===null,'map gesture state survived pointerup');
+  p.view.setHandwritingMode('pen');gesture(p,[[100,300],[150,300],[200,300]]);assert(ink(p).layers[0].strokes.length===3,'new stroke failed after interrupted gesture');p.view.setHandwritingMode('eraser');gesture(p,[[150,270],[150,330]]);
+  assert(JSON.stringify(ink(p).layers[0].strokes.map((stroke:any)=>stroke.id))===JSON.stringify(ids),'eraser did not preserve untouched IDs');button(p.host,'撤销脑图手写').click();const restored=JSON.stringify(ink(p));assert(ink(p).layers[0].strokes.length===3,'undo did not restore erased stroke');await p.store.flush();const reopened=new Store((p.store as any).host);await reopened.load();assert(JSON.stringify(reopened.canvases.find(canvas=>canvas.id===p.canvasId)?.handwriting)===restored,'reopened map differs from memory');
+ });
+ await test('5.0.2 switching document pen to eraser cancels unfinished stroke',async()=>{
+  const host=document.createElement('div');host.style.cssText='width:400px;height:200px';target.append(host);let commits=0;
+  const pen=new PenController(host,{getColor:()=>'black',onCommit:()=>commits++});pen.setActive(true);const node=host.querySelector('svg')!,rect=host.getBoundingClientRect();
+  pointer(node,'pointerdown',rect.left+30,rect.top+30);pen.setTool('erase');pointer(node,'pointermove',rect.left+40,rect.top+40);pointer(node,'pointerup',rect.left+50,rect.top+50);
+  assert(commits===0,'tool switch saved unfinished document stroke');pen.destroy();
+ });
  await test('A14 bound focus ink stays selectable and erasable at its moved position',async()=>{
   const p=await fresh();p.store.addNode({id:'a14-focus',canvasId:p.canvasId,parentId:null,title:'Focus target',collapsed:false,x:100,y:100});p.view.render();p.view.setHandwritingMode('pen');gesture(p,[[120,115],[140,120],[160,125]]);const original=structuredClone(ink(p).layers[0].strokes[0]);assert(original.focusNodeId==='a14-focus'&&original.targetFrame,'focus binding was not saved');
   p.store.moveNode('a14-focus',200,100);p.view.render();p.view.setHandwritingMode('lasso');gesture(p,[[210,105],[270,105],[270,145],[210,145],[210,105]]);assert(p.host.querySelector('[aria-label="已选中的脑图笔迹"]'),'lasso missed moved ink');gesture(p,[[240,120],[260,130]]);const moved=ink(p).layers[0].strokes[0];assert(Math.abs(moved.points[0].x-original.points[0].x-20)<.1,'lasso did not preserve local binding');

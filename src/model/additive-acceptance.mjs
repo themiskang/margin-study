@@ -121,6 +121,31 @@ try {
     assert.equal(f.store.getCard("source").back, "Changed note");
   });
   await check("legacy annotations remain accepted without additive fields", () => api.validateAnnotationCollection([{ id: "old", type: "highlight", rects: [], text: "legacy" }]));
+  await check("annotation revisions advance on saves, undo/redo and path migration", async () => {
+    const f = await fresh(), path = "doc.pdf", moved = "renamed.pdf";
+    const initial = f.store.getAnnotationsRevision(path);
+    const live = await f.store.loadAnnotations(path);
+    assert.ok(f.store.getAnnotationsRevision(path) > initial);
+    const afterLoad = f.store.getAnnotationsRevision(path);
+    live.push({ id: "revision-ink", type: "pen", docPath: path, page: 1, rects: [], text: "", color: "#000", createdAt: stamp, strokes: [[{ x: .1, y: .2 }, { x: .5, y: .2 }]] });
+    f.store.saveAnnotationsDebounced(path, live);
+    assert.ok(f.store.getAnnotationsRevision(path) > afterLoad);
+    const beforeNow = f.store.getAnnotationsRevision(path);
+    await f.store.saveAnnotationsNow(path, live);
+    assert.ok(f.store.getAnnotationsRevision(path) > beforeNow);
+    f.store.libraryTransaction("annotation edit", () => { live[0].text = "changed"; f.store.saveAnnotationsDebounced(path, live); });
+    const beforeUndo = f.store.getAnnotationsRevision(path);
+    assert.equal(f.store.undoLibraryChange(), true);
+    assert.ok(f.store.getAnnotationsRevision(path) > beforeUndo);
+    const beforeRedo = f.store.getAnnotationsRevision(path);
+    assert.equal(f.store.redoLibraryChange(), true);
+    assert.ok(f.store.getAnnotationsRevision(path) > beforeRedo);
+    const oldRevision = f.store.getAnnotationsRevision(path), targetRevision = f.store.getAnnotationsRevision(moved);
+    await f.store.renameDocument(path, moved);
+    assert.ok(f.store.getAnnotationsRevision(path) > oldRevision);
+    assert.ok(f.store.getAnnotationsRevision(moved) > targetRevision);
+    await f.store.flush();
+  });
   await check("document fingerprints are additive and refresh without changing stable document identity", async () => {
     const f = await fresh(), record = f.store.registerDocument("doc.pdf");
     assert.ok(record);

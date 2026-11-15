@@ -25,15 +25,15 @@ export function openPdfPageEditor(reader: ReaderView): () => void {
   };
   photosInput.addEventListener("change",()=>{const files=[...photosInput.files??[]];photosInput.value="";void insertImages(files);});
   const openCameraCapture = (capture: (file: File) => void) => {
-    const overlay = el("div", { class: "ms-pdf-camera-bg", role: "dialog", "aria-label": "Camera Capture" });
+    const overlay = el("div", { class: "ms-pdf-camera-bg", role: "dialog", "aria-label": "拍照" });
     const dialog = el("div", { class: "ms-pdf-camera-dialog" });
-    const title = el("div", { class: "ms-pdf-camera-title", text: "Take Photo" });
+    const title = el("div", { class: "ms-pdf-camera-title", text: "拍照" });
     const video = el("video", { class: "ms-pdf-camera-video" });
     video.autoplay = true; video.muted = true; video.playsInline = true;
-    const deviceSelect = el("select", { class: "ms-pdf-camera-device", "aria-label": "Camera Device" });
-    const status = el("div", { class: "ms-pdf-camera-status", text: "Starting camera..." });
-    const cancel = el("button", { text: "Cancel", "aria-label": "Cancel Camera" });
-    const shot = el("button", { text: "Capture", "aria-label": "Capture Page", class: "mod-cta" });
+    const deviceSelect = el("select", { class: "ms-pdf-camera-device", "aria-label": "相机设备" });
+    const status = el("div", { class: "ms-pdf-camera-status", text: "正在启动相机…" });
+    const cancel = el("button", { text: "取消", "aria-label": "取消拍照" });
+    const shot = el("button", { text: "拍摄", "aria-label": "拍摄页面", class: "mod-cta" });
     shot.disabled = true;
     const actions = el("div", { class: "ms-pdf-camera-actions" }, [cancel, shot]);
     dialog.append(title, video, deviceSelect, status, actions);
@@ -65,7 +65,7 @@ export function openPdfPageEditor(reader: ReaderView): () => void {
         const previous = deviceSelect.value;
         while (deviceSelect.firstChild) deviceSelect.removeChild(deviceSelect.firstChild);
         for (const [index, device] of inputs.entries()) {
-          deviceSelect.append(el("option", { value: device.deviceId, text: device.label || `Camera ${index + 1}` }));
+          deviceSelect.append(el("option", { value: device.deviceId, text: device.label || `相机 ${index + 1}` }));
         }
         const current = stream?.getVideoTracks()[0]?.getSettings().deviceId || "";
         if (inputs.some(device => device.deviceId === previous)) deviceSelect.value = previous;
@@ -75,9 +75,9 @@ export function openPdfPageEditor(reader: ReaderView): () => void {
     const start = async () => {
       const revision = ++cameraRevision;
       shot.disabled = true;
-      status.textContent = "Requesting camera access...";
+      status.textContent = "正在请求相机权限…";
       if (!navigator.mediaDevices?.getUserMedia) {
-        fail("This device does not expose a camera to Obsidian.");
+        fail("此设备未向 Obsidian 提供相机。");
         return;
       }
       stream?.getTracks().forEach(track => track.stop());
@@ -92,13 +92,13 @@ export function openPdfPageEditor(reader: ReaderView): () => void {
         stream = started;
         video.srcObject = stream;
         void listDevices(revision);
-        status.textContent = "Starting camera preview...";
+        status.textContent = "正在启动相机预览…";
         await video.play();
         if (done || revision !== cameraRevision) return;
         shot.disabled = false;
-        status.textContent = "Camera ready";
+        status.textContent = "相机已就绪";
       } catch (error) {
-        if (!done && revision === cameraRevision) fail("Unable to open camera: " + (error instanceof Error ? error.message : String(error)));
+        if (!done && revision === cameraRevision) fail("无法打开相机：" + (error instanceof Error ? error.message : String(error)));
       }
     };
     document.addEventListener("keydown", key);
@@ -108,7 +108,7 @@ export function openPdfPageEditor(reader: ReaderView): () => void {
     shot.addEventListener("click", () => {
       if (done || shot.disabled || !stream?.getVideoTracks().some(track => track.readyState === "live")) return;
       if (!video.videoWidth || !video.videoHeight) {
-        status.textContent = "Camera is not ready yet.";
+        status.textContent = "相机尚未就绪。";
         return;
       }
       const canvas = document.createElement("canvas");
@@ -116,7 +116,7 @@ export function openPdfPageEditor(reader: ReaderView): () => void {
       canvas.height = video.videoHeight;
       const context = canvas.getContext("2d");
       if (!context) {
-        fail("Unable to capture the camera frame.");
+        fail("无法拍摄相机画面。");
         return;
       }
       context.drawImage(video, 0, 0);
@@ -124,7 +124,7 @@ export function openPdfPageEditor(reader: ReaderView): () => void {
         canvas.width = 0; canvas.height = 0;
         if (done) return;
         if (!blob) {
-          fail("Unable to encode the captured photo.");
+          fail("无法编码拍摄的照片。");
           return;
         }
         const file = new File([blob], `camera-page-${Date.now()}.png`, { type: "image/png" });
@@ -174,11 +174,11 @@ export function openPdfPageEditor(reader: ReaderView): () => void {
           if (label !== "Add Page") { void run(); return; }
           closeMenu();
           const menu = el("div", {class:"ms-pdf-add-page-menu",role:"menu","aria-label":"Add Page"});
-          const blank = el("button", {text:"Add Blank Page","aria-label":"Add Blank Page",role:"menuitem"});
-          const title = el("div",{class:"ms-pdf-add-page-title",text:"Select Page Type"});
-          const files = el("button",{text:"Add Page From Files","aria-label":"Add Page From Files",role:"menuitem"});
+          const blank = el("button", {text:"添加空白页","aria-label":"添加空白页",role:"menuitem"});
+          const title = el("div",{class:"ms-pdf-add-page-title",text:"选择页面类型"});
+          const files = el("button",{text:"从文件添加页面","aria-label":"从文件添加页面",role:"menuitem"});
           files.addEventListener("click",next=>{next.stopPropagation();closeMenu();importAfterPage=page;input.click();});
-          const photos = el("button",{text:"Add Page From Photos","aria-label":"Add Page From Photos",role:"menuitem"});
+          const photos = el("button",{text:"从相册添加页面","aria-label":"从相册添加页面",role:"menuitem"});
           photos.addEventListener("click",next=>{
             next.stopPropagation(); closeMenu(); importAfterPage=page;
             if (!hasNativePhotoPicker(reader.app)) { photosInput.click(); return; }
@@ -194,7 +194,7 @@ export function openPdfPageEditor(reader: ReaderView): () => void {
             } catch (error) { if (!closed) new Notice(error instanceof Error ? error.message : String(error)); }
             finally { nativeImageRequest = null; busy = false; render(); }
           };
-          const cameraButton = el("button",{text:"Add Page From Camera","aria-label":"Add Page From Camera",role:"menuitem"});
+          const cameraButton = el("button",{text:"拍照添加页面","aria-label":"拍照添加页面",role:"menuitem"});
           cameraButton.addEventListener("click",next=>{
             next.stopPropagation();closeMenu();importAfterPage=page;
             if (hasNativePhotoPicker(reader.app)) { void runNativeImages(pickNativeCamera); return; }
@@ -226,14 +226,14 @@ export function openPdfPageEditor(reader: ReaderView): () => void {
       action("Remove Page", () => reader.removePdfPage(page), page === 1);
       action("Up", () => reader.movePdfPage(page, page - 1), page === 1);
       action("Down", () => reader.movePdfPage(page, page + 1), page === reader.getPageNumbers().length);
-      const rotate = el("button", { class: "ms-pdf-page-rotate", "aria-label": "Rotate Page", title: "Rotate Page" }); setIcon(rotate, "rotate-cw");
+      const rotate = el("button", { class: "ms-pdf-page-rotate", "aria-label": "旋转页面", title: "旋转页面" }); setIcon(rotate, "rotate-cw");
       rotate.addEventListener("click", async event => {
         event.stopPropagation(); if (busy || closed) return; busy = true;
         scroll.querySelectorAll<HTMLButtonElement>(".ms-pdf-page-editor button").forEach(node => node.disabled = true);
         try { await reader.rotatePdfPage(page); } catch (error) { new Notice(String(error)); } finally { busy = false; render(); }
       });
       sheet.append(rotate);
-      sheet.append(actions, el("div", { class: "ms-pdf-page-edit-hint", text: "Double click on the blank area to exit editing" }));
+      sheet.append(actions, el("div", { class: "ms-pdf-page-edit-hint", text: "双击空白区域退出编辑" }));
       record.wrapper.querySelector(".ms-pdf-page-editor")?.remove(); record.wrapper.append(sheet);
     }
   };

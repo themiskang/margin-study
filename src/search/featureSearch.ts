@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖 Obsidian 平台、插件命令、设置页和界面组件。
+ * [OUTPUT]: 提供功能索引、搜索、执行、设置定位和搜索面板。
+ * [POS]: 连接本地功能搜索与插件命令及设置入口。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import type MarginStudyPlugin from "../main";
 import { Notice, Platform } from "obsidian";
 import { el, clear } from "../utils/dom";
@@ -74,6 +80,8 @@ export const FEATURE_INDEX: FeatureEntry[] = [
     setting("settings.local-cli-token", "本地令牌", "复制或重新生成本地连接令牌", ["本地令牌", "token"]),
     setting("settings.local-cli-write", "允许本地写入", "允许本机持令牌的程序整理卡片", ["本地写入", "整理"]),
   ] : []),
+  setting("settings.hide-host-tab-bar", "隐藏宿主标签栏", "学习工作区激活时隐藏 Obsidian 标签栏", ["宿主标签", "标签栏", "hideHostTabBar"]),
+  setting("settings.ink-prediction", "手写笔迹预测", "根据手写速度预测一帧笔迹，松笔后只保留真实笔迹", ["手写预测", "笔迹预测", "ink prediction", "handwriting prediction", "inkPrediction"]),
   setting("settings.colors", "标注颜色", "编辑可选的标注颜色列表", ["标注颜色", "颜色", "colors"]),
   setting("settings.default-color", "默认标注颜色", "选择新标注使用的默认颜色", ["默认颜色", "默认标注颜色"]),
   setting("settings.scale", "默认缩放", "调整新打开 PDF 的默认缩放比例", ["缩放", "scale", "默认缩放"]),
@@ -88,6 +96,7 @@ export const FEATURE_INDEX: FeatureEntry[] = [
   setting("settings.tag-colors", "标签配色", "为标签指定展示颜色", ["标签配色", "标签颜色"]),
   setting("settings.auto-backup", "每日自动备份", "每天首次启动时自动备份学习库", ["自动备份", "每日备份"]),
   setting("settings.replace-native-reader", "用 MarginStudy 替代原生阅读器", "控制 PDF、Word、EPUB、HTML 是否由 MarginStudy 接管打开", ["替代原生阅读器", "接管", "replace"]),
+  setting("settings.diagnostic-no-persist", "停用持久化（仅诊断用）", "诊断时暂停主数据和标注写入", ["诊断", "停用持久化"]),
 ];
 
 /** 按关键词/标题/说明/ID 的 AND 检索；空查询返回全部条目（作为本地操作指引浏览）。 */
@@ -117,6 +126,13 @@ export function queryFeatures(query: string): FeatureEntry[] {
  * 执行一个显式功能 ID 对应的唯一动作。
  * 无效或旧功能 ID（命令注册表中不存在）返回 false 且不执行任何动作。
  */
+export function favoriteFeatureIds(settings?: { favoriteFeatures?: string[] }): string[] {
+  const configured = settings?.favoriteFeatures;
+  const candidates = configured === undefined ? ["open-cards", "start-review", "open-research-browser"] : configured;
+  const valid = new Set(FEATURE_INDEX.map(entry => entry.id));
+  return [...new Set(candidates.filter(id => valid.has(id)))];
+}
+
 export function runFeature(plugin: MarginStudyPlugin, featureId: string): boolean {
   const commands = (plugin.app as unknown as { commands?: { commands?: Record<string, CommandLike> } })?.commands?.commands;
   const cmd = commands?.[`${plugin.manifest.id}:${featureId}`];

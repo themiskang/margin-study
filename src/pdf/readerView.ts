@@ -257,6 +257,21 @@ export class ReaderView extends ItemView {
   }
   renderDisplayThumbnail(number:number,canvas:HTMLCanvasElement):Promise<void>{return renderExtendThumbnail(this,number,canvas);}
   getExtendNotes(): PdfExtendNote[] { return this.extendNotes.notes(); }
+
+  /** 页内翻译：AI 生成译文后作为可编辑文字框插入当前页；一次历史，撤销只移除本次译文。 */
+  async translateSelectionIntoPage(input: { text: string; language: string; sourceAnnId?: string; signal?: AbortSignal }): Promise<{ noteId: string; boxId: string }> {
+    if (!this.getPdfPageEdits()) throw new Error("页内翻译只支持 PDF 文档");
+    const page = this.getCurrentPage(), path = this.getFilePath();
+    const { translateSelection } = await import("../ai/translate");
+    const result = await translateSelection(this.plugin, { text: input.text, language: input.language, signal: input.signal });
+    if (this.destroyed || this.getFilePath() !== path) throw new Error("文档已切换，译文未写入");
+    const current = this.getCurrentPage();
+    const target = page === current ? page : current;
+    return this.extendNotes.addTranslation(target, { x: .06, y: .06, w: .88, h: .18 }, result.text, {
+      sourceText: input.text.trim(), language: input.language.trim(), service: result.service, model: result.model,
+      sourceAnnId: input.sourceAnnId, createdAt: new Date().toISOString(),
+    });
+  }
   setExtendMode(mode: PdfExtendMode): Promise<void> { return this.extendNotes.setMode(mode); }
   createExtend(page: number, anchor: { x: number; y: number }): Promise<string> { return this.extendNotes.create(page, anchor); }
   createLinkedExtend(page: number, anchor: {x:number;y:number}, sourceAnnId: string): Promise<string> { return this.extendNotes.create(page, anchor, sourceAnnId); }
@@ -623,6 +638,7 @@ export class ReaderView extends ItemView {
 
   async onOpen(): Promise<void> {
     this.destroyed = false;
+    window.addEventListener("marginstudy-reading-layout", this.onGlobalReadingLayout);
     this.stopCropSync?.(); this.stopCropSync = this.plugin.store.subscribe(() => { this.syncPdfPageEdits(); this.syncPageCrop(); if (this.doc && this.loadedPath) void this.extendNotes.sync(); });
     this.register(this.plugin.store.subscribeDocumentRename?.((oldPath, newPath) => {
       if (this.destroyed) return;
@@ -720,6 +736,7 @@ export class ReaderView extends ItemView {
   }
 
   async onClose(): Promise<void> {
+    window.removeEventListener("marginstudy-reading-layout", this.onGlobalReadingLayout);
     await this.finishExtendEditing(); this.extendNotes.reset();
     this.scrollEl?.removeEventListener("click", this.extendNotes.onPlace, true);
     this.scrollEl?.removeEventListener("pointerdown", this.extendNotes.onRegionStart, true);
@@ -1044,6 +1061,16 @@ export class ReaderView extends ItemView {
   }
 
   getPageLayout(): { layout: PdfLayout; continuous: boolean } { return { layout: this.layout, continuous: this.continuous }; }
+  private onGlobalReadingLayout = (event: Event): void => {
+    if ((event as CustomEvent).detail !== this.plugin.store || !this.scrollEl) return;
+    const continuous = this.plugin.store.settings.readingMode !== "paged";
+    const fitVertical = continuous && !this.continuous;
+    this.continuous = continuous;
+    this.layout = !continuous && this.plugin.store.settings.doublePage ? "spread" : "single";
+    this.reflowPages(this.currentPage);
+    if (this.doc) void this.renderPageUnit(this.currentPage);
+    if (this.doc && fitVertical) void this.fitWidth();
+  };
   getCurrentPage(): number { return this.currentPage; }
   async restoreExactReadingPosition(page: number, top: number, left: number): Promise<boolean> {
     if (!await this.navigateToReference(page, [], undefined, false)) return false;
@@ -1060,10 +1087,20 @@ export class ReaderView extends ItemView {
   async setPageLayout(layout: PdfLayout, continuous: boolean): Promise<void> {
     if (layout !== "single" && layout !== "spread") return;
     const location = this.doc ? this.captureLocation() : { page: this.currentPage, pageOffset: 0, left: 0 };
-    this.layout = layout; this.continuous = continuous;
+    const settings = this.plugin.store.settings;
+    const modeChanged = continuous !== this.continuous;
+    if (continuous && !modeChanged && layout === "spread") { new Notice("请先切回翻页阅读"); this.syncLayoutControls(); return; }
+    if (!continuous && (layout === "spread" || !modeChanged) && (layout === "spread") !== !!settings.doublePage) {
+      settings.doublePage = layout === "spread";
+      new Notice("对所有学习集生效");
+    }
+    settings.readingMode = continuous ? "vertical" : "paged";
+    this.layout = !continuous && settings.doublePage ? "spread" : "single"; this.continuous = continuous;
+    this.plugin.store.save();
     this.reflowPages(location.page);
-    if (this.loadedPath) updateNotebookMeta(this.plugin, this.loadedPath, { pdfLayout: layout, pdfContinuous: continuous });
+    window.dispatchEvent(new CustomEvent("marginstudy-reading-layout", { detail: this.plugin.store }));
     if (this.doc) await this.restoreHistoryLocation(location, false);
+    if (this.doc && continuous && modeChanged) await this.fitWidth();
     this.app.workspace.requestSaveLayout();
   }
 
@@ -1108,7 +1145,7 @@ export class ReaderView extends ItemView {
     await Promise.all(this.unitPages(page).map((number) => this.renderPage(number)));
   }
   private syncLayoutControls(): void {
-    if (this.layoutSelect) this.layoutSelect.value = this.layout;
+    if (this.layoutSelect) { this.layoutSelect.value = this.layout; this.layoutSelect.disabled = this.continuous; this.layoutSelect.title = this.continuous ? "请先切回翻页阅读" : "页面布局"; }
     if (this.continuousSelect) this.continuousSelect.value = this.continuous ? "continuous" : "paged";
   }
   private stepPage(direction: 1 | -1): void {
@@ -1143,8 +1180,8 @@ export class ReaderView extends ItemView {
     if (saved.pdfPageId && this.doc instanceof EditedPdfDocument && saved.position) {
       const index = this.doc.edits.pages.findIndex(entry => entry.id === saved.pdfPageId); if (index >= 0) saved.position.page = index + 1;
     }
-    this.layout = saved.layout ?? this.layout;
-    this.continuous = saved.continuous ?? this.continuous;
+    this.continuous = this.plugin.store.settings.readingMode !== "paged";
+    this.layout = !this.continuous && this.plugin.store.settings.doublePage ? "spread" : "single";
     if (saved.scale !== undefined && saved.scale !== this.scale) this.applyScale(saved.scale,false);
     this.reflowPages(Math.min(this.pages.size, saved.position?.page ?? 1));
     if (saved.position) await this.restoreHistoryLocation({ ...saved.position, page: Math.min(this.pages.size, saved.position.page) }, false);
@@ -1361,6 +1398,10 @@ export class ReaderView extends ItemView {
     this.lastLocation = { page, pageOffset: (top - bounds.top) / Math.max(1, bounds.height), left: this.scrollEl.scrollLeft };
     return { ...this.lastLocation };
   }
+  /** Delete one annotation by id through the same path as the annotation menu. */
+  deleteAnnotationById(id: string): boolean { return this.annController.deleteAnnotation(id); }
+  canGoBack(): boolean { return this.navigationHistory.canBack; }
+  canGoForward(): boolean { return this.navigationHistory.canForward; }
   async goBack(): Promise<void> { const target = this.navigationHistory.back(this.captureLocation()); this.updateHistoryButtons(); if (target) await this.restoreHistoryLocation(target); }
   async goForward(): Promise<void> { const target = this.navigationHistory.forward(this.captureLocation()); this.updateHistoryButtons(); if (target) await this.restoreHistoryLocation(target); }
   private async restoreHistoryLocation(target: PdfReadingLocation, smooth = true): Promise<void> {
@@ -1538,12 +1579,13 @@ export class ReaderView extends ItemView {
     this.folded.clear();
     this.bookmarked.clear();
     const meta = notebookMeta(this.plugin.store.getDocMeta(this.filePath ?? ""));
-    this.layout = meta.pdfLayout === "spread" ? "spread" : "single";
-    this.continuous = meta.pdfContinuous !== false;
+    this.continuous = this.plugin.store.settings.readingMode !== "paged";
+    this.layout = !this.continuous && this.plugin.store.settings.doublePage ? "spread" : "single";
     (meta.foldedPages ?? []).forEach((p) => this.folded.add(p));
     (meta.bookmarks ?? []).forEach((p) => this.bookmarked.add(p));
     for (let i = 1; i <= this.doc.numPages; i++) {
       const wrapper = el("div", { class: "ms-page", "data-page": String(i) });
+      if (Platform.isMobile) wrapper.classList.add("ms-mobile-page");
       const entry = this.doc instanceof EditedPdfDocument ? this.doc.edits.pages[i - 1] : undefined;
       const original = entry && !entry.sourcePage ? {w:entry.width!,h:entry.height!} : estimatedSize;
       this.originalPageSizes.set(i, original);
@@ -1649,7 +1691,9 @@ export class ReaderView extends ItemView {
         const viewport = extendProjection(baseViewport, this.extendNotes.gaps(pageNum, baseViewport, scale), regionFoldBands(this,pageNum,baseViewport));
         rec.baseViewport = baseViewport; rec.viewport = viewport;
         this.pageSizes.set(pageNum, { w: viewport.width / scale, h: viewport.height / scale });
-        const dpr = Math.min(window.devicePixelRatio || 1, Math.sqrt(MAX_PAGE_PIXELS / Math.max(1, viewport.width * viewport.height)));
+        const mobileLowRes = Platform.isMobile && this.plugin.store.settings.mobileLowRes !== false;
+        const maxPagePixels = mobileLowRes ? 4_000_000 : MAX_PAGE_PIXELS;
+        const dpr = Math.min(window.devicePixelRatio || 1, mobileLowRes ? 1.25 : Infinity, Math.sqrt(maxPagePixels / Math.max(1, viewport.width * viewport.height)));
         rec.wrapper.style.width = `${Math.floor(viewport.width)}px`;
         rec.wrapper.style.height = `${Math.floor(viewport.height)}px`;
         rec.canvas.style.width = `${Math.floor(viewport.width)}px`;
@@ -1847,7 +1891,7 @@ export class ReaderView extends ItemView {
     void this.finishExtendEditing().then(() => this.extendNotes.sync());
     if (!this.doc || !this.loadedPath) return; const meta = notebookMeta(this.plugin.store.getDocMeta(this.loadedPath));
     this.folded = new Set(meta.foldedPages ?? []); this.bookmarked = new Set(meta.bookmarks ?? []);
-    this.layout = meta.pdfLayout === "spread" ? "spread" : "single"; this.continuous = meta.pdfContinuous !== false;
+    this.continuous = this.plugin.store.settings.readingMode !== "paged"; this.layout = !this.continuous && this.plugin.store.settings.doublePage ? "spread" : "single";
     for (const [number, rec] of this.pages) {
       rec.wrapper.classList.toggle("ms-page-folded", this.folded.has(number)); rec.wrapper.classList.toggle("ms-page-bookmarked", this.bookmarked.has(number));
       rec.wrapper.querySelector(".ms-page-btn.is-bm")?.classList.toggle("is-on", this.bookmarked.has(number));

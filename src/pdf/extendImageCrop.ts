@@ -13,7 +13,7 @@ export function openExtendImageCrop(image: NoteImage, paper: HTMLElement, commit
   const previousFocus=document.activeElement as HTMLElement|null;
   const {bg,modal,close}=createModal("",()=>{if(closed)return;closed=true;moving?.();observer.disconnect();pixels.width=pixels.height=0;if(previousFocus?.isConnected)previousFocus.focus({preventScroll:true});});
   bg.classList.add("ms-image-crop-bg");modal.classList.add("ms-image-crop-modal");modal.setAttribute("role","dialog");modal.setAttribute("aria-modal","true");modal.setAttribute("aria-label","图片裁剪");
-  const header=el("header"),cancel=el("button",{text:"Cancel","aria-label":"Cancel"}),done=el("button",{text:"Done","aria-label":"Done"});header.append(cancel,done);
+  const header=el("header"),cancel=el("button",{text:"取消","aria-label":"取消"}),done=el("button",{text:"完成","aria-label":"完成"});header.append(cancel,done);
   const controls=el("div",{class:"ms-image-crop-controls",role:"toolbar","aria-label":"裁剪操作"});
   const action=(label:string,icon:string,run:()=>void)=>{const button=el("button",{"aria-label":label,title:label});setIcon(button,icon);button.addEventListener("click",()=>{if(ready&&!busy){moving?.();run();paint();}});controls.append(button);return button;};
   const stage=el("div",{class:"ms-image-crop-stage"}),preview=el("canvas",{"aria-label":"原始图片预览"}) as HTMLCanvasElement,pixels=document.createElement("canvas"),selection=el("div",{class:"ms-image-crop-selection"});stage.append(preview,selection);modal.replaceChildren(header,controls,stage);

@@ -8,7 +8,7 @@ import { el } from "../utils/dom";
 import { createModal } from "../utils/modal";
 import { uid } from "../utils/id";
 
-type ImportHost = Pick<MarginStudyPlugin, "app" | "store" | "openDocument">;
+export type ImportHost = Pick<MarginStudyPlugin, "app" | "store" | "openDocument">;
 export interface WebImportInput {
   url?: string;
   /** Supplied markup takes precedence over fetching the URL. The URL still records its origin. */

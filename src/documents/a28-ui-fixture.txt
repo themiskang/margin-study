@@ -37,7 +37,7 @@ try {
   openSyncStatusPanel(store, { findSource: () => { sourceCalls++; }, resolveConflict: () => { conflictCalls++; }, backupPaths: () => [], notify: text => notices.push(text) });
   await check("all visible status rows carry real event IDs and honest cloud text", () => {
     const ids = new Set(store.getLocalEvents().map(event => event.id)), rows = [...document.querySelectorAll<HTMLElement>("[data-status]")];
-    assert(rows.length === 6, "status row count");
+    assert(rows.length === 7, "status row count");
     for (const row of rows) {
       const evidence = row.dataset.evidenceEventIds?.split(",") ?? [];
       assert(evidence.length > 0 && evidence.every(id => ids.has(id)), "status evidence missing: " + row.dataset.status);
@@ -47,9 +47,11 @@ try {
   });
   await check("missing, deletion, conflict and save actions are distinct", () => {
     const modal = document.querySelector(".ms-sync-status")!;
-    assert(modal.querySelector('[data-status="missing"]')?.textContent?.includes("文件缺失"), "missing text");
+    assert(modal.querySelector('[data-status="missing"]')?.textContent?.includes("本机未找到"), "missing text");
+    assert(modal.querySelector('[data-status="pending-upload"]')?.textContent?.includes("等待上传"), "pending-upload text");
+    assert(modal.querySelector('[data-status="missing"]')?.textContent?.includes("iCloud"), "missing row does not distinguish cloud availability");
     assert(modal.querySelector('[data-status="deleted"]')?.textContent?.includes("对象已删除"), "deleted text");
-    click(modal, "查找或重定位来源文件"); click(modal, "处理冲突");
+    click(modal, "重新链接来源文件"); click(modal, "处理冲突");
     assert(sourceCalls === 1 && conflictCalls === 1, "wrong status action");
     assert(!![...modal.querySelectorAll("button")].find(item => item.textContent === "立即保存"), "save action missing");
   });

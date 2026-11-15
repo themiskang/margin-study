@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖复习数据、卡片内容和 Obsidian 插件服务。
+ * [OUTPUT]: 提供复习卡组浏览与操作界面。
+ * [POS]: 连接卡组管理、卡片预览和复习流程。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import type MarginStudyPlugin from "../main";
 import type { Card } from "../types";
 import { Notice } from "obsidian";
@@ -205,7 +211,7 @@ export async function openReviewDeckBrowser(plugin: MarginStudyPlugin, deckId: s
       stage.content.append(page);
     } else { stage.edit.disabled = true; stage.favorite.disabled = true; stage.content.append(el("p", { class: "ms-muted", text: dueOnly ? "当前没有到期卡片。取消「仅到期」可浏览卡组中的全部卡片。" : "卡组还没有可浏览的卡片。请从卡片盒或脑图显式加入。" })); }
     const actions = stage.footer; actions.classList.add("ms-review-browser-actions");
-    const previous = el("button", { type: "button", class: "ms-native-review-icon ms-native-review-previous", text: "Prev", "aria-label": "上一张" }), next = el("button", { type: "button", class: "ms-native-review-icon ms-native-review-next", text: "Next", "aria-label": "下一张" });
+    const previous = el("button", { type: "button", class: "ms-native-review-icon ms-native-review-previous", text: "上一张", "aria-label": "上一张" }), next = el("button", { type: "button", class: "ms-native-review-icon ms-native-review-next", text: "下一张", "aria-label": "下一张" });
     previous.disabled = index === 0; next.disabled = index >= cards.length - 1;
     previous.addEventListener("click", () => { index--; void draw(); }); next.addEventListener("click", () => { index++; void draw(); });
     const score = reviewIconButton(`进入问答评分 · ${dueQuestions.length} 题`, "aq", "primary ms-native-review-mode");

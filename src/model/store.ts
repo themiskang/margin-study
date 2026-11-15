@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖 Obsidian 存储适配器、模型和标注组件。
+ * [OUTPUT]: 提供 Store 和文档提交错误类型。
+ * [POS]: 串行协调主数据、侧车和恢复副本的持久化。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import { App, TFile, Notice } from "obsidian";
 import { sha256Hex } from "../utils/sha256";
 import {
@@ -14,22 +20,26 @@ import { cardsIncludingMembers, coalesceReviewPending, reviewPendingForData } fr
 import { togglePlainCloze } from "../utils/markdown";
 import { reviewDecksForData } from "./reviewDecks";
 import { validateAnnotationCollection } from "./annotationValidation";
+import { repairDuplicateIds } from "./duplicateIds";
 import { mindmapHasHandwriting, normalizeMindmapHandwriting } from "../mindmap/handwritingContracts";
 import { clampHandwritingWidth } from "../annot/handwritingPresets";
 import { builtinSceneTemplates, defaultStudyScene, installableSceneTemplateIds, isSupportedSceneTemplate } from "../workspace/scenes";
+import { exportMn5SceneTemplate, importMn5SceneTemplate } from "../workspace/mn5SceneTemplates";
 import { syncCardColor } from "./cardColors";
 import { editedExcerptBlocks } from "../cards/excerptBlocks";
 import { applyMediaReplacements, externalizeMedia, hasInlineMedia } from "./mediaMigration";
 import { ProtectedObject, ProtectionSnapshot, ProtectionSnapshotInfo, protectedCollections, protectedObjects, protectedAnnotations, signProtectionSnapshot, validateProtectionSnapshot } from "./localProtection";
 import { isStudyDocumentPath } from "../documents/formats";
+import { measurePenCommit, perfEnabledForPen, recordPenPersistence } from "../annot/pen";
 
 interface StoreHost {
   app: App;
+  manifest?: { dir?: string };
   loadData(): Promise<any>;
   saveData(data: any): Promise<void>;
 }
 type LibrarySnapshot = { data: PluginData; annotations: [string, Annotation[]][] };
-type HistoryEntry = { label: string; before: LibrarySnapshot; after: LibrarySnapshot } | { label: string; nodeMove: { id: string; before: {x:number;y:number}; after: {x:number;y:number} } };
+type HistoryEntry = { label: string; before: LibrarySnapshot; after: LibrarySnapshot } | { label: string; nodeMove: { id: string; before: {x:number;y:number}; after: {x:number;y:number} } } | { label: string; readOnly: true };
 export class DocumentCommitRollbackError extends Error {
   constructor(error: unknown, rollbackError: unknown) {
     super(`文档操作失败：${String(error)}；内存已回滚，但恢复后的数据尚未保存：${String(rollbackError)}`);
@@ -39,8 +49,69 @@ export class DocumentCommitRollbackError extends Error {
 type BackupFile = { path: string; storedPath: string; sha256: string; bytes: number };
 type BackupManifest = { format: "margin-study-backup"; version: 2; createdAt: string; dataSha256: string; files: BackupFile[]; missingFiles?: string[] };
 const clone = <T>(value: T): T => value == null ? value : JSON.parse(JSON.stringify(value));
+const cloneSnapshot = <T>(value: T): T => typeof structuredClone === "function" ? structuredClone(value) : clone(value);
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 const SAVE_DEBOUNCE_MS = 800;
+const INPUT_QUIET_MS = 1200;
+const SERIALIZE_CHUNK = 64 * 1024;
+async function serializeData(value: unknown, onYield?: () => Promise<void>): Promise<string> {
+  const parts: string[] = [];
+  let pending = 0;
+  const ancestors = new Set<object>();
+  function* visit(input: any, key: string, inArray: boolean): Generator<string> {
+    if (input && typeof input === "object" && typeof input.toJSON === "function") input = input.toJSON(key);
+    if (typeof input === "string") {
+      yield '"';
+      for (let start = 0; start < input.length;) {
+        let end = Math.min(start + SERIALIZE_CHUNK / 4, input.length);
+        if (end < input.length && input.charCodeAt(end - 1) >= 0xd800 && input.charCodeAt(end - 1) <= 0xdbff && input.charCodeAt(end) >= 0xdc00 && input.charCodeAt(end) <= 0xdfff) end--;
+        yield JSON.stringify(input.slice(start, end)).slice(1, -1);
+        start = end;
+      }
+      yield '"';
+      return;
+    }
+    if (!input || typeof input !== "object") {
+      const result = JSON.stringify(input);
+      yield result === undefined ? (inArray ? "null" : "") : result;
+      return;
+    }
+    if (ancestors.has(input)) throw new TypeError("Converting circular structure to JSON");
+    ancestors.add(input);
+    if (Array.isArray(input)) {
+      yield "[";
+      for (let index = 0; index < input.length; index++) {
+        if (index) yield ",";
+        yield* visit(input[index], String(index), true);
+      }
+      yield "]";
+    } else {
+      yield "{";
+      let first = true;
+      for (const property of Object.keys(input)) {
+        const item = input[property];
+        if (item === undefined || typeof item === "function" || typeof item === "symbol") continue;
+        if (!first) yield ",";
+        first = false;
+        yield JSON.stringify(property); yield ":";
+        yield* visit(item, property, false);
+      }
+      yield "}";
+    }
+    ancestors.delete(input);
+  }
+  for (const part of visit(value, "", false)) {
+    parts.push(part);
+    pending += part.length * 2;
+    if (pending >= SERIALIZE_CHUNK) {
+      pending = 0;
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+      if (onYield) await onYield();
+    }
+  }
+  return parts.join("");
+}
+const HISTORY_LIMIT_BYTES = 32 * 1024 * 1024;
 const sha = (data: string | ArrayBuffer): string => sha256Hex(data);
 function normalizeHandwritingPresets(value: unknown): HandwritingPresetSpec[] {
   if (!Array.isArray(value)) return DEFAULT_HANDWRITING_PRESETS.map(preset => ({ ...preset }));
@@ -112,8 +183,12 @@ export class Store {
   private mainDirty = false;
   private mainVersion = 0;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  private saveIdle: number | null = null;
+  private lastInputAt = 0;
+  private activeInputs = 0;
   private queue: Promise<void> = Promise.resolve();
   private annCache = new Map<string, Annotation[]>();
+  private annotationRevisions = new Map<string, number>();
   private annLoads = new Map<string, Promise<Annotation[]>>();
   private annBase = new Map<string, string | null>();
   private annDirty = new Map<string, number>();
@@ -130,6 +205,7 @@ export class Store {
   private notificationPending = false;
   private history: HistoryEntry[] = [];
   private future: HistoryEntry[] = [];
+  private historySizes = new WeakMap<HistoryEntry, number>();
   private libraryHistoryRevision = 0;
   private transactionDepth = 0;
   private documentCommitPending = false;
@@ -254,8 +330,8 @@ export class Store {
     this.repairGraph();
   }
 
-  private data(): PluginData {
-    return clone({ schemaVersion: 2, revision: this.revision, writerId: this.writerId,
+  private data(copy = true): PluginData {
+    const data: PluginData = { schemaVersion: 2, revision: this.revision, writerId: this.writerId,
       settings: this.settings, cards: this.cards, nodes: this.nodes, edges: this.edges,
       srs: this.srs, docMeta: this.docMeta, reviewHistory: this.reviewHistory,
       reviewLogs: this.reviewLogs, practiceAttempts: this.practiceAttempts, reviewPending: this.reviewPending, cardTemplates: this.cardTemplates,
@@ -266,7 +342,8 @@ export class Store {
       documents: this.documents,
       workspaceState: this.workspaceState,
       localEvents: this.localEvents,
-    });
+    };
+    return copy ? clone(data) : data;
   }
 
   private recordLocalEvent(kind: LocalEventKind, objectIds: string[], detail: string): LocalEvent {
@@ -310,9 +387,12 @@ export class Store {
     const deleted = latest(event => event.kind === "object-deleted"), currentIds = new Set(protectedCollections.flatMap(collection => ((this[collection] ?? []) as { id: string }[]).map(item => item.id)));
     const deletedObjects = deleted?.objectIds.filter(id => !currentIds.has(id)) ?? [];
     const activity = this.localEvents.slice(-10).reverse();
+    const pendingEvent = latest(event => event.kind === "pending");
+    const pendingCount = this.annDirty.size + (this.mainDirty ? 1 : 0);
     return [
       { key: "local", text: pending ? "本地待保存" : local ? "本地已保存" : "本地已读取（尚无本次保存记录）", evidenceEventIds: evidence(local), ...(pending ? { action: "save-local" as const } : {}) },
-      { key: "missing", text: missingDocs.length ? `文件缺失：${missingDocs.length} 个来源文件` : "文件缺失：无已登记的缺失来源", evidenceEventIds: missingEvidence.length ? missingEvidence : evidence(), ...(missingDocs.length ? { action: "find-source" as const } : {}) },
+      { key: "pending-upload", text: pending ? `等待上传：${pendingCount} 项本地修改尚未落盘（保存后由宿主同步机制处理）` : "等待上传：无未落盘的本地修改", evidenceEventIds: evidence(pending ? pendingEvent : local) },
+      { key: "missing", text: missingDocs.length ? `本机未找到 ${missingDocs.length} 个来源文件；iCloud 是否仍有副本无法由本插件确认` : "文件缺失：本机未发现缺失来源", evidenceEventIds: missingEvidence.length ? missingEvidence : evidence(), ...(missingDocs.length ? { action: "relink-source" as const } : {}) },
       { key: "conflict", text: conflict ? "冲突：需要处理" : "冲突：当前未发现", evidenceEventIds: evidence(conflictEvent), ...(conflict ? { action: "resolve-conflict" as const } : {}) },
       { key: "deleted", text: deleted ? (deletedObjects.length ? "最近删除记录（对象已删除）：" : "最近删除记录（对象已恢复或重新出现）：") + deleted.detail : "对象已删除：无近期记录", evidenceEventIds: evidence(deleted), ...(deleted ? { action: "show-deletions" as const } : {}) },
       { key: "activity", text: "最近活动：" + (activity[0]?.detail ?? fallback.detail), evidenceEventIds: evidence(activity[0]) },
@@ -377,6 +457,13 @@ export class Store {
     if (index < 0) throw new Error("场景模板不存在");
     this.mutate("编辑场景模板", () => { this.sceneTemplates![index] = clone(template); });
   }
+  /** 导入新场景模板（只新增，不改已有同 ID 模板）。 */
+  addSceneTemplate(template: StudySceneTemplate): void {
+    if (builtinSceneTemplates().some(item => item.id === template.id)) throw new Error("内置模板不可直接导入，请先复制");
+    if (!isSupportedSceneTemplate(template)) throw new Error("模板内容无效");
+    if ((this.sceneTemplates ?? []).some(item => item.id === template.id)) throw new Error("模板已存在");
+    this.mutate("导入场景模板", () => { this.sceneTemplates = [...(this.sceneTemplates ?? []), clone(template)]; });
+  }
   removeSceneTemplate(id: string): void {
     if (builtinSceneTemplates().some(item => item.id === id)) throw new Error("内置模板不可删除");
     if (!(this.sceneTemplates ?? []).some(item => item.id === id)) throw new Error("场景模板不存在");
@@ -411,16 +498,18 @@ export class Store {
       this.save();
     }
   }
-  exportSceneTemplate(templateId: string): string {
+  exportSceneTemplate(templateId: string, format: "margin-study" | "mn5" = "margin-study"): string {
     const template = this.getSceneTemplates().find(item => item.id === templateId);
     if (!template) throw new Error("场景模板不存在");
-    return JSON.stringify({ format: "margin-study-scene-template", version: 1, template }, null, 2);
+    return JSON.stringify(format === "mn5" ? exportMn5SceneTemplate(template) : { format: "margin-study-scene-template", version: 1, template }, null, 2);
   }
   importSceneTemplate(text: string): StudySceneTemplate {
     let document: any;
     try { document = JSON.parse(text); } catch { throw new Error("模板 JSON 无效"); }
-    if (!document || document.format !== "margin-study-scene-template" || document.version !== 1 || !isSupportedSceneTemplate(document.template)) throw new Error("模板版本或内容无效");
-    const template: StudySceneTemplate = clone(document.template);
+    const isMn5 = document?.schema === 3;
+    if (!isMn5 && (!document || document.format !== "margin-study-scene-template" || document.version !== 1 || !isSupportedSceneTemplate(document.template))) throw new Error("模板版本或内容无效");
+    const template: StudySceneTemplate = isMn5 ? importMn5SceneTemplate(document) : clone(document.template);
+    if (isMn5 && this.getSceneTemplates().some(item => item.id === template.id)) template.id = uid("scene-template");
     if (this.getSceneTemplates().some(item => item.id === template.id)) throw new Error("模板 ID 已存在");
     this.mutate("导入场景模板", () => { this.sceneTemplates = [...(this.sceneTemplates ?? []), template]; });
     return clone(template);
@@ -507,9 +596,39 @@ export class Store {
     this.queue = job.then(() => {}, () => {});
     return job;
   }
+  noteInputActivity(activeChange = 0): void {
+    this.lastInputAt = Date.now();
+    this.activeInputs = Math.max(0, this.activeInputs + activeChange);
+    if (this.mainDirty || this.annDirty.size) this.scheduleFlush();
+  }
+  private async waitForInputQuiet(requireQuiet: boolean): Promise<void> {
+    while (this.activeInputs || (requireQuiet && Date.now() - this.lastInputAt < INPUT_QUIET_MS)) {
+      const remaining = INPUT_QUIET_MS - (Date.now() - this.lastInputAt);
+      await new Promise<void>(resolve => setTimeout(resolve, Math.max(50, Math.min(INPUT_QUIET_MS, remaining || 50))));
+    }
+  }
   private scheduleFlush(): void {
     if (this.saveTimer !== null) clearTimeout(this.saveTimer);
-    this.saveTimer = setTimeout(() => { this.saveTimer = null; void this.flush().catch(() => {}); }, SAVE_DEBOUNCE_MS);
+    if (this.saveIdle !== null && typeof cancelIdleCallback === "function") cancelIdleCallback(this.saveIdle);
+    this.saveTimer = null;
+    this.saveIdle = null;
+    if (this.settings.diagnosticNoPersist) return;
+    const attempt = () => {
+      this.saveTimer = null;
+      const remaining = INPUT_QUIET_MS - (Date.now() - this.lastInputAt);
+      if (this.activeInputs || remaining > 0) {
+        this.saveTimer = setTimeout(attempt, remaining > 0 ? remaining : SAVE_DEBOUNCE_MS);
+        return;
+      }
+      if (typeof requestIdleCallback === "function") {
+        this.saveIdle = requestIdleCallback(() => {
+          this.saveIdle = null;
+          if (this.activeInputs || Date.now() - this.lastInputAt < INPUT_QUIET_MS) { this.scheduleFlush(); return; }
+          void this.flush(true).catch(() => {});
+        }, { timeout: SAVE_DEBOUNCE_MS });
+      } else void this.flush(true).catch(() => {});
+    };
+    this.saveTimer = setTimeout(attempt, SAVE_DEBOUNCE_MS);
   }
   save(): void {
     if (!this.mainDirty) this.recordLocalEvent("pending", [], "本地修改等待保存。");
@@ -517,28 +636,36 @@ export class Store {
   }
 
   /** Flush includes edits arriving while an earlier disk write is in progress. */
-  async flush(): Promise<void> {
+  async flush(automatic = false): Promise<void> {
     if (this.saveTimer !== null) { clearTimeout(this.saveTimer); this.saveTimer = null; }
+    if (this.saveIdle !== null && typeof cancelIdleCallback === "function") cancelIdleCallback(this.saveIdle);
+    this.saveIdle = null;
+    if (this.settings.diagnosticNoPersist) return;
     if (this.jobs.size) await Promise.allSettled([...this.jobs]);
     await this.enqueue(async () => {
       try {
         if (this.loadBlocked) throw new Error("主数据未成功读取，写入已锁定");
         // Commit source sidecars first; main cards must never claim an unwritten source.
-        while (this.annDirty.size || this.mainDirty) {
-          for (const path of [...this.annDirty.keys()]) await this.persistAnnotations(path);
-          if (this.mainDirty) await this.persistMain();
+        while (!this.settings.diagnosticNoPersist && (this.annDirty.size || this.mainDirty)) {
+          for (const path of [...this.annDirty.keys()]) {
+            if (this.settings.diagnosticNoPersist) return;
+            await this.persistAnnotations(path, automatic);
+          }
+          if (!this.settings.diagnosticNoPersist && this.mainDirty) await this.persistMain(automatic);
         }
         this.lastSaveError = null;
       } catch (e) { this.report("尚有修改未保存；原文件已保留，请重试保存或处理冲突。", e); throw e; }
     });
   }
 
-  private async persistMain(): Promise<void> {
-    return withSharedCommitLock(this.host.app.vault.adapter, async () => {
+  private async persistMain(automatic = false): Promise<void> {
+    const started = perfEnabledForPen() ? performance.now() : 0;
+    try { return await withSharedCommitLock(this.host.app.vault.adapter, async () => {
     const version = this.mainVersion;
-    const local = this.data();
+    const yieldForInput = () => this.waitForInputQuiet(automatic);
+    const local = JSON.parse(await serializeData(cloneSnapshot(this.data(false)), yieldForInput)) as PluginData;
     const disk = await this.host.loadData();
-    if (!same(disk, this.baseline)) {
+    if (await serializeData(disk, yieldForInput) !== await serializeData(this.baseline, yieldForInput)) {
       if (disk != null) this.validateData(disk);
       // Preserve both versions before stopping. Choosing a winner is an explicit user action.
       const path = await this.writeRecovery("main-conflict", { local, remote: disk, baseline: this.baseline });
@@ -553,16 +680,23 @@ export class Store {
     local.savedAt = new Date().toISOString();
     const savedEvent: LocalEvent = { id: uid("local-event"), at: local.savedAt, kind: "saved", objectIds: [], detail: "本地数据已落盘。" };
     local.localEvents = [...(local.localEvents ?? []), savedEvent];
-    await this.writeRecovery("pending-main", local, true);
-    await this.host.saveData(local);
+    await this.writeRecovery("pending-main", local, true, automatic);
+    if (this.host.manifest?.dir) {
+      const content = await serializeData(local, yieldForInput);
+      await this.waitForInputQuiet(automatic);
+      await this.host.app.vault.adapter.write(this.host.manifest.dir + "/data.json", content);
+    } else {
+      await this.waitForInputQuiet(automatic);
+      await this.host.saveData(local);
+    }
     this.localEvents.push(savedEvent);
     applyMediaReplacements(this, media.replacements);
     if (media.count) console.info(`MarginStudy: 图片外置 ${media.count} 项，${media.bytes} 字节，耗时 ${media.elapsedMs} ms`);
-    this.baseline = clone(local);
+    this.baseline = cloneSnapshot(local);
     this.revision = local.revision;
     if (this.mainVersion === version) this.mainDirty = false;
     this.localStatusChanged();
-    });
+    }); } finally { if (started) recordPenPersistence(started, performance.now()); }
   }
 
   /** Resolve only after the UI presents the retained versions. */
@@ -692,13 +826,15 @@ export class Store {
     let current = "";
     for (const part of safePath(path).split("/")) { current = current ? current + "/" + part : part; if (!await adapter.exists(current)) await adapter.mkdir(current); }
   }
-  private async writeRecovery(label: string, payload: unknown, rolling = false): Promise<string> {
+  private async writeRecovery(label: string, payload: unknown, rolling = false, automatic = false): Promise<string> {
     const dir = "_marginstudy-recovery";
     await this.ensureDir(dir);
     const recoveryWriter = "device-rolling-000001";
     const path = `${dir}/${label}-${rolling ? recoveryWriter : uid("snapshot")}.json`;
     const content = rolling ? { ...(payload as object), writerId: recoveryWriter } : payload;
-    await this.host.app.vault.adapter.write(path, JSON.stringify(content, null, 2));
+    const text = rolling ? await serializeData(content, () => this.waitForInputQuiet(automatic)) : JSON.stringify(content, null, 2);
+    if (rolling) await this.waitForInputQuiet(automatic);
+    await this.host.app.vault.adapter.write(path, text);
     if (rolling) {
       await this.pruneRecoveries(path, label === "pending-main" ? "main" : "annotations").catch(error => console.warn("MarginStudy recovery cleanup failed", error));
     }
@@ -733,6 +869,8 @@ export class Store {
   }
 
   sidecarPath(path: string): string { return path + ".mstudy.json"; }
+  getAnnotationsRevision(path: string): number { return this.annotationRevisions.get(path) ?? 0; }
+  private bumpAnnotationsRevision(path: string): void { this.annotationRevisions.set(path, this.getAnnotationsRevision(path) + 1); }
   async loadAnnotations(path: string): Promise<Annotation[]> {
     if (this.annCache.has(path)) return this.annCache.get(path)!;
     if (this.annLoads.has(path)) return this.annLoads.get(path)!;
@@ -741,10 +879,11 @@ export class Store {
       const sidecar = this.sidecarPath(path);
       const text = await adapter.exists(sidecar) ? await adapter.read(sidecar) : null;
       try {
+        if (this.annCache.has(path)) return this.annCache.get(path)!;
         const obj = text === null ? { annotations: [] } : JSON.parse(text);
         validateAnnotationCollection(obj?.annotations);
         const anns = obj.annotations as Annotation[];
-        this.annCache.set(path, anns); this.annBase.set(path, text); this.annBlocked.delete(path);
+        this.annCache.set(path, anns); this.bumpAnnotationsRevision(path); this.annBase.set(path, text); this.annBlocked.delete(path);
         return anns;
       } catch (e) {
         this.annBlocked.add(path);
@@ -762,17 +901,21 @@ export class Store {
     const cached = this.annCache.get(path);
     if (cached && cached !== anns) cached.splice(0, cached.length, ...anns);
     else if (!cached) this.annCache.set(path, anns);
+    this.bumpAnnotationsRevision(path);
     if (!this.annDirty.size && !this.mainDirty) this.recordLocalEvent("pending", anns.map(annotation => annotation.id), "文档批注等待保存：" + path);
     this.annDirty.set(path, (this.annDirty.get(path) ?? 0) + 1);
     this.annotationsChanged(path);
     this.scheduleFlush();
   }
-  async saveAnnotationsNow(path: string, anns: Annotation[]): Promise<void> { this.saveAnnotationsDebounced(path, anns); await this.flush(); }
-  private async persistAnnotations(path: string): Promise<void> {
+  async saveAnnotationsNow(path: string, anns: Annotation[]): Promise<void> {
+    if (this.annBlocked.has(path)) throw new Error("标注文件已锁定：" + path);
+    this.saveAnnotationsDebounced(path, anns); await this.flush();
+  }
+  private async persistAnnotations(path: string, automatic = false): Promise<void> {
     if (this.annBlocked.has(path)) throw new Error("标注文件已锁定：" + path);
     const version = this.annDirty.get(path);
     if (version == null) return;
-    const anns = clone(this.annCache.get(path) ?? []);
+    const anns = JSON.parse(await serializeData(cloneSnapshot(this.annCache.get(path) ?? []), () => this.waitForInputQuiet(automatic))) as Annotation[];
     validateAnnotationCollection(anns);
     const sidecar = this.sidecarPath(path);
     const adapter = this.host.app.vault.adapter;
@@ -785,13 +928,17 @@ export class Store {
       throw new Error("标注被外部修改，已保留两份版本：" + recovery);
     }
     const media = await externalizeMedia({ annotations: anns }, adapter);
-    const content = JSON.stringify({ schemaVersion: 2, annotations: anns }, null, 2);
+    const content = await serializeData({ schemaVersion: 2, annotations: anns }, () => this.waitForInputQuiet(automatic));
     // A rolling recovery copy also covers a partial host write or forced process exit.
-    await this.writeRecovery("pending-annotations-" + sha(path).slice(0, 12), { docPath: path, annotations: anns }, true);
+    await this.writeRecovery("pending-annotations-" + sha(path).slice(0, 12), { docPath: path, annotations: anns }, true, automatic);
+    await this.waitForInputQuiet(automatic);
     await adapter.write(sidecar, content);
     this.recordLocalEvent("saved", anns.map(annotation => annotation.id), "文档批注已落盘：" + path);
     this.save();
-    applyMediaReplacements({ annotations: this.annCache.get(path) ?? [] }, media.replacements);
+    if (media.replacements.size) {
+      applyMediaReplacements({ annotations: this.annCache.get(path) ?? [] }, media.replacements);
+      this.bumpAnnotationsRevision(path);
+    }
     this.annBase.set(path, content);
     if (this.annDirty.get(path) === version) this.annDirty.delete(path);
   }
@@ -817,11 +964,13 @@ export class Store {
       if (strategy === "merge") for (const a of remote) { const existing = merged.find(x => x.id === a.id); if (!existing) merged.push(a); else if (!same(existing,a)) merged.push({ ...a, id: uid("ann-conflict"), cardId: undefined }); }
       const cached = this.annCache.get(path), oldBase = this.annBase.get(path), wasBlocked = this.annBlocked.has(path);
       if (cached) cached.splice(0,cached.length,...merged); else this.annCache.set(path,merged);
+      this.bumpAnnotationsRevision(path);
       this.annBase.set(path,disk); this.annBlocked.delete(path); this.annDirty.set(path,(this.annDirty.get(path) ?? 0)+1);
       try { await this.persistAnnotations(path); }
       catch (error) {
         if (same(this.annCache.get(path), merged)) {
           const live = this.annCache.get(path)!; live.splice(0, live.length, ...local);
+          this.bumpAnnotationsRevision(path);
         }
         if (oldBase === undefined) this.annBase.delete(path); else this.annBase.set(path, oldBase);
         if (wasBlocked) this.annBlocked.add(path);
@@ -843,7 +992,7 @@ export class Store {
     });
   }
 
-  private snapshot(): LibrarySnapshot { return { data: this.data(), annotations: [...this.annCache].map(([p, a]) => [p, clone(a)]) }; }
+  private snapshot(): LibrarySnapshot { return measurePenCommit("snapshotMs", () => ({ data: this.data(), annotations: [...this.annCache].map(([p, a]) => [p, clone(a)]) })); }
   private restoreSnapshot(snapshot: LibrarySnapshot, previous?: LibrarySnapshot): void {
     const current = this.data();
     this.applyData(clone(snapshot.data));
@@ -926,6 +1075,7 @@ export class Store {
       const cached = this.annCache.get(path);
       if (cached) cached.splice(0, cached.length, ...clone(annotations));
       else this.annCache.set(path, clone(annotations));
+      this.bumpAnnotationsRevision(path);
       this.annDirty.set(path, (this.annDirty.get(path) ?? 0) + 1);
       this.annotationsChanged(path);
     }
@@ -940,7 +1090,7 @@ export class Store {
       const result = action(); this.repairGraph();
       const after = this.snapshot();
       if (!same(before, after)) {
-        this.history.push({ label, before, after }); if (this.history.length > 20) this.history.shift(); this.future = []; this.libraryHistoryRevision++;
+        this.pushHistory({ label, before, after }); this.libraryHistoryRevision++;
         if (/^(删除|移除|清空)/.test(label)) {
           const remaining = new Set(protectedObjects(after.data).map(item => item.collection + ":" + item.id));
           const removed = protectedObjects(before.data).filter(item => !remaining.has(item.collection + ":" + item.id));
@@ -952,13 +1102,35 @@ export class Store {
     } catch (e) { this.restoreSnapshot(before); throw e; }
     finally { this.transactionDepth--; }
   }
+  private pushHistory(entry: HistoryEntry): void {
+    this.future = [];
+    this.history.push(entry);
+    this.historySizes.set(entry, new TextEncoder().encode(JSON.stringify(entry)).byteLength);
+    if (this.history.length > 20) this.history.shift();
+    let bytes = this.history.reduce((total, item) => total + (this.historySizes.get(item) ?? 0), 0), discarded = 0;
+    while (bytes > HISTORY_LIMIT_BYTES && this.history.length) {
+      const oldest = this.history.shift()!;
+      bytes -= this.historySizes.get(oldest) ?? 0;
+      discarded++;
+    }
+    if (discarded) console.info("MarginStudy: history-byte-limit", { discarded, bytes, limit: HISTORY_LIMIT_BYTES });
+  }
   getLibraryHistoryState(): {canUndo:boolean;canRedo:boolean;undoLabel?:string;redoLabel?:string;revision:number} {
     return {canUndo:this.history.length>0,canRedo:this.future.length>0,undoLabel:this.history[this.history.length-1]?.label,redoLabel:this.future[this.future.length-1]?.label,revision:this.libraryHistoryRevision};
   }
+  getStudySetHistory(studySetId: string): { label: string; data: LibrarySnapshot["data"]; annotations: LibrarySnapshot["annotations"] }[] {
+    return this.history.flatMap(entry => {
+      if (!("before" in entry) || !entry.before.data.studySets?.some(set => set.id === studySetId)) return [];
+      return [{ label: entry.label, data: clone(entry.before.data), annotations: clone(entry.before.annotations) }];
+    });
+  }
+  recordReadOnlyLibraryAction(label: string): void {
+    this.pushHistory({ label, readOnly: true }); this.libraryHistoryRevision++; this.changed();
+  }
   getRevision(): number { return this.revision; }
-  undoLibraryChange(): boolean { if (this.documentCommitPending) throw new Error("文档操作正在保存，请稍后重试。"); const item = this.history.pop(); if (!item) return false; this.future.push(item); this.libraryHistoryRevision++; if ('nodeMove' in item) { const node=this.getNode(item.nodeMove.id); if(node) Object.assign(node,item.nodeMove.before); this.save(); } else { this.restoreSnapshot(item.before, item.after); this.restoreCardAnchors(); } return true; }
+  undoLibraryChange(): boolean { if (this.documentCommitPending) throw new Error("文档操作正在保存，请稍后重试。"); const item = this.history.pop(); if (!item) return false; this.future.push(item); this.libraryHistoryRevision++; if ('readOnly' in item) this.changed(); else if ('nodeMove' in item) { const node=this.getNode(item.nodeMove.id); if(node) Object.assign(node,item.nodeMove.before); this.save(); } else { this.restoreSnapshot(item.before, item.after); this.restoreCardAnchors(); } return true; }
   libraryTransaction<T>(label: string, action: () => T): T { return this.mutate(label, action); }
-  redoLibraryChange(): boolean { if (this.documentCommitPending) throw new Error("文档操作正在保存，请稍后重试。"); const item = this.future.pop(); if (!item) return false; this.history.push(item); this.libraryHistoryRevision++; if ('nodeMove' in item) { const node=this.getNode(item.nodeMove.id); if(node) Object.assign(node,item.nodeMove.after); this.save(); } else { this.restoreSnapshot(item.after, item.before); this.restoreCardAnchors(); } return true; }
+  redoLibraryChange(): boolean { if (this.documentCommitPending) throw new Error("文档操作正在保存，请稍后重试。"); const item = this.future.pop(); if (!item) return false; this.history.push(item); this.libraryHistoryRevision++; if ('readOnly' in item) this.changed(); else if ('nodeMove' in item) { const node=this.getNode(item.nodeMove.id); if(node) Object.assign(node,item.nodeMove.after); this.save(); } else { this.restoreSnapshot(item.after, item.before); this.restoreCardAnchors(); } return true; }
   private restoreCardAnchors(): void {
     for (const c of this.cards.filter(c => !c.groupId)) for (const source of this.sources(c)) {
       if (!source.anchorAnnId) continue;
@@ -1316,8 +1488,8 @@ export class Store {
   moveNode(id: string, x: number, y: number): void {
     const node = this.getNode(id); if (!node || !Number.isFinite(x) || !Number.isFinite(y) || (node.x === x && node.y === y)) return;
     const before = { x: node.x, y: node.y }; node.x = x; node.y = y;
-    this.history.push({ label: "移动节点", nodeMove: { id, before, after: { x, y } } });
-    if (this.history.length > 20) this.history.shift(); this.future = []; this.libraryHistoryRevision++; this.mainDirty = true; this.mainVersion++; this.changed(id); this.scheduleFlush();
+    this.pushHistory({ label: "移动节点", nodeMove: { id, before, after: { x, y } } });
+    this.libraryHistoryRevision++; this.mainDirty = true; this.mainVersion++; this.changed(id); this.scheduleFlush();
   }
   addNode(n: MindNode): void { this.mutate("添加节点", () => {
     if (this.getNode(n.id)) throw new Error("节点 id 已存在");
@@ -2051,6 +2223,7 @@ export class Store {
       });
       if (anns) {
         this.annCache.delete(oldPath); this.annBase.delete(oldPath); this.annDirty.delete(oldPath);
+        this.bumpAnnotationsRevision(oldPath);
         this.annCache.set(newPath, anns); this.annBase.set(newPath, text);
         for (const annotation of anns) annotation.docPath = newPath;
         this.saveAnnotationsDebounced(newPath, anns);
@@ -2066,9 +2239,9 @@ export class Store {
         const adapter = this.host.app.vault.adapter, from = this.sidecarPath(newPath), to = this.sidecarPath(oldPath);
         if (await adapter.exists(from) && !await adapter.exists(to)) await adapter.rename(from, to);
         if (originalSidecarText !== null) await adapter.write(to, originalSidecarText);
-        this.annCache.delete(newPath); this.annBase.delete(newPath); this.annDirty.delete(newPath);
-        this.annCache.delete(oldPath); this.annBase.delete(oldPath); this.annDirty.delete(oldPath);
-        for (const [path, annotations] of before.annotations) { this.annCache.set(path, clone(annotations)); this.annBase.set(path, await adapter.exists(this.sidecarPath(path)) ? await adapter.read(this.sidecarPath(path)) : null); }
+        this.annCache.delete(newPath); this.bumpAnnotationsRevision(newPath); this.annBase.delete(newPath); this.annDirty.delete(newPath);
+        this.annCache.delete(oldPath); this.bumpAnnotationsRevision(oldPath); this.annBase.delete(oldPath); this.annDirty.delete(oldPath);
+        for (const [path, annotations] of before.annotations) { this.annCache.set(path, clone(annotations)); this.bumpAnnotationsRevision(path); this.annBase.set(path, await adapter.exists(this.sidecarPath(path)) ? await adapter.read(this.sidecarPath(path)) : null); }
       } catch { /* recovery record above describes the partial migration */ }
       this.restoreSnapshot(before);
       throw error;
@@ -2120,7 +2293,12 @@ export class Store {
     if (manifest.format !== "margin-study-backup" || manifest.version !== 2 || !Array.isArray(manifest.files)) throw new Error("备份清单格式不支持");
     const dataText = await adapter.read(root + "/data.json");
     if (sha(dataText) !== manifest.dataSha256) throw new Error("主数据校验失败");
-    const data = JSON.parse(dataText); this.validateData(data);
+    const parsed = JSON.parse(dataText);
+    // 5.0.2：备份里若出现重复卡片编号，先修复再校验，避免整包恢复失败。
+    const repaired = repairDuplicateIds(parsed);
+    const data = repaired.data;
+    if (repaired.repaired.length) this.recordLocalEvent("restored", repaired.repaired.map(entry => entry.id), "备份含重复 ID，已修复 " + repaired.repaired.length + " 组：" + repaired.repaired.map(entry => `${entry.collection}/${entry.id}(${entry.strategy})`).join("、"));
+    this.validateData(data);
     const objects = protectedObjects(data), seen = new Set<string>();
     for (const item of manifest.files) {
       const path = safePath(item.path), storedPath = safePath(item.storedPath);

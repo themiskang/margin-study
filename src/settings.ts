@@ -1,7 +1,14 @@
+/**
+ * [INPUT]: 依赖 Obsidian 设置组件、插件存储与手写控制器。
+ * [OUTPUT]: 提供插件设置面板。
+ * [POS]: 保存设置并向手写控制器提供预测开关。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import { App, PluginSettingTab, Setting, Notice, Platform } from "obsidian";
 import type MarginStudyPlugin from "./main";
 import { BRANCH_STYLES, ACCENTS, ThemeMode } from "./types";
 import { applyTheme } from "./theme";
+import { setInkPredictionReader } from "./annot/pen";
 
 export class MarginStudySettingTab extends PluginSettingTab {
   plugin: MarginStudyPlugin;
@@ -9,12 +16,42 @@ export class MarginStudySettingTab extends PluginSettingTab {
   constructor(app: App, plugin: MarginStudyPlugin) {
     super(app, plugin);
     this.plugin = plugin;
+    setInkPredictionReader(() => this.plugin.store.settings.inkPrediction ?? Platform.isMobile);
   }
 
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
     const s = this.plugin.store.settings;
+
+    new Setting(containerEl)
+      .setName("隐藏宿主标签栏")
+      .setDesc("学习工作区激活时隐藏 Obsidian 标签栏。")
+      .addToggle(toggle => toggle.setValue(s.hideHostTabBar ?? true).onChange(value => {
+        s.hideHostTabBar = value;
+        document.querySelectorAll<HTMLElement>(".ms-study-workspace").forEach(root => {
+          root.dataset.hideHostTabBar = String(value);
+        });
+        this.plugin.store.save();
+      }));
+
+    new Setting(containerEl)
+      .setName("手写笔迹预测")
+      .setDesc("根据手写速度预测一帧笔迹，松笔后只保留真实笔迹。")
+      .addToggle(toggle => toggle.setValue(s.inkPrediction ?? Platform.isMobile).onChange(value => {
+        s.inkPrediction = value;
+        this.plugin.store.save();
+      }));
+
+    if (Platform.isMobile) {
+      new Setting(containerEl)
+        .setName("移动端降低 PDF 分辨率")
+        .setDesc("降低页面渲染负担；切换后重新打开 PDF 生效。")
+        .addToggle(toggle => toggle.setValue(s.mobileLowRes !== false).onChange(value => {
+          s.mobileLowRes = value;
+          this.plugin.store.save();
+        }));
+    }
 
     if (!Platform.isMobile) {
       const state = this.plugin.localCli?.getState();
@@ -243,5 +280,18 @@ export class MarginStudySettingTab extends PluginSettingTab {
           );
         });
       });
+
+    new Setting(containerEl)
+      .setName("停用持久化（仅诊断用）")
+      .setDesc("诊断模式：不会写盘。退出前请先关闭此开关，等待保存完成。")
+      .addToggle(toggle => toggle.setValue(s.diagnosticNoPersist).onChange(value => {
+        s.diagnosticNoPersist = value;
+        this.plugin.store.save();
+        if (value) {
+          const message = "诊断模式：不会写盘。退出前请先关闭此开关，等待保存完成。";
+          new Notice(message, 12000);
+          console.warn("MarginStudy:", message);
+        }
+      }));
   }
 }

@@ -92,7 +92,7 @@ export class CardBoardRenderer {
     if (this.options.nativeChrome) {
       const nativeSearch = el("div", { class: "ms-organize-native-search" });
       const filter = this.button("", "看板来源与分组", () => this.root?.classList.toggle("show-filters")); setIcon(filter, "filter"); filter.classList.add("ms-organize-native-icon");filter.style.setProperty("padding","5px","important");const filterIcon=filter.querySelector<SVGElement>("svg");if(filterIcon){filterIcon.style.setProperty("flex-shrink","0");filterIcon.style.setProperty("min-width","1em");}
-      this.search.placeholder = "Search Cards"; nativeSearch.append(filter, this.search);
+      this.search.placeholder = "搜索卡片"; nativeSearch.append(filter, this.search);
       searchGroups.classList.add("ms-board-query-settings"); controls.append(nativeSearch, this.sourceSelect, first.row, second.row, searchGroups);
     } else controls.append(this.sourceSelect, first.row, second.row, this.search, searchGroups);
     this.filters = el("div", { class: "ms-board-filter-panel" });

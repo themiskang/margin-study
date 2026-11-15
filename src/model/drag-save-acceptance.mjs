@@ -26,3 +26,59 @@ const reopened = new Store(host); await reopened.load();
 assert.deepEqual({ x: reopened.getNode("node").x, y: reopened.getNode("node").y }, { x: 100, y: 200 });
 console.log("PASS 100 moves coalesced and restored");
 console.log(`synthetic saveData: ${saveMs.toFixed(3)} ms, ${bytes} bytes`);
+store.noteInputActivity(1);
+store.moveNode("node", 101, 202);
+await new Promise(resolve => setTimeout(resolve, 1450));
+assert.equal(writes, 1, "active input must not write");
+store.noteInputActivity(0);
+store.moveNode("node", 102, 204);
+await new Promise(resolve => setTimeout(resolve, 500));
+store.noteInputActivity(-1);
+await new Promise(resolve => setTimeout(resolve, 700));
+assert.equal(writes, 1, "input session must remain coalesced");
+await new Promise(resolve => setTimeout(resolve, 1200));
+assert.equal(writes, 2, "quiet input session must eventually write once");
+await new Promise(resolve => setTimeout(resolve, 1000));
+assert.equal(writes, 2, "continuous input must produce only one main write");
+console.log("PASS input activity gates and coalesces automatic writes");
+const largeText = ("字😀\\\"\n".repeat(50000));
+const directFiles = new Map(), directDirs = new Set([".obsidian/plugins/margin-study"]);
+const directAdapter = {
+  exists: async path => directFiles.has(path) || directDirs.has(path),
+  mkdir: async path => directDirs.add(path),
+  read: async path => directFiles.get(path),
+  write: async (path, value) => directFiles.set(path, value),
+  remove: async path => directFiles.delete(path),
+};
+const dataPath = ".obsidian/plugins/margin-study/data.json";
+const directHost = {
+  manifest: { dir: ".obsidian/plugins/margin-study" },
+  app: { vault: { adapter: directAdapter, getFiles: () => [] } },
+  loadData: async () => directFiles.has(dataPath) ? JSON.parse(directFiles.get(dataPath)) : null,
+  saveData: async () => { throw new Error("direct adapter write expected"); },
+};
+const direct = new Store(directHost);
+await direct.load();
+direct.saveWorkspaceState({ largeText });
+let yielded = false;
+setTimeout(() => { yielded = true; }, 0);
+await direct.flush();
+assert.equal(yielded, true, "large serialization must yield");
+assert.equal(JSON.parse(directFiles.get(dataPath)).workspaceState.largeText, largeText);
+const reopenedDirect = new Store(directHost);
+await reopenedDirect.load();
+assert.equal(reopenedDirect.getWorkspaceState().largeText, largeText);
+console.log("PASS large adapter write yields and survives reopen");
+const annotations = await direct.loadAnnotations("doc.pdf");
+for (let index = 0; index < 6; index++) {
+  direct.noteInputActivity(1);
+  annotations.push({ id: `stroke-${index}`, type: "ink", docPath: "doc.pdf", page: 1, rects: [], points: [{ x: index / 10, y: .5 }] });
+  direct.saveAnnotationsDebounced("doc.pdf", annotations);
+  direct.noteInputActivity(-1);
+}
+await new Promise(resolve => setTimeout(resolve, 2000));
+assert.equal(JSON.parse(directFiles.get("doc.pdf.mstudy.json")).annotations.length, 6);
+const reopenedInk = new Store(directHost);
+await reopenedInk.load();
+assert.equal((await reopenedInk.loadAnnotations("doc.pdf")).length, 6);
+console.log("PASS six synthetic strokes persist and reopen after two seconds");

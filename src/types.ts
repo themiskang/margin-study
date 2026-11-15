@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖各功能模块声明的共享类型。
+ * [OUTPUT]: 提供项目数据类型与默认设置。
+ * [POS]: 定义存储、阅读器与设置共享的数据契约。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 // ===== 间隔重复状态（FSRS 风格：难度 + 稳定度模型） =====
 export interface CardState {
   due: string; // 下次复习日期 YYYY-MM-DD
@@ -151,6 +157,8 @@ export interface Card {
   keywords?: string[]; // 关键词标题链接：在文档/卡片中触发解释卡
   wrong?: boolean; // 错题标记（复习点「重来」置真，点「良好/简单」清除）
   favorite?: boolean;
+  /** MN5 「文本优先」：卡片同时有图片与文字时，节点正面只显示文字。 */
+  textFirst?: boolean;
   anchorAnnId?: string; // 源标注
   documentNotebookId?: string;
   page?: number;
@@ -162,7 +170,7 @@ export interface Card {
   /** Reader text kept separate when the source card already has an independent note. */
   extendText?: { noteId: string; text: string }[];
   /** Media added to the card; snapshot coordinates use the composite frame and strokes use the snapshot frame. */
-  commentMedia?: { id: string; image: string; kind: "image" | "ink"; name?: string; collapsed?: boolean; snapshot?: { image: string; x: number; y: number; width: number; height: number }; strokes?: import("./mindmap/handwritingContracts").MindmapInkStroke[] }[];
+  commentMedia?: { id: string; image: string; kind: "image" | "ink"; name?: string; collapsed?: boolean; parts?: { image: string; y: number; height: number }[]; snapshot?: { image: string; x: number; y: number; width: number; height: number; viewScale?: number }; strokes?: import("./mindmap/handwritingContracts").MindmapInkStroke[] }[];
   /** Explicit comment order; missing/stale keys leave legacy content and identities intact. */
   commentOrder?: string[];
   sources?: CardSource[];
@@ -253,10 +261,25 @@ export interface StudySceneTemplate {
   version: 1;
   name: string;
   scenes: { id: StudySceneId; label: string; tools: string[] }[];
+  schema?: 3;
+  mn5?: {
+    id: string;
+    base?: string;
+    tabs: string[];
+    modes: { id: string; behavior: "read" | "write" | "recall"; tools: string[]; overflow: string[] }[];
+    home: string;
+    plugins: unknown[];
+  };
+  surfaces?: { bottomRead: { visible: string[] }; dock: { visible: string[] }; dockPinned: string[]; excerptResultBar: boolean };
+  review?: { autoAdd: string; rule: { excludeGroupChildren: boolean; excludeToc: boolean } };
+  resume?: { card: string };
+  coach?: { enabled: boolean };
   colors?: string[];
   excerptPopup?: boolean;
   textSelectionMenuActions?: string[];
   handwritingPresets?: HandwritingPresetSpec[];
+  /** 自有扩展，MN5 无此字段。 */
+  statusBar?: "full" | "compact" | "hidden";
   cardTemplate?: { front: string; back: string; fields: string[] };
 }
 
@@ -272,7 +295,8 @@ export interface StudySet {
   pinned?: boolean;
   category?: string;
   fixedViews?: FixedMindmapView[];
-  excerptDestination?: { canvasId: string; nodeId: string };
+  /** 摘录去向；缺少 mode 的旧数据按 fixed 处理。 */
+  excerptDestination?: { mode?: "default" | "mindmap" | "document" | "contents" | "selection" | "fixed"; canvasId?: string; nodeId?: string };
   /** Absent in legacy data. Merely reading defaults never writes a migration. */
   scene?: StudySceneSelection;
   recallSettings?: { options: Record<RecallOptionKey, boolean>; coverAll: boolean; hintLanguage: "auto" | "zh" | "en"; mode?: "in-place" | "layered" };
@@ -366,16 +390,18 @@ export interface LocalEvent {
 }
 
 export interface SyncStatusItem {
-  key: "local" | "missing" | "conflict" | "deleted" | "activity" | "cloud";
+  key: "local" | "pending-upload" | "missing" | "conflict" | "deleted" | "activity" | "cloud";
   text: string;
   evidenceEventIds: string[];
-  action?: "find-source" | "show-deletions" | "resolve-conflict" | "save-local";
+  action?: "find-source" | "show-deletions" | "resolve-conflict" | "save-local" | "relink-source" | "reimport-source";
 }
 
 // ===== 设置 =====
 export type ThemeMode = "light" | "dark" | "auto";
 export type ReadingTheme = "white" | "sepia" | "gray" | "dark" | "green";
 export interface MarginStudySettings {
+  diagnosticNoPersist: boolean;
+  hideHostTabBar?: boolean;
   fixedViewPosition?: { x: number; y: number };
   studyHomeCategory?: string;
   studyHomeSort?: "name" | "recent";
@@ -386,9 +412,13 @@ export interface MarginStudySettings {
   appleOcrEngine?: boolean;
   ocrSelectionCorrection?: boolean;
   readingTheme?: ReadingTheme; // 学习工作区的阅读主题；不改变 Obsidian 宿主主题
+  readingMode?: "vertical" | "paged";
+  doublePage?: boolean;
   showFootnotesLinksOnMargin?: boolean;
   hideMarginNumbers?: boolean;
   tapPageEdges?: boolean;
+  mobileLowRes?: boolean;
+  inkPrediction?: boolean;
   assistiveExcerpt?: boolean;
   excerptPopup?: boolean;
   textSelectionMenuActions?: string[];
@@ -414,9 +444,19 @@ export interface MarginStudySettings {
   replaceNativeReader: boolean; // 用 MarginStudy 阅读器替代 Obsidian 原生 PDF/Word 查看器（双击即开本插件）
   handwritingPresets?: HandwritingPresetSpec[];
   handwritingPresetsVersion?: 2;
+  /** 百度网盘官方 OAuth 配置与令牌；仅本地保存，不进入日志或导出清单。 */
+  baiduNetdisk?: import("./import/baiduNetdisk").BaiduNetdiskSettings;
+  /** 顶部「收藏」的功能 ID；空数组/缺省使用默认快捷入口。 */
+  favoriteFeatures?: string[];
+  /** 页内翻译目标语言；缺省为简体中文。 */
+  translationTargetLanguage?: "简体中文" | "繁體中文" | "English" | "日本語" | "한국어";
+  /** MN5 学习集「在脑图和文档之间同步删除卡片」：删除源标注时一并移除其卡片与节点。 */
+  syncDeleteCardOnSourceRemoval?: boolean;
 }
 
 export const DEFAULT_SETTINGS: MarginStudySettings = {
+  diagnosticNoPersist: false,
+  hideHostTabBar: true,
   colors: ["#ffd54f", "#ff8a80", "#80cbc4", "#9fa8da", "#ce93d8", "#a5d6a7"],
   defaultColor: "#ffd54f",
   scale: 1.4,
@@ -426,6 +466,9 @@ export const DEFAULT_SETTINGS: MarginStudySettings = {
   immersive: false,
   theme: "light",
   readingTheme: "white",
+  readingMode: "vertical",
+  doublePage: false,
+  mobileLowRes: true,
   assistiveExcerpt: true,
   excerptPopup: true,
   excerptLockColors: false,
@@ -490,6 +533,16 @@ export interface PdfExtendNote {
   }[];
   ink?: { id: string; strokes: Stroke[][]; color: string; brush: "pen" | "highlight" }[];
   collapsed?: boolean;
+  /** 页内译文：来源文本、语言与服务信息；正文在 textBoxes 中可继续编辑。 */
+  translation?: PdfTranslation;
+  createdAt: string;
+}
+export interface PdfTranslation {
+  sourceText: string;
+  language: string;
+  service?: string;
+  model?: string;
+  sourceAnnId?: string;
   createdAt: string;
 }
 export interface DocumentOutlineItem { id: string; title: string; page: number; level: number; pageId?: string; rects?: PdfRect[]; }

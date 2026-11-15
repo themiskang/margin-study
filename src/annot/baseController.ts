@@ -1,3 +1,10 @@
+/**
+ * [INPUT]: 依赖文档阅读器、标注模型和插件存储。
+ * [OUTPUT]: 提供 PDF 与 Word 共用的标注控制器。
+ * [POS]: 连接阅读器交互、标注操作和保存活动。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
+import { showExcerptNotice } from "../study/excerptNotice";
 import type MarginStudyPlugin from "../main";
 import { Annotation, AnnotationType, Card, CardType, DEFAULT_HANDWRITING_PRESETS, DomRange, HandwritingPresetId, HandwritingPresetSpec, MindNode, PdfRect, PdfPageGeometry, RecallHintRequest, RecallHintResult, RecallOptionKey, Stroke } from "../types";
 import { clampHandwritingWidth, handwritingPresetWidth, handwritingPresets } from "./handwritingPresets";
@@ -6,6 +13,8 @@ import { renderContextActionMenu } from "./contextActions";
 import type { ContextAction } from "./contextActions";
 import { openExtendSpeech } from "../pdf/extendSpeech";
 import { aiErrorText } from "../ai/contracts";
+import { aiServiceFor } from "../ai/panel";
+import { recognizeInk } from "./recognizeInk";
 import type { CondenseLevel } from "../ai/condense";
 import { el, clear } from "../utils/dom";
 import { openTextModal, createModal } from "../utils/modal";
@@ -16,6 +25,7 @@ import { transcribeVoice } from "../audio/transcription";
 import { hasMic } from "../utils/platform";
 import { RecallSession } from "../recall/session";
 import { cloneStrokes } from "./penGeometry";
+import { measurePenCommit } from "./pen";
 import type { HandwritingMode, InkChange, InkRecord, PenTool } from "./penGeometry";
 import { annotationInkLayer, inkLayerState, InkLayerControls } from "./inkLayers";
 import type { InkLayerState } from "./inkLayers";
@@ -47,6 +57,42 @@ type ReaderEditChange = { sequence: number; label: string } & (
   | { kind: "overlay"; before: Annotation; after: Annotation }
   | { kind: "document"; apply: (redo: boolean) => Promise<void> }
 );
+type PenRevision = { path: string; revision: number };
+function sameStrokeEnds(first: Stroke[], second: Stroke[]): boolean {
+  if (first === second) return true;
+  if (first.length !== second.length) return false;
+  if (!first.length) return true;
+  const start = first[0], otherStart = second[0], end = first[first.length - 1], otherEnd = second[second.length - 1];
+  return start.x === otherStart.x && start.y === otherStart.y && end.x === otherEnd.x && end.y === otherEnd.y;
+}
+function sameStrokeShape(first: Stroke[][], second: Stroke[][]): boolean {
+  return first === second || first.length === second.length && first.every((stroke, index) => sameStrokeEnds(stroke, second[index]));
+}
+function sameStrokePoints(first: Stroke[], second: Stroke[]): boolean {
+  if (first === second) return true;
+  if (first.length !== second.length) return false;
+  return first.every((point, index) => {
+    const other = second[index];
+    if (point.x !== other.x || point.y !== other.y || point.pressure !== other.pressure) return false;
+    for (const key in point) if (!(key in other) || (point as any)[key] !== (other as any)[key]) return false;
+    for (const key in other) if (!(key in point)) return false;
+    return true;
+  });
+}
+function sameStrokes(first: Stroke[][], second: Stroke[][]): boolean {
+  return first === second || first.length === second.length && first.every((stroke, index) => sameStrokePoints(stroke, second[index]));
+}
+function strokesHistoryBytes(strokes: Stroke[][]): number {
+  let bytes = 16;
+  for (const stroke of strokes) {
+    bytes += 16;
+    for (const point of stroke) {
+      bytes += 256;
+      for (const key in point) bytes += 32 + key.length * 2;
+    }
+  }
+  return bytes;
+}
 
 /**
  * 标注控制器公共基类：承载 PDF / Word 两份控制器的纯公共逻辑
@@ -56,9 +102,9 @@ type ReaderEditChange = { sequence: number; label: string } & (
  * （见 OPTIMIZATION_REVIEW H）。
  */
 export abstract class BaseAnnotationController {
-  private continuousExcerpts = new Map<string, { cardId?: string; count: number }>();
+  private continuousExcerpts = new Map<string, { cardId?: string; annotationId?: string; count: number }>();
   private continuousExcerptKey = "text";
-  private get continuousExcerpt(): { cardId?: string; count: number } | null { return this.continuousExcerpts.get(this.continuousExcerptKey) ?? null; }
+  private get continuousExcerpt(): { cardId?: string; annotationId?: string; count: number } | null { return this.continuousExcerpts.get(this.continuousExcerptKey) ?? null; }
   setContinuousExcerptPen(key:string):void {
     this.continuousExcerptKey=key; this.continuousExcerptListener?.();
   }
@@ -132,6 +178,8 @@ export abstract class BaseAnnotationController {
   private penRedoButton: HTMLButtonElement | null = null;
   private editUndo: ReaderEditChange[] = [];
   private editRedo: ReaderEditChange[] = [];
+  private editHistorySizes = new WeakMap<ReaderEditChange, number>();
+  private penRevision: PenRevision | null = null;
   private editSequence = 0;
   private applyingEditHistory = false;
   private editHistoryListeners = new Set<(state: ReaderEditHistoryState) => void>();
@@ -313,6 +361,10 @@ export abstract class BaseAnnotationController {
       this.watchAnnotations();
     }) ?? null;
     this.getScrollContainer().addEventListener("mouseup", this.onMouseUp);
+    this.getScrollContainer().addEventListener("scroll", this.onInputScroll, { passive: true });
+    this.getScrollContainer().addEventListener("wheel", this.onInputScroll, { passive: true });
+    this.getScrollContainer().addEventListener("pointerdown", this.onInputPointerDown, true);
+    this.getScrollContainer().addEventListener("ms-recognize-ink", this.onRecognizeInk);
     document.addEventListener("mousedown", this.onDocMouseDown);
     document.addEventListener("selectionchange", this.onSelectionChange);
     this.getScrollContainer().addEventListener("click", this.onOverlayPlace, true);
@@ -542,7 +594,7 @@ export abstract class BaseAnnotationController {
   /** 颜色变更时同步子类状态（如手写笔颜色） */
   protected onColorChanged(): void {}
   /** Commit an unfinished stroke before changing the parameters it was drawn with. */
-  protected flushPen(): void {}
+  protected flushPen(_commitDrawing = true): void {}
   protected onPenToolChanged(): void {}
   /** 批注文字改完后的子类处理（PDF 重画 / Word 改 span title） */
   protected afterNoteEdited(_ann: Annotation): void {}
@@ -634,6 +686,11 @@ export abstract class BaseAnnotationController {
     this.handwritingSyncListeners.clear();
     this.unsubscribeStore?.(); this.unsubscribeStore = null;
     this.getScrollContainer().removeEventListener("mouseup", this.onMouseUp);
+    this.getScrollContainer().removeEventListener("scroll", this.onInputScroll);
+    this.getScrollContainer().removeEventListener("wheel", this.onInputScroll);
+    this.getScrollContainer().removeEventListener("pointerdown", this.onInputPointerDown, true);
+    this.onInputBlur();
+    this.getScrollContainer().removeEventListener("ms-recognize-ink", this.onRecognizeInk);
     document.removeEventListener("mousedown", this.onDocMouseDown);
     document.removeEventListener("selectionchange", this.onSelectionChange);
     this.getScrollContainer().removeEventListener("click", this.onOverlayPlace, true);
@@ -647,7 +704,43 @@ export abstract class BaseAnnotationController {
     this.editHistoryListeners.clear();
   }
 
+  private onInputScroll = (): void => { this.plugin.store.noteInputActivity?.(); };
+  private inputPointers = new Set<number>();
+  private onInputPointerDown = (event: PointerEvent): void => {
+    if (!event.isTrusted && event.buttons === 0) return;
+    if (this.inputPointers.has(event.pointerId)) return;
+    if (!this.inputPointers.size) {
+      window.addEventListener("pointermove", this.onInputPointerMove, true);
+      window.addEventListener("pointerup", this.onInputPointerEnd, true);
+      window.addEventListener("pointercancel", this.onInputPointerEnd, true);
+      window.addEventListener("blur", this.onInputBlur);
+    }
+    this.inputPointers.add(event.pointerId);
+    this.plugin.store.noteInputActivity?.(1);
+  };
+  private onInputPointerMove = (event: PointerEvent): void => {
+    if (this.inputPointers.has(event.pointerId)) this.plugin.store.noteInputActivity?.();
+  };
+  private onInputPointerEnd = (event: PointerEvent): void => {
+    if (this.inputPointers.delete(event.pointerId)) this.plugin.store.noteInputActivity?.(-1);
+    if (!this.inputPointers.size) this.onInputBlur();
+  };
+  private onInputBlur = (): void => {
+    window.removeEventListener("pointermove", this.onInputPointerMove, true);
+    window.removeEventListener("pointerup", this.onInputPointerEnd, true);
+    window.removeEventListener("pointercancel", this.onInputPointerEnd, true);
+    window.removeEventListener("blur", this.onInputBlur);
+    for (const pointer of this.inputPointers) {
+      this.inputPointers.delete(pointer);
+      this.plugin.store.noteInputActivity?.(-1);
+    }
+  };
+
   // ===== 工具栏 =====
+  private onRecognizeInk = (event: Event): void => {
+    const image = (event as CustomEvent<{ image?: string }>).detail?.image;
+    if (image) recognizeInk(this.plugin, image);
+  };
   buildToolbar(container: HTMLElement): void {
     clear(container);
     for (const c of this.plugin.store.getEffectiveSceneSettings().colors) {
@@ -841,6 +934,16 @@ export abstract class BaseAnnotationController {
       const workspace = this.plugin.studyWorkspace ?? await this.plugin.openStudyWorkspace();
       if (selectionIsCurrent()) workspace.showResearchText(text);
     }});
+    const pdfReader = this.plugin.activeReader as { getPdfPageEdits?: () => unknown; translateSelectionIntoPage?: (input: { text: string; language: string; sourceAnnId?: string }) => Promise<unknown> } | null;
+    if (pdfReader?.getPdfPageEdits?.() && typeof pdfReader.translateSelectionIntoPage === "function") actions.push({ id: "translate", label: "翻译", icon: "languages", group: "more", run: async () => {
+      if (!selectionIsCurrent()) return;
+      const language = this.plugin.store.settings.translationTargetLanguage ?? "简体中文";
+      try {
+        new Notice(`正在翻译为${language}…`);
+        await pdfReader.translateSelectionIntoPage!({ text, language, sourceAnnId: target?.kind === "pdf" ? undefined : undefined });
+        new Notice("译文已插入当前页，可双击编辑");
+      } catch (error) { new Notice("翻译失败：" + String((error as Error).message ?? error), 10000); }
+    }});
     actions.push({ id: "speech", label: "朗读", icon: "volume-2", group: "more", run: () => {
       this.closeSelectionSpeech?.();
       this.closeSelectionSpeech = openExtendSpeech(this.getScrollContainer(), text, "选区朗读");
@@ -898,17 +1001,55 @@ export abstract class BaseAnnotationController {
 
   /** 构造标注 + 推入缓存 + 持久化 + 增量渲染 + 提示（子类 commitAnnotation 复用） */
   protected pushAnnotation(ann: Annotation): void {
+    if (ann.type === "pen") {
+      const current = this.penRevisionIsCurrent(); this.penRevision = null;
+      if (!current) return;
+    }
     ann.documentNotebookId ??= this.activeNotebookId;
     this.prepareAnnotation(ann);
-    this.cache.push(ann);
-    if (ann.type === "pen" && ann.strokes?.length) this.recordPenChange([{ id: ann.id, before: [], after: cloneStrokes(ann.strokes) }], ann);
-    this.persist();
-    if (this.isAnnotationVisible(ann)) this.renderOne(ann);
-    this.syncOcclusionElements();
+    const session = this.continuousExcerpt;
+    const previous = session?.annotationId && ann.docKind === "pdf" && (ann.type === "highlight" || ann.type === "underline" || ann.type === "region")
+      ? this.cache.find(item => item.id === session.annotationId) : undefined;
+    if (previous && session) {
+      const geometry = [...(previous.pdfGeometry?.length ? previous.pdfGeometry : [{ page: previous.page, rects: previous.rects }])];
+      for (const part of ann.pdfGeometry?.length ? ann.pdfGeometry : [{ page: ann.page, rects: ann.rects }]) {
+        const existing = geometry.find(item => item.page === part.page);
+        if (existing) existing.rects = [...existing.rects, ...part.rects];
+        else geometry.push({ page: part.page, rects: [...part.rects] });
+      }
+      previous.pdfGeometry = geometry;
+      previous.rects = geometry.find(item => item.page === previous.page)?.rects ?? previous.rects;
+      previous.text = [previous.text, ann.text].filter(Boolean).join("\n\n");
+      previous.images = [...new Set([...(previous.images ?? (previous.image ? [previous.image] : [])), ...(ann.image ? [ann.image] : []), ...(ann.images ?? [])])];
+      const card = session.cardId ? this.plugin.store.getCard(session.cardId) : undefined;
+      if (card) {
+        const sources = card.sources?.length ? card.sources : [{ docPath:card.docPath, anchorAnnId:card.anchorAnnId, page:card.page, text:card.front, image:card.image }];
+        const source = { docPath:ann.docPath, documentNotebookId:ann.documentNotebookId, anchorAnnId:previous.id, page:ann.page, text:ann.text, image:ann.image };
+        this.plugin.store.updateCard(card.id, { sources:[...sources, source], front:[card.front, ann.text || (ann.type === "region" ? "[区域摘录]" : "")].filter(Boolean).join("\n\n"), images:previous.images });
+        this.plugin.refreshSidebar();
+      }
+      this.persist();
+      this.onAnnotationsChanged();
+      session.count++;
+      this.continuousExcerptListener?.();
+      return;
+    }
+    measurePenCommit("applyMs", () => {
+      this.cache.push(ann);
+      if (ann.type === "pen" && ann.strokes?.length) this.recordPenChange([{ id: ann.id, before: [], after: ann.strokes }], ann);
+      this.persist();
+    });
+    measurePenCommit("renderMs", () => {
+      if (this.isAnnotationVisible(ann)) {
+        this.renderOne(ann);
+        if (ann.type !== "pen") this.syncOcclusionElements();
+      } else this.syncOcclusionElements();
+    });
     if (ann.type !== "pen") new Notice("已添加" + this.typeLabel(ann.type));
     // 高亮/下划线后自动成卡（设置开启且尚未关联卡片时）
     if (this.continuousExcerpt && ann.docKind === "pdf" && (ann.type === "highlight" || ann.type === "underline" || ann.type === "region")) {
       const session = this.continuousExcerpt;
+      session.annotationId = ann.id;
       let card = session.cardId ? this.plugin.store.getCard(session.cardId) : undefined;
       if (!card) {
         this.makeCard(ann, "excerpt", true);
@@ -1087,9 +1228,34 @@ export abstract class BaseAnnotationController {
   }
   private recordEditChange(change: ReaderEditChange): void {
     this.editUndo.push(change);
+    if (change.kind === "pen") {
+      const encoder = new TextEncoder();
+      const bytes = change.changes.reduce((total, item) => {
+        const creation = item.creation?.annotation;
+        const metadata = creation ? { ...creation, strokes: undefined } : undefined;
+        return total + strokesHistoryBytes(item.before) + strokesHistoryBytes(item.after)
+          + (creation?.strokes ? strokesHistoryBytes(creation.strokes) : 0)
+          + encoder.encode(JSON.stringify([item.id, metadata])).byteLength + 512;
+      }, 1024);
+      this.editHistorySizes.set(change, bytes);
+    } else if (change.kind === "overlay") {
+      const { strokes: beforeStrokes, ...before } = change.before, { strokes: afterStrokes, ...after } = change.after;
+      const bytes = new TextEncoder().encode(JSON.stringify({ ...change, before, after })).byteLength
+        + (beforeStrokes ? strokesHistoryBytes(beforeStrokes) : 0) + (afterStrokes ? strokesHistoryBytes(afterStrokes) : 0);
+      this.editHistorySizes.set(change, bytes);
+    } else this.editHistorySizes.set(change, new TextEncoder().encode(JSON.stringify(change)).byteLength);
     // Retain the existing forty-operation allowance for each independent tool family.
     if (this.editUndo.filter(entry=>entry.kind===change.kind).length > 40) this.editUndo.splice(this.editUndo.findIndex(entry=>entry.kind===change.kind),1);
-    this.editRedo = []; this.publishEditHistory();
+    this.editRedo = [];
+    const limit = 32 * 1024 * 1024;
+    let bytes = this.editUndo.reduce((total, entry) => total + (this.editHistorySizes.get(entry) ?? 0), 0), discarded = 0;
+    while (bytes > limit && this.editUndo.length) {
+      const oldest = this.editUndo.shift()!;
+      bytes -= this.editHistorySizes.get(oldest) ?? 0;
+      discarded++;
+    }
+    if (discarded) console.info("MarginStudy: reader-history-byte-limit", { discarded, bytes, limit });
+    this.publishEditHistory();
   }
   private clearEditHistory(): void { this.editUndo = []; this.editRedo = []; this.publishEditHistory(); }
   private publishEditHistory(): void {
@@ -1281,7 +1447,7 @@ export abstract class BaseAnnotationController {
   }
   setHandwritingMode(mode: HandwritingMode): void {
     if (this.disposed || this.releasing || !this.docPath || !["pen","highlight","eraser","lasso","off"].includes(mode)) return;
-    this.flushPen();
+    this.flushPen(mode !== "eraser" || this.getHandwritingMode() === mode);
     if (mode === "pen" || mode === "highlight") {
       const highlighted = mode === "highlight", wanted = highlighted ? this.highlightHandwritingPreset : this.normalHandwritingPreset;
       const selected = this.getHandwritingPresets().find(item => item.id === wanted && (item.type === "highlighter") === highlighted)
@@ -1319,45 +1485,76 @@ export abstract class BaseAnnotationController {
     return this.cache.map((ann) => this.mapAnnotationForDisplay(ann)).filter((ann) => annotationNotebook(ann) === this.activeNotebookId && ann.type === "pen" && annotationInkLayer(ann, state) === layer && (page === undefined || ann.page === page) && ann.strokes?.length)
       .map((ann) => ({ id: ann.id, strokes: ann.strokes! }));
   }
+  protected beginPenGesture(): void {
+    this.penRevision = this.docPath ? { path: this.docPath, revision: this.plugin.store.getAnnotationsRevision(this.docPath) } : null;
+  }
+  protected watchPenGestures(overlay: SVGSVGElement): void {
+    let pointer: number | null = null;
+    overlay.addEventListener("pointerdown", event => {
+      if (pointer !== null || event.button !== 0 || event.isPrimary === false) return;
+      pointer = event.pointerId; this.beginPenGesture();
+    }, true);
+    const finish = (event: PointerEvent) => { if (event.pointerId === pointer) pointer = null; };
+    overlay.addEventListener("pointerup", finish, true);
+    overlay.addEventListener("pointercancel", finish, true);
+    overlay.addEventListener("lostpointercapture", finish, true);
+    overlay.addEventListener("keydown", event => {
+      if (["Delete", "Backspace"].includes(event.key)) this.beginPenGesture();
+    }, true);
+  }
+  private penRevisionIsCurrent(): boolean {
+    return measurePenCommit("staleCompareMs", () => {
+      if (!this.docPath || this.releasing || this.disposed || this.penRevision && (this.penRevision.path !== this.docPath || this.plugin.store.getAnnotationsRevision(this.docPath) !== this.penRevision.revision)) {
+        if (this.docPath && !this.releasing && !this.disposed) this.rejectStalePenChange();
+        return false;
+      }
+      return true;
+    });
+  }
+  private measurePenClone<T>(action: () => T): T {
+    const section = "cloneMs" as Parameters<typeof measurePenCommit>[0];
+    return measurePenCommit(section, action);
+  }
   protected commitPenChanges(changes: InkChange[], coordinates?: { project: (strokes: Stroke[][]) => Stroke[][]; unproject: (strokes: Stroke[][]) => Stroke[][] }): void {
-    if (!this.docPath || this.releasing || this.disposed) return;
+    if (!changes.length) { this.penRevision = null; return; }
+    const current = this.penRevisionIsCurrent(); this.penRevision = null;
+    if (!current) return;
     if (coordinates) {
       const originals = changes.map(change => this.cache.find(ann => ann.id === change.id));
-      const displayed = originals.map(ann => coordinates.project(ann?.strokes ?? []));
-      if (originals.some((ann, index) => !ann || ann.type !== "pen" || JSON.stringify(displayed[index]) !== JSON.stringify(changes[index].before))) {
+      if (originals.some(ann => !ann || ann.type !== "pen")) {
         this.rejectStalePenChange(); return;
       }
-      changes = changes.map((change, index) => ({ id: change.id, before: cloneStrokes(originals[index]!.strokes!),
+      changes = changes.map((change, index) => ({ id: change.id, before: originals[index]!.strokes ?? [],
         after: change.after.map(stroke => {
-          const unchanged = displayed[index].findIndex(before => JSON.stringify(before) === JSON.stringify(stroke));
-          return unchanged < 0 ? coordinates.unproject([stroke])[0] : cloneStrokes([originals[index]!.strokes![unchanged]])[0];
+          const unchanged = change.before.findIndex(before => sameStrokePoints(before, stroke));
+          return unchanged < 0 ? coordinates.unproject([stroke])[0] : originals[index]!.strokes![unchanged];
         }) }));
     }
-    const changed = changes.filter((change) => JSON.stringify(change.before) !== JSON.stringify(change.after));
-    if (!changed.length || !this.applyPenChanges(changed, false)) return;
+    const changed = changes.filter(change => !sameStrokeShape(change.before, change.after));
+    if (!changed.length || !this.applyPenChanges(changed, false, true)) return;
     this.recordPenChange(changed);
   }
   private recordPenChange(changes: InkChange[], created?: Annotation): void {
-    this.recordEditChange({ kind:"pen", sequence:++this.editSequence, label:"手写", changes:changes.map((change) => ({
+    this.recordEditChange({ kind:"pen", sequence:++this.editSequence, label:"手写", changes:this.measurePenClone(() => changes.map((change) => ({
       id: change.id, before: cloneStrokes(change.before), after: cloneStrokes(change.after),
-      ...(created?.id === change.id ? { creation: { annotation: this.cloneAnnotation(created), index: this.cache.indexOf(created), removed: false } } : {})
-    })) });
+      ...(created?.id === change.id ? { creation: { annotation: structuredClone(created), index: this.cache.indexOf(created), removed: false } } : {})
+    }))) });
   }
   private rejectStalePenChange(): void {
     this.clearEditHistory();
     new Notice("笔画已在其他视图修改，已清除此视图的阅读编辑撤销记录");
   }
-  private applyPenChanges(changes: ReaderPenChange[], reverse: boolean): boolean {
+  private applyPenChanges(changes: ReaderPenChange[], reverse: boolean, currentGesture = false): boolean {
     const annotations = changes.map((change) => this.cache.find((ann) => ann.id === change.id));
     if (annotations.some((ann, index) => changes[index].creation?.removed
       ? reverse || !!ann
-      : !ann || ann.type !== "pen" || JSON.stringify(ann.strokes ?? []) !== JSON.stringify(reverse ? changes[index].after : changes[index].before))) {
+      : !ann || ann.type !== "pen" || !currentGesture && !sameStrokes(ann.strokes ?? [], reverse ? changes[index].after : changes[index].before))) {
       this.rejectStalePenChange(); return false;
     }
     annotations.forEach((ann, index) => {
       const change = changes[index], creation = change.creation;
       if (creation?.removed) {
-        const restored = this.cloneAnnotation(creation.annotation); restored.docPath = this.docPath!;
+        const restored = structuredClone(creation.annotation); restored.docPath = this.docPath!;
         this.cache.splice(Math.min(creation.index, this.cache.length), 0, restored); creation.removed = false;
       } else if (reverse && creation && this.canRemoveCreatedPen(ann!, creation.annotation)) {
         this.cache.splice(this.cache.indexOf(ann!), 1); creation.removed = true;
@@ -1367,7 +1564,8 @@ export abstract class BaseAnnotationController {
     this.persist(); this.onAnnotationsChanged(); return true;
   }
   private canRemoveCreatedPen(current: Annotation, original: Annotation): boolean {
-    if (JSON.stringify(current) !== JSON.stringify({ ...original, docPath: current.docPath }) || current.cardId) return false;
+    const { strokes: currentStrokes, ...currentMetadata } = current, { strokes: originalStrokes, ...originalMetadata } = original;
+    if (!sameStrokes(currentStrokes ?? [], originalStrokes ?? []) || JSON.stringify(currentMetadata) !== JSON.stringify({ ...originalMetadata, docPath: current.docPath }) || current.cardId) return false;
     return !this.plugin.store.cards.some(card => (card.docPath === current.docPath && card.anchorAnnId === current.id)
       || card.sources?.some(source => source.docPath === current.docPath && source.anchorAnnId === current.id));
   }
@@ -1436,6 +1634,7 @@ export abstract class BaseAnnotationController {
     if (id === state.active && this.penMode) this.teardownPen();
     const removed = this.cache.filter((ann) => annotationNotebook(ann) === id);
     for (const ann of removed) { const index = this.cache.indexOf(ann); if (index >= 0) this.cache.splice(index,1); this.plugin.store.removeAnnotationLinks(this.docPath, ann.id); }
+    if (this.plugin.store.settings.syncDeleteCardOnSourceRemoval) this.removeCardsForAnnotations(removed);
     this.persist(); const meta = this.plugin.store.getDocMeta(this.docPath), scoped = { ...meta.documentNotebookMeta }; delete scoped[id];
     const retain = id === state.active || id === "default";
     this.plugin.store.updateDocMeta(this.docPath, { documentNotebooks: state.notebooks.filter((item) => retain || item.id !== id), documentNotebookMeta: scoped,
@@ -1778,7 +1977,8 @@ export abstract class BaseAnnotationController {
     ann.cardId = card.id;
     this.persist();
     this.plugin.refreshSidebar();
-    if (this.plugin.store.settings.autoNodeOnCard) this.addCardToMindmap(card);
+    const destinationMode = this.plugin.store.studySets.find(item => item.id === this.plugin.store.activeStudySetId)?.excerptDestination?.mode;
+    if (destinationMode === "mindmap" || destinationMode !== "document" && this.plugin.store.settings.autoNodeOnCard) this.addCardToMindmap(card);
     let autoReviewNotice="";
     if(this.plugin.store.settings.autoReview){
       const deck=this.plugin.store.reviewDeckForStudySet();
@@ -1789,10 +1989,18 @@ export abstract class BaseAnnotationController {
         }catch(error){autoReviewNotice=`未加入复习：${String(error)}`;}
       }else autoReviewNotice="未加入复习：当前学习集没有可用复习卡组";
     }
-    if (!silent) {
-      const label = type === "excerpt" ? "摘录卡" : type === "comment" ? "评论卡" : "闪卡";
+    if (type === "excerpt") {
+      // 5.0.2：摘录提示带「定位」动作；不自动切换视图。
+      showExcerptNotice(this.plugin, card.id);
+      if (autoReviewNotice) new Notice(autoReviewNotice);
+    } else if (!silent) {
+      const label = type === "comment" ? "评论卡" : "闪卡";
       new Notice(`已生成${label}，可在侧边栏「卡片」或脑图拖拽使用${autoReviewNotice?`；${autoReviewNotice}`:""}`);
-    }else if(autoReviewNotice.startsWith("未加入复习"))new Notice(`已生成卡片；${autoReviewNotice}`);
+    }else{
+      // 5.0.2：自动摘录只给“可定位”的提示，不抢阅读视图。
+      showExcerptNotice(this.plugin, card.id);
+      if(autoReviewNotice.startsWith("未加入复习"))new Notice(`已生成卡片；${autoReviewNotice}`);
+    }
   }
 
   protected editNote(ann: Annotation): void {
@@ -1848,8 +2056,21 @@ export abstract class BaseAnnotationController {
     const index = this.cache.findIndex((item) => item.id === ann.id);
     if (index >= 0) this.cache.splice(index, 1);
     this.plugin.store.removeAnnotationLinks(ann.docPath, ann.id);
+    if (this.plugin.store.settings.syncDeleteCardOnSourceRemoval) this.removeCardsForAnnotations([ann]);
     this.persist();
     this.removeAnnotationEl(ann);
+  }
+
+  /** 学习集「同步删除卡片」：源标注删除时移除其卡片与被引用的脑图节点。 */
+  protected removeCardsForAnnotations(annotations: Annotation[]): void {
+    const ids = new Set(annotations.map(ann => ann.cardId).filter((id): id is string => !!id));
+    if (!ids.size) return;
+    this.plugin.store.libraryTransaction("同步删除卡片", () => {
+      for (const cardId of ids) {
+        for (const node of [...this.plugin.store.nodes].filter(node => node.cardId === cardId)) this.plugin.store.removeExcerptFromMindmap(node.id);
+        this.plugin.store.removeCard(cardId);
+      }
+    });
   }
 
   protected typeLabel(t: AnnotationType): string {
@@ -1870,23 +2091,34 @@ export abstract class BaseAnnotationController {
 
   /** 把卡片同步到当前文档脑图（仿 MarginNote：摘录即节点，实时联动）。已存在对应节点则跳过。 */
   protected addCardToMindmap(card: Card): void {
-    const docPath = card.docPath;
-    if (this.plugin.store.nodes.some((n) => n.cardId === card.id && n.canvasId === this.plugin.store.activeCanvasId && !n.hidden)) return;
-    const set=this.plugin.store.studySets.find(item=>item.id===this.plugin.store.activeStudySetId),destination=set?.excerptDestination;
-    const candidate=destination&&destination.canvasId===this.plugin.store.activeCanvasId?this.plugin.store.getNode(destination.nodeId):undefined;
-    const pinned=candidate?.canvasId===this.plugin.store.activeCanvasId?candidate:undefined;
-    const rootId = pinned ? pinned.parentId : this.ensureRoot(docPath);
-    const sibs = this.plugin.store.nodes.filter((n) => n.parentId === rootId&&n.canvasId===this.plugin.store.activeCanvasId);
+    const docPath = card.docPath, store = this.plugin.store;
+    if (store.nodes.some((n) => n.cardId === card.id && n.canvasId === store.activeCanvasId && !n.hidden)) return;
+    const set = store.studySets.find(item => item.id === store.activeStudySetId), destination = set?.excerptDestination;
+    const mode = destination?.mode ?? (destination?.nodeId ? "fixed" : "default");
+    if (mode === "document") return;
+    const candidate = mode === "fixed" && destination?.nodeId && destination.canvasId === store.activeCanvasId ? store.getNode(destination.nodeId) : undefined;
+    const pinned = candidate?.canvasId === store.activeCanvasId ? candidate : undefined;
+    let parentId: string | null = pinned ? pinned.parentId : this.ensureRoot(docPath);
+    let anchorX = 320, anchorY: number | undefined;
+    if (mode === "selection" && !pinned) {
+      const placement = this.plugin.studyWorkspace?.excerptPlacement?.();
+      if (placement?.parentId && store.getNode(placement.parentId)?.canvasId === store.activeCanvasId) {
+        parentId = placement.parentId; anchorX = placement.x ?? anchorX; anchorY = placement.y;
+      }
+    } else if (mode === "contents" && !pinned) {
+      parentId = this.ensureChapterNode(docPath, this.ensureRoot(docPath), card, destination?.canvasId);
+    }
+    const sibs = store.nodes.filter((n) => n.parentId === parentId && n.canvasId === store.activeCanvasId);
     const i = sibs.length;
     // 根节点在左侧，子节点单列排布到右侧；每个分支自动分配柔和底色
-    const x = pinned?.x??320;
-    const y = pinned ? pinned.y + 150 : 40 + i * 150;
-    const newNode:MindNode={
+    const x = pinned?.x ?? anchorX;
+    const y = pinned ? pinned.y + 150 : anchorY ?? 40 + i * 150;
+    const newNode: MindNode = {
       id: uid("node"),
-      parentId: rootId,
+      parentId,
       title: card.front.slice(0, 60),
       cardId: card.id,
-      canvasId: this.plugin.store.activeCanvasId,
+      canvasId: store.activeCanvasId,
       docPath,
       image: card.image,
       collapsed: false,
@@ -1894,10 +2126,27 @@ export abstract class BaseAnnotationController {
       y,
       color: this.branchColor(i),
     };
-    if(pinned){const siblings=sibs.slice().sort((a,b)=>(a.order??0)-(b.order??0)),position=siblings.findIndex(item=>item.id===pinned.id);
-      this.plugin.store.libraryTransaction("添加摘录到固定落点",()=>{this.plugin.store.addNode(newNode);this.plugin.store.reparentNode(newNode.id,rootId,position+1);});
-    }else this.plugin.store.addNode(newNode);
+    if (pinned) {
+      const siblings = sibs.slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0)), position = siblings.findIndex(item => item.id === pinned.id);
+      store.libraryTransaction("添加摘录到固定落点", () => { store.addNode(newNode); store.reparentNode(newNode.id, parentId!, position + 1); });
+    } else store.addNode(newNode);
     this.plugin.refreshMindmap();
+  }
+
+  /** 「跟着目录」：把摘录挂到当前页所属章节节点；没有目录时回退到文档根。 */
+  private ensureChapterNode(docPath: string, rootId: string, card: Card, canvasId?: string): string {
+    const store = this.plugin.store;
+    if (canvasId && canvasId !== store.activeCanvasId) return rootId;
+    const outline = store.getDocMeta(docPath).documentOutline ?? [];
+    const page = card.page ?? 0;
+    let chapter: { title: string; page: number } | undefined;
+    for (const item of outline) if (item.page > 0 && item.page <= page) chapter = { title: item.title, page: item.page };
+    if (!chapter) return rootId;
+    const existing = store.nodes.find(node => node.canvasId === store.activeCanvasId && node.parentId === rootId && node.title === chapter!.title);
+    if (existing) return existing.id;
+    const id = uid("node");
+    store.addNode({ id, parentId: rootId, title: chapter.title, docPath, canvasId: store.activeCanvasId, collapsed: false, x: 200, y: 40 + store.nodes.filter(node => node.parentId === rootId && node.canvasId === store.activeCanvasId).length * 150, color: this.branchColor(1) });
+    return id;
   }
 
   /** 柔和分支色板（MarginNote 风格 pastel cards） */

@@ -7,6 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { build } from "esbuild";
+import { runBrowser } from "../../scripts/ego-harness.mjs";
 
 export async function runUIAcceptance({fixtureName, prefix, label, pdfArtifactPath}) {
 const exec = promisify(execFile);
@@ -22,7 +23,8 @@ const mockedObsidian = obsidian.replace(/export class Menu \{[\s\S]*?(?=\nexport
   hidden: () => void = () => {};
   hide() { document.querySelector('#test-menu')?.remove(); this.hidden(); return this; }
   onHide(callback: () => void) { this.hidden = callback; }
-  addItem(cb: any) { const item: any = {title:'',disabled:false,action:()=>{},setTitle(value:any){this.title=value;return this;},setDisabled(value:any){this.disabled=value;return this;},setChecked(value:any){this.checked=value;return this;},onClick(value:any){this.action=value;return this;}};cb(item);this.items.push(item);return this; }
+  addItem(cb: any) { const item: any = {title:'',disabled:false,action:()=>{},setTitle(value:any){this.title=value;return this;},setDisabled(value:any){this.disabled=value;return this;},setChecked(value:any){this.checked=value;return this;},setIsLabel(value:any){this.isLabel=value;return this;},onClick(value:any){this.action=value;return this;}};cb(item);this.items.push(item);return this; }
+  addSeparator() { return this; }
   showAtMouseEvent() { document.querySelector('#test-menu')?.remove(); const menu=document.createElement('div');menu.id='test-menu';menu.setAttribute('role','menu');for(const item of this.items){const button=document.createElement('button');button.textContent=item.title;button.disabled=item.disabled;button.setAttribute('aria-checked',String(!!item.checked));button.onclick=(event)=>{menu.remove();item.action(event);};menu.append(button);}document.body.append(menu); }
   showAtPosition() { this.showAtMouseEvent(); }
 }`).replace(/export function setIcon\([\s\S]*?(?=\nexport )/, `export function setIcon(element: HTMLElement, icon: string) {
@@ -42,10 +44,12 @@ const mockedObsidian = obsidian.replace(/export class Menu \{[\s\S]*?(?=\nexport
 await writeFile(join(temporary, "obsidian.ts"), mockedObsidian);
 await writeFile(join(temporary, "index.html"), '<!doctype html><meta charset="utf-8"><title>MarginStudy UI acceptance</title><link rel="stylesheet" href="/styles.css"><body><main id="fixtures" style="height:95vh;background:#fff;color:#17252a"></main><script type="module" src="/fixture.js"></script>');
 await writeFile(join(temporary, "styles.css"), [await readFile(join(project, "styles.css"), "utf8"), await readFile(join(project, "styles-mindmap.css"), "utf8"), await readFile(join(project, "styles-organize.css"), "utf8")].join("\n"));
+await writeFile(join(temporary, "unused-network.ts"), "export function request(){throw new Error('AI network transport is outside this UI fixture');}\nexport function get(){}");
 await build({ entryPoints: [join(temporary, "fixture.ts")], bundle: true, platform: "browser", format: "esm", target: "chrome120", outfile: join(temporary, "fixture.js"),
   plugins: [{ name: "synthetic-obsidian", setup(builder) {
     builder.onResolve({ filter: /^obsidian$/ }, () => ({ path: join(temporary, "obsidian.ts") }));
     builder.onResolve({ filter: /^crypto$/ }, () => ({ path: "unused-crypto", namespace: "synthetic" }));
+    builder.onResolve({ filter: /^(?:http|https|node:http|node:https)$/ }, () => ({ path: join(temporary, "unused-network.ts") }));
     builder.onLoad({ filter: /.*/, namespace: "synthetic" }, () => ({ contents: "export function createHash() { throw new Error('Hashing is outside this UI fixture'); }", loader: "js" }));
   } }] });
 const allowed = new Set(["index.html", "fixture.js", "styles.css"]);
@@ -56,8 +60,8 @@ const server = createServer(async (request, response) => {
   response.end(await readFile(join(temporary, name)));
 });
 await new Promise((done) => server.listen(0, "127.0.0.1", done));
-const session = (await exec("agent-browser", ["session", "id", "--scope", "worktree", "--prefix", `${prefix}-${process.pid}`], { cwd: project })).stdout.trim();
-const browser = (...args) => exec("agent-browser", ["--session", session, ...args], { cwd: project, maxBuffer: 4 * 1024 * 1024 });
+const session = `${prefix}-${process.pid}`;
+const browser = (...args) => runBrowser(session, ...args);
 try {
   await browser("open", `http://127.0.0.1:${server.address().port}`);
   await browser("wait", "--fn", "window.done === true");

@@ -45,6 +45,46 @@ async function fresh() {
 }
 
 try {
+  await test('复习快捷键只在背面评分，输入与无关按键不受影响', async () => {
+    for (const grade of [1, 2, 3, 4]) {
+      const { store, plugin, deck, cards } = await fresh();
+      await startReview(plugin, { deckId: deck.id, presentation: 'score', cardIds: [cards[0].id] }); await wait();
+      const key = (value: string, target: HTMLElement = document.body) => {
+        const event = new KeyboardEvent('keydown', { key: value, bubbles: true, cancelable: true }); target.dispatchEvent(event); return event;
+      };
+      const count = () => store.reviewLogs.filter(log => !log.initialization).length;
+      for (const value of ['1', '2', '3', '4', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Enter']) assert(!key(value).defaultPrevented, `${value} 被拦截`);
+      assert(count() === 0 && !!document.querySelector('[aria-label="复习问题"]'), '正面按键改变了复习');
+      assert(key(' ').defaultPrevented, '空格未翻面'); await wait();
+      assert(!!document.querySelector('[aria-label="复习答案"]'), '空格未显示背面');
+      key(' '); await wait(); assert(!!document.querySelector('[aria-label="复习问题"]'), '第二次空格未回正面');
+      key(' '); await wait();
+      button('批注与工具').click();
+      const input = document.querySelector<HTMLTextAreaElement>('[aria-label="本次复习批注"]')!;
+      input.focus(); const inputEvent = key(String(grade), input);
+      assert(!inputEvent.defaultPrevented && count() === 0, '输入框数字被拦截或触发评分');
+      document.execCommand('insertText', false, String(grade));
+      assert(input.value === String(grade), '输入框不能输入数字');
+      input.blur(); key(String(grade)); await wait();
+      assert(count() === 1 && store.getLatestReviewLog()?.rating === grade, `数字 ${grade} 评分错误`);
+      assert(document.querySelector('.ms-native-review-completion')?.textContent?.includes('已到最后一张卡片'), '最后一张未进入收尾');
+      button('完成').click(); assert(!document.querySelector('.ms-review-score'), '完成未退出复习');
+    }
+  });
+
+  await test('收尾重来恢复本轮队列，完成退出复习', async () => {
+    const { store, plugin, deck, cards } = await fresh();
+    await startReview(plugin, { deckId: deck.id, presentation: 'score', cardIds: [cards[0].id] }); await wait();
+    button('显示答案').click(); document.querySelector<HTMLButtonElement>('.ms-grade.again')!.click(); await wait();
+    assert(document.querySelector('.ms-native-review-completion')?.textContent?.includes('已到最后一张卡片'), '重复评分后未显示收尾');
+    button('从头再来一遍').click(); await wait();
+    assert(document.querySelector('.ms-review-question-text')?.textContent?.includes(cards[0].front), '重来未恢复原卡');
+    assert(!!document.querySelector('[aria-label="复习问题"]'), '重来未回到正面');
+    button('显示答案').click(); document.querySelector<HTMLButtonElement>('.ms-grade.easy')!.click(); await wait();
+    assert(store.reviewLogs.filter(log => !log.initialization).length === 2, '重来后评分未记录');
+    button('完成').click(); assert(!document.querySelector('.ms-review-score'), '完成未关闭复习');
+  });
+
   await test('背面进入文档与脑图再返回，当前卡与会话游标逐字段不变', async () => {
     const { store, plugin, deck, canvasId, navigations } = await fresh();
     const originalCurrent = ReviewSession.prototype.current; let session: any;

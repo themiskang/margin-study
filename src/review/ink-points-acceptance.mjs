@@ -1,0 +1,55 @@
+import assert from "node:assert/strict";
+import { build } from "esbuild";
+import { createRequire } from "node:module";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const bundle = await build({ entryPoints: ["src/cards/inkPointsMigration.ts"], bundle: true, platform: "node", format: "cjs", write: false });
+const path = join(await mkdtemp(join(tmpdir(), "marginstudy-ink-points-")), "test.cjs");
+await writeFile(path, bundle.outputFiles[0].contents);
+const { migrateInkPointsToContent, readInkCommentToContent } = createRequire(import.meta.url)(path);
+const stroke = { id: "s", tool: "pen", color: "#000", width: 3, points: [{ x: 0.25, y: 0.5, pressure: 0.7 }] };
+const shortMeta = { kind: "short", snapshotWidth: 600, snapshotHeight: 800, viewScale: 0.5 };
+const short = migrateInkPointsToContent([stroke], shortMeta);
+assert.deepEqual(short[0].points, [{ x: 150, y: 400, pressure: 0.7 }]);
+assert.equal(short[0].pointsVersion, 2);
+assert.equal(migrateInkPointsToContent(short, shortMeta), short);
+const longMeta = { kind: "segmented", compositeWidth: 800, compositeHeight: 1200, snapshotLeft: 100, snapshotTop: 0.1 * 1200, viewScale: 0.5 };
+const long = migrateInkPointsToContent([stroke], longMeta);
+assert.deepEqual(long[0].points, [{ x: 100, y: 480, pressure: 0.7 }]);
+const modern = [{ ...stroke, pointsVersion: 2 }];
+assert.equal(migrateInkPointsToContent(modern, shortMeta), modern);
+const future = { ...stroke, pointsVersion: 3 };
+const mixed = migrateInkPointsToContent([future, { ...stroke, pointsVersion: 1 }], shortMeta);
+assert.equal(mixed[0], future);
+assert.equal(mixed[1].pointsVersion, 2);
+assert.deepEqual(stroke.points, [{ x: 0.25, y: 0.5, pressure: 0.7 }]);
+
+const sources = [];
+const imageSize = async source => {
+  sources.push(source);
+  if (source === "snapshot.png") return { width: 600, height: 800 };
+  if (source === "part.png") return { width: 800, height: 700 };
+  if (source === "blank.png") return { width: 840, height: 560 };
+  throw new Error("unavailable");
+};
+const shortItem = { id: "short", kind: "ink", image: "composite.png", snapshot: { image: "snapshot.png", x: 0.1, y: 0.1, width: 0.8, height: 0.8, viewScale: 0.5 }, strokes: [stroke] };
+const readShort = await readInkCommentToContent(shortItem, imageSize);
+assert.deepEqual(readShort.strokes[0].points, short[0].points);
+assert.equal(readShort.image, shortItem.image);
+assert.equal(shortItem.strokes[0], stroke);
+assert.equal(await readInkCommentToContent(readShort, imageSize), readShort);
+assert.deepEqual(sources, ["snapshot.png"]);
+
+const longItem = { ...shortItem, id: "long", snapshot: { ...shortItem.snapshot, x: 0.125, y: 0.1 }, parts: [{ image: "part-2.png", y: 700, height: 500 }, { image: "part.png", y: 0, height: 700 }] };
+const readLong = await readInkCommentToContent(longItem, imageSize);
+assert.deepEqual(readLong.strokes[0].points, long[0].points);
+assert.equal(readLong.parts, longItem.parts);
+assert.deepEqual(sources, ["snapshot.png", "part.png"]);
+const blank = await readInkCommentToContent({ id: "blank", kind: "ink", image: "blank.png", strokes: [stroke] }, imageSize);
+assert.deepEqual(blank.strokes[0].points, [{ x: 210, y: 280, pressure: 0.7 }]);
+await assert.rejects(readInkCommentToContent({ ...longItem, parts: [{ image: "part.png", y: 1, height: 700 }] }, imageSize), /分段尺寸无效/);
+await assert.rejects(readInkCommentToContent({ ...shortItem, snapshot: { ...shortItem.snapshot, image: "missing.png" } }, imageSize), /unavailable/);
+assert.equal(shortItem.strokes[0], stroke);
+console.log("PASS ink points: short, segmented offsets, viewScale, idempotence, versioned mixed input and image metadata");

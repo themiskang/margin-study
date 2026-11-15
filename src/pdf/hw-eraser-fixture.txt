@@ -1,0 +1,38 @@
+ await test('5.0.2 PDF eraser ignores hover and interrupted pen; erase undo survives reopen',async()=>{
+  const path='hw-eraser-switch.pdf';add(path,{bytes:await makePdf()});const p=plugin();let view=await openReader(path,p);
+  try{
+   view.setHandwritingMode('pen');let host=pageHost(view),overlay=host.querySelector<SVGSVGElement>('.ms-pen-overlay')!;
+   drag(overlay,host,[[.1,.2],[.3,.2],[.5,.2]]);drag(overlay,host,[[.1,.5],[.3,.5],[.5,.5]]);
+   const original=JSON.stringify(await p.store.loadAnnotations(path)),initial=JSON.parse(original),ids=initial.map((ann:any)=>ann.id);
+   assert(initial.length===2,'expected two independent ink annotations');
+   view.setHandwritingMode('eraser');pointer(overlay,host,'pointermove',.3,.2);pointer(overlay,host,'pointerup',.3,.2);
+   assert(JSON.stringify(await p.store.loadAnnotations(path))===original,'hover changed original ink');
+   view.setHandwritingMode('pen');const controller=view.annController.penControllers.get(1);let commits=0;const onCommit=controller.opts.onCommit;controller.opts.onCommit=(...args:any[])=>{commits++;return onCommit(...args);};
+   pointer(overlay,host,'pointerdown',.3,.2);view.setHandwritingMode('eraser');assert(controller.pointerId===null&&controller.gesture===null&&controller.current.length===0,'PDF gesture state survived tool switch');pointer(overlay,host,'pointermove',.3,.25);pointer(overlay,host,'pointerup',.3,.3);
+   assert(commits===0&&JSON.stringify(await p.store.loadAnnotations(path))===original,'interrupted pen committed or erased ink');assert(controller.pointerId===null&&controller.gesture===null&&controller.current.length===0,'PDF gesture state survived pointerup');
+   view.setHandwritingMode('pen');drag(overlay,host,[[.1,.8],[.3,.8],[.5,.8]]);let annotations=await p.store.loadAnnotations(path);
+   assert(annotations.length===3,'new stroke failed after interruption');const addedId=annotations[2].id;
+   view.setHandwritingMode('eraser');drag(overlay,host,[[.3,.75],[.3,.85]]);
+   annotations=await p.store.loadAnnotations(path);assert(annotations.filter((ann:any)=>ann.strokes?.length).map((ann:any)=>ann.id).join(',')===ids.join(','),'eraser changed untouched IDs or missed target');
+   view.annController.undoPenChange();annotations=await p.store.loadAnnotations(path);assert(annotations.find((ann:any)=>ann.id===addedId)?.strokes?.length===1,'undo did not restore target');
+   const restored=JSON.stringify(annotations);await p.store.flush();await view.onClose();view.containerEl.remove();view=await openReader(path,p);
+   assert(JSON.stringify(await p.store.loadAnnotations(path))===restored,'reopened PDF data differs');const canvas=pageHost(view).querySelector<HTMLCanvasElement>('.ms-ink-raster')!,ctx=canvas.getContext('2d')!;assert([.2,.5,.8].every(y=>ctx.getImageData(Math.round(canvas.width*.3),Math.round(canvas.height*y),1,1).data[3]>0),'reopened PDF did not render restored ink');
+  }finally{await view.onClose();view.containerEl.remove();}
+ });
+ await test('lasso AI text captures only selected ink and opens recognition',async()=>{
+  const path='hw-ai-text.pdf';add(path,{bytes:await makePdf()});const p=plugin(),view=await openReader(path,p);let request:any;
+  (aiServiceFor(p) as any).request=async(input:any)=>{request=input;return {text:'识别结果'};};
+  try{
+   view.setHandwritingMode('pen');const host=pageHost(view),overlay=host.querySelector<SVGSVGElement>('.ms-pen-overlay')!;
+   drag(overlay,host,[[.1,.2],[.3,.2],[.5,.2]]);drag(overlay,host,[[.1,.7],[.3,.7],[.5,.7]]);
+   view.setHandwritingMode('lasso');drag(overlay,host,[[.05,.1],[.55,.1],[.55,.3],[.05,.3],[.05,.1]]);
+   const button=host.querySelector<HTMLButtonElement>('[aria-label="AI 转文本"]')!;assert(button&&!button.hidden,'selected ink recognition entry missing');
+   let image='';host.addEventListener('ms-recognize-ink',(event:any)=>{image=event.detail.image;});button.click();await wait(30);
+   assert(image.startsWith('data:image/png;base64,'),'selected ink image missing');
+   const captured=new Image();captured.src=image;await captured.decode();assert(captured.height<80,'unselected distant stroke included in recognition image');
+   const modal=document.querySelector<HTMLElement>('.ms-modal');assert(modal?.textContent?.includes('AI 转文本'),'recognition dialog missing');
+   assert((modal?.querySelector('[aria-label="识别文字"]') as HTMLTextAreaElement)?.value==='识别结果','recognition result missing');
+   assert(request?.task==='markdown'&&request.images?.[0]===image,'selected ink not sent to AI');
+   document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
+  }finally{await view.onClose();view.containerEl.remove();}
+ });

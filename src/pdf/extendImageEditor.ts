@@ -45,11 +45,11 @@ export function renderExtendImages(box: HTMLElement, options: ImageEditorOptions
     geometry(item, image);
     item.append(el("img", {src:image.src, alt:"留白图片", draggable:"false"}));
     const menu = el("div", {class:"ms-extend-image-menu", role:"toolbar", "aria-label":"图片操作"});
-    for(const [label,text,cut] of [["复制留白图片","Copy",false],["剪切留白图片","Cut",true]] as const){
+    for(const [label,text,cut] of [["复制留白图片","复制",false],["剪切留白图片","剪切",true]] as const){
       const button=el("button",{"aria-label":label,text});
       button.addEventListener("click",event=>{event.stopPropagation();if(options.enabled()&&options.current())void options.clipboard(image,cut).catch(fail);});menu.append(button);
     }
-    const crop=el("button",{text:"Crop","aria-label":"裁剪留白图片"});
+    const crop=el("button",{text:"裁剪","aria-label":"裁剪留白图片"});
     crop.addEventListener("click",event=>{event.stopPropagation();if(!options.enabled())return;closeCrop?.();closeCrop=openExtendImageCrop(image,box,async patch=>{
       if(!options.current())throw new Error("文档或笔记本已切换");const images=options.latest();if(JSON.stringify(images.find(value=>value.id===image.id))!==JSON.stringify(image))throw new Error("留白图片已在其他窗口更新，请重新操作");
       await options.save(images.map(value=>value.id===image.id?{...value,...patch}:value));

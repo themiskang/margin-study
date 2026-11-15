@@ -32,10 +32,10 @@ export async function runLayerAcceptance({test,assert,plugin,add,app,htmlControl
   add('layer-pdf.pdf',{name:'Layers',pages:2});const p=plugin(),v:any=new ReaderView({app} as any,p);await v.onOpen();await v.loadFileByPath('layer-pdf.pdf');await v.renderPage(2);
   const controller=v.annController;controller.createPenAnnotation(1,[[{x:.2,y:.2},{x:.4,y:.2}]]);controller.createInkLayer('PDF 二轮');const second=controller.getInkLayers().active;
   controller.createPenAnnotation(1,[[{x:.3,y:.3},{x:.5,y:.3}]]);controller.createPenAnnotation(2,[[{x:.3,y:.3},{x:.5,y:.3}]]);controller.setInkOverlay('default');
-  assert(v.getPageRecord(1).annLayer.querySelectorAll('.ms-ann-pen').length===2&&v.getPageRecord(2).annLayer.querySelectorAll('.ms-ann-pen').length===1,'layer render crossed pages');
+  const alpha=(page:number,x:number,y:number)=>{const canvas=v.getPageRecord(page).annLayer.querySelector('.ms-ink-raster') as HTMLCanvasElement;return canvas.getContext('2d')!.getImageData(Math.round(canvas.width*x),Math.round(canvas.height*y),1,1).data[3];};assert(alpha(1,.3,.2)>0&&alpha(1,.4,.3)>0&&alpha(2,.3,.2)===0&&alpha(2,.4,.3)>0,'layer render crossed pages');
   const select=v.toolbarEl.querySelector('[aria-label="当前手写图层"]');assert(select.value===second,'toolbar state stale');
   await v.onClose();const reopened:any=new ReaderView({app} as any,p);await reopened.onOpen();await reopened.loadFileByPath('layer-pdf.pdf');
-  assert(reopened.annController.getInkLayers().active===second&&reopened.getPageRecord(1).annLayer.querySelector('.ms-ink-reference'),'layer state lost on reopen');
+  const canvas=reopened.getPageRecord(1).annLayer.querySelector('.ms-ink-raster') as HTMLCanvasElement,referenceAlpha=canvas.getContext('2d')!.getImageData(Math.round(canvas.width*.3),Math.round(canvas.height*.2),1,1).data[3];assert(reopened.annController.getInkLayers().active===second&&referenceAlpha>0&&referenceAlpha<120,'layer state lost on reopen');
   const manage=[...reopened.toolbarEl.querySelectorAll('button')].find((button:any)=>button.textContent==='图层') as HTMLButtonElement;manage.click();assert(document.querySelector('.ms-ink-layer-modal'),'layer manager absent');await reopened.onClose();assert(!document.querySelector('.ms-ink-layer-modal'),'closing reader leaked layer dialog');
  });
  await test('Handwriting settings list creates/selects/overlays, same-name merges, deletes non-default ink only after confirmation',async()=>{

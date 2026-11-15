@@ -1,6 +1,21 @@
 /** Public host adapters for an isolated workspace contract test. */
 export const notices: string[] = [];
-export class Notice { constructor(text: string) { notices.push(text); } }
+export class Notice {
+  noticeEl: HTMLElement;
+  constructor(text: string, _timeout?: number) {
+    notices.push(text);
+    this.noticeEl = document.createElement("div");
+    this.noticeEl.className = "notice";
+    this.noticeEl.setAttribute("role", "status");
+    this.noticeEl.textContent = text;
+    // Keep synthetic notices out of layout/hit-testing; tests dispatch their buttons directly.
+    this.noticeEl.style.display = "none";
+    document.body.append(this.noticeEl);
+    // Synthetic notices stay visible; tests remove them explicitly.
+  }
+  hide(): void { this.noticeEl.remove(); }
+  setMessage(text: string): void { this.noticeEl.textContent = text; notices.push(text); }
+}
 export class TFile {
   path: string; extension: string; name: string; basename: string; stat: any;
   constructor(path: string, size = 10) { this.path=path;this.name=path.split('/').pop()!;this.extension=this.name.split('.').pop()!;this.basename=this.name.replace(/\.[^.]+$/,'');this.stat={size,mtime:1,ctime:1}; }
@@ -29,9 +44,9 @@ export class Menu {
   private hidden:()=>void=()=>{};
   hide(){document.querySelector('#test-menu')?.remove();this.hidden();return this;}
   onHide(callback:()=>void){this.hidden=callback;}
-  addItem(callback:any){const item:any={title:'',disabled:false,action:()=>{},setTitle(value:string){this.title=value;return this;},setIcon(){return this;},setChecked(){return this;},setDisabled(value:boolean){this.disabled=value;return this;},onClick(action:any){this.action=action;return this;}};callback(item);this.items.push(item);return this;}
+  addItem(callback:any){const item:any={title:'',disabled:false,checked:null,isLabel:false,action:()=>{},setTitle(value:string){this.title=value;return this;},setIcon(){return this;},setChecked(value:boolean){this.checked=value;return this;},setIsLabel(value:boolean){this.isLabel=value;return this;},setDisabled(value:boolean){this.disabled=value;return this;},onClick(action:any){this.action=action;return this;}};callback(item);this.items.push(item);return this;}
   addSeparator(){return this;}
-  showAtMouseEvent(){document.querySelector('#test-menu')?.remove();const menu=document.createElement('div');menu.id='test-menu';menu.setAttribute('role','menu');for(const item of this.items){const button=document.createElement('button');button.setAttribute('role','menuitem');button.textContent=item.title;button.disabled=item.disabled;button.addEventListener('click',event=>{menu.remove();item.action(event);});menu.append(button);}document.body.append(menu);}
+  showAtMouseEvent(){document.querySelector('#test-menu')?.remove();const menu=document.createElement('div');menu.id='test-menu';menu.setAttribute('role','menu');for(const item of this.items){const button=document.createElement('button');button.setAttribute('role',item.checked===null?'menuitem':'menuitemradio');if(item.checked!==null)button.setAttribute('aria-checked',String(item.checked));if(item.isLabel)button.dataset.label='true';button.textContent=item.title;button.disabled=item.disabled;button.addEventListener('click',event=>{if(item.isLabel)return;menu.remove();item.action(event);});menu.append(button);}document.body.append(menu);}
   showAtPosition(){this.showAtMouseEvent();}
 }
 export const Platform={isMobile:false};

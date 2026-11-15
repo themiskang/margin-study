@@ -72,6 +72,15 @@ function selectAndLink(host: HTMLElement, ids: string[]) {
 }
 
 try {
+  await test('MN5 mind-map capsule has nine ordered actions and one checked current map', async () => {
+    const p=await fresh();p.addCard('menu-card','Menu card');p.addNode('menu-node','menu-card');
+    const {host}=p.graph({nativeChrome:true});button(host,'选择脑图').click();
+    const rows=[...document.querySelectorAll<HTMLButtonElement>('#test-menu button')];
+    const expected=['关闭脑图','主脑图','管理脑图','大纲','卡片分组看板','导出思维导图','导出学习集','朗读卡片','在场景模板里设置…'];
+    assert(rows.map(row=>row.textContent).join('|')===expected.join('|'),'mind-map menu order: '+rows.map(row=>row.textContent).join('|'));
+    assert(rows.filter(row=>row.getAttribute('aria-checked')==='true').length===1&&rows[1].getAttribute('aria-checked')==='true','current map is not the only checked item');
+    assert(rows.every((row,index)=>[0,8].includes(index)?row.disabled:!row.disabled),'unexpected enabled state');
+  });
   await test('Card editor and list batch palette expose all 16 colors and persist their indices', async () => {
     const p=await fresh();p.addCard('a','Alpha');p.addCard('b','Beta');p.store.settings.colors=['#123456'];
     openDetail(p.plugin,p.store.getCard('a')!);const modal=document.querySelector('.ms-modal')!;
@@ -260,7 +269,7 @@ try {
     const bar=host.querySelector<HTMLElement>('.ms-selection-actions')!,scroll=host.querySelector<HTMLElement>('.ms-mindmap')!;
     let card=graphCard(host,'one').getBoundingClientRect(),box=bar.getBoundingClientRect(),viewport=scroll.getBoundingClientRect();
     assert(box.bottom<=card.top&&card.top-box.bottom<=20,'selection actions are not above the selected card');
-    assert(button(bar,'概要').disabled&&button(bar,'重新分组').disabled&&button(bar,'合并').disabled,'single selection enables pair actions');
+    button(bar,'更多').click();button(document.querySelector('#test-menu')!,'更多操作…').click();const pairMenu=document.querySelector<HTMLElement>('#test-menu')!;assert(button(pairMenu,'概要').disabled&&button(pairMenu,'重新分组').disabled&&button(pairMenu,'合并').disabled,'single selection enables pair actions');document.querySelector('#test-menu')?.remove();
     for(const x of [0,700]) { p.store.updateNode('one',{x});const graph=mounted[mounted.length-1] as MindmapRenderer;graph.render();graphCard(host,'one').click();await pause();for(const end of [0,bar.scrollWidth]){bar.scrollLeft=end;box=bar.getBoundingClientRect();viewport=scroll.getBoundingClientRect();assert(box.left>=viewport.left&&box.right<=viewport.right,'near-edge selection actions cross map bounds');} }
     p.store.updateNode('one',{x:300});(mounted[mounted.length-1] as MindmapRenderer).render();graphCard(host,'one').click();
     scroll.scrollTop+=150;scroll.dispatchEvent(new Event('scroll'));await pause();box=bar.getBoundingClientRect();card=graphCard(host,'one').getBoundingClientRect();assert(box.bottom<=card.top&&card.top-box.bottom<=20,'scroll detached actions from card');
@@ -275,7 +284,7 @@ try {
       assert(document.querySelector('#test-menu')?.textContent?.includes('按内容拆分…')&&!document.querySelector('#test-menu')?.textContent?.includes('新建脑图…'),'card menu opened canvas selection');document.querySelector('#test-menu')?.remove();
     };
     clickMenu('one');const scroll=host.querySelector('.ms-mindmap')!;graphCard(host,'two').scrollIntoView({block:'center',inline:'center',behavior:'auto'});scroll.dispatchEvent(new Event('scroll'));await pause();clickMenu('two');
-    button(host,'选择脑图').click();assert(document.querySelector('#test-menu')?.textContent?.includes('新建脑图…'),'canvas selector is no longer reachable');
+    button(host,'选择脑图').click();button(document.querySelector('#test-menu')!,'管理脑图').click();assert(button(document.querySelector('.ms-modal')!,'新建脑图…'),'canvas management is no longer reachable');
   });
   await test('Native chrome places controls at the right, keeps old tools reachable, and opens locally owned floating panels', async () => {
     const p=await fresh();p.addCard('a','Article excerpt');p.addNode('one','a');target.style.width='760px';const {host,view}=p.graph({nativeChrome:true});assert(!host.querySelector('.ms-mindmap-root > .ms-toolbar'),'native workspace retained long top toolbar');
@@ -283,10 +292,10 @@ try {
     const hostStyle=document.createElement('style');hostStyle.textContent='button:not(.clickable-icon){background-color:#e0e0e0;color:#000}';target.append(hostStyle);
     const pill=getComputedStyle(button(host,'选择脑图'));assert(pill.color==='rgb(116, 123, 134)'&&pill.backgroundColor!=='rgb(224, 224, 224)','host button styles replaced native canvas pill colors');hostStyle.remove();
     const choose=(label:string)=>{button(host,'选择脑图').click();button(document.querySelector('#test-menu')!,label).click();};
-    choose('大纲');assert(host.querySelector('.ms-map-floating-panel .ms-outline-renderer.is-native')&&p.plugin.sidebar===p.sentinel,'outline float absent/stole sidebar');button(host,'关闭面板').click();choose('卡片分组看板 ⌃⌘M');assert(host.querySelector('.ms-map-floating-panel .ms-card-board.is-native'),'board float absent');button(host,'关闭面板').click();
-    button(host,'选择脑图').click();button(document.querySelector('#test-menu')!,'脑图工具与设置…').click();assert(button(document.querySelector('.ms-modal')!,'导入范围卡片')&&button(document.querySelector('.ms-modal')!,'自动布局'),'low-frequency commands lost');assert(![...document.querySelectorAll('.ms-modal button')].some(item=>item.textContent==='多选'),'tools modal retained a multi-select entry');
-    document.querySelector('.ms-modal-bg')!.remove();choose('多选 ⌥⌘M');assert(host.querySelector('[data-selection-mode="multiple"]'),'menu did not enable selection');
-    choose('工具 ▸');for(const label of ['手形工具','复制与粘贴 ▸','连接卡片','脑图手写'])assert(button(document.querySelector('#test-menu')!,label),`missing ${label}`);button(document.querySelector('#test-menu')!,'手形工具').click();assert(!host.querySelector('[data-selection-mode="multiple"]'),'hand did not exit selection');view.dispose();
+    choose('大纲');assert(host.querySelector('.ms-map-floating-panel .ms-outline-renderer.is-native')&&p.plugin.sidebar===p.sentinel,'outline float absent/stole sidebar');button(host,'关闭面板').click();choose('卡片分组看板');assert(host.querySelector('.ms-map-floating-panel .ms-card-board.is-native'),'board float absent');button(host,'关闭面板').click();
+    choose('管理脑图');assert(button(document.querySelector('.ms-modal')!,'导入范围卡片')&&button(document.querySelector('.ms-modal')!,'自动布局'),'low-frequency commands lost');
+    button(document.querySelector('.ms-modal')!,'多选 ⌥⌘M').click();assert(host.querySelector('[data-selection-mode="multiple"]'),'management did not enable selection');
+    choose('管理脑图');button(document.querySelector('.ms-modal')!,'工具 ▸').click();for(const label of ['手形工具','复制与粘贴 ▸','连接卡片','脑图手写'])assert(button(document.querySelector('#test-menu')!,label),`missing ${label}`);button(document.querySelector('#test-menu')!,'手形工具').click();assert(!host.querySelector('[data-selection-mode="multiple"]'),'hand did not exit selection');view.dispose();
   });
   (window as any).acceptanceScenes=['outline-edit','board-two-level','native-map','native-cards'];
   (window as any).showAcceptanceScene=async(scene:string)=>{
