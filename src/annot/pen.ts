@@ -11,6 +11,7 @@ import { inkEndpoint, inkPoint, inkSamples, PalmGuard, predictInkPoint } from ".
 import type { TimedInkPoint } from "./penInput";
 
 let inkPredictionReader: (() => boolean) | null = null;
+// 仅兜底 pen 墨迹；非 pen 分支裸传 ann.color，当前无色状态不可达（删色仅用于笔迹墨色变更）。
 export const INK_DEFAULT_COLOR = "#000000";
 // Lasso cut/copy must survive the controller being rebuilt by an annotation render.
 let lassoClipboard: Stroke[][] = [];

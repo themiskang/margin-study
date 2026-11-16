@@ -184,8 +184,7 @@ body:not(.is-mobile):has(.status-bar) .workspace-leaf.mod-active .ms-study-works
 .ms-workspace-tab-strip::-webkit-scrollbar {display:none;}
 .ms-workspace-tab {display:flex;align-items:center;width:306px;max-width:64%;min-width:120px;flex:0 0 auto;border:1px solid var(--ms-workspace-border);border-bottom:0;border-top:0;border-radius:8px 8px 0 0;}
 @media (max-width:900px) {
-  .ms-workspace-tab {width:auto;flex:1 1 0;min-width:0;}
-  .ms-workspace-tab-strip:has(.ms-workspace-tab:nth-child(3)) .ms-workspace-tab {flex:1 0 76px;}
+  .ms-workspace-tab {width:auto;flex:1 0 76px;min-width:76px;max-width:none;}
 }
 .ms-workspace-tab.is-active {background:#fff;}
 .ms-study-workspace .ms-workspace-tab>button[role=tab] {display:block;min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:transparent;border:0;box-shadow:none;font-size:14px;font-weight:650;height:32px;padding:5px 9px;text-align:left;color:#121212;}
