@@ -252,6 +252,26 @@ export async function runPenAcceptance({test,assert,wait,plugin,add,app,htmlCont
    anns=await annotations();assert(anns.length===1&&anns[0].strokes.length===2,'paste after cut did not restore the cut ink');
   }finally{await a.close();}
  });
+ await test('Legacy ink without colour renders black and keeps undefined through colour undo and redo',async()=>{
+  const p=plugin(),a=htmlController(p,'legacy-ink-colour.html');await a.load();a.body.style.cssText='position:relative;width:400px;height:300px';
+  try{
+   a.ann.createPenAnnotation([[{x:.1,y:.2},{x:.5,y:.2}]]);
+   const ann=(await p.store.loadAnnotations('legacy-ink-colour.html'))[0];delete ann.color;
+   const canvas=document.createElement('canvas');canvas.width=400;canvas.height=300;const context=canvas.getContext('2d')!;context.strokeStyle='#e53935';
+   paintInkStrokes(context,ann.strokes,400,300,undefined);const pixel=context.getImageData(120,60,1,1).data;
+   assert(pixel[0]===0&&pixel[1]===0&&pixel[2]===0&&pixel[3]>0,'missing colour inherited previous canvas colour');
+   const layer=document.createElement('div');PenController.render(layer,ann.strokes,400,300,undefined);
+   assert(layer.querySelector('path')!.getAttribute('stroke')==='#000000','missing SVG ink colour did not render black');
+   a.ann.setHandwritingMode('lasso');const overlay=a.body.querySelector<SVGSVGElement>('.ms-pen-overlay')!;
+   drag(overlay,a.body,[[.05,.1],[.55,.1],[.55,.3],[.05,.3],[.05,.1]]);
+   a.body.querySelector<HTMLButtonElement>('.ms-pen-selection-toolbar [aria-label="颜色"]')!.click();
+   a.body.querySelector<HTMLButtonElement>('[data-color="#1e88e5"]')!.click();await wait(20);
+   assert(ann.color==='#1e88e5','legacy ink colour change failed');
+   a.ann.undoPenChange();assert(ann.color===undefined,'legacy ink undo did not restore undefined');
+   a.ann.redoPenChange();assert(ann.color==='#1e88e5','legacy ink redo failed');
+   a.ann.undoPenChange();assert(ann.color===undefined,'legacy ink second undo did not restore undefined');
+  }finally{await a.close();}
+ });
  await test('HTML pen edits persist across split views, undo/redo, lasso move/delete and preserve source IDs',async()=>{
   const p=plugin(),a=htmlController(p,'edit.html'),b=htmlController(p,'edit.html');await a.load();await b.load();a.body.style.cssText='position:relative;width:400px;height:300px';b.body.style.cssText=a.body.style.cssText;
   a.ann.createPenAnnotation([[{x:.1,y:.2,pressure:.2},{x:.3,y:.2,pressure:.8}],[{x:.6,y:.7},{x:.8,y:.7}]]);const ann=(await p.store.loadAnnotations('edit.html'))[0],id=ann.id;p.store.cards.push({id:'ink-card',anchorAnnId:id});

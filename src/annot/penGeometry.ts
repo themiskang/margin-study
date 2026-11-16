@@ -9,7 +9,7 @@ import type { Stroke } from "../types";
 export type PenTool = "draw" | "highlight" | "erase" | "select";
 export type HandwritingMode = "pen" | "highlight" | "eraser" | "lasso" | "off";
 export interface InkRecord { id: string; strokes: Stroke[][]; color?: string; }
-export interface InkChange { id: string; before: Stroke[][]; after: Stroke[][]; color?: { before: string; after: string }; }
+export interface InkChange { id: string; before: Stroke[][]; after: Stroke[][]; color?: { before?: string; after: string }; }
 export interface InkSelection { id: string; indexes: number[]; }
 export const cloneStrokes = (strokes: Stroke[][]): Stroke[][] => strokes.map((stroke) => stroke.map((point) => ({ ...point })));
 

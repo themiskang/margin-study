@@ -1561,7 +1561,11 @@ export abstract class BaseAnnotationController {
         this.cache.splice(this.cache.indexOf(ann!), 1); creation.removed = true;
       } else {
         ann!.strokes = cloneStrokes(reverse ? change.before : change.after);
-        if (change.color) ann!.color = reverse ? change.color.before : change.color.after;
+        if (change.color) {
+          const color = reverse ? change.color.before : change.color.after;
+          if (color === undefined) delete (ann as Partial<Annotation>).color;
+          else ann!.color = color;
+        }
       }
     });
     // Erasing existing ink and linked source records still retains their annotation IDs.

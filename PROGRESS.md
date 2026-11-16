@@ -3477,6 +3477,13 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - `npx tsc --noEmit` 退出码 0；px-gap 为 292 通过、0 超差、0 缺失、6 跳过，输出在 `/tmp/marginstudy-p-i10-i19-px-final`。一次完整 verify 主动中断，不能计为通过；完整 verify 两轮尚未完成。
 - 下一步：先设计并实现同一标注内部分笔画改色及其撤销，再实现五项工具条和共享缓冲区；完成后串行运行两次完整 verify，并核对 px-gap。
 
+## 2026-11-16 · R7 无显式颜色笔迹撤销
+
+- 笔迹 Canvas 与 SVG 渲染均以 `INK_DEFAULT_COLOR` 黑色兜底；颜色变更记录保留原始 `undefined`，撤销删除显式颜色，重做及再次撤销保持可逆。
+- 新增 HTML 笔迹行为断言，覆盖默认绘制色、改色、撤销、重做和再次撤销。
+- `npx tsc --noEmit` 通过；`hw-eraser-acceptance` 240/240；`a19-acceptance` 12/12；`npm run verify` 串行两轮退出码均为 0，分别输出到 `/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-verify-1794814111300` 和 `/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-verify-1794814421975`。
+- 本包未进行真实宿主或 Pad 验收，待异厂复核。
+
 ## 2026-11-16 · P-I10/I19 收口（规划席接手实现与提交）
 
 - I-10：单选锚点 `.ms-node-connect-anchor`（mindmapRenderer.ts:1722 附近）+ 锚点拖动复用 `connectSelectedNodes`，预览改为 `#eab308` / `6 4`，四条合成断言在 `src/mindmap/a19-fixture.txt`，定向 12/12。

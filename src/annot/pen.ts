@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖笔迹几何、指针采样和调用方提供的回调。
- * [OUTPUT]: 提供手写控制器、预测设置、绘制函数和性能采样接口。
+ * [OUTPUT]: 提供手写控制器、默认笔色、绘制函数和性能采样接口。
  * [POS]: 处理手写指针输入并通知宿主保存活动状态。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
@@ -11,6 +11,7 @@ import { inkEndpoint, inkPoint, inkSamples, PalmGuard, predictInkPoint } from ".
 import type { TimedInkPoint } from "./penInput";
 
 let inkPredictionReader: (() => boolean) | null = null;
+export const INK_DEFAULT_COLOR = "#000000";
 // Lasso cut/copy must survive the controller being rebuilt by an annotation render.
 let lassoClipboard: Stroke[][] = [];
 export function setInkPredictionReader(reader: () => boolean): void { inkPredictionReader = reader; }
@@ -133,9 +134,9 @@ function renderStroke(parent: SVGElement, stroke: Stroke[], width: number, heigh
   }
 }
 
-export function paintInkStrokes(context: CanvasRenderingContext2D, strokes: Stroke[][], width: number, height: number, color: string, brush: "pen" | "highlight" = "pen", thickness?: number, opacity?: number, reference = false): void {
+export function paintInkStrokes(context: CanvasRenderingContext2D, strokes: Stroke[][], width: number, height: number, color: string | undefined, brush: "pen" | "highlight" = "pen", thickness?: number, opacity?: number, reference = false): void {
   context.save();
-  context.strokeStyle = color; context.lineCap = "round"; context.lineJoin = "round";
+  context.strokeStyle = color ?? INK_DEFAULT_COLOR; context.lineCap = "round"; context.lineJoin = "round";
   const alpha = Math.max(0, Math.min(1, opacity ?? 1));
   context.globalAlpha = alpha * (brush === "highlight" && opacity === undefined ? .32 : 1) * (reference ? .35 : 1);
   for (const stroke of strokes) {
@@ -554,7 +555,7 @@ export class PenController {
     const selected = new Map(this.selection.map(entry => [entry.id, new Set(entry.indexes)]));
     const changes: InkChange[] = this.records().flatMap((record) => {
       if (!selected.get(record.id)?.size || record.color === color) return [];
-      return [{ id: record.id, before: cloneStrokes(record.strokes), after: cloneStrokes(record.strokes), color: { before: record.color ?? this.opts.getColor(), after: color } }];
+      return [{ id: record.id, before: cloneStrokes(record.strokes), after: cloneStrokes(record.strokes), color: { before: record.color, after: color } }];
     });
     this.colorPalette.hidden = true;
     if (!changes.length) return;
@@ -620,11 +621,11 @@ export class PenController {
     this.colorPalette.style.top = `${Math.max(0, bounds.y * rect.height + 4)}px`;
   }
 
-  static render(layer: HTMLElement, strokes: Stroke[][], width: number, height: number, color: string, brush: "pen" | "highlight" = "pen", thickness?: number, opacity?: number): void {
+  static render(layer: HTMLElement, strokes: Stroke[][], width: number, height: number, color: string | undefined, brush: "pen" | "highlight" = "pen", thickness?: number, opacity?: number): void {
     const svg = document.createElementNS(SVGNS, "svg"); svg.classList.add("ms-pen-render");
     svg.setAttribute("width", String(width)); svg.setAttribute("height", String(height)); svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
     svg.dataset.inkBrush = brush; if (brush === "highlight" && opacity === undefined) svg.style.opacity = ".32";
-    for (const stroke of strokes) renderStroke(svg, stroke, width, height, color, brush, thickness, opacity);
+    for (const stroke of strokes) renderStroke(svg, stroke, width, height, color ?? INK_DEFAULT_COLOR, brush, thickness, opacity);
     layer.append(svg);
   }
 }
