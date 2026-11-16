@@ -3492,3 +3492,11 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - 新断言在 `src/documents/acceptance-fixtures/penCases.txt`（五项顺序、颜色与撤销重做、复制粘贴、删除、剪切后粘贴复原），reader 套件 239/239。
 - 门禁（规划席自跑）：tsc 0；`npm run verify` 连续两轮 52/52 PASS 退出码 0；`node scripts/px-gap.mjs` 292 通过 / 0 超差 / 0 缺失 / 6 跳过。
 - 未覆盖：真实宿主（Obsidian 内 PDF/Word）手绘拖动与工具条观感未做现场截图验收；A6 Pad 仍离线。
+
+## 2026-11-16 · I-04 编辑器内容坐标
+
+- 短卡与分段长卡在输入、绘制和保存时直接使用相对快照的内容坐标；旧版笔迹仍在读取时迁移。快照元数据保留实际 1:1 比例。
+- 长卡夹具将短卡画布按 0.5 缩放，检查输入点、保存后像素位置与重开坐标。
+- `npx tsc --noEmit` 通过；`hw-eraser` 240/240；`a19` 12/12；`review-long` 14/14；`px-gap` 298 总数、292 通过、0 超差、0 缺失、6 跳过。
+- `npm run verify` 串行两轮退出码均为 0，结果目录分别为 `/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-verify-1794816503752` 和 `/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-verify-1794816811963`。
+- 未进行真实宿主或 Pad 验收；待异厂复核。

@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 卡片数据、快照图片和手写输入。
+ * [OUTPUT]: 卡片快照、手写评论显示与编辑入口。
+ * [POS]: 以内容坐标保存卡片手写评论，旧数据读取时迁移。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import { Notice } from "obsidian";
 import type MarginStudyPlugin from "../main";
 import type { Card } from "../types";
@@ -9,7 +15,7 @@ import { uid } from "../utils/id";
 import { renderMarkdown } from "../utils/markdown";
 import { createModal } from "../utils/modal";
 import { cardCommentItems } from "./commentOrder";
-import { migrateInkPointsToContent, readInkCommentToContent } from "./inkPointsMigration";
+import { readInkCommentToContent } from "./inkPointsMigration";
 import type { CardInkMedia } from "./inkPointsMigration";
 
 type Media = NonNullable<Card["commentMedia"]>[number];
@@ -153,7 +159,7 @@ export function openCardInkComment(plugin: MarginStudyPlugin, cardId: string, mo
       const width = snapshot.width, height = snapshot.height + margin * 2;
       const active = plugin.activeReader?.getActiveHandwritingPreset?.(), presets = handwritingPresets(plugin.store.settings);
       const preset = plugin.activeReader?.getHandwritingPreset?.() ?? presets.find(value => value.id === active) ?? presets.find(value => value.type !== "highlighter") ?? presets[0];
-      const drawing = segmentedCardInkInput(width, height, { color: preset?.color ?? "#5269dc", width: preset ? handwritingPresetWidth(preset, "card") : 3, opacity: preset?.opacity ?? 1 });
+      const drawing = segmentedCardInkInput(width, height, { color: preset?.color ?? "#5269dc", width: preset ? handwritingPresetWidth(preset, "card") : 3, opacity: preset?.opacity ?? 1 }, { x: 0, y: margin });
       const viewport = el("div", { class: "ms-card-ink-viewport" });
       drawing.element.style.position = "relative"; drawing.element.style.background = "#fff";
       for (const part of snapshot.parts) {
@@ -196,8 +202,7 @@ export function openCardInkComment(plugin: MarginStudyPlugin, cardId: string, mo
           }
           if (JSON.stringify(plugin.store.getCard(cardId)) !== JSON.stringify(captured)) throw new Error("卡片已变化，请重新打开批注");
           if (JSON.stringify(drawing.strokes()) !== JSON.stringify(strokes)) throw new Error("笔迹已变化，请重新保存批注");
-          const contentStrokes = migrateInkPointsToContent(strokes, { kind: "segmented", compositeWidth: width, compositeHeight: height, snapshotLeft: 0, snapshotTop: margin });
-          const media: Media = { id: uid("comment"), kind: "ink", name: "整卡截图批注", collapsed: true, image: preview.toDataURL("image/png"), strokes: contentStrokes, parts,
+          const media: Media = { id: uid("comment"), kind: "ink", name: "整卡截图批注", collapsed: true, image: preview.toDataURL("image/png"), strokes, parts,
             snapshot: { image: snapshot.image, x: 0, y: margin / height, width: 1, height: snapshot.height / height, viewScale: 1 } };
           plugin.store.updateCard(cardId, { commentMedia: [...(latest.commentMedia ?? []), media] });
           close(); onChanged?.(); offerUndo(plugin, cardId, media.id, onChanged);
@@ -207,23 +212,20 @@ export function openCardInkComment(plugin: MarginStudyPlugin, cardId: string, mo
       return;
     }
     const width = snapshot ? snapshot.width + margin * 2 : 840, height = snapshot ? snapshot.height + margin * 2 : 560;
-    const viewScale = 1;
-    const viewWidth = Math.max(1, Math.round(width * viewScale)), viewHeight = Math.max(1, Math.round(height * viewScale));
     const reference = snapshot ? { x: margin, y: margin, width: snapshot.width, height: snapshot.height } : { x: 0, y: 0, width, height };
-    const viewReference = { x: reference.x * viewScale, y: reference.y * viewScale, width: reference.width * viewScale, height: reference.height * viewScale };
     const paper = el("div", { class: "ms-card-ink-paper", "data-snapshot-frame": snapshot ? "true" : "false" });
-    Object.assign(paper.style, { position: "relative", width: `${viewWidth}px`, height: `${viewHeight}px`, background: "#fff" });
-    if (snapshot) paper.append(el("img", { src: snapshot.image, alt: "原卡只读快照", style: `position:absolute;left:${viewReference.x}px;top:${viewReference.y}px;width:${viewReference.width}px;height:${viewReference.height}px;pointer-events:none` }));
+    Object.assign(paper.style, { position: "relative", width: `${width}px`, height: `${height}px`, background: "#fff" });
+    if (snapshot) paper.append(el("img", { src: snapshot.image, alt: "原卡只读快照", style: `position:absolute;left:${reference.x}px;top:${reference.y}px;width:${reference.width}px;height:${reference.height}px;pointer-events:none` }));
     const active = plugin.activeReader?.getActiveHandwritingPreset?.(), presets = handwritingPresets(plugin.store.settings);
     const preset = plugin.activeReader?.getHandwritingPreset?.() ?? presets.find(value => value.id === active) ?? presets.find(value => value.type !== "highlighter") ?? presets[0];
-    const drawing = cardInkInput(viewWidth, viewHeight, viewReference, { color: preset?.color ?? "#5269dc", width: preset ? handwritingPresetWidth(preset, "card") : 3, opacity: preset?.opacity ?? 1 });
+    const drawing = cardInkInput(width, height, reference, { color: preset?.color ?? "#5269dc", width: preset ? handwritingPresetWidth(preset, "card") : 3, opacity: preset?.opacity ?? 1 });
     paper.append(drawing.canvas); const viewport = el("div", { class: "ms-card-ink-viewport" }); viewport.append(paper); loading.replaceWith(viewport);
     undo.disabled = false; clear.disabled = false; save.disabled = false; undo.addEventListener("click", drawing.undo); clear.addEventListener("click", drawing.clear);
     save.addEventListener("click", async () => {
       if (save.disabled) return;
       drawing.freeze(true); save.disabled = true; undo.disabled = true; clear.disabled = true;
       const strokes = drawing.strokes(), frozenStrokes = JSON.stringify(strokes);
-      const frozenCanvas = document.createElement("canvas"); frozenCanvas.width = viewWidth; frozenCanvas.height = viewHeight;
+      const frozenCanvas = document.createElement("canvas"); frozenCanvas.width = width; frozenCanvas.height = height;
       frozenCanvas.getContext("2d")!.drawImage(drawing.canvas, 0, 0);
       const composed = document.createElement("canvas"); composed.width = width; composed.height = height;
       try {
@@ -231,13 +233,12 @@ export function openCardInkComment(plugin: MarginStudyPlugin, cardId: string, mo
         const latest = plugin.store.getCard(cardId); if (!latest) throw new Error("卡片已不存在");
         if (JSON.stringify(latest) !== JSON.stringify(captured)) throw new Error("卡片已变化，请重新打开批注");
         const context = composed.getContext("2d")!; context.fillStyle = "#fff"; context.fillRect(0, 0, composed.width, composed.height);
-        if (snapshot) context.drawImage(paper.querySelector("img")!, viewReference.x, viewReference.y, viewReference.width, viewReference.height);
+        if (snapshot) context.drawImage(paper.querySelector("img")!, reference.x, reference.y, reference.width, reference.height);
         context.drawImage(frozenCanvas, 0, 0);
         if (JSON.stringify(plugin.store.getCard(cardId)) !== JSON.stringify(captured)) throw new Error("卡片已变化，请重新打开批注");
         if (JSON.stringify(drawing.strokes()) !== frozenStrokes || drawing.canvas.toDataURL() !== frozenCanvas.toDataURL()) throw new Error("笔迹已变化，请重新保存批注");
-        const contentStrokes = migrateInkPointsToContent(strokes, { kind: "short", snapshotWidth: reference.width, snapshotHeight: reference.height });
-        const media: Media = { id: uid("comment"), kind: "ink", name: snapshot ? "整卡截图批注" : "空白手写", collapsed: true, image: composed.toDataURL("image/png"), strokes: contentStrokes,
-          ...(snapshot ? { snapshot: { image: snapshot.image, x: reference.x / width, y: reference.y / height, width: reference.width / width, height: reference.height / height, viewScale } } : {}) };
+        const media: Media = { id: uid("comment"), kind: "ink", name: snapshot ? "整卡截图批注" : "空白手写", collapsed: true, image: composed.toDataURL("image/png"), strokes,
+          ...(snapshot ? { snapshot: { image: snapshot.image, x: reference.x / width, y: reference.y / height, width: reference.width / width, height: reference.height / height, viewScale: 1 } } : {}) };
         plugin.store.updateCard(cardId, { commentMedia: [...(latest.commentMedia ?? []), media] });
         close(); onChanged?.(); offerUndo(plugin, cardId, media.id, onChanged);
       } catch (error) { new Notice(`批注保存失败：${String(error)}`); }

@@ -40,13 +40,22 @@ try {
   openCardInkComment(plugin, card.id, 'snapshot');
   for (let attempt = 0; attempt < 200 && document.querySelector<HTMLButtonElement>('[data-save-card-ink]')?.disabled; attempt++) await wait(25);
   const modal = document.querySelector('[data-card-ink-editor]')!, drawing = modal.querySelector<HTMLCanvasElement>('canvas[aria-label="卡片批注画布"]')!;
+  const paper = modal.querySelector<HTMLElement>('.ms-card-ink-paper')!;
+  paper.style.transformOrigin = 'top left'; paper.style.transform = 'scale(0.5)';
   const bounds = drawing.getBoundingClientRect();
-  drawing.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 42, pointerType: 'mouse', button: 0, clientX: bounds.left + 150, clientY: bounds.top + 160 }));
-  drawing.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 42, pointerType: 'mouse', button: 0, clientX: bounds.left + 150, clientY: bounds.top + 160 }));
+  drawing.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 42, pointerType: 'mouse', button: 0, clientX: bounds.left + 75, clientY: bounds.top + 80 }));
+  drawing.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 42, pointerType: 'mouse', button: 0, clientX: bounds.left + 75, clientY: bounds.top + 80 }));
+  const ink = drawing.getContext('2d')!.getImageData(150, 160, 1, 1).data;
+  if (!ink[3]) throw new Error('缩放后画布笔迹落点错误');
   modal.querySelector<HTMLButtonElement>('[data-save-card-ink]')!.click();
   for (let attempt = 0; attempt < 200 && !card.commentMedia; attempt++) await wait(25);
   const saved = card.commentMedia[0], reopened = await readCardInkComment(plugin, JSON.parse(JSON.stringify(saved)));
   if (saved.strokes[0].pointsVersion !== 2 || Math.abs(saved.strokes[0].points[0].x - 30) > .01 || Math.abs(saved.strokes[0].points[0].y - 40) > .01 || JSON.stringify(reopened.strokes) !== JSON.stringify(saved.strokes)) throw new Error('短卡保存或重开内容坐标错误');
+  const image = new Image(); image.src = saved.image; await image.decode();
+  const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height;
+  const context = canvas.getContext('2d')!; context.drawImage(image, 0, 0);
+  const pixel = context.getImageData(150, 160, 1, 1).data;
+  if (![0, 1, 2].every(channel => Math.abs(pixel[channel] - (ink[channel] * ink[3] / 255 + 255 - ink[3])) <= 2)) throw new Error('缩放后保存笔迹与页面落点不对齐');
   results.push({ name: '短卡保存版本 2 坐标并重开', passed: true });
 } catch (error) { results.push({ name: '短卡保存版本 2 坐标并重开', passed: false, error: String(error) }); }
 try {

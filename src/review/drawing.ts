@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 指针事件、画布尺寸和手写样式。
+ * [OUTPUT]: 复习手绘与卡片评论手写输入。
+ * [POS]: 卡片评论采集及绘制使用相对快照的内容坐标。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import type { Stroke } from "../types";
 import { el } from "../utils/dom";
 import { inkEndpoint, inkPoint, inkSamples, PalmGuard } from "../annot/penInput";
@@ -106,9 +112,9 @@ export function cardInkInput(width: number, height: number, reference: { x: numb
     const bounds = canvas.getBoundingClientRect();
     const x = Math.max(0, Math.min(width, (event.clientX - bounds.left) * width / Math.max(1, bounds.width)));
     const y = Math.max(0, Math.min(height, (event.clientY - bounds.top) * height / Math.max(1, bounds.height)));
-    return inkPoint(event, (x - reference.x) / reference.width, (y - reference.y) / reference.height);
+    return inkPoint(event, x - reference.x, y - reference.y);
   };
-  const position = (value: Stroke) => ({ x: reference.x + value.x * reference.width, y: reference.y + value.y * reference.height });
+  const position = (value: Stroke) => ({ x: reference.x + value.x, y: reference.y + value.y });
   const segment = (stroke: MindmapInkStroke, previous: Stroke, next?: Stroke) => {
     const start = position(previous), end = next && position(next), pressure = next?.pressure ?? previous.pressure;
     context.strokeStyle = stroke.color; context.fillStyle = stroke.color; context.globalAlpha = stroke.opacity ?? 1;
@@ -151,13 +157,13 @@ export function cardInkInput(width: number, height: number, reference: { x: numb
     if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
   };
   canvas.addEventListener("pointerup", finish); canvas.addEventListener("pointercancel", finish); canvas.addEventListener("lostpointercapture", finish);
-  return { canvas, strokes: () => strokes.map(stroke => ({ ...stroke, points: stroke.points.map(value => ({ ...value })) })),
+  return { canvas, strokes: () => strokes.map(stroke => ({ ...stroke, pointsVersion: 2, points: stroke.points.map(value => ({ ...value })) })),
     undo: () => { if (frozen || pointerId !== null) return; strokes.pop(); repaint(); },
     clear: () => { if (frozen || pointerId !== null) return; strokes.length = 0; repaint(); },
     freeze: value => { frozen = value; if (value) { current = undefined; pointerId = null; pointerType = null; } } };
 }
 
-export function segmentedCardInkInput(width: number, height: number, style: DrawingStyle): {
+export function segmentedCardInkInput(width: number, height: number, style: DrawingStyle, reference: { x: number; y: number }): {
   element: HTMLElement; canvases: HTMLCanvasElement[]; strokes(): MindmapInkStroke[]; undo(): void; clear(): void; freeze(value: boolean): void;
 } {
   const element = el("div", { style: `width:${width}px` });
@@ -174,10 +180,10 @@ export function segmentedCardInkInput(width: number, height: number, style: Draw
     const bounds = canvas.getBoundingClientRect();
     const x = Math.max(0, Math.min(width, (event.clientX - bounds.left) * width / bounds.width));
     const y = Math.max(0, Math.min(height, Number(canvas.dataset.offsetY) + (event.clientY - bounds.top) * canvas.height / bounds.height));
-    return inkPoint(event, x / width, y / height);
+    return inkPoint(event, x - reference.x, y - reference.y);
   };
   const draw = (stroke: MindmapInkStroke, previous: Stroke, next?: Stroke) => {
-    const startY = previous.y * height, endY = (next?.y ?? previous.y) * height;
+    const startY = previous.y + reference.y, endY = (next?.y ?? previous.y) + reference.y;
     for (const canvas of canvases) {
       const offset = Number(canvas.dataset.offsetY);
       if (Math.max(startY, endY) + stroke.width < offset || Math.min(startY, endY) - stroke.width > offset + canvas.height) continue;
@@ -185,8 +191,8 @@ export function segmentedCardInkInput(width: number, height: number, style: Draw
       context.strokeStyle = stroke.color; context.fillStyle = stroke.color; context.globalAlpha = stroke.opacity ?? 1;
       context.lineWidth = pressure === undefined ? stroke.width : Math.max(.5, stroke.width * (.45 + pressure * 1.1));
       context.lineCap = "round"; context.lineJoin = "round"; context.beginPath();
-      if (next) { context.moveTo(previous.x * width, startY - offset); context.lineTo(next.x * width, endY - offset); context.stroke(); }
-      else { context.arc(previous.x * width, startY - offset, Math.max(.5, context.lineWidth / 2), 0, Math.PI * 2); context.fill(); }
+      if (next) { context.moveTo(previous.x + reference.x, startY - offset); context.lineTo(next.x + reference.x, endY - offset); context.stroke(); }
+      else { context.arc(previous.x + reference.x, startY - offset, Math.max(.5, context.lineWidth / 2), 0, Math.PI * 2); context.fill(); }
       context.globalAlpha = 1;
     }
   };
@@ -223,7 +229,7 @@ export function segmentedCardInkInput(width: number, height: number, style: Draw
     };
     canvas.addEventListener("pointerup", finish); canvas.addEventListener("pointercancel", finish); canvas.addEventListener("lostpointercapture", finish);
   }
-  return { element, canvases, strokes: () => strokes.map(stroke => ({ ...stroke, points: stroke.points.map(value => ({ ...value })) })),
+  return { element, canvases, strokes: () => strokes.map(stroke => ({ ...stroke, pointsVersion: 2, points: stroke.points.map(value => ({ ...value })) })),
     undo: () => { if (!frozen && pointerId === null) { strokes.pop(); repaint(); } },
     clear: () => { if (!frozen && pointerId === null) { strokes.length = 0; repaint(); } },
     freeze: value => { frozen = value; if (value) { current = undefined; pointerId = null; pointerType = null; } } };
