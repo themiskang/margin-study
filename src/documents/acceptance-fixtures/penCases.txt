@@ -221,6 +221,37 @@ export async function runPenAcceptance({test,assert,wait,plugin,add,app,htmlCont
   const moved=transformSelectedInk(records,selected,{x:.9,y:.1});const after=moved[0].after[0];assert(Math.abs(after[1].x-1)<1e-8&&Math.abs(after[1].x-after[0].x-.7)<1e-8&&after[0].pressure===.2,'clamp distorted ink or lost pressure');
   assert(transformSelectedInk(records,selected,null)[0].after.length===1,'delete selected removed other ink');
  });
+ await test('Lasso toolbar exposes MN5 colour/cut/copy/AI text/delete and colour edits stay undoable',async()=>{
+  const p=plugin(),a=htmlController(p,'lasso-toolbar.html');await a.load();a.body.style.cssText='position:relative;width:400px;height:300px';
+  const annotations=async()=>((await p.store.loadAnnotations('lasso-toolbar.html')) as any[]).filter(ann=>ann.strokes?.length);
+  const overlay=()=>a.body.querySelector<SVGSVGElement>('.ms-pen-overlay')!;
+  const relasso=async(polygon:number[][])=>{a.ann.setHandwritingMode('off');a.ann.setHandwritingMode('lasso');drag(overlay(),a.body,polygon);const bar=a.body.querySelector<HTMLElement>('.ms-pen-selection-toolbar');assert(bar&&!bar.hidden,'lasso toolbar missing after selection');return bar!;};
+  const act=(bar:HTMLElement,name:string)=>{const found=bar.querySelector<HTMLButtonElement>(`[aria-label="${name}"]`);assert(found,'toolbar action missing: '+name);return found!;};
+  const top=[[.05,.1],[.55,.1],[.55,.3],[.05,.3],[.05,.1]],bottom=[[.05,.6],[.55,.6],[.55,.8],[.05,.8],[.05,.6]];
+  try{
+   a.ann.createPenAnnotation([[{x:.1,y:.2},{x:.5,y:.2}]]);a.ann.createPenAnnotation([[{x:.1,y:.7},{x:.5,y:.7}]]);
+   let bar=await relasso(top);
+   assert([...bar.querySelectorAll('button')].map(item=>item.getAttribute('aria-label')).join('/')==='颜色/剪切/复制/AI 转文本/删除','toolbar order differs from MN5 D-22');
+   act(bar,'颜色').click();
+   const palette=a.body.querySelector<HTMLButtonElement>('.ms-pen-color-palette')!;
+   assert(palette&&!palette.hidden,'colour palette did not open from the toolbar');
+   palette.querySelector<HTMLButtonElement>('[data-color="#1e88e5"]')!.click();await wait(20);
+   let anns=await annotations();
+   assert(anns.length===2&&anns[0].color==='#1e88e5'&&anns[1].color==='#000000','colour action hit unselected ink or missed the selection');
+   a.ann.undoPenChange();anns=await annotations();assert(anns[0].color==='#000000','colour undo did not restore the original colour');
+   a.ann.redoPenChange();anns=await annotations();assert(anns[0].color==='#1e88e5','colour redo did not reapply the colour');
+   bar=await relasso(top);act(bar,'复制').click();
+   overlay().dispatchEvent(new KeyboardEvent('keydown',{key:'v',ctrlKey:true,bubbles:true,cancelable:true}));await wait(20);
+   anns=await annotations();assert(anns.length===3,'copy and paste did not add the selected ink');
+   bar=await relasso(bottom);act(bar,'删除').click();anns=await annotations();
+   assert(anns.length===2,'delete action did not remove only the selected ink');
+   bar=await relasso(top);act(bar,'剪切').click();anns=await annotations();
+   assert(anns.length===0,'cut action did not remove the selected ink');
+   a.ann.setHandwritingMode('off');a.ann.setHandwritingMode('lasso');
+   overlay().dispatchEvent(new KeyboardEvent('keydown',{key:'v',ctrlKey:true,bubbles:true,cancelable:true}));await wait(20);
+   anns=await annotations();assert(anns.length===1&&anns[0].strokes.length===2,'paste after cut did not restore the cut ink');
+  }finally{await a.close();}
+ });
  await test('HTML pen edits persist across split views, undo/redo, lasso move/delete and preserve source IDs',async()=>{
   const p=plugin(),a=htmlController(p,'edit.html'),b=htmlController(p,'edit.html');await a.load();await b.load();a.body.style.cssText='position:relative;width:400px;height:300px';b.body.style.cssText=a.body.style.cssText;
   a.ann.createPenAnnotation([[{x:.1,y:.2,pressure:.2},{x:.3,y:.2,pressure:.8}],[{x:.6,y:.7},{x:.8,y:.7}]]);const ann=(await p.store.loadAnnotations('edit.html'))[0],id=ann.id;p.store.cards.push({id:'ink-card',anchorAnnId:id});

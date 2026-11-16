@@ -3461,3 +3461,27 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - 基线：tsc 0 + verify 52/52 PASS + px-gap 292/298 0 超差。
 - 新构建 evidence：.agent-artifacts/newbuild-20261116/（3 视口截图 + build.json 锚点）。
 - 剩余未闭合：A6 Pad（设备离线）、A3 379 全菜单矩阵（需 MN5 原生采集）、I-04 编辑器内容坐标（trailing）。
+
+## 2026-11-16 · P-I10/I19 执行中
+
+- I-10 已增加单选节点链条按钮、鼠标与笔拖动入口及黄色虚线，复用现有节点关联路径；尚未验证实际拖动建边。
+- I-19 尚未实现。套索记录当前只有笔画坐标，颜色属于标注记录；部分笔画改色与跨 PDF、Word、留白复制需要保留记录样式及撤销语义。
+- `npx tsc --noEmit` 退出码 0；定向回归 workspace 352/352、mindmap-a18 7/7、mindmap-a19 11/11。全量 verify、px-gap 和宿主验收未运行。
+- 勘误补记已登记 `pdf.worker.js` 的 16 位短哈希；历史 `build.json` 未修改。
+- 下一步：先验证 I-10 的拖动建边和取消路径，再设计并实现 I-19 的笔迹样式、共享缓冲区及撤销，最后串行完成两轮完整回归和 px-gap。
+
+## 2026-11-16 · P-I10/I19 返工续做
+
+- `src/mindmap/a19-fixture.txt` 新增单选锚点、黄色虚线、取消不建边及拖动只建一条边的合成断言；定向套件 12/12 通过。
+- `src/annot/penGeometry.ts` 和 `src/annot/baseController.ts` 增加笔迹颜色变更及撤销记录传递；五项工具条、颜色选择交互、剪切复制粘贴尚未实现。部分笔画属于同一标注时，改色需要保留未选笔画的原色，不能直接改变整条标注颜色。
+- `npx tsc --noEmit` 退出码 0；px-gap 为 292 通过、0 超差、0 缺失、6 跳过，输出在 `/tmp/marginstudy-p-i10-i19-px-final`。一次完整 verify 主动中断，不能计为通过；完整 verify 两轮尚未完成。
+- 下一步：先设计并实现同一标注内部分笔画改色及其撤销，再实现五项工具条和共享缓冲区；完成后串行运行两次完整 verify，并核对 px-gap。
+
+## 2026-11-16 · P-I10/I19 收口（规划席接手实现与提交）
+
+- I-10：单选锚点 `.ms-node-connect-anchor`（mindmapRenderer.ts:1722 附近）+ 锚点拖动复用 `connectSelectedNodes`，预览改为 `#eab308` / `6 4`，四条合成断言在 `src/mindmap/a19-fixture.txt`，定向 12/12。
+- I-19：`src/annot/pen.ts` 把单个「AI 转文本」按钮扩展为 `.ms-pen-selection-toolbar`，五项按 D-22 原生顺序 颜色/剪切/复制/AI 转文本/删除；颜色走 `InkChange.color` 回写 `ann.color` 并可撤销重做；剪贴缓冲区提升为模块级（渲染重建控制器后仍可用）；Cmd/Ctrl+V 粘贴复用 `onCommit` 建新标注。
+- 色板 5 色（黑/红/蓝/绿/黄）由 `.ms-pen-color-palette` 提供；颜色属标注级，PDF/Word 每笔一条标注，所以选中即可精确着色。
+- 新断言在 `src/documents/acceptance-fixtures/penCases.txt`（五项顺序、颜色与撤销重做、复制粘贴、删除、剪切后粘贴复原），reader 套件 239/239。
+- 门禁（规划席自跑）：tsc 0；`npm run verify` 连续两轮 52/52 PASS 退出码 0；`node scripts/px-gap.mjs` 292 通过 / 0 超差 / 0 缺失 / 6 跳过。
+- 未覆盖：真实宿主（Obsidian 内 PDF/Word）手绘拖动与工具条观感未做现场截图验收；A6 Pad 仍离线。

@@ -105,6 +105,13 @@ body .ms-image-crop-modal button.ms-image-crop-handle { position:absolute; z-ind
 .ms-pen-overlay[data-tool="erase"] { cursor: cell; }
 .ms-pen-overlay[data-tool="select"] { cursor: crosshair; }
 .ms-pen-selection { fill: transparent; stroke: var(--interactive-accent, #3478f6); stroke-width: 1.5; stroke-dasharray: 5 3; pointer-events: none; }
+.ms-pen-selection-toolbar { display: flex; gap: 4px; align-items: center; }
+.ms-pen-selection-toolbar[hidden] { display: none; }
+.ms-pen-selection-toolbar button { padding: 2px 6px; font-size: 12px; line-height: 1.4; border-radius: 4px; border: 1px solid var(--background-modifier-border); background: var(--background-primary); color: var(--text-normal); }
+.ms-pen-selection-toolbar button:hover { background: var(--background-modifier-hover); }
+.ms-pen-color-palette { display: flex; gap: 4px; padding: 4px; border-radius: 4px; border: 1px solid var(--background-modifier-border); background: var(--background-primary); }
+.ms-pen-color-palette[hidden] { display: none; }
+.ms-pen-color-palette button { width: 16px; height: 16px; padding: 0; border-radius: 50%; border: 1px solid var(--background-modifier-border); }
 .ms-pen-lasso-trail { fill: none; stroke: var(--interactive-accent, #3478f6); stroke-width: 1.5; stroke-dasharray: 4 3; pointer-events: none; }
 .ms-pen-erase-trail { fill: none; stroke: rgba(220, 75, 75, .28); stroke-width: 18; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
 .ms-notebook-controls { display: inline-flex; align-items: center; gap: 4px; }

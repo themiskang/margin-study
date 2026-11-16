@@ -1,9 +1,15 @@
+/**
+ * [INPUT]: 依赖笔迹坐标类型。
+ * [OUTPUT]: 提供笔迹选区、变换和变更数据。
+ * [POS]: 为手写控制器提供与界面无关的笔迹几何运算。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import type { Stroke } from "../types";
 
 export type PenTool = "draw" | "highlight" | "erase" | "select";
 export type HandwritingMode = "pen" | "highlight" | "eraser" | "lasso" | "off";
-export interface InkRecord { id: string; strokes: Stroke[][]; }
-export interface InkChange { id: string; before: Stroke[][]; after: Stroke[][]; }
+export interface InkRecord { id: string; strokes: Stroke[][]; color?: string; }
+export interface InkChange { id: string; before: Stroke[][]; after: Stroke[][]; color?: { before: string; after: string }; }
 export interface InkSelection { id: string; indexes: number[]; }
 export const cloneStrokes = (strokes: Stroke[][]): Stroke[][] => strokes.map((stroke) => stroke.map((point) => ({ ...point })));
 

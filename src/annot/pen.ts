@@ -11,6 +11,8 @@ import { inkEndpoint, inkPoint, inkSamples, PalmGuard, predictInkPoint } from ".
 import type { TimedInkPoint } from "./penInput";
 
 let inkPredictionReader: (() => boolean) | null = null;
+// Lasso cut/copy must survive the controller being rebuilt by an annotation render.
+let lassoClipboard: Stroke[][] = [];
 export function setInkPredictionReader(reader: () => boolean): void { inkPredictionReader = reader; }
 
 interface PerfStroke {
@@ -226,6 +228,8 @@ export class PenController {
   private snapshot: InkRecord[] = [];
   private selection: InkSelection[] = [];
   private selectionRect: SVGRectElement | null = null;
+  private toolbar: HTMLDivElement;
+  private colorPalette: HTMLDivElement;
   private recognitionButton: HTMLButtonElement;
   private delta: Stroke = { x: 0, y: 0 };
   private temporary = new Map<SVGGElement, number>();
@@ -237,12 +241,36 @@ export class PenController {
     this.overlay.setAttribute("tabindex", "0"); this.overlay.setAttribute("role", "application");
     this.overlay.setAttribute("aria-label", "手写工具；套索选中后可拖动，Delete 删除，Esc 取消");
     this.container.append(this.overlay); this.overlay.style.pointerEvents = "none"; this.bind();
-    this.recognitionButton = document.createElement("button");
-    this.recognitionButton.type = "button"; this.recognitionButton.textContent = "AI 转文本";
-    this.recognitionButton.setAttribute("aria-label", "AI 转文本");
-    this.recognitionButton.style.position = "absolute"; this.recognitionButton.style.zIndex = "20"; this.recognitionButton.hidden = true;
-    this.recognitionButton.addEventListener("click", () => this.recognizeSelection());
-    this.container.append(this.recognitionButton);
+    // MN5 D-22 order: color / cut / copy / AI text / delete.
+    this.toolbar = document.createElement("div");
+    this.toolbar.className = "ms-pen-selection-toolbar";
+    this.toolbar.setAttribute("role", "toolbar"); this.toolbar.setAttribute("aria-label", "套索工具");
+    this.toolbar.style.position = "absolute"; this.toolbar.style.zIndex = "20"; this.toolbar.hidden = true;
+    this.colorPalette = document.createElement("div");
+    this.colorPalette.className = "ms-pen-color-palette";
+    this.colorPalette.setAttribute("role", "group"); this.colorPalette.setAttribute("aria-label", "笔迹颜色");
+    this.colorPalette.style.position = "absolute"; this.colorPalette.style.zIndex = "21"; this.colorPalette.hidden = true;
+    for (const [label, color] of [
+      ["黑色", "#000000"], ["红色", "#e53935"], ["蓝色", "#1e88e5"], ["绿色", "#43a047"], ["黄色", "#ffd54f"],
+    ] as const) {
+      const swatch = document.createElement("button");
+      swatch.type = "button"; swatch.dataset.color = color; swatch.style.background = color;
+      swatch.setAttribute("aria-label", `颜色 ${label}`); swatch.title = label;
+      swatch.addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); this.applySelectionColor(color); });
+      this.colorPalette.append(swatch);
+    }
+    const action = (label: string, run: () => void): HTMLButtonElement => {
+      const button = document.createElement("button");
+      button.type = "button"; button.textContent = label; button.setAttribute("aria-label", label);
+      button.addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); run(); });
+      this.toolbar.append(button); return button;
+    };
+    action("颜色", () => this.toggleColorPalette());
+    action("剪切", () => { this.copySelection(); this.deleteSelection(); });
+    action("复制", () => this.copySelection());
+    this.recognitionButton = action("AI 转文本", () => this.recognizeSelection());
+    action("删除", () => this.deleteSelection());
+    this.container.append(this.toolbar, this.colorPalette);
   }
   setTool(tool: PenTool): void {
     if (this.tool === tool) return;
@@ -255,7 +283,7 @@ export class PenController {
     this.container.classList.toggle("ms-pen-mode", active);
   }
   get isActive(): boolean { return this.active; }
-  destroy(): void { this.setActive(false); this.flush(); this.clearTemporary(); this.overlay.remove(); this.recognitionButton.remove(); }
+  destroy(): void { this.setActive(false); this.flush(); this.clearTemporary(); this.overlay.remove(); this.toolbar.remove(); this.colorPalette.remove(); }
 
   /** Unfinished drawing is committed unless explicitly cancelled; edit gestures are cancelled. */
   flush(commitDrawing = true): void {
@@ -462,6 +490,7 @@ export class PenController {
         event.preventDefault(); event.stopPropagation(); this.flush(); this.clearSelection();
         if (event.shiftKey) this.opts.onRedo?.(); else this.opts.onUndo?.();
       } else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); this.flush(); this.clearSelection(); }
+      else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "v") { event.preventDefault(); event.stopPropagation(); this.flush(); this.pasteInk(); }
       else if (["Delete", "Backspace"].includes(event.key) && this.selection.length) {
         event.preventDefault(); event.stopPropagation(); this.opts.onChange?.(transformSelectedInk(this.records(), this.selection, null)); this.clearSelection();
       }
@@ -516,7 +545,33 @@ export class PenController {
     predictionContext.beginPath(); predictionContext.moveTo(last.x - bounds.left, last.y - bounds.top);
     predictionContext.lineTo(predicted.x - bounds.left, predicted.y - bounds.top); predictionContext.stroke();
   }
-  private clearSelection(): void { this.selection = []; this.selectionRect?.remove(); this.selectionRect = null; this.recognitionButton.hidden = true; }
+  private clearSelection(): void { this.selection = []; this.selectionRect?.remove(); this.selectionRect = null; this.toolbar.hidden = true; this.colorPalette.hidden = true; }
+  private toggleColorPalette(): void {
+    if (!this.selection.length) return;
+    this.colorPalette.hidden = !this.colorPalette.hidden;
+  }
+  private applySelectionColor(color: string): void {
+    const selected = new Map(this.selection.map(entry => [entry.id, new Set(entry.indexes)]));
+    const changes: InkChange[] = this.records().flatMap((record) => {
+      if (!selected.get(record.id)?.size || record.color === color) return [];
+      return [{ id: record.id, before: cloneStrokes(record.strokes), after: cloneStrokes(record.strokes), color: { before: record.color ?? this.opts.getColor(), after: color } }];
+    });
+    this.colorPalette.hidden = true;
+    if (!changes.length) return;
+    this.opts.onBegin?.(); this.opts.onChange?.(changes); this.drawSelection();
+  }
+  private copySelection(): void {
+    const selected = new Map(this.selection.map(entry => [entry.id, new Set(entry.indexes)]));
+    lassoClipboard = this.records().flatMap((record) => record.strokes.filter((_, index) => selected.get(record.id)?.has(index))).map(stroke => stroke.map(point => ({ ...point })));
+  }
+  private deleteSelection(): void {
+    if (!this.selection.length) return;
+    this.opts.onBegin?.(); this.opts.onChange?.(transformSelectedInk(this.records(), this.selection, null)); this.clearSelection();
+  }
+  private pasteInk(): void {
+    if (!lassoClipboard.length) return;
+    this.opts.onBegin?.(); this.opts.onCommit(cloneStrokes(lassoClipboard), this.tool === "highlight" ? "highlight" : "pen");
+  }
   private recognizeSelection(): void {
     const bounds = this.selectionBounds(); if (!bounds) return;
     const rect = this.container.getBoundingClientRect(), selected = new Map(this.selection.map(entry => [entry.id, new Set(entry.indexes)]));
@@ -553,14 +608,16 @@ export class PenController {
   }
   private drawSelection(): void {
     this.selectionRect?.remove(); this.selectionRect = null;
-    const bounds = this.selectionBounds(); if (!bounds) { this.recognitionButton.hidden = true; return; }
+    const bounds = this.selectionBounds(); if (!bounds) { this.toolbar.hidden = true; this.colorPalette.hidden = true; return; }
     const rect = this.container.getBoundingClientRect(), selection = document.createElementNS(SVGNS, "rect");
     selection.setAttribute("class", "ms-pen-selection"); selection.setAttribute("x", String((bounds.x + this.delta.x) * rect.width - 5));
     selection.setAttribute("y", String((bounds.y + this.delta.y) * rect.height - 5)); selection.setAttribute("width", String(bounds.width * rect.width + 10));
     selection.setAttribute("height", String(bounds.height * rect.height + 10)); this.overlay.append(selection); this.selectionRect = selection;
-    this.recognitionButton.hidden = false;
-    this.recognitionButton.style.left = `${Math.max(0, bounds.x * rect.width)}px`;
-    this.recognitionButton.style.top = `${Math.max(0, bounds.y * rect.height - 32)}px`;
+    this.toolbar.hidden = false;
+    this.toolbar.style.left = `${Math.max(0, bounds.x * rect.width)}px`;
+    this.toolbar.style.top = `${Math.max(0, bounds.y * rect.height - 32)}px`;
+    this.colorPalette.style.left = `${Math.max(0, bounds.x * rect.width)}px`;
+    this.colorPalette.style.top = `${Math.max(0, bounds.y * rect.height + 4)}px`;
   }
 
   static render(layer: HTMLElement, strokes: Stroke[][], width: number, height: number, color: string, brush: "pen" | "highlight" = "pen", thickness?: number, opacity?: number): void {

@@ -1483,7 +1483,7 @@ export abstract class BaseAnnotationController {
   protected getPenRecords(page?: number, layer = this.getInkLayers().active): InkRecord[] {
     const state = this.getInkLayers();
     return this.cache.map((ann) => this.mapAnnotationForDisplay(ann)).filter((ann) => annotationNotebook(ann) === this.activeNotebookId && ann.type === "pen" && annotationInkLayer(ann, state) === layer && (page === undefined || ann.page === page) && ann.strokes?.length)
-      .map((ann) => ({ id: ann.id, strokes: ann.strokes! }));
+      .map((ann) => ({ id: ann.id, strokes: ann.strokes!, color: ann.color }));
   }
   protected beginPenGesture(): void {
     this.penRevision = this.docPath ? { path: this.docPath, revision: this.plugin.store.getAnnotationsRevision(this.docPath) } : null;
@@ -1524,19 +1524,19 @@ export abstract class BaseAnnotationController {
       if (originals.some(ann => !ann || ann.type !== "pen")) {
         this.rejectStalePenChange(); return;
       }
-      changes = changes.map((change, index) => ({ id: change.id, before: originals[index]!.strokes ?? [],
+      changes = changes.map((change, index) => ({ id: change.id, color: change.color, before: originals[index]!.strokes ?? [],
         after: change.after.map(stroke => {
           const unchanged = change.before.findIndex(before => sameStrokePoints(before, stroke));
           return unchanged < 0 ? coordinates.unproject([stroke])[0] : originals[index]!.strokes![unchanged];
         }) }));
     }
-    const changed = changes.filter(change => !sameStrokeShape(change.before, change.after));
+    const changed = changes.filter(change => !sameStrokeShape(change.before, change.after) || !!change.color && change.color.before !== change.color.after);
     if (!changed.length || !this.applyPenChanges(changed, false, true)) return;
     this.recordPenChange(changed);
   }
   private recordPenChange(changes: InkChange[], created?: Annotation): void {
     this.recordEditChange({ kind:"pen", sequence:++this.editSequence, label:"手写", changes:this.measurePenClone(() => changes.map((change) => ({
-      id: change.id, before: cloneStrokes(change.before), after: cloneStrokes(change.after),
+      id: change.id, before: cloneStrokes(change.before), after: cloneStrokes(change.after), color: change.color && { ...change.color },
       ...(created?.id === change.id ? { creation: { annotation: structuredClone(created), index: this.cache.indexOf(created), removed: false } } : {})
     }))) });
   }
@@ -1548,7 +1548,8 @@ export abstract class BaseAnnotationController {
     const annotations = changes.map((change) => this.cache.find((ann) => ann.id === change.id));
     if (annotations.some((ann, index) => changes[index].creation?.removed
       ? reverse || !!ann
-      : !ann || ann.type !== "pen" || !currentGesture && !sameStrokes(ann.strokes ?? [], reverse ? changes[index].after : changes[index].before))) {
+      : !ann || ann.type !== "pen" || !currentGesture && (!sameStrokes(ann.strokes ?? [], reverse ? changes[index].after : changes[index].before)
+        || !!changes[index].color && ann.color !== (reverse ? changes[index].color!.after : changes[index].color!.before)))) {
       this.rejectStalePenChange(); return false;
     }
     annotations.forEach((ann, index) => {
@@ -1558,7 +1559,10 @@ export abstract class BaseAnnotationController {
         this.cache.splice(Math.min(creation.index, this.cache.length), 0, restored); creation.removed = false;
       } else if (reverse && creation && this.canRemoveCreatedPen(ann!, creation.annotation)) {
         this.cache.splice(this.cache.indexOf(ann!), 1); creation.removed = true;
-      } else ann!.strokes = cloneStrokes(reverse ? change.before : change.after);
+      } else {
+        ann!.strokes = cloneStrokes(reverse ? change.before : change.after);
+        if (change.color) ann!.color = reverse ? change.color.before : change.color.after;
+      }
     });
     // Erasing existing ink and linked source records still retains their annotation IDs.
     this.persist(); this.onAnnotationsChanged(); return true;

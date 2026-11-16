@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖脑图数据、卡片操作、手写控制器和宿主界面。
+ * [OUTPUT]: 提供脑图渲染器及节点交互。
+ * [POS]: 协调脑图画布、节点选择、连线和工作区操作。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import { applyCardTypography } from "../cards/typography";
 import { Menu, Notice, setIcon } from "obsidian";
 import type MarginStudyPlugin from "../main";
@@ -1713,6 +1719,13 @@ export class MindmapRenderer {
       }
     }
 
+    const connectAnchor = el("button", { type: "button", class: "ms-node-connect-anchor", "aria-label": "拖动连接节点", title: "拖动连接节点" });
+    setIcon(connectAnchor, "link");
+    connectAnchor.addEventListener("pointerdown", (event) => {
+      if (event.button === 0 && (event.pointerType === "mouse" || event.pointerType === "pen")) this.startConnectDrag(event, n, true);
+    });
+    connectAnchor.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); });
+    div.append(connectAnchor);
     div.addEventListener("pointerdown", (e) => this.onNodePointerDown(e, n, div));
     div.addEventListener("dblclick", (e) => {
       e.stopPropagation();
@@ -1813,11 +1826,11 @@ export class MindmapRenderer {
     this.finishNodeDrag = abort;
   }
 
-  private startConnectDrag(event: PointerEvent, source: MindNode): void {
+  private startConnectDrag(event: PointerEvent, source: MindNode, fromAnchor = false): void {
     if (!this.world || !this.svg || this.finishConnectDrag) return;
     event.preventDefault(); event.stopPropagation();
     const pointerId = event.pointerId, startX = event.clientX, startY = event.clientY, canvasId = this.currentCanvasId();
-    const start = this.viewCoordinates(startX, startY), preview = svgEl("path", { fill: "none", stroke: "var(--interactive-accent, #448aff)", "stroke-width": 2, "stroke-dasharray": "6 4", "pointer-events": "none" });
+    const start = this.viewCoordinates(startX, startY), preview = svgEl("path", { fill: "none", stroke: "#eab308", "stroke-width": 2, "stroke-dasharray": "6 4", "pointer-events": "none" });
     let moved = false; this.svg.append(preview);
     const move = (next: PointerEvent) => {
       if (next.pointerId !== pointerId) return;
@@ -1831,13 +1844,13 @@ export class MindmapRenderer {
     };
     const up = (next: PointerEvent) => {
       if (next.pointerId !== pointerId) return;
-      move(next); cleanup(); if (!moved || !this.connectMode || this.currentCanvasId() !== canvasId) return;
+      move(next); cleanup(); if (!moved || (!fromAnchor && !this.connectMode) || this.currentCanvasId() !== canvasId) return;
       this.dragged = true; this.pendingFrom = null;
       const target = [...this.nodeEls.entries()].reverse().find(([id, element]) => {
         const rect = element.getBoundingClientRect();
         return id !== source.id && next.clientX >= rect.left && next.clientX <= rect.right && next.clientY >= rect.top && next.clientY <= rect.bottom;
       });
-      if (target && this.plugin.store.connectNodes(source.id, target[0])) { this.render(); this.plugin.refreshSidebar(); }
+      if (target) { this.connectSelectedNodes(source.id, target[0]); this.render(); this.plugin.refreshSidebar(); }
       else new Notice("请连接同一脑图中的两张不同卡片");
       window.setTimeout(() => { this.dragged = false; }, 0);
     };

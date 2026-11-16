@@ -102,6 +102,25 @@ try {
     equal((modal().querySelector('[aria-label="卡片标题"]') as HTMLInputElement).value, '目标卡标题', 'URL opened wrong card');
     return { url: url.href, parsed: { scheme: url.protocol, action: url.host, vault: url.searchParams.get('msvault'), card: url.searchParams.get('card') } };
   });
+  await test('I-10 单选锚点拖动与取消', async () => {
+    const p = await fresh(), graph = p.graph(), source = graphNode(graph.host, 'node-source');
+    source.click();
+    const anchor = source.querySelector<HTMLElement>('.ms-node-connect-anchor');
+    assert(anchor && getComputedStyle(anchor).visibility !== 'hidden' && getComputedStyle(anchor).display !== 'none', 'Anchor is not visible');
+    const start = anchor!.getBoundingClientRect(), dest = graphNode(graph.host, 'node-target').getBoundingClientRect();
+    const x1 = start.left + start.width / 2, y1 = start.top + start.height / 2, x2 = dest.left + dest.width / 2, y2 = dest.top + dest.height / 2;
+    const down = () => anchor!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerId: 31, pointerType: 'mouse', button: 0, clientX: x1, clientY: y1 }));
+    const move = () => window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 31, pointerType: 'mouse', buttons: 1, clientX: x2, clientY: y2 }));
+    down(); move();
+    const preview = graph.host.querySelector<SVGPathElement>('path[stroke-dasharray="6 4"][stroke="#eab308"]');
+    assert(preview, 'Yellow dashed preview missing');
+    window.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, pointerId: 31, pointerType: 'mouse' }));
+    assert(p.store.edges.length === 0, 'Cancelled drag created an edge');
+    down(); move();
+    window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 31, pointerType: 'mouse', button: 0, clientX: x2, clientY: y2 }));
+    assert(p.store.edges.length === 1, 'Drag did not create exactly one edge');
+    return { visible: true, preview: ['6 4', '#eab308'], cancelledEdges: 0, committedEdges: p.store.edges.length };
+  });
   await test('A19.3 手绘断开只修改指定关系', async () => {
     const p = await fresh(), graph = p.graph(); button(graph.host, '连线模式').click(); draw(graph.host, 'node-source', 'node-target'); draw(graph.host, 'node-third', 'node-fourth');
     assert(p.store.edges.length === 2, 'Hand-drawn connections did not create two edges');

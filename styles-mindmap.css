@@ -58,6 +58,24 @@
   outline: 2px dashed var(--ms-map-selection);
   outline-offset: 0;
 }
+.ms-mindmap-root .ms-node-connect-anchor {
+  display: none;
+  position: absolute;
+  right: -20px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 40px;
+  height: 40px;
+  padding: 8px;
+  border-radius: 50%;
+  background: #eab308;
+  color: #fff;
+  z-index: 5;
+  touch-action: none;
+  cursor: crosshair;
+}
+.ms-mindmap-root[data-selection-mode="single"] .ms-node.is-selected .ms-node-connect-anchor { display: flex; align-items: center; justify-content: center; }
+.ms-mindmap-root .ms-node-connect-anchor svg { width: 24px; height: 24px; }
 .ms-mindmap-root .ms-node:focus-visible {
   outline: 2px solid var(--ms-map-selection);
   outline-offset: 3px;
