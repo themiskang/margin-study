@@ -1,3 +1,10 @@
+/**
+ * [INPUT]: 阅读器、留白内容和笔迹默认颜色。
+ * [OUTPUT]: 留白页面导航和缩略图。
+ * [POS]: PDF 阅读器的扩展页面显示适配层。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
+import { INK_DEFAULT_COLOR } from "../annot/pen";
 import type { ReaderView } from "./readerView";
 import { regionFoldBands, foldCoordinates } from "./regionFolds";
 import type { Annotation, PdfDisplayPage } from "../types";
@@ -25,5 +32,5 @@ export async function renderExtendThumbnail(reader: ReaderView, number:number, c
   if(note.text){const annotation:Annotation={id:note.id,docPath:path!,docKind:"pdf",page:entry.page,type:"note",rects:[],text:note.text,color:"#111111",createdAt:note.createdAt,overlay:extendExportText(note)};
     const png=await overlayPng(annotation,Math.max(1,base.width*.94-32),entry.height,"ms-extend-text"),image=await createImageBitmap(new Blob([new Uint8Array(png).buffer],{type:"image/png"}));try{current();context.drawImage(image,canvas.width*.06,0,(base.width*.94-32)*ratio,canvas.height);}finally{image.close();}}
   for(const record of note.images??[]){const image=new Image();image.src=record.src;await image.decode();current();const width=record.w*canvas.width,height=record.h*canvas.height,fit=Math.min(width/image.width,height/image.height),w=image.width*fit,h=image.height*fit;context.drawImage(image,record.x*canvas.width+(width-w)/2,record.y*canvas.height+(height-h)/2,w,h);}
-  for(const record of note.ink??[]){context.strokeStyle=record.color;context.lineWidth=(record.brush==="highlight"?16:3)*ratio;context.globalAlpha=record.brush==="highlight"?.32:1;context.lineCap="round";for(const stroke of record.strokes){context.beginPath();stroke.forEach((point,index)=>{const x=point.x*canvas.width,y=point.y*canvas.height;if(index)context.lineTo(x,y);else context.moveTo(x,y);});context.stroke();}}context.globalAlpha=1;
+  for(const record of note.ink??[]){context.strokeStyle=record.color??INK_DEFAULT_COLOR;context.lineWidth=(record.brush==="highlight"?16:3)*ratio;context.globalAlpha=record.brush==="highlight"?.32:1;context.lineCap="round";for(const stroke of record.strokes){context.beginPath();stroke.forEach((point,index)=>{const x=point.x*canvas.width,y=point.y*canvas.height;if(index)context.lineTo(x,y);else context.moveTo(x,y);});context.stroke();}}context.globalAlpha=1;
 }

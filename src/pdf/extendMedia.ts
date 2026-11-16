@@ -1,3 +1,10 @@
+/**
+ * [INPUT]: 留白笔记内容和笔迹默认颜色。
+ * [OUTPUT]: 留白内容的合成图片。
+ * [POS]: 留白笔记到卡片预览的渲染桥梁。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
+import { INK_DEFAULT_COLOR } from "../annot/pen";
 import type { Annotation, PdfExtendNote } from "../types";
 
 import { paintExtendTextBoxes } from "./extendTextBoxes";
@@ -20,7 +27,7 @@ export async function extendMediaImage(note: PdfExtendNote, width: number, compo
     if(composed&&note.text){const annotation:Annotation={id:note.id,docPath:"",docKind:"pdf",page:1,type:"note",rects:[],text:note.text,color:"#111111",createdAt:note.createdAt,overlay:{kind:"text",fontSize:16,textRuns:note.runs}};const png=await overlayPng(annotation,Math.max(1,width*.94-32),height,"ms-extend-text"),image=await createImageBitmap(new Blob([new Uint8Array(png).buffer],{type:"image/png"}));try{context.drawImage(image,width*.06,0,Math.max(1,width*.94-32),height);}finally{image.close();}}
     await paintExtendTextBoxes(context,note,width);
     for (const record of note.ink ?? []) {
-      context.strokeStyle = record.color; context.lineWidth = record.brush === "highlight" ? 16 : 3;
+      context.strokeStyle = record.color ?? INK_DEFAULT_COLOR; context.lineWidth = record.brush === "highlight" ? 16 : 3;
       context.globalAlpha = record.brush === "highlight" ? .32 : 1; context.lineCap = "round"; context.lineJoin = "round";
       for (const stroke of record.strokes) {
         context.beginPath(); stroke.forEach((point, index) => {

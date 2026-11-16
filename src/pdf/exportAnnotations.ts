@@ -1,4 +1,11 @@
+/**
+ * [INPUT]: PDF 页面、批注几何和笔迹默认颜色。
+ * [OUTPUT]: 批注图像及 PDF 扁平化导出。
+ * [POS]: PDF 导出中的批注渲染入口。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import { BlendMode, LineCapStyle, PDFDocument, PDFPage, concatTransformationMatrix, popGraphicsState, pushGraphicsState, rgb } from "pdf-lib";
+import { INK_DEFAULT_COLOR } from "../annot/pen";
 import type { Annotation, PdfRect } from "../types";
 import { annotationGeometry, pdfRectToCssRect } from "../anchors/pdfGeometry";
 import { annotationTextRuns, annotationTextStyle, applyTextStyle, renderTextRuns, textColor } from "../annot/textRuns";
@@ -69,7 +76,7 @@ export async function flattenPdfAnnotations(output: PDFDocument, page: PDFPage, 
       for (const stroke of strokes) {
         const raw=stroke.map(point=>viewport.convertToPdfPoint(point.x*viewport.width,point.y*viewport.height));
         if (!raw.length)continue;
-        const draw=(points:number[][],thickness:number)=>{const path=points.map((point,index)=>`${index?'L':'M'} ${point[0]} ${-point[1]}`).join(' ');page.drawSvgPath(path,{x:0,y:0,borderColor:color(ann.color),borderWidth:thickness,borderOpacity:opacity*inkOpacity,borderLineCap:LineCapStyle.Round});};
+        const draw=(points:number[][],thickness:number)=>{const path=points.map((point,index)=>`${index?'L':'M'} ${point[0]} ${-point[1]}`).join(' ');page.drawSvgPath(path,{x:0,y:0,borderColor:color(ann.color ?? INK_DEFAULT_COLOR),borderWidth:thickness,borderOpacity:opacity*inkOpacity,borderLineCap:LineCapStyle.Round});};
         if (!highlight&&stroke.some(point=>point.pressure!==undefined)) {for(let index=1;index<raw.length;index++)draw([raw[index-1],raw[index]],width/3*(.8+5*((stroke[index-1].pressure??.5)+(stroke[index].pressure??.5))/2));}
         else draw(raw,width);
       } continue;

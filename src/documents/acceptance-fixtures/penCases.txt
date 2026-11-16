@@ -6,6 +6,11 @@ import { ReaderView as RealReaderView } from 'marginstudy-real-reader';
 import { PDFDocument } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/node_modules/pdf-lib/es/index.js';
 import { loadPdf } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/pdfjs';
 import { reviewDrawingInput } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/review/drawing';
+import { DocumentNavigation } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/workspace/documentNavigation';
+import { extendMediaImage } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/extendMedia';
+import { renderExtendThumbnail } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/extendNavigation';
+import { exportExtendCard } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/extendExport';
+import { flattenPdfAnnotations } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/exportAnnotations';
 
 function pointer(overlay:SVGSVGElement,host:HTMLElement,type:string,x:number,y:number,extra:any={}){
  const bounds=host.getBoundingClientRect();overlay.dispatchEvent(new PointerEvent(type,{clientX:bounds.left+x*bounds.width,clientY:bounds.top+y*bounds.height,pointerId:1,button:0,isPrimary:true,bubbles:true,...extra}));
@@ -25,11 +30,42 @@ function openVanishPen(view:any,assert:any){
  return {overlay:pageHost(view).querySelector<SVGSVGElement>('.ms-pen-overlay')!,toggle};
 }
 function closeHandwritingSettings(){document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));}
+async function recordStrokeStyles(action:()=>Promise<unknown>){
+ const prototype=CanvasRenderingContext2D.prototype,descriptor=Object.getOwnPropertyDescriptor(prototype,'strokeStyle')!,values:any[]=[];
+ Object.defineProperty(prototype,'strokeStyle',{...descriptor,set(value){values.push(value);descriptor.set!.call(this,value);}});
+ try{await action();return values;}finally{Object.defineProperty(prototype,'strokeStyle',descriptor);}
+}
 async function openReader(path:string,p:any){const view:any=new RealReaderView({app:p.app} as any,p);await view.onOpen();await view.loadFileByPath(path);await view.renderPage(1);return view;}
 async function drawPermanent(view:any,p:any,points:number[][],wait:any){
  view.setHandwritingMode('pen');const host=pageHost(view),overlay=host.querySelector<SVGSVGElement>('.ms-pen-overlay')!;drag(overlay,host,points);await wait(20);view.setHandwritingMode('off');await p.store.flush();
 }
 export async function runPenAcceptance({test,assert,wait,plugin,add,app,htmlController}:any){
+ await test('Colorless ink previews use black instead of stale canvas or invalid SVG color',async()=>{
+  const stroke=[[{x:.2,y:.5},{x:.8,y:.5}]];
+  const preview=(DocumentNavigation.prototype as any).inkPreview({strokes:stroke});
+  assert(preview.querySelector('polyline')?.getAttribute('stroke')==='#000000','colorless navigation stroke is not black');
+ });
+ const colorlessNote={id:'colorless',pageId:'page',height:100,text:'',ink:[{brush:'pen',strokes:[[{x:.2,y:.5},{x:.8,y:.5}]]}]};
+ await test('Colorless extend media assigns black',async()=>{
+  const values=await recordStrokeStyles(()=>extendMediaImage(colorlessNote as any,100));
+  assert(values.length===1&&values[0]==='#000000','colorless extend media did not assign black');
+ });
+ await test('Colorless extend thumbnail assigns black',async()=>{
+  const reader={getDisplayPages:()=>[{number:1,page:1,height:100,noteId:'colorless'}],getPageBaseSize:()=>({width:100}),getFilePath:()=>'/test.pdf',getDocumentNotebookId:()=> 'default',getExtendNotes:()=>[colorlessNote]};
+  const values=await recordStrokeStyles(()=>renderExtendThumbnail(reader as any,1,document.createElement('canvas')));
+  assert(values.length===1&&values[0]==='#000000','colorless extend thumbnail did not assign black');
+ });
+ await test('Colorless extend export assigns black',async()=>{
+  const reader={finishExtendEditing:async()=>{},getFilePath:()=>'/test.pdf',getDocumentNotebookId:()=> 'default',getExtendNotes:()=>[colorlessNote],getPdfPageEdits:()=>({pages:[{id:'page'}]}),getPageBaseSize:()=>({width:100}),plugin:{store:{cards:[]}}};
+  const values=await recordStrokeStyles(()=>exportExtendCard(reader as any,'colorless','png'));
+  assert(values.length===1&&values[0]==='#000000','colorless extend export did not assign black');
+ });
+ await test('Colorless PDF ink export uses black',async()=>{
+  let border:any;const viewport={width:100,height:100,convertToPdfPoint:(x:number,y:number)=>[x,y]};
+  const page={drawSvgPath:(_path:any,options:any)=>{border=options.borderColor;}};
+  await flattenPdfAnnotations({} as any,page as any,1,{getViewport:()=>viewport},viewport,{left:0,top:0,right:1,bottom:1},[{annotation:{id:'pen',page:1,type:'pen',rects:[],strokes:colorlessNote.ink[0].strokes} as any,opacity:1}],()=>{},async()=> '');
+  assert(border?.red===0&&border?.green===0&&border?.blue===0,'colorless PDF ink export did not use black');
+ });
  await test('PERF-9 PDF page ink uses one raster, incrementally appends, and redraws edits',async()=>{
   const path='perf9-page.pdf';add(path,{name:'Raster ink',pages:2});const p=plugin(),view:any=new ReaderView({app} as any,p);await view.onOpen();await view.loadFileByPath(path);
   const controller=view.annController,first=view.getPageRecord(1),second=view.getPageRecord(2);

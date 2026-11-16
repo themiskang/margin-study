@@ -98,7 +98,7 @@ export function reviewDrawingInput(options: Partial<DrawingStyle> = {}): { eleme
     vectorStrokes: () => strokes.map((points, index) => ({ id: ids[index], tool: "pen", color: style.color, width: style.width, opacity: style.opacity, points: points.map(point => ({ ...point })) })) };
 }
 
-export function cardInkInput(width: number, height: number, reference: { x: number; y: number; width: number; height: number }, style: DrawingStyle): {
+export function cardInkInput(width: number, height: number, reference: { x: number; y: number }, style: DrawingStyle): {
   canvas: HTMLCanvasElement; strokes(): MindmapInkStroke[]; undo(): void; clear(): void; freeze(value: boolean): void;
 } {
   const canvas = el("canvas", { "aria-label": "卡片批注画布" }) as HTMLCanvasElement;

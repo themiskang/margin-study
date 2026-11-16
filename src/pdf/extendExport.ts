@@ -1,3 +1,10 @@
+/**
+ * [INPUT]: PDF 页面、留白笔记和笔迹默认颜色。
+ * [OUTPUT]: 展开留白的 PDF 导出。
+ * [POS]: PDF 导出中的留白页面合成层。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
+import { INK_DEFAULT_COLOR } from "../annot/pen";
 import { clip, degrees, endPath, LineCapStyle, PDFDocument, PDFPage, popGraphicsState, pushGraphicsState, rectangle, rgb } from "pdf-lib";
 import type { Annotation, Card, PdfExtendNote } from "../types";
 import type { ReaderView } from "./readerView";
@@ -125,7 +132,7 @@ export async function exportExtendCard(reader: ReaderView, id: string, format: "
     for(const record of note.images??[]){const image=new Image();image.src=record.src;await image.decode();current();const w=record.w*width,h=record.h*note.height,fit=Math.min(w/image.width,h/image.height);context.drawImage(image,record.x*width+(w-image.width*fit)/2,sourceHeight+record.y*note.height+(h-image.height*fit)/2,image.width*fit,image.height*fit);}
     if(note.text){const textHeight=paperHeight-(plainCard?4:0),png=await overlayPng(annotation,contentWidth,textHeight,"ms-extend-text"),image=await createImageBitmap(new Blob([new Uint8Array(png).buffer],{type:"image/png"}));try{current();context.drawImage(image,plainCard?39:width*.06,sourceHeight+(plainCard?4:0),contentWidth,textHeight);}finally{image.close();}}
     await paintExtendTextBoxes(context,note,width,sourceHeight);current();
-    for(const record of note.ink??[]){context.strokeStyle=record.color;context.lineWidth=record.brush==="highlight"?16:3;context.globalAlpha=record.brush==="highlight"?.32:1;context.lineCap="round";context.lineJoin="round";
+    for(const record of note.ink??[]){context.strokeStyle=record.color??INK_DEFAULT_COLOR;context.lineWidth=record.brush==="highlight"?16:3;context.globalAlpha=record.brush==="highlight"?.32:1;context.lineCap="round";context.lineJoin="round";
       for(const stroke of record.strokes){context.beginPath();stroke.forEach((point,index)=>{if(index)context.lineTo(point.x*width,sourceHeight+point.y*note.height);else context.moveTo(point.x*width,sourceHeight+point.y*note.height);});context.stroke();}}
     context.globalAlpha=1;for(const comment of comments)context.drawImage(comment.image,width*.06,comment.y,contentWidth,comment.height);current();const blob=await new Promise<Blob>((resolve,reject)=>canvas.toBlob(value=>value?resolve(value):reject(new Error("留白无法编码")),"image/png")),bytes=new Uint8Array(await blob.arrayBuffer());current();
     if(format==="png")return bytes;

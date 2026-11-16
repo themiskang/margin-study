@@ -202,6 +202,7 @@ export function openCardInkComment(plugin: MarginStudyPlugin, cardId: string, mo
           }
           if (JSON.stringify(plugin.store.getCard(cardId)) !== JSON.stringify(captured)) throw new Error("卡片已变化，请重新打开批注");
           if (JSON.stringify(drawing.strokes()) !== JSON.stringify(strokes)) throw new Error("笔迹已变化，请重新保存批注");
+          // 短卡与长卡保留 viewScale=1，兼容历史快照格式和 1:1 基线。
           const media: Media = { id: uid("comment"), kind: "ink", name: "整卡截图批注", collapsed: true, image: preview.toDataURL("image/png"), strokes, parts,
             snapshot: { image: snapshot.image, x: 0, y: margin / height, width: 1, height: snapshot.height / height, viewScale: 1 } };
           plugin.store.updateCard(cardId, { commentMedia: [...(latest.commentMedia ?? []), media] });

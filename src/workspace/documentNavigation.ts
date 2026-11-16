@@ -1,3 +1,10 @@
+/**
+ * [INPUT]: 阅读器、文档批注、卡片和笔迹默认颜色。
+ * [OUTPUT]: 文档导航面板及其交互。
+ * [POS]: 工作区的目录、缩略图和批注导航入口。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
+import { INK_DEFAULT_COLOR } from "../annot/pen";
 import type MarginStudyPlugin from "../main";
 import type { Annotation, Card, CardSource, ReaderLike, DocumentOutlineItem } from "../types";
 import { Component, MarkdownRenderer, Menu, Notice } from "obsidian";
@@ -414,7 +421,7 @@ export class DocumentNavigation {
       if (!stroke.length) continue;
       const line = document.createElementNS(svg.namespaceURI, "polyline");
       line.setAttribute("points", stroke.map(point => `${point.x * 600},${point.y * 800}`).join(" "));
-      line.setAttribute("fill", "none"); line.setAttribute("stroke", ann.color); line.setAttribute("stroke-width", ann.inkBrush === "highlight" ? "10" : "2");
+      line.setAttribute("fill", "none"); line.setAttribute("stroke", ann.color ?? INK_DEFAULT_COLOR); line.setAttribute("stroke-width", ann.inkBrush === "highlight" ? "10" : "2");
       line.setAttribute("stroke-linecap", "round"); line.setAttribute("stroke-linejoin", "round"); svg.append(line);
     }
     return svg;
