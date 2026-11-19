@@ -1,6 +1,6 @@
 /**
- * [INPUT]: 依赖 Obsidian 存储适配器、模型和标注组件。
- * [OUTPUT]: 提供 Store 和文档提交错误类型。
+ * [INPUT]: 依赖 Obsidian 存储适配器、模型和标注组件。桌面导入使用文件系统原子替换。
+ * [OUTPUT]: 提供 Store、学习集导入提交和文档提交错误类型。
  * [POS]: 串行协调主数据、侧车和恢复副本的持久化。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
@@ -210,6 +210,7 @@ export class Store {
   private transactionDepth = 0;
   private documentCommitPending = false;
   private documentCommitOwner = false;
+  private studySetImportCanvasId?: string;
   private pendingConflict: { local: PluginData; remote: PluginData } | null = null;
   private localEvents: LocalEvent[] = [];
   private protectionSnapshots: ProtectionSnapshotInfo[] = [];
@@ -612,7 +613,7 @@ export class Store {
     if (this.saveIdle !== null && typeof cancelIdleCallback === "function") cancelIdleCallback(this.saveIdle);
     this.saveTimer = null;
     this.saveIdle = null;
-    if (this.settings.diagnosticNoPersist) return;
+    if (this.settings.diagnosticNoPersist || this.studySetImportCanvasId) return;
     const attempt = () => {
       this.saveTimer = null;
       const remaining = INPUT_QUIET_MS - (Date.now() - this.lastInputAt);
@@ -632,7 +633,9 @@ export class Store {
   }
   save(): void {
     if (!this.mainDirty) this.recordLocalEvent("pending", [], "本地修改等待保存。");
-    this.mainDirty = true; this.mainVersion++; this.changed(); this.scheduleFlush();
+    this.mainDirty = true; this.mainVersion++;
+    if (!this.studySetImportCanvasId) this.changed();
+    this.scheduleFlush();
   }
 
   /** Flush includes edits arriving while an earlier disk write is in progress. */
@@ -654,7 +657,10 @@ export class Store {
           if (!this.settings.diagnosticNoPersist && this.mainDirty) await this.persistMain(automatic);
         }
         this.lastSaveError = null;
-      } catch (e) { this.report("尚有修改未保存；原文件已保留，请重试保存或处理冲突。", e); throw e; }
+      } catch (e) {
+        if (!this.studySetImportCanvasId) this.report("尚有修改未保存；原文件已保留，请重试保存或处理冲突。", e);
+        throw e;
+      }
     });
   }
 
@@ -675,13 +681,40 @@ export class Store {
       this.localStatusChanged();
       throw new Error("发现外部修改。两份版本已保存到 " + path + "；请运行「处理保存冲突」。");
     }
-    const media = await externalizeMedia(local, this.host.app.vault.adapter);
+    const importCanvasId = this.studySetImportCanvasId;
+    const media = importCanvasId ? undefined : await externalizeMedia(local, this.host.app.vault.adapter);
     local.revision = this.revision + 1;
     local.savedAt = new Date().toISOString();
     const savedEvent: LocalEvent = { id: uid("local-event"), at: local.savedAt, kind: "saved", objectIds: [], detail: "本地数据已落盘。" };
     local.localEvents = [...(local.localEvents ?? []), savedEvent];
-    await this.writeRecovery("pending-main", local, true, automatic);
-    if (this.host.manifest?.dir) {
+    if (!importCanvasId) await this.writeRecovery("pending-main", local, true, automatic);
+    if (importCanvasId && this.host.manifest?.dir) {
+      const adapter = this.host.app.vault.adapter as App["vault"]["adapter"] & { getBasePath?: () => string };
+      const path = this.host.manifest.dir + "/data.json";
+      const content = await serializeData(local, yieldForInput);
+      const basePath = adapter.getBasePath?.();
+      if (disk != null && !basePath) {
+        await adapter.process(path, current => {
+          if (!same(JSON.parse(current), disk)) throw new Error("导入期间主数据发生变化，请重试。");
+          return content;
+        });
+      } else {
+        const staged = path + "." + importCanvasId + ".tmp";
+        try {
+          await adapter.write(staged, content);
+          if (disk != null && basePath) {
+            const fs = (require("fs") as typeof import("fs")).promises;
+            const { join } = require("path") as typeof import("path");
+            await fs.rename(join(basePath, staged), join(basePath, path));
+          } else {
+            await adapter.rename(staged, path);
+          }
+        } catch (error) {
+          if (await adapter.exists(staged)) await adapter.remove(staged);
+          throw error;
+        }
+      }
+    } else if (this.host.manifest?.dir) {
       const content = await serializeData(local, yieldForInput);
       await this.waitForInputQuiet(automatic);
       await this.host.app.vault.adapter.write(this.host.manifest.dir + "/data.json", content);
@@ -690,8 +723,10 @@ export class Store {
       await this.host.saveData(local);
     }
     this.localEvents.push(savedEvent);
-    applyMediaReplacements(this, media.replacements);
-    if (media.count) console.info(`MarginStudy: 图片外置 ${media.count} 项，${media.bytes} 字节，耗时 ${media.elapsedMs} ms`);
+    if (media) {
+      applyMediaReplacements(this, media.replacements);
+      if (media.count) console.info(`MarginStudy: 图片外置 ${media.count} 项，${media.bytes} 字节，耗时 ${media.elapsedMs} ms`);
+    }
     this.baseline = cloneSnapshot(local);
     this.revision = local.revision;
     if (this.mainVersion === version) this.mainDirty = false;
@@ -1081,7 +1116,7 @@ export class Store {
     }
     this.save();
   }
-  private mutate<T>(label: string, action: () => T): T {
+  private mutate<T>(label: string, action: () => T, revertOnError = true): T {
     if (this.documentCommitPending && !this.documentCommitOwner && !this.transactionDepth) throw new Error("文档操作正在保存，请稍后重试。");
     if (this.transactionDepth) return action();
     const before = this.snapshot();
@@ -1099,7 +1134,7 @@ export class Store {
         this.save();
       }
       return result;
-    } catch (e) { this.restoreSnapshot(before); throw e; }
+    } catch (e) { if (revertOnError) this.restoreSnapshot(before); throw e; }
     finally { this.transactionDepth--; }
   }
   private pushHistory(entry: HistoryEntry): void {
@@ -1130,6 +1165,54 @@ export class Store {
   getRevision(): number { return this.revision; }
   undoLibraryChange(): boolean { if (this.documentCommitPending) throw new Error("文档操作正在保存，请稍后重试。"); const item = this.history.pop(); if (!item) return false; this.future.push(item); this.libraryHistoryRevision++; if ('readOnly' in item) this.changed(); else if ('nodeMove' in item) { const node=this.getNode(item.nodeMove.id); if(node) Object.assign(node,item.nodeMove.before); this.save(); } else { this.restoreSnapshot(item.before, item.after); this.restoreCardAnchors(); } return true; }
   libraryTransaction<T>(label: string, action: () => T): T { return this.mutate(label, action); }
+  async commitStudySetImport<T>(canvasId: string, action: () => T): Promise<T> {
+    if (this.documentCommitPending || this.settings.diagnosticNoPersist) throw new Error("当前无法保存学习集导入。");
+    this.documentCommitPending = true;
+    try {
+      if (this.mainDirty || this.annDirty.size || this.jobs.size || this.loadBlocked) await this.flush();
+      const before = this.data(), oldHistory = [...this.history], oldFuture = [...this.future];
+      const historyRevision = this.libraryHistoryRevision;
+      let result: T | undefined, applied = false;
+      this.studySetImportCanvasId = canvasId;
+      try {
+        this.documentCommitOwner = true;
+        try {
+          result = this.mutate("导入学习集", () => {
+            const imported = action();
+            this.validateData(this.data(false));
+            return imported;
+          }, false);
+          applied = true;
+        }
+        finally { this.documentCommitOwner = false; }
+        await this.flush();
+        return result!;
+      } catch (error) {
+        const disk: PluginData | null = applied ? await this.host.loadData().catch(() => null) : null;
+        if (disk?.canvases?.some(canvas => canvas.id === canvasId)) {
+          this.baseline = cloneSnapshot(disk);
+          this.applyData(disk);
+          this.mainDirty = false;
+          this.lastSaveError = null;
+          return result!;
+        }
+        const workspaceState = this.workspaceState, settings = this.settings, events = this.localEvents;
+        this.applyData(before);
+        this.workspaceState = workspaceState;
+        this.settings = settings;
+        this.localEvents = this.pendingConflict ? events : before.localEvents ?? [];
+        this.history = oldHistory;
+        this.future = oldFuture;
+        this.libraryHistoryRevision = historyRevision;
+        this.mainDirty = !same(workspaceState, before.workspaceState) || !same(settings, before.settings);
+        throw error;
+      } finally {
+        this.studySetImportCanvasId = undefined;
+        this.changed();
+        if (this.mainDirty || this.annDirty.size) this.scheduleFlush();
+      }
+    } finally { this.documentCommitPending = false; }
+  }
   redoLibraryChange(): boolean { if (this.documentCommitPending) throw new Error("文档操作正在保存，请稍后重试。"); const item = this.future.pop(); if (!item) return false; this.history.push(item); this.libraryHistoryRevision++; if ('readOnly' in item) this.changed(); else if ('nodeMove' in item) { const node=this.getNode(item.nodeMove.id); if(node) Object.assign(node,item.nodeMove.after); this.save(); } else { this.restoreSnapshot(item.after, item.before); this.restoreCardAnchors(); } return true; }
   private restoreCardAnchors(): void {
     for (const c of this.cards.filter(c => !c.groupId)) for (const source of this.sources(c)) {

@@ -1,5 +1,11 @@
+/**
+ * [INPUT]: 使用合成学习集包、Store 和库适配器。
+ * [OUTPUT]: 验证复习往返、文件回链、故障恢复和旧包兼容。
+ * [POS]: 从导入与导出的公开入口执行学习集回归。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,14 +16,14 @@ import { strToU8, zipSync } from "fflate";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const temporary = await mkdtemp(join(tmpdir(), "marginstudy-set-import-"));
-const built = await build({ stdin: { contents: 'export { readStudySetPackage, importStudySetPackage } from "./studySetImport"; export { Store } from "../model/store";', resolveDir: here }, bundle: true, platform: "node", format: "cjs", write: false,
+const built = await build({ stdin: { contents: 'export { readStudySetPackage, importStudySetPackage } from "./studySetImport"; export { exportStudySet } from "./studySetExport"; export { Store } from "../model/store";', resolveDir: here }, bundle: true, platform: "node", format: "cjs", write: false,
   plugins: [{ name: "synthetic-obsidian", setup(builder) {
     builder.onResolve({ filter: /^obsidian$/ }, () => ({ path: "obsidian", namespace: "synthetic" }));
     builder.onLoad({ filter: /.*/, namespace: "synthetic" }, () => ({ contents: 'export class Notice{};export class TFile{};export class App{};export class Component{};export const MarkdownRenderer={render:async()=>{}};' }));
   } }] });
 const bundle = join(temporary, "fixture.cjs");
 await writeFile(bundle, built.outputFiles[0].contents);
-const { readStudySetPackage, importStudySetPackage, Store } = createRequire(import.meta.url)(bundle);
+const { readStudySetPackage, importStudySetPackage, exportStudySet, Store } = createRequire(import.meta.url)(bundle);
 
 const sha = bytes => createHash("sha256").update(bytes).digest("hex");
 const results = [];
@@ -72,28 +78,15 @@ await test("page collection references follow imported document renames only", a
     { id: "two", sourcePath: "external.pdf", sourcePage: 1 },
   ] };
   for (const collision of [true, false]) {
-    const existing = new Map(collision ? [["X.pdf", strToU8("existing")]] : []);
-    const vault = {
-      getAbstractFileByPath: path => existing.has(path) ? { path } : null,
-      adapter: { exists: async path => existing.has(path) },
-      createBinary: async (path, bytes) => { existing.set(path, new Uint8Array(bytes)); return { path }; },
-      modifyBinary: async (file, bytes) => { existing.set(file.path, new Uint8Array(bytes)); },
-      delete: async file => { existing.delete(file.path); },
-    };
-    const store = {
-      studySets: [], cardTemplates: [], reviewDecks: [], srs: {}, reviewLogs: [], reviewPending: [],
-      libraryTransaction: (_name, run) => run(),
-      sidecarPath: path => path + ".mstudy.json",
-      createStudySet: name => ({ id: "new-set", name, docPaths: [] }),
-      createCanvas: () => ({ id: "new-canvas" }),
-      addCard() {}, addNode() {}, addEdge() {}, updateStudySet() {}, registerDocument() {},
-      getSceneTemplates: () => [], setActiveStudySet() {}, save() {}, flush: async () => {},
-    };
+    const { host, files: existing } = storeFixture();
+    if (collision) existing.set("X.pdf", strToU8("existing"));
+    const store = new Store(host);
+    await store.load();
     const bytes = pack({ payload: payload(), documents: {
       "documents/pages.msref": strToU8(JSON.stringify(collection)),
       "documents/X.pdf": strToU8("%PDF"),
     } });
-    const summary = await importStudySetPackage({ app: { vault }, store }, bytes);
+    const summary = await importStudySetPackage({ app: host.app, store }, bytes);
     const result = JSON.parse(new TextDecoder().decode(existing.get("pages.msref")));
     assert.equal(result.pages[0].sourcePath, collision ? "X (2).pdf" : "X.pdf");
     assert.equal(result.pages[1].sourcePath, "external.pdf");
@@ -103,8 +96,8 @@ await test("page collection references follow imported document renames only", a
   return "mapped";
 });
 
-function storeFixture(settings) {
-  let disk = { revision: 4, cards: [], nodes: [], edges: [], srs: {}, studySets: [], canvases: [], documents: [], settings };
+function storeFixture(settings, seed = {}) {
+  let disk = { revision: 4, cards: [], nodes: [], edges: [], srs: {}, studySets: [], canvases: [], documents: [], settings, ...seed };
   const files = new Map(), directories = new Set();
   const adapter = {
     exists: async path => files.has(path) || directories.has(path),
@@ -112,6 +105,23 @@ function storeFixture(settings) {
     list: async path => ({ files: [...files.keys()].filter(name => name.startsWith(path + "/")), folders: [] }),
     read: async path => files.get(path),
     write: async (path, content) => files.set(path, content),
+    readBinary: async path => {
+      assert.ok(files.has(path), path);
+      return Uint8Array.from(Buffer.from(files.get(path))).buffer;
+    },
+    remove: async path => files.delete(path),
+    rename: async (source, target) => {
+      if (files.has(target)) throw new Error("Destination file already exists!");
+      assert.ok(files.has(source));
+      files.set(target, files.get(source));
+      files.delete(source);
+    },
+    process: async (path, change) => {
+      assert.ok(files.has(path));
+      const content = change(files.get(path));
+      files.set(path, content);
+      return content;
+    },
   };
   const vault = { adapter, getFiles: () => [], getAbstractFileByPath: path => files.has(path) ? { path } : null,
     createBinary: async (path, data) => { files.set(path, new Uint8Array(data)); return { path }; },
@@ -120,6 +130,338 @@ function storeFixture(settings) {
   const host = { app: { vault }, loadData: async () => structuredClone(disk), saveData: async value => { disk = structuredClone(value); } };
   return { host, files, readDisk: () => structuredClone(disk) };
 }
+
+const sourcePath = "EV01-主流程.pdf", attachmentPath = "EV01-附件.pdf", supplementPath = "EV01-补充.docx";
+const seedTime = "2026-11-01T00:00:00.000Z";
+const dueDates = ["2026-12-01T00:00:00.000Z", "2026-11-25T00:00:00.000Z"];
+const question = id => `${id}::deck:deck-a::basic`;
+const sourceCards = ["card-a", "card-b"].map((id, index) => ({
+  id, docPath: sourcePath, front: `EV01 卡片 ${index + 1}`, page: index + 1, anchorAnnId: `ann-${index + 1}`,
+  links: index ? [] : ["card-b"], tags: ["ev01"], createdAt: seedTime,
+}));
+const sourceAnnotations = sourceCards.map(card => ({
+  id: card.anchorAnnId, docPath: sourcePath, page: card.page, cardId: card.id, type: "highlight",
+  rects: [{ x: .1, y: card.page / 10, w: .3, h: .02 }], createdAt: seedTime,
+}));
+sourceAnnotations.push({ id: "ann-ink", docPath: sourcePath, page: 2, type: "ink", rects: [], createdAt: seedTime });
+const f02Seed = {
+  cards: [...sourceCards, { id: "outside", docPath: "", front: "Outside", links: [], createdAt: seedTime }],
+  nodes: sourceCards.map((card, index) => ({
+    id: `node-${index}`, cardId: card.id, canvasId: "canvas-a", title: card.front, parentId: index ? "node-0" : null, x: 10, y: 20 + index,
+  })),
+  edges: [{ from: "node-0", to: "node-1", label: "分支" }],
+  studySets: [{ id: "set-a", name: "EV01 学习集", docPaths: [sourcePath, supplementPath],
+    documentAttachments: { [sourcePath]: [attachmentPath] }, cardIds: sourceCards.map(card => card.id), reviewDeckId: "deck-a", createdAt: seedTime }],
+  canvases: [{ id: "canvas-a", studySetId: "set-a", name: "主脑图", createdAt: seedTime }],
+  activeStudySetId: "set-a",
+  reviewDecks: [
+    { id: "deck-a", name: "EV01 牌组", studySetIds: ["set-a", "outside-set"], cardIds: ["card-a", "card-b", "outside"], createdAt: seedTime },
+    { id: "outside-deck", name: "Outside", studySetIds: ["outside-set"], cardIds: ["outside", "card-a"], createdAt: seedTime },
+  ],
+  srs: { [question("card-a")]: { due: dueDates[0] }, [question("card-b")]: { due: dueDates[1] },
+    [question("outside")]: { due: dueDates[0] }, "card-a::deck:outside-deck::basic": { due: dueDates[0] } },
+  reviewLogs: [{ id: "log-1", cardId: "card-a", questionId: question("card-a"), deckId: "deck-a", rating: 3, reviewedAt: seedTime },
+    { id: "outside-log", cardId: "outside", questionId: question("outside"), deckId: "deck-a", reviewedAt: seedTime }],
+  reviewPending: [{ id: "pending-1", cardId: "card-a", questionId: question("card-a"), deckId: "deck-a", due: dueDates[0], queuedAt: seedTime },
+    { id: "outside-pending", cardId: "outside", questionId: question("outside"), deckId: "deck-a", due: dueDates[0], queuedAt: seedTime }],
+};
+const f02Files = {
+  [sourcePath]: strToU8("%PDF-1.4 EV01 main"), [attachmentPath]: strToU8("%PDF-1.4 EV01 attachment"), [supplementPath]: strToU8("docx bytes"),
+};
+const openStore = async host => { const store = new Store(host); await store.load(); return store; };
+const importInto = (host, store, bytes, options) => importStudySetPackage({ app: host.app, store }, bytes, options);
+async function f02Evidence(id, data) {
+  const file = join(temporary, `F02-${id}.json`);
+  await writeFile(file, JSON.stringify(data, null, 2) + "\n");
+  console.log(`F02 ${id} evidence: ${file}`);
+}
+
+await test("EV01: scoped review schedules survive archive, import and reopen; attachment and anchors remain reachable", async () => {
+  const source = storeFixture(undefined, f02Seed);
+  for (const [path, bytes] of Object.entries(f02Files)) source.files.set(path, bytes);
+  source.files.set(sourcePath + ".mstudy.json", JSON.stringify({ schemaVersion: 2, annotations: sourceAnnotations }));
+  const sourceStore = await openStore(source.host);
+  const zipPath = join(temporary, "F02-EV01.marginstudy-set.zip");
+  const hostRequire = createRequire(import.meta.url);
+  globalThis.window = { require: name => name === "@electron/remote"
+    ? { dialog: { showSaveDialog: async () => ({ canceled: false, filePath: zipPath }) } } : hostRequire(name) };
+  try { await exportStudySet({ store: sourceStore, app: source.host.app }, { history: "all" }); }
+  finally { delete globalThis.window; }
+  const bytes = Uint8Array.from(await readFile(zipPath)).buffer;
+  const { payload: exported } = await readStudySetPackage(bytes);
+  assert.deepEqual([exported.reviewDecks?.length, Object.keys(exported.srs ?? {}).length, exported.reviewLogs?.length, exported.reviewPending?.length], [1, 2, 1, 1]);
+  assert.deepEqual(exported.reviewDecks[0].studySetIds, ["set-a"]);
+  assert.deepEqual(exported.reviewDecks[0].cardIds, ["card-a", "card-b"]);
+  const target = storeFixture(), original = strToU8("%PDF-1.4 EV01 preexisting");
+  target.files.set(sourcePath, original);
+  const imported = await importInto(target.host, await openStore(target.host), bytes);
+  const reopened = await openStore(target.host);
+  const counts = [reopened.reviewDecks.length, Object.keys(reopened.srs).length, reopened.reviewLogs.length, reopened.reviewPending.length];
+  assert.deepEqual(counts, [1, 2, 1, 1]);
+  const set = reopened.studySets.find(item => item.id === imported.studySetId);
+  const [cardA, cardB] = reopened.cards;
+  const deck = reopened.reviewDecks[0], questionA = `${cardA.id}::deck:${deck.id}::basic`;
+  assert.deepEqual([reopened.srs[questionA].due, reopened.srs[`${cardB.id}::deck:${deck.id}::basic`].due], dueDates);
+  assert.equal(reopened.reviewLogs[0].questionId, questionA);
+  assert.equal(reopened.reviewPending[0].questionId, questionA);
+  assert.deepEqual(deck.studySetIds, [set.id]);
+  assert.deepEqual(deck.cardIds, [cardA.id, cardB.id]);
+  assert.ok(reopened.reviewDecks.every(item => item.id !== "outside-deck"));
+  await f02Evidence("A1", { counts, dueDates, sourceDeck: exported.reviewDecks[0], importedDeck: deck, questionA,
+    importedSchedules: reopened.srs, archive: zipPath, outOfScopeRecords: 0 });
+  const renamed = "EV01-主流程 (2).pdf";
+  assert.equal(cardA.docPath, renamed);
+  assert.deepEqual(set.documentAttachments, { [renamed]: [attachmentPath] });
+  const attachmentHash = sha(Buffer.from(await target.host.app.vault.adapter.readBinary(set.documentAttachments[renamed][0])));
+  assert.equal(attachmentHash, sha(f02Files[attachmentPath]));
+  assert.equal(sha(target.files.get(sourcePath)), sha(original));
+  const annotations = await reopened.loadAnnotations(renamed);
+  for (const [index, card] of reopened.cards.entries()) {
+    const annotation = annotations.find(item => item.id === card.anchorAnnId);
+    assert.equal(annotation.cardId, card.id);
+    assert.equal(annotation.page, card.page);
+    assert.deepEqual(annotation.rects, sourceAnnotations[index].rects);
+  }
+  assert.deepEqual(cardA.links, [cardB.id]);
+  assert.equal(reopened.nodes.find(node => node.cardId === cardA.id).canvasId, reopened.nodes.find(node => node.cardId === cardB.id).canvasId);
+  assert.equal(reopened.edges.length, 1);
+  await f02Evidence("A2-store", { attachments: set.documentAttachments, attachmentHash, originalSha256: sha(original),
+    targetSha256: sha(target.files.get(sourcePath)), annotations, cards: reopened.cards.map(({id, docPath, page, anchorAnnId}) => ({id, docPath, page, anchorAnnId})) });
+  return "1/2/1/1, exact due dates, scoped deck, renamed source, attachment bytes and remapped anchors";
+});
+
+await test("legacy empty PDF page edits do not block the original pages after import and reopen", async () => {
+  const data = payload();
+  data.studySets[0].docPaths.push("edited.pdf");
+  const edits = { version: 1, pages: [{ id: "source:2", sourcePage: 2, rotation: 90 }, { id: "source:1", sourcePage: 1 }] };
+  data.docMeta = {
+    "a.pdf": { bookmarks: [2], pdfPageEdits: { version: 1, pages: [] } },
+    "edited.pdf": { pdfPageEdits: edits },
+  };
+  const bytes = pack({ payload: data, documents: {
+    "documents/a.pdf": strToU8("%PDF-1.4 original"),
+    "documents/edited.pdf": strToU8("%PDF-1.4 reordered"),
+  } });
+  const target = storeFixture();
+  const originalMeta = { brightness: .8, pdfPageEdits: edits };
+  target.files.set("a.pdf", strToU8("%PDF-1.4 preexisting"));
+  const store = await openStore(target.host);
+  store.updateDocMeta("a.pdf", originalMeta);
+  await store.flush();
+  await importInto(target.host, store, bytes);
+  const reopened = await openStore(target.host);
+  const imported = reopened.getDocMeta("a (2).pdf");
+  assert.deepEqual(imported, { bookmarks: [2] });
+  assert.deepEqual(reopened.getDocMeta("edited.pdf").pdfPageEdits, edits);
+  assert.deepEqual(reopened.getDocMeta("a.pdf"), originalMeta);
+  await f02Evidence("A2-pdf-page-edits", { imported, nonempty: reopened.getDocMeta("edited.pdf"), original: reopened.getDocMeta("a.pdf") });
+  return "empty metadata removed from the renamed copy, bookmarks and ordered pages preserved";
+});
+
+function interruptionPackage() {
+  const data = payload();
+  data.studySets[0].docPaths.push("b.pdf");
+  data.annotations = { "a.pdf": [{ id: "ann", type: "highlight", rects: [], cardId: "c1" }] };
+  return pack({ payload: data, documents: { "documents/a.pdf": strToU8("a"), "documents/b.pdf": strToU8("b") } });
+}
+
+function importedState(target, store) {
+  return { cards: store.cards.length, studySets: store.studySets.length, nodes: store.nodes.length, canvases: store.canvases.length,
+    files: [...target.files.keys()].filter(path => !path.startsWith("_marginstudy-recovery/")).sort() };
+}
+
+await test("all three failed import writes leave no partial data after reopen", async () => {
+  const cases = [];
+  for (const phase of ["second-file", "annotation", "flush"]) {
+    const target = storeFixture(), store = await openStore(target.host);
+    const { vault } = target.host.app;
+    const createBinary = vault.createBinary, write = vault.adapter.write, saveData = target.host.saveData;
+    let files = 0;
+    vault.createBinary = async (path, bytes) => {
+      if (phase === "second-file" && ++files === 2) throw new Error("injected " + phase);
+      if (phase === "annotation" && path.endsWith(".mstudy.json")) throw new Error("injected " + phase);
+      return createBinary(path, bytes);
+    };
+    vault.adapter.write = async (path, content) => {
+      if (phase === "annotation" && path.endsWith(".mstudy.json")) throw new Error("injected " + phase);
+      return write(path, content);
+    };
+    target.host.saveData = async data => {
+      if (phase === "flush" && data.studySets.length) throw new Error("injected " + phase);
+      return saveData(data);
+    };
+    let error;
+    const before = target.readDisk();
+    await assert.rejects(importInto(target.host, store, interruptionPackage()), caught => {
+      error = caught.message;
+      return error.includes("injected " + phase) && error.includes("已回滚");
+    });
+    await store.flush();
+    const reopened = await openStore(target.host);
+    const state = importedState(target, reopened);
+    assert.deepEqual(state, { cards: 0, studySets: 0, nodes: 0, canvases: 0, files: [] });
+    assert.deepEqual(target.readDisk(), before);
+    assert.deepEqual([...target.files.keys()], []);
+    cases.push({ phase, error, state, unchangedMainData: true });
+  }
+  await f02Evidence("A3", cases);
+  return "file, sidecar and final save failures leave the pre-import disk state";
+});
+
+await test("desktop adapter refusing overwrite can import into an existing data.json", async () => {
+  const base = await mkdtemp(join(temporary, "desktop-"));
+  const target = storeFixture();
+  target.host.manifest = { dir: ".obsidian/plugins/margin-study" };
+  const folder = join(base, target.host.manifest.dir);
+  await mkdir(folder, { recursive: true });
+  const mainPath = target.host.manifest.dir + "/data.json";
+  const actualPath = join(base, mainPath);
+  await writeFile(actualPath, JSON.stringify(target.readDisk()));
+  target.host.loadData = async () => JSON.parse(await readFile(actualPath, "utf8"));
+  const { adapter } = target.host.app.vault;
+  const { exists, write, remove } = adapter;
+  const isPluginData = path => path === mainPath || path.startsWith(mainPath + ".");
+  adapter.getBasePath = () => base;
+  adapter.exists = async path => isPluginData(path) ? access(join(base, path)).then(() => true, () => false) : exists(path);
+  adapter.write = async (path, content) => isPluginData(path) ? writeFile(join(base, path), content) : write(path, content);
+  adapter.remove = async path => isPluginData(path) ? unlink(join(base, path)) : remove(path);
+  adapter.rename = async (source, destination) => {
+    assert.ok(isPluginData(source));
+    if (await adapter.exists(destination)) throw new Error("Destination file already exists!");
+    assert.fail("unexpected adapter rename");
+  };
+  const result = await importInto(target.host, await openStore(target.host), interruptionPackage());
+  const reopened = await openStore(target.host);
+  assert.equal(result.cards, 1);
+  assert.equal(reopened.cards.length, 1);
+  assert.equal(reopened.getRevision(), 5);
+  const pluginFiles = await readdir(folder);
+  assert.deepEqual(pluginFiles, ["data.json"]);
+  await f02Evidence("A3-desktop-replace", { cards: reopened.cards.length, revision: reopened.getRevision(), pluginFiles });
+  return "desktop atomic replacement succeeds under a strict Obsidian-style adapter";
+});
+
+await test("adapter commits handle first save and distinguish failures before and after the write", async () => {
+  const cases = [];
+  for (const phase of ["new-file", "before-write", "after-write"]) {
+    const target = storeFixture();
+    target.host.manifest = { dir: ".obsidian/plugins/margin-study" };
+    const mainPath = target.host.manifest.dir + "/data.json";
+    const original = JSON.stringify(target.readDisk());
+    if (phase !== "new-file") target.files.set(mainPath, original);
+    target.host.loadData = async () => target.files.has(mainPath) ? JSON.parse(target.files.get(mainPath)) : null;
+    const { adapter } = target.host.app.vault;
+    const process = adapter.process;
+    if (phase !== "new-file") {
+      adapter.process = async (path, change) => {
+        assert.equal(path, mainPath);
+        if (phase === "after-write") await process(path, change);
+        throw new Error("injected process result");
+      };
+    }
+    const store = await openStore(target.host);
+    const result = importInto(target.host, store, interruptionPackage());
+    const committed = phase !== "before-write";
+    if (committed) assert.equal((await result).cards, 1);
+    else await assert.rejects(result, /已回滚.*injected process result/);
+    const reopened = await openStore(target.host);
+    assert.equal(reopened.cards.length, committed ? 1 : 0);
+    assert.equal(target.files.get(mainPath) === original, !committed);
+    assert.equal([...target.files.keys()].some(path => path.endsWith(".tmp")), false);
+    cases.push({ phase, cards: reopened.cards.length, originalMainData: target.files.get(mainPath) === original });
+  }
+  await f02Evidence("A3-atomic-main", cases);
+  return "first save, rollback and completed writes are distinguished on reopen";
+});
+
+await test("retries after interruption and concurrent submissions yield one import per target", async () => {
+  const bytes = interruptionPackage();
+  const target = storeFixture(), firstStore = await openStore(target.host);
+  const vault = target.host.app.vault, remove = vault.delete, createBinary = vault.createBinary;
+  let fileWrites = 0;
+  vault.createBinary = async (path, content) => {
+    if (++fileWrites === 2) throw new Error("injected second write");
+    return createBinary(path, content);
+  };
+  vault.delete = async () => { throw new Error("injected cleanup interruption"); };
+  await assert.rejects(importInto(target.host, firstStore, bytes), /injected second write/);
+  assert.ok([...target.files.keys()].some(path => path.endsWith("a.pdf")));
+  vault.delete = remove;
+  vault.createBinary = createBinary;
+  const first = await importInto(target.host, await openStore(target.host), bytes);
+  const firstState = importedState(target, await openStore(target.host));
+  const secondStore = await openStore(target.host), staleStore = await openStore(target.host);
+  const repeated = await importInto(target.host, secondStore, bytes);
+  assert.equal(repeated.studySetId, first.studySetId);
+  assert.deepEqual(importedState(target, await openStore(target.host)), firstState);
+  const merge = { mode: "merge", studySetId: first.studySetId };
+  const [merged, concurrent] = await Promise.all([importInto(target.host, secondStore, bytes, merge), importInto(target.host, staleStore, bytes, merge)]);
+  const final = importedState(target, await openStore(target.host));
+  assert.equal(merged.studySetId, concurrent.studySetId);
+  assert.equal(first.duplicateGroups + repeated.duplicateGroups + merged.duplicateGroups + concurrent.duplicateGroups, 0);
+  assert.deepEqual(firstState, { cards: 1, studySets: 1, nodes: 1, canvases: 1, files: ["a.pdf", "a.pdf.mstudy.json", "b.pdf"] });
+  assert.deepEqual(final, { cards: 2, studySets: 1, nodes: 2, canvases: 2,
+    files: ["a (2).pdf", "a (2).pdf.mstudy.json", "a.pdf", "a.pdf.mstudy.json", "b (2).pdf", "b.pdf"] });
+  await f02Evidence("A4", { firstState, afterRetry: firstState, final, results: [first, repeated, merged, concurrent] });
+  return "journal survives interrupted cleanup; retries and concurrent submits converge";
+});
+
+await test("ambiguous legacy partial import is reported and existing data is preserved", async () => {
+  const data = payload();
+  const target = storeFixture(undefined, {
+    studySets: [{ ...data.studySets[0], id: "study-old", cardIds: ["import-old"] }],
+    cards: [{ ...data.cards[0], id: "import-old" }],
+  });
+  target.files.set("a.pdf", strToU8("a"));
+  const before = target.readDisk();
+  const message = await importInto(target.host, await openStore(target.host), interruptionPackage())
+    .then(() => "", error => error.message);
+  assert.match(message, /旧版导入.*无法确认/);
+  assert.deepEqual(target.readDisk(), before);
+  assert.deepEqual([...target.files.keys()], ["a.pdf"]);
+  await f02Evidence("A5-legacy-partial", { message, unchangedMainData: true, files: ["a.pdf"] });
+  return "legacy partial import requires manual identification";
+});
+
+await test("legacy v1 settings leave target settings intact after create, merge and reload", async () => {
+  const fakeNetdisk = scope => Object.fromEntries(
+    ["clientId", "clientSecret", "accessToken", "refreshToken"].map(key => [key, `F04-FAKE-${scope}-${key}`]),
+  );
+  const { host } = storeFixture({
+    studyHomeCategory: "F04-FAKE-target-category", accent: "teal", layout: "tree",
+    baiduNetdisk: fakeNetdisk("target"),
+  });
+  const legacy = payload();
+  legacy.settings = {
+    studyHomeCategory: "F04-FAKE-source-category", accent: "violet", layout: "right", scale: 1.5,
+    baiduNetdisk: fakeNetdisk("source"),
+  };
+  const bytes = pack({ payload: legacy });
+  let store = new Store(host);
+  await store.load();
+  const snapshots = { beforeCreate: structuredClone(store.settings) };
+  const created = await importStudySetPackage({ app: host.app, store }, bytes, { mode: "new" });
+  store = new Store(host);
+  await store.load();
+  const createdSet = store.studySets.find(set => set.id === created.studySetId);
+  assert.equal(createdSet.cardIds.length, 1);
+  snapshots.afterCreateReload = structuredClone(store.settings);
+  snapshots.beforeMerge = structuredClone(store.settings);
+  const merged = await importStudySetPackage({ app: host.app, store }, bytes, { mode: "merge", studySetId: created.studySetId });
+  store = new Store(host);
+  await store.load();
+  assert.equal(merged.studySetId, created.studySetId);
+  assert.equal(store.studySets.find(set => set.id === merged.studySetId).cardIds.length, 2);
+  snapshots.afterMergeReload = structuredClone(store.settings);
+
+  const evidence = join(temporary, "F04-03-settings-snapshots.json");
+  await writeFile(join(temporary, "F04-03-legacy.marginstudy-set.zip"), new Uint8Array(bytes));
+  await writeFile(evidence, JSON.stringify(snapshots, null, 2) + "\n");
+  console.log(`F04 import evidence: ${evidence}`);
+  assert.deepEqual(snapshots.afterCreateReload, snapshots.beforeCreate);
+  assert.deepEqual(snapshots.afterMergeReload, snapshots.beforeMerge);
+  return "target settings identical after both v1 import modes and reload";
+});
 
 await test("import persists remapped review data and skips incompatible scene templates", async () => {
   const { host, files, readDisk } = storeFixture();
