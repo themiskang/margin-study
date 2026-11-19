@@ -103,8 +103,8 @@ await test("page collection references follow imported document renames only", a
   return "mapped";
 });
 
-await test("import persists remapped review data and skips incompatible scene templates", async () => {
-  let disk = { revision: 4, cards: [], nodes: [], edges: [], srs: {}, studySets: [], canvases: [], documents: [] };
+function storeFixture(settings) {
+  let disk = { revision: 4, cards: [], nodes: [], edges: [], srs: {}, studySets: [], canvases: [], documents: [], settings };
   const files = new Map(), directories = new Set();
   const adapter = {
     exists: async path => files.has(path) || directories.has(path),
@@ -118,6 +118,11 @@ await test("import persists remapped review data and skips incompatible scene te
     modifyBinary: async (file, data) => files.set(file.path, new Uint8Array(data)),
     delete: async file => files.delete(file.path) };
   const host = { app: { vault }, loadData: async () => structuredClone(disk), saveData: async value => { disk = structuredClone(value); } };
+  return { host, files, readDisk: () => structuredClone(disk) };
+}
+
+await test("import persists remapped review data and skips incompatible scene templates", async () => {
+  const { host, files, readDisk } = storeFixture();
   const store = new Store(host); await store.load();
   const template = { ...structuredClone(store.getSceneTemplates()[0]), id: "test-personal" };
   assert.throws(() => store.addSceneTemplate(store.getSceneTemplates()[0]), /内置模板/);
@@ -134,9 +139,10 @@ await test("import persists remapped review data and skips incompatible scene te
   data.annotations = { "a.pdf": [{ id: "ann", type: "highlight", rects: [], cardId: "c1" }] };
   const existingSidecar = JSON.stringify({ annotations: [] });
   files.set("a.pdf.mstudy.json", existingSidecar);
-  const result = await importStudySetPackage({ app: { vault }, store }, pack({ payload: data, documents: { "documents/a.pdf": strToU8("%PDF") } }));
+  const result = await importStudySetPackage({ app: host.app, store }, pack({ payload: data, documents: { "documents/a.pdf": strToU8("%PDF") } }));
   assert.ok(store.getRevision() > 4);
   assert.equal(result.skippedSceneTemplates, 1);
+  const disk = readDisk();
   assert.equal(disk.cardTemplates[0].id, "custom");
   const cardId = disk.cards[0].id, deckId = disk.reviewDecks[0].id, questionId = `${cardId}::deck:${deckId}::basic`;
   assert.ok(disk.srs[questionId]);
@@ -145,10 +151,10 @@ await test("import persists remapped review data and skips incompatible scene te
   assert.deepEqual(disk.reviewDecks[0].cardIds, [cardId]);
   assert.equal(files.get("a.pdf.mstudy.json"), existingSidecar);
   assert.equal(JSON.parse(files.get("a (2).pdf.mstudy.json")).annotations[0].cardId, cardId);
-  const merged = await importStudySetPackage({ app: { vault }, store }, pack({ payload: payload() }), { mode: "merge", studySetId: result.studySetId });
+  const merged = await importStudySetPackage({ app: host.app, store }, pack({ payload: payload() }), { mode: "merge", studySetId: result.studySetId });
   assert.equal(merged.studySetId, result.studySetId);
   assert.equal(store.studySets.find(set => set.id === result.studySetId).cardIds.length, 2);
-  await assert.rejects(importStudySetPackage({ app: { vault }, store }, pack({ payload: payload() }), { mode: "merge", studySetId: "missing" }), /目标学习集不存在/);
+  await assert.rejects(importStudySetPackage({ app: host.app, store }, pack({ payload: payload() }), { mode: "merge", studySetId: "missing" }), /目标学习集不存在/);
   return "revision and persisted references verified";
 });
 

@@ -92,6 +92,46 @@ await test("history options export recent, all, or no scoped snapshots",async()=
     for(const name of history){const value=JSON.parse(strFromU8(entries[name]));assert.equal(value.set.id,"set");assert.ok(!JSON.stringify(value).includes("Other/private.pdf"));}
   }
 });
+await test("shared ZIP excludes global settings from the payload and every history entry", async () => {
+  const item = await fixture("f04-share");
+  const credentialKeys = ["clientId", "clientSecret", "accessToken", "refreshToken"];
+  const preferenceKeys = ["studyHomeCategory", "accent", "layout"];
+  const fakeSettings = stage => ({
+    baiduNetdisk: Object.fromEntries(credentialKeys.map(key => [key, `F04-FAKE-${stage}-${key}`])),
+    ...Object.fromEntries(preferenceKeys.map(key => [key, `F04-FAKE-${stage}-${key}`])),
+  });
+  const historical = fakeSettings("history");
+  const current = fakeSettings("current");
+  Object.assign(item.store.settings, historical);
+  item.store.updateStudySet("set", { name: "Updated set" });
+  Object.assign(item.store.settings, current);
+  assert.deepEqual(item.store.getStudySetHistory("set").map(entry => entry.data.settings.baiduNetdisk), [historical.baiduNetdisk]);
+
+  await api.exportStudySet(item.plugin, { history: "all" });
+  const entries = unzipSync(await fs.readFile(item.output));
+  const history = Object.keys(entries).filter(name => /^history\/.*\.json$/.test(name));
+  const forbiddenKeys = ["settings", "baiduNetdisk", ...credentialKeys, ...preferenceKeys];
+  const markers = [historical, current].flatMap(value => [
+    ...Object.values(value.baiduNetdisk),
+    ...preferenceKeys.map(key => value[key]),
+  ]);
+  const scan = ["studyset.json", ...history].map(name => {
+    const json = strFromU8(entries[name]);
+    JSON.parse(json);
+    return {
+      name,
+      forbiddenKeyHits: forbiddenKeys.filter(key => new RegExp(`"${key}"\\s*:`).test(json)),
+      markerHits: markers.filter(marker => json.includes(marker)),
+    };
+  });
+  const evidence = path.join(item.folder, "F04-01-02-scan.json");
+  await fs.writeFile(evidence, JSON.stringify({ history, forbiddenKeys, markers, scan }, null, 2) + "\n");
+  console.log(`F04 export evidence: ${evidence}`);
+  assert.equal(history.length, 1);
+  assert.equal(JSON.parse(strFromU8(entries[history[0]])).set.name, "Study 测试");
+  assert.deepEqual(scan.flatMap(entry => entry.forbiddenKeyHits), []);
+  assert.deepEqual(scan.flatMap(entry => entry.markerHits), []);
+});
 await test("notes export writes cards into a new vault note without overwriting",async()=>{
   const item=await fixture("notes"),files=new Map([["Study 测试 - 学习笔记.md","existing"]]);
   item.plugin.app.vault.getAbstractFileByPath=name=>files.has(name)?{}:null;
@@ -107,7 +147,7 @@ await test("exported ZIP contains precisely the current set and unchanged store 
   const entries=unzipSync(bytes),data=JSON.parse(strFromU8(entries["studyset.json"]));
   assert.deepEqual(data.studySets,[before.studySets[0]]);assert.deepEqual(data.cards,before.cards.slice(0,2));
   assert.deepEqual(data.nodes,before.nodes.slice(0,2));assert.deepEqual(data.edges,before.edges);
-  assert.deepEqual(data.canvases,[before.canvases[0]]);assert.deepEqual(data.settings,before.settings);
+  assert.deepEqual(data.canvases,[before.canvases[0]]);assert.equal(Object.hasOwn(data,"settings"),false);
   assert.deepEqual(state(item.store),before);assert.equal(item.writes(),0);assert.equal(item.dialogs(),1);
 });
 await test("archive files and manifest hashes match original documents and referenced media",async()=>{
