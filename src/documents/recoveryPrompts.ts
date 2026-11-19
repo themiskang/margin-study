@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖 Store、恢复动作和宿主界面组件。
+ * [OUTPUT]: 提供来源恢复提示和本地状态面板。
+ * [POS]: 显示可选备份和保护快照，交由 Store 恢复选中的对象。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import { createModal } from "../utils/modal";
 import { el } from "../utils/dom";
 import type { Store } from "../model/store";
@@ -59,15 +65,15 @@ export class SourceRecoveryPrompts {
   dispose(): void { this.disposed = true; this.pending.clear(); for (const close of [...this.closers]) close(); }
 }
 
-export function openSyncStatusPanel(store: Store, actions: { findSource: () => void; resolveConflict: () => void; backupPaths: () => string[]; notify: (message: string) => void }): void {
+export function openSyncStatusPanel(store: Store, actions: { findSource: () => void; resolveConflict: () => void; backupPaths: () => string[] | Promise<string[]>; notify: (message: string) => void }): void {
   let unsubscribe = () => {};
   const { modal, close } = createModal("本地状态与保护", () => unsubscribe());
   modal.classList.add("ms-sync-status");
   const content = el("div"); modal.append(content);
-  const showBackups = () => {
+  const showBackups = async () => {
+    const paths = await actions.backupPaths();
     const picker = createModal("选择完整备份");
     picker.modal.append(el("p", { text: "校验备份后选择具体对象；不会覆盖整个学习库或源文件。" }));
-    const paths = actions.backupPaths();
     if (!paths.length) picker.modal.append(el("p", { text: "没有完整备份。" }));
     for (const path of paths) {
       const button = el("button", { class: "ms-btn", text: path });
@@ -138,7 +144,11 @@ export function openSyncStatusPanel(store: Store, actions: { findSource: () => v
     const history = el("details", { class: "ms-sync-history" }); history.append(el("summary", { text: "查看最近本地事件" }));
     for (const event of store.getLocalEvents().slice(-10).reverse()) history.append(el("p", { text: `${event.at}  ${event.detail}  [${event.id}]` }));
     const snapshots = el("button", { class: "ms-btn", text: "查看保护快照" }); snapshots.addEventListener("click", () => { void showSnapshots(); });
-    const backups = el("button", { class: "ms-btn", text: "从完整备份选择对象" }); backups.addEventListener("click", showBackups);
+    const backups = el("button", { class: "ms-btn", text: "从完整备份选择对象" });
+    backups.addEventListener("click", () => {
+      backups.disabled = true;
+      void showBackups().catch(error => actions.notify("无法读取备份列表：" + String(error))).finally(() => { backups.disabled = false; });
+    });
     const done = el("button", { class: "ms-btn", text: "关闭" }); done.addEventListener("click", close);
     content.append(history, snapshots, backups, done);
   };

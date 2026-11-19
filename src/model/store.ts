@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 Obsidian 存储适配器、模型和标注组件。桌面导入使用文件系统原子替换。
+ * [INPUT]: 依赖 Obsidian 存储适配器、模型、标注和升级备份发布。
  * [OUTPUT]: 提供 Store、主数据版本迁移、学习集导入提交和文档提交错误类型。
  * [POS]: 串行提交主数据、侧车和恢复副本。主数据迁移前保留可恢复备份。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
@@ -28,6 +28,8 @@ import { exportMn5SceneTemplate, importMn5SceneTemplate } from "../workspace/mn5
 import { syncCardColor } from "./cardColors";
 import { editedExcerptBlocks } from "../cards/excerptBlocks";
 import { applyMediaReplacements, externalizeMedia, hasInlineMedia } from "./mediaMigration";
+import { BACKUP_ROOT, clearAbandonedMigrationBackups, isMigrationBackup, isStagedMigrationBackup, migrationBackupPaths, publishMigrationBackup } from "./migrationBackup";
+import type { BackupFile, BackupManifest } from "./migrationBackup";
 import { ProtectedObject, ProtectionSnapshot, ProtectionSnapshotInfo, protectedCollections, protectedObjects, protectedAnnotations, signProtectionSnapshot, validateProtectionSnapshot } from "./localProtection";
 import { isStudyDocumentPath } from "../documents/formats";
 import { measurePenCommit, perfEnabledForPen, recordPenPersistence } from "../annot/pen";
@@ -46,8 +48,6 @@ export class DocumentCommitRollbackError extends Error {
     this.name = "DocumentCommitRollbackError";
   }
 }
-type BackupFile = { path: string; storedPath: string; sha256: string; bytes: number };
-type BackupManifest = { format: "margin-study-backup"; version: 2; createdAt: string; dataSha256: string; files: BackupFile[]; missingFiles?: string[] };
 const clone = <T>(value: T): T => value == null ? value : JSON.parse(JSON.stringify(value));
 const cloneSnapshot = <T>(value: T): T => typeof structuredClone === "function" ? structuredClone(value) : clone(value);
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
@@ -222,6 +222,7 @@ export class Store {
   async load(): Promise<void> {
     try {
       await withSharedCommitLock(this.host.app.vault.adapter, async () => {
+        await clearAbandonedMigrationBackups(this.host.app);
         let data = await this.host.loadData();
         if (data != null) this.validateData(data);
         this.applyData(cloneSnapshot(data ?? {}));
@@ -247,7 +248,11 @@ export class Store {
     const path = this.host.manifest?.dir ? `${this.host.manifest.dir}/data.json` : undefined;
     const originalText = path ? await this.host.app.vault.adapter.read(path) : JSON.stringify(data);
     if (!same(JSON.parse(originalText), data)) throw new Error("备份前主数据发生变化，请重新打开学习库");
-    await this.writeBackup(data, originalText, false, true);
+    await publishMigrationBackup(
+      this.host.app,
+      async dir => (await this.writeBackup(data, originalText, false, dir, true)).manifest,
+      async path => (await this.readBackup(path, false)).manifest,
+    );
     const upgraded = { ...data, schemaVersion: MAIN_SCHEMA_VERSION };
     try {
       if (path) {
@@ -2381,16 +2386,18 @@ export class Store {
   async backupData(silent = false, includePending = false): Promise<string> {
     try {
       if (!includePending) await this.flush();
+      await clearAbandonedMigrationBackups(this.host.app);
       const data = this.data();
-      const { path, missingFiles } = await this.writeBackup(data, JSON.stringify(data, null, 2), includePending);
-      if (!silent) new Notice("备份已保存：" + path + (missingFiles.length ? `（${missingFiles.length} 个来源文件原本已缺失，清单已记录）` : ""));
+      const dir = `${BACKUP_ROOT}/${new Date().toISOString().replace(/[:.]/g, "-")}-${uid("backup")}`;
+      const { path, manifest } = await this.writeBackup(data, JSON.stringify(data, null, 2), includePending, dir);
+      const missing = manifest.missingFiles?.length ?? 0;
+      if (!silent) new Notice("备份已保存：" + path + (missing ? `（${missing} 个来源文件原本已缺失，清单已记录）` : ""));
       return path;
     } catch (e) { this.report("备份失败，本次未记为成功",e); return ""; }
   }
 
-  private async writeBackup(data: Partial<PluginData>, dataText: string, includePending: boolean, migration = false): Promise<{ path: string; missingFiles: string[] }> {
+  private async writeBackup(data: Partial<PluginData>, dataText: string, includePending: boolean, dir: string, migration = false): Promise<{ path: string; manifest: BackupManifest }> {
     const vault = this.host.app.vault, adapter = vault.adapter;
-    const dir = "MarginStudyBackups/" + (migration ? "pre-v3-" : "") + new Date().toISOString().replace(/[:.]/g,"-") + "-" + uid("backup");
     const paths = new Set<string>();
     for (const card of data.cards ?? []) for (const source of this.sources(card)) paths.add(source.docPath);
     for (const set of data.studySets ?? []) for (const path of set.docPaths) paths.add(path);
@@ -2412,7 +2419,6 @@ export class Store {
     await this.ensureDir(dir + "/files");
     const dataPath = dir + "/data.json";
     await adapter.write(dataPath, dataText);
-    if (migration && await adapter.read(dataPath) !== dataText) throw new Error("升级前备份的主数据校验失败");
     const files: BackupFile[] = [], missingFiles: string[] = [];
     for (const path of paths) {
       safePath(path);
@@ -2427,17 +2433,27 @@ export class Store {
       await this.ensureDir(destination.slice(0, destination.lastIndexOf("/")));
       await adapter.writeBinary(destination, content);
       const sha256 = sha(content);
-      if (migration && sha(await adapter.readBinary(destination)) !== sha256) throw new Error("升级前备份的文件校验失败：" + path);
       files.push({ path, storedPath, sha256, bytes: content.byteLength });
     }
     const manifest: BackupManifest = { format: "margin-study-backup", version: 2, createdAt: new Date().toISOString(), dataSha256: sha(dataText), files, missingFiles };
     const path = dir + "/manifest.json", manifestText = JSON.stringify(manifest, null, 2);
     await adapter.write(path, manifestText);
-    if (migration && await adapter.read(path) !== manifestText) throw new Error("升级前备份的清单校验失败");
-    return { path, missingFiles };
+    return { path, manifest };
   }
 
-  private async readBackupObjects(manifestPath: string): Promise<ProtectedObject[]> {
+  async listBackupPaths(): Promise<string[]> {
+    const vault = this.host.app.vault;
+    const paths = vault.getFiles().map(file => file.path).filter(path => path.startsWith(`${BACKUP_ROOT}/`) &&
+      path.endsWith("/manifest.json") && !isStagedMigrationBackup(path) && !isMigrationBackup(path));
+    for (const path of await migrationBackupPaths(vault.adapter)) {
+      try { await this.readBackup(path, false); }
+      catch { continue; }
+      paths.push(path);
+    }
+    return paths.sort((left, right) => right.localeCompare(left));
+  }
+
+  private async readBackup(manifestPath: string, collectObjects: boolean): Promise<{ manifest: BackupManifest; objects: ProtectedObject[] }> {
     const adapter = this.host.app.vault.adapter;
     safePath(manifestPath);
     if (!manifestPath.startsWith("MarginStudyBackups/") || !manifestPath.endsWith("/manifest.json")) throw new Error("不是有效的备份清单路径");
@@ -2450,9 +2466,9 @@ export class Store {
     // 5.0.2：备份里若出现重复卡片编号，先修复再校验，避免整包恢复失败。
     const repaired = repairDuplicateIds(parsed);
     const data = repaired.data;
-    if (repaired.repaired.length) this.recordLocalEvent("restored", repaired.repaired.map(entry => entry.id), "备份含重复 ID，已修复 " + repaired.repaired.length + " 组：" + repaired.repaired.map(entry => `${entry.collection}/${entry.id}(${entry.strategy})`).join("、"));
+    if (collectObjects && repaired.repaired.length) this.recordLocalEvent("restored", repaired.repaired.map(entry => entry.id), "备份含重复 ID，已修复 " + repaired.repaired.length + " 组：" + repaired.repaired.map(entry => `${entry.collection}/${entry.id}(${entry.strategy})`).join("、"));
     this.validateData(data);
-    const objects = protectedObjects(data), seen = new Set<string>();
+    const objects = collectObjects ? protectedObjects(data) : [], seen = new Set<string>();
     for (const item of manifest.files) {
       const path = safePath(item.path), storedPath = safePath(item.storedPath);
       if (path.startsWith("MarginStudyBackups/") || path.startsWith("_marginstudy-recovery/") || !storedPath.startsWith("files/") || seen.has(path)) throw new Error("备份含重复或不允许的文件路径");
@@ -2461,14 +2477,15 @@ export class Store {
       if (sha(bytes) !== item.sha256 || bytes.byteLength !== item.bytes) throw new Error("文件校验失败：" + path);
       if (path.endsWith(".mstudy.json")) {
         const sidecar = JSON.parse(new TextDecoder().decode(bytes)); validateAnnotationCollection(sidecar?.annotations);
-        objects.push(...protectedAnnotations(path.slice(0, -".mstudy.json".length), sidecar.annotations));
+        if (collectObjects) objects.push(...protectedAnnotations(path.slice(0, -".mstudy.json".length), sidecar.annotations));
       }
     }
-    return objects;
+    return { manifest, objects };
   }
 
   async prepareBackupRecovery(manifestPath: string): Promise<ProtectionSnapshotInfo> {
-    const objects = await this.readBackupObjects(manifestPath);
+    if (isStagedMigrationBackup(manifestPath)) throw new Error("升级备份尚未发布");
+    const { objects } = await this.readBackup(manifestPath, true);
     return this.createProtectionSnapshot("从完整备份选择对象：" + manifestPath, objects);
   }
 

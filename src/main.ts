@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖 Obsidian 宿主、Store 和插件各视图。
+ * [OUTPUT]: 注册 MarginStudy 插件、界面和命令。
+ * [POS]: 将宿主生命周期接入 Store 和视图。恢复面板使用 Store 校验后的升级备份列表。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import { Plugin, WorkspaceLeaf, TFile, TFolder, Notice, Menu, Platform } from "obsidian";
 import { Store } from "./model/store";
 import { ReaderView, VIEW_TYPE_READER } from "./pdf/readerView";
@@ -401,7 +407,7 @@ export default class MarginStudyPlugin extends Plugin {
     openSyncStatusPanel(this.store, {
       findSource: () => { void this.reconcileMissingSources(false).then(() => this.recoveryPrompts.openPending()).catch(error => new Notice("来源扫描未完成：" + String(error), 10000)); },
       resolveConflict: () => this.showSaveConflict(),
-      backupPaths: () => this.app.vault.getFiles().filter(file => file.path.startsWith("MarginStudyBackups/") && file.name === "manifest.json").map(file => file.path).sort((left, right) => right.localeCompare(left)),
+      backupPaths: () => this.store.listBackupPaths(),
       notify: message => { new Notice(message, 10000); },
     });
   }

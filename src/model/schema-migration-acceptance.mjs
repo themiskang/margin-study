@@ -6,12 +6,13 @@
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { access, cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
+import { migrationDiskHost as host, verifyMigrationBackups } from "./migration-backup-acceptance.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const temporary = await mkdtemp(join(tmpdir(), "marginstudy-schema-"));
@@ -63,38 +64,6 @@ async function fixture(name, data) {
     await writeFile(join(root, sidecar), ` ${JSON.stringify({ schemaVersion: 2, annotations: [{ id: `ann-${index + 1}`, type: "note", page: 1, text: "original", rects: [] }] })}\n`);
   }
   return root;
-}
-
-function host(root, stage) {
-  const adapter = {
-    getBasePath: () => root,
-    exists: async path => access(join(root, path)).then(() => true, () => false),
-    mkdir: path => mkdir(join(root, path)),
-    list: async path => {
-      const files = [], folders = [];
-      for (const entry of await readdir(join(root, path), { withFileTypes: true })) {
-        (entry.isDirectory() ? folders : files).push(path ? `${path}/${entry.name}` : entry.name);
-      }
-      return { files, folders };
-    },
-    read: path => readFile(join(root, path), "utf8"),
-    readBinary: async path => Uint8Array.from(await readFile(join(root, path))).buffer,
-    write: (path, value) => {
-      if (stage === "snapshot" && path.startsWith("MarginStudyBackups/") && path.endsWith("/manifest.json")) throw new Error("F05 snapshot injection");
-      if (stage === "commit" && path.startsWith(`${mainPath}.`) && path.endsWith(".tmp")) throw new Error("F05 commit injection");
-      return writeFile(join(root, path), value);
-    },
-    writeBinary: (path, value) => writeFile(join(root, path), Buffer.from(value)),
-    stat: path => stat(join(root, path)).then(info => ({ type: info.isFile() ? "file" : "folder", mtime: info.mtimeMs, size: info.size })),
-    rename: (source, target) => rename(join(root, source), join(root, target)),
-    remove: path => rm(join(root, path)),
-  };
-  return {
-    manifest: { dir: pluginDir },
-    app: { vault: { adapter, getFiles: () => [{ path: sourcePath }] } },
-    loadData: async () => JSON.parse(await adapter.read(mainPath)),
-    saveData: () => assert.fail("desktop migration must use the vault adapter"),
-  };
 }
 
 async function hashes(root) {
@@ -196,3 +165,6 @@ for (const party of Object.values(conflict)) {
 }
 await writeEvidence("A4-backup-conflict", { manifest, stagedBackup, restored: await host(restoreRoot).loadData(), restoredHashes: await hashes(restoreRoot), conflict });
 console.log("F05 Store migration, two failure stages, backup restore and conflict passed");
+await writeEvidence("F07-store-bundle", { sha256: hash(built.outputFiles[0].contents), bytes: built.outputFiles[0].contents.byteLength });
+await verifyMigrationBackups({ Store, bundle, temporary, fixture, seed, host, hashes, hash, writeEvidence });
+console.log("F07 backup fault recovery, retry deduplication and existing backup preservation passed");

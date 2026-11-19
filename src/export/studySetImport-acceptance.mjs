@@ -106,7 +106,10 @@ function storeFixture(settings, seed = {}) {
   const adapter = {
     exists: async path => files.has(path) || directories.has(path),
     mkdir: async path => directories.add(path),
-    list: async path => ({ files: [...files.keys()].filter(name => name.startsWith(path + "/")), folders: [] }),
+    list: async path => ({
+      files: [...files.keys()].filter(name => name.startsWith(path + "/")),
+      folders: [...directories].filter(name => dirname(name) === path),
+    }),
     read: async path => files.get(path),
     write: async (path, content) => files.set(path, content),
     readBinary: async path => {
@@ -115,8 +118,25 @@ function storeFixture(settings, seed = {}) {
     },
     writeBinary: async (path, content) => files.set(path, new Uint8Array(content)),
     remove: async path => files.delete(path),
+    rmdir: async path => {
+      for (const file of files.keys()) if (file.startsWith(path + "/")) files.delete(file);
+      for (const dir of directories) if (dir === path || dir.startsWith(path + "/")) directories.delete(dir);
+    },
     rename: async (source, target) => {
-      if (files.has(target)) throw new Error("Destination file already exists!");
+      if (files.has(target) || directories.has(target)) throw new Error("Destination file already exists!");
+      if (directories.has(source)) {
+        for (const dir of [...directories]) {
+          if (dir !== source && !dir.startsWith(source + "/")) continue;
+          directories.delete(dir);
+          directories.add(target + dir.slice(source.length));
+        }
+        for (const [file, content] of [...files]) {
+          if (!file.startsWith(source + "/")) continue;
+          files.delete(file);
+          files.set(target + file.slice(source.length), content);
+        }
+        return;
+      }
       assert.ok(files.has(source));
       files.set(target, files.get(source));
       files.delete(source);
