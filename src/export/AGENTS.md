@@ -7,7 +7,7 @@
 - `studySetImportFiles.ts` 规划原件与侧车路径，在主数据提交前记录可回滚文件。
 - `studySetNotes.ts` 将学习集卡片导出为库内 Markdown。
 - `studySet-acceptance.mjs` 校验 ZIP 内容范围、完整性和脱敏。
-- `studySetImport-acceptance.mjs` 校验导入后的重开、引用、PDF 页编辑、回滚和重试。
+- `studySetImport-acceptance.mjs` 校验导入后的重开、引用、PDF 页编辑、回滚和主数据迁移后的重复导入。
 - `studySet-ui-acceptance.mjs` 执行学习集导出界面夹具。
 - `studySet-ui-fixture.txt` 定义学习集导出菜单的交互断言。
 - `exporter.ts` 提供文档、卡片和复习题的导出入口。

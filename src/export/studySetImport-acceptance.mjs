@@ -1,13 +1,13 @@
 /**
  * [INPUT]: 使用合成学习集包、Store 和库适配器。
- * [OUTPUT]: 验证复习往返、文件回链、故障恢复和旧包兼容。
+ * [OUTPUT]: 验证复习往返、文件回链、故障恢复、旧包兼容和主数据迁移后的导入重试。
  * [POS]: 从导入与导出的公开入口执行学习集回归。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 import assert from "node:assert/strict";
 import { access, mkdir, mkdtemp, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { build } from "esbuild";
@@ -16,14 +16,18 @@ import { strToU8, zipSync } from "fflate";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const temporary = await mkdtemp(join(tmpdir(), "marginstudy-set-import-"));
-const built = await build({ stdin: { contents: 'export { readStudySetPackage, importStudySetPackage } from "./studySetImport"; export { exportStudySet } from "./studySetExport"; export { Store } from "../model/store";', resolveDir: here }, bundle: true, platform: "node", format: "cjs", write: false,
-  plugins: [{ name: "synthetic-obsidian", setup(builder) {
-    builder.onResolve({ filter: /^obsidian$/ }, () => ({ path: "obsidian", namespace: "synthetic" }));
-    builder.onLoad({ filter: /.*/, namespace: "synthetic" }, () => ({ contents: 'export class Notice{};export class TFile{};export class App{};export class Component{};export const MarkdownRenderer={render:async()=>{}};' }));
-  } }] });
-const bundle = join(temporary, "fixture.cjs");
-await writeFile(bundle, built.outputFiles[0].contents);
-const { readStudySetPackage, importStudySetPackage, exportStudySet, Store } = createRequire(import.meta.url)(bundle);
+async function loadFixtureApi(source, filename) {
+  const built = await build({ stdin: { contents: 'export { readStudySetPackage, importStudySetPackage } from "./studySetImport"; export { exportStudySet } from "./studySetExport"; export { Store } from "../model/store";', resolveDir: source }, bundle: true, platform: "node", format: "cjs", write: false,
+    plugins: [{ name: "synthetic-obsidian", setup(builder) {
+      builder.onResolve({ filter: /^obsidian$/ }, () => ({ path: "obsidian", namespace: "synthetic" }));
+      builder.onLoad({ filter: /.*/, namespace: "synthetic" }, () => ({ contents: 'export class Notice{};export class TFile{};export class App{};export class Component{};export const MarkdownRenderer={render:async()=>{}};' }));
+    } }] });
+  const bundle = join(temporary, filename);
+  await writeFile(bundle, built.outputFiles[0].contents);
+  return createRequire(import.meta.url)(bundle);
+}
+const currentApi = await loadFixtureApi(here, "fixture.cjs");
+const { readStudySetPackage, importStudySetPackage, exportStudySet, Store } = currentApi;
 
 const sha = bytes => createHash("sha256").update(bytes).digest("hex");
 const results = [];
@@ -97,7 +101,7 @@ await test("page collection references follow imported document renames only", a
 });
 
 function storeFixture(settings, seed = {}) {
-  let disk = { revision: 4, cards: [], nodes: [], edges: [], srs: {}, studySets: [], canvases: [], documents: [], settings, ...seed };
+  let disk = { schemaVersion: 3, revision: 4, cards: [], nodes: [], edges: [], srs: {}, studySets: [], canvases: [], documents: [], settings, ...seed };
   const files = new Map(), directories = new Set();
   const adapter = {
     exists: async path => files.has(path) || directories.has(path),
@@ -109,6 +113,7 @@ function storeFixture(settings, seed = {}) {
       assert.ok(files.has(path), path);
       return Uint8Array.from(Buffer.from(files.get(path))).buffer;
     },
+    writeBinary: async (path, content) => files.set(path, new Uint8Array(content)),
     remove: async path => files.delete(path),
     rename: async (source, target) => {
       if (files.has(target)) throw new Error("Destination file already exists!");
@@ -404,6 +409,37 @@ await test("retries after interruption and concurrent submissions yield one impo
     files: ["a (2).pdf", "a (2).pdf.mstudy.json", "a.pdf", "a.pdf.mstudy.json", "b (2).pdf", "b.pdf"] });
   await f02Evidence("A4", { firstState, afterRetry: firstState, final, results: [first, repeated, merged, concurrent] });
   return "journal survives interrupted cleanup; retries and concurrent submits converge";
+});
+
+await test("a v2 import receipt survives schema migration and retries into the same target", async () => {
+  const baselineRoot = process.env.MARGINSTUDY_SCHEMA_BASELINE_DIR;
+  const priorApi = baselineRoot ? await loadFixtureApi(resolve(baselineRoot, "src/export"), "f02-baseline.cjs") : currentApi;
+  const bytes = interruptionPackage(), initial = storeFixture(undefined, { schemaVersion: baselineRoot ? 2 : 3 });
+  const initialStore = new priorApi.Store(initial.host);
+  await initialStore.load();
+  const studySetId = initialStore.createStudySet("F05 target").id;
+  await initialStore.flush();
+  const options = { mode: "merge", studySetId };
+  const imported = await priorApi.importStudySetPackage({ app: initial.host.app, store: initialStore }, bytes, options);
+  const disk = initial.readDisk();
+  if (baselineRoot) assert.equal(disk.schemaVersion, 2);
+  else disk.schemaVersion = 2;
+  const legacy = storeFixture(undefined, disk);
+  for (const [path, content] of initial.files) legacy.files.set(path, content);
+  const migrated = await openStore(legacy.host);
+  assert.equal(legacy.readDisk().schemaVersion, 3);
+  const pathsBefore = [...legacy.files].filter(([path]) => /^(a|b)\.pdf/.test(path)).map(([path, content]) => [path, sha(content)]);
+  const stateBefore = importedState(legacy, migrated);
+  assert.equal(stateBefore.cards, 1);
+  const repeated = await importInto(legacy.host, migrated, bytes, options);
+  const reopened = await openStore(legacy.host);
+  const stateAfter = importedState(legacy, reopened);
+  const pathsAfter = [...legacy.files].filter(([path]) => /^(a|b)\.pdf/.test(path)).map(([path, content]) => [path, sha(content)]);
+  assert.equal(repeated.studySetId, imported.studySetId);
+  assert.deepEqual(stateAfter, stateBefore);
+  assert.deepEqual(pathsAfter, pathsBefore);
+  await f02Evidence("F05-A1-retry", { priorImport: baselineRoot ? "frozen F02 Store" : "v2 version fixture", legacyVersion: 2, upgradedVersion: 3, imported, repeated, stateBefore, stateAfter, pathsBefore, pathsAfter });
+  return "same target and bundle keep one import and the same file hashes";
 });
 
 await test("ambiguous legacy partial import is reported and existing data is preserved", async () => {

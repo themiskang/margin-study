@@ -29,6 +29,7 @@ const allSuites=[
   ["model-additive","src/model/additive-acceptance.mjs"],
   ["model-duplicate-ids","src/model/duplicate-ids-acceptance.mjs"],
   ["model-a28","src/model/a28-acceptance.mjs"],
+  ["model-schema-migration","src/model/schema-migration-acceptance.mjs"],
   ["status-a28-ui","src/documents/a28-ui-acceptance.mjs"],
   ["mobile-sha256","src/model/sha256-acceptance.mjs"],
   ["study","src/study/acceptance.mjs"],

@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 使用 Store、复习契约、FSRS 和合成库。
+ * [OUTPUT]: 校验复习行为、首次主数据落盘和冲突恢复。
+ * [POS]: 通过公开入口验证复习与持久化的边界。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 // Run: node src/review/acceptance.mjs. All fixtures are synthetic; no vault is read.
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
@@ -328,7 +334,7 @@ try {
       await audit("an empty first launch can save when the host returns undefined", async () => {
         const memory = memoryHost(undefined), store = new review.Store(memory.host); stores.push(store);
         await store.load(); assert.equal(store.cards.length, 0);
-        store.save(); await store.flush(); assert.equal(memory.readMain().schemaVersion, 2);
+        store.save(); await store.flush(); assert.equal(memory.readMain().schemaVersion, 3);
       });
       await audit("await flush must include an edit arriving during its main write", async () => {
         const { store, memory } = await makeStore();

@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 Obsidian 存储适配器、模型和标注组件。桌面导入使用文件系统原子替换。
- * [OUTPUT]: 提供 Store、学习集导入提交和文档提交错误类型。
- * [POS]: 串行协调主数据、侧车和恢复副本的持久化。
+ * [OUTPUT]: 提供 Store、主数据版本迁移、学习集导入提交和文档提交错误类型。
+ * [POS]: 串行提交主数据、侧车和恢复副本。主数据迁移前保留可恢复备份。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 import { App, TFile, Notice } from "obsidian";
@@ -54,6 +54,8 @@ const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.str
 const SAVE_DEBOUNCE_MS = 800;
 const INPUT_QUIET_MS = 1200;
 const SERIALIZE_CHUNK = 64 * 1024;
+const MAIN_SCHEMA_VERSION = 3;
+const SIDECAR_SCHEMA_VERSION = 2;
 async function serializeData(value: unknown, onYield?: () => Promise<void>): Promise<string> {
   const parts: string[] = [];
   let pending = 0;
@@ -218,25 +220,52 @@ export class Store {
   constructor(host: StoreHost) { this.host = host; }
 
   async load(): Promise<void> {
-    let data: any;
     try {
-      data = await this.host.loadData();
-      if (data != null) this.validateData(data);
+      await withSharedCommitLock(this.host.app.vault.adapter, async () => {
+        let data = await this.host.loadData();
+        if (data != null) this.validateData(data);
+        this.applyData(cloneSnapshot(data ?? {}));
+        if (!this.settings.diagnosticNoPersist && this.needsMainMigration(data)) data = await this.migrateMain(data);
+        this.baseline = clone(data);
+        this.loadBlocked = false;
+      });
     } catch (error) {
       this.loadBlocked = true;
       this.report("主数据读取失败，已暂停写入以保留原文件。可从备份恢复。", error);
       throw error;
     }
-    this.baseline = clone(data);
-    this.applyData(data ?? {});
     this.recordLocalEvent("loaded", [], "已读取本地数据；云端状态无法由本插件确认。");
     for (const doc of this.documents) if (doc.missing && !this.localEvents.some(event => event.kind === "file-missing" && event.objectIds.includes(doc.id))) this.recordLocalEvent("file-missing", [doc.id], "已登记来源文件缺失：" + doc.path);
     if (hasInlineMedia(this)) this.save();
   }
 
+  private needsMainMigration(data: PluginData | null | undefined): data is PluginData {
+    return data != null && (data.schemaVersion ?? (this.host.manifest?.dir ? 1 : MAIN_SCHEMA_VERSION)) < MAIN_SCHEMA_VERSION;
+  }
+
+  private async migrateMain(data: PluginData): Promise<PluginData> {
+    const path = this.host.manifest?.dir ? `${this.host.manifest.dir}/data.json` : undefined;
+    const originalText = path ? await this.host.app.vault.adapter.read(path) : JSON.stringify(data);
+    if (!same(JSON.parse(originalText), data)) throw new Error("备份前主数据发生变化，请重新打开学习库");
+    await this.writeBackup(data, originalText, false, true);
+    const upgraded = { ...data, schemaVersion: MAIN_SCHEMA_VERSION };
+    try {
+      if (path) {
+        await this.commitMainReplacement(path, data, await serializeData(upgraded), uid("migration"), originalText);
+      } else {
+        if (!same(await this.host.loadData(), data)) throw new Error("提交前主数据发生变化，请重新打开学习库");
+        await this.host.saveData(upgraded);
+      }
+    } catch (error) {
+      const committed = await this.host.loadData().catch(() => null);
+      if (!same(committed, upgraded)) throw error;
+    }
+    return upgraded;
+  }
+
   private validateData(data: any): asserts data is PluginData {
     if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("数据必须是对象");
-    if (data.schemaVersion != null && (!Number.isInteger(data.schemaVersion) || data.schemaVersion > 2)) throw new Error("数据来自较新版本，请先更新插件");
+    if (data.schemaVersion != null && (!Number.isInteger(data.schemaVersion) || data.schemaVersion > MAIN_SCHEMA_VERSION)) throw new Error("主数据版本不兼容，请先更新插件");
     for (const key of ["cards", "nodes", "edges", "studySets", "canvases", "reviewLogs", "practiceAttempts", "reviewPending", "reviewDecks", "cardTemplates", "documents", "localEvents"]) {
       if (data[key] != null && !Array.isArray(data[key])) throw new Error(key + " 格式无效");
     }
@@ -332,7 +361,7 @@ export class Store {
   }
 
   private data(copy = true): PluginData {
-    const data: PluginData = { schemaVersion: 2, revision: this.revision, writerId: this.writerId,
+    const data: PluginData = { schemaVersion: MAIN_SCHEMA_VERSION, revision: this.revision, writerId: this.writerId,
       settings: this.settings, cards: this.cards, nodes: this.nodes, edges: this.edges,
       srs: this.srs, docMeta: this.docMeta, reviewHistory: this.reviewHistory,
       reviewLogs: this.reviewLogs, practiceAttempts: this.practiceAttempts, reviewPending: this.reviewPending, cardTemplates: this.cardTemplates,
@@ -648,6 +677,10 @@ export class Store {
     await this.enqueue(async () => {
       try {
         if (this.loadBlocked) throw new Error("主数据未成功读取，写入已锁定");
+        const legacy = this.baseline;
+        if ((this.annDirty.size || this.mainDirty) && this.needsMainMigration(legacy)) {
+          this.baseline = await withSharedCommitLock(this.host.app.vault.adapter, () => this.migrateMain(legacy));
+        }
         // Commit source sidecars first; main cards must never claim an unwritten source.
         while (!this.settings.diagnosticNoPersist && (this.annDirty.size || this.mainDirty)) {
           for (const path of [...this.annDirty.keys()]) {
@@ -662,6 +695,35 @@ export class Store {
         throw e;
       }
     });
+  }
+
+  private async commitMainReplacement(path: string, disk: unknown, content: string, stamp: string, expectedText?: string): Promise<void> {
+    const adapter = this.host.app.vault.adapter as App["vault"]["adapter"] & { getBasePath?: () => string };
+    const basePath = adapter.getBasePath?.();
+    const checkCurrent = (current: string) => {
+      if (expectedText === undefined ? !same(JSON.parse(current), disk) : current !== expectedText) {
+        throw new Error(expectedText === undefined ? "导入期间主数据发生变化，请重试。" : "迁移提交前主数据发生变化，请重新打开学习库。");
+      }
+    };
+    if (disk != null && !basePath) {
+      await adapter.process(path, current => { checkCurrent(current); return content; });
+      return;
+    }
+    const staged = path + "." + stamp + ".tmp";
+    try {
+      await adapter.write(staged, content);
+      if (disk != null && basePath) {
+        if (expectedText !== undefined) checkCurrent(await adapter.read(path));
+        const fs = (require("fs") as typeof import("fs")).promises;
+        const { join } = require("path") as typeof import("path");
+        await fs.rename(join(basePath, staged), join(basePath, path));
+      } else {
+        await adapter.rename(staged, path);
+      }
+    } catch (error) {
+      if (await adapter.exists(staged)) await adapter.remove(staged);
+      throw error;
+    }
   }
 
   private async persistMain(automatic = false): Promise<void> {
@@ -689,31 +751,9 @@ export class Store {
     local.localEvents = [...(local.localEvents ?? []), savedEvent];
     if (!importCanvasId) await this.writeRecovery("pending-main", local, true, automatic);
     if (importCanvasId && this.host.manifest?.dir) {
-      const adapter = this.host.app.vault.adapter as App["vault"]["adapter"] & { getBasePath?: () => string };
       const path = this.host.manifest.dir + "/data.json";
       const content = await serializeData(local, yieldForInput);
-      const basePath = adapter.getBasePath?.();
-      if (disk != null && !basePath) {
-        await adapter.process(path, current => {
-          if (!same(JSON.parse(current), disk)) throw new Error("导入期间主数据发生变化，请重试。");
-          return content;
-        });
-      } else {
-        const staged = path + "." + importCanvasId + ".tmp";
-        try {
-          await adapter.write(staged, content);
-          if (disk != null && basePath) {
-            const fs = (require("fs") as typeof import("fs")).promises;
-            const { join } = require("path") as typeof import("path");
-            await fs.rename(join(basePath, staged), join(basePath, path));
-          } else {
-            await adapter.rename(staged, path);
-          }
-        } catch (error) {
-          if (await adapter.exists(staged)) await adapter.remove(staged);
-          throw error;
-        }
-      }
+      await this.commitMainReplacement(path, disk, content, importCanvasId);
     } else if (this.host.manifest?.dir) {
       const content = await serializeData(local, yieldForInput);
       await this.waitForInputQuiet(automatic);
@@ -887,7 +927,7 @@ export class Store {
       if (!stat || stat.type !== "file") continue;
       try {
         const data = JSON.parse(await adapter.read(path));
-        if (data?.writerId !== match[1] || (category === "main" ? data?.schemaVersion !== 2 : typeof data?.docPath !== "string" || !Array.isArray(data?.annotations))) continue;
+        if (data?.writerId !== match[1] || (category === "main" ? ![2, MAIN_SCHEMA_VERSION].includes(data?.schemaVersion) : typeof data?.docPath !== "string" || !Array.isArray(data?.annotations))) continue;
       } catch { continue; }
       candidates.push({ path, mtime: stat.mtime, size: stat.size });
     }
@@ -963,7 +1003,7 @@ export class Store {
       throw new Error("标注被外部修改，已保留两份版本：" + recovery);
     }
     const media = await externalizeMedia({ annotations: anns }, adapter);
-    const content = await serializeData({ schemaVersion: 2, annotations: anns }, () => this.waitForInputQuiet(automatic));
+    const content = await serializeData({ schemaVersion: SIDECAR_SCHEMA_VERSION, annotations: anns }, () => this.waitForInputQuiet(automatic));
     // A rolling recovery copy also covers a partial host write or forced process exit.
     await this.writeRecovery("pending-annotations-" + sha(path).slice(0, 12), { docPath: path, annotations: anns }, true, automatic);
     await this.waitForInputQuiet(automatic);
@@ -2341,30 +2381,60 @@ export class Store {
   async backupData(silent = false, includePending = false): Promise<string> {
     try {
       if (!includePending) await this.flush();
-      const dir = "MarginStudyBackups/" + new Date().toISOString().replace(/[:.]/g,"-") + "-" + uid("backup");
-      await this.ensureDir(dir + "/files");
-      const dataText = JSON.stringify(this.data(), null, 2), adapter = this.host.app.vault.adapter;
-      await adapter.write(dir + "/data.json", dataText);
-      const paths = new Set<string>();
-      for (const c of this.cards) for (const s of this.sources(c)) paths.add(s.docPath);
-      for (const set of this.studySets) for (const p of set.docPaths) paths.add(p);
-      for (const d of this.documents) if (!d.missing) paths.add(d.path);
-      for (const f of this.host.app.vault.getFiles()) if (!f.path.startsWith("MarginStudyBackups/") && !f.path.startsWith("_marginstudy-recovery/") && (f.path.endsWith(".mstudy.json") || f.path.startsWith("_marginstudy-audio/") || f.path.startsWith("_marginstudy-imports/") || f.path.startsWith("_marginstudy-media/"))) paths.add(f.path);
-      if (includePending) for (const path of this.annCache.keys()) paths.add(this.sidecarPath(path));
-      for (const p of [...paths]) if (!p.endsWith(".mstudy.json") && await adapter.exists(this.sidecarPath(p))) paths.add(this.sidecarPath(p));
-      const files: BackupFile[] = [], missingFiles: string[] = [];
-      for (const p of paths) {
-        safePath(p);
-        const cached = p.endsWith(".mstudy.json") ? this.annCache.get(p.slice(0,-".mstudy.json".length)) : undefined;
-        if (!await adapter.exists(p) && !(includePending && cached)) { missingFiles.push(p); continue; }
-        const content = includePending && cached ? new TextEncoder().encode(JSON.stringify({ schemaVersion: 2, annotations: cached },null,2)).buffer : await adapter.readBinary(p), storedPath = "files/" + p;
-        const parent = (dir + "/" + storedPath).split("/").slice(0,-1).join("/"); await this.ensureDir(parent);
-        await adapter.writeBinary(dir + "/" + storedPath, content); files.push({ path: p, storedPath, sha256: sha(content), bytes: content.byteLength });
-      }
-      const manifest: BackupManifest = { format: "margin-study-backup", version: 2, createdAt: new Date().toISOString(), dataSha256: sha(dataText), files, missingFiles };
-      const result = dir + "/manifest.json"; await adapter.write(result, JSON.stringify(manifest,null,2));
-      if (!silent) new Notice("备份已保存：" + result + (missingFiles.length ? `（${missingFiles.length} 个来源文件原本已缺失，清单已记录）` : "")); return result;
+      const data = this.data();
+      const { path, missingFiles } = await this.writeBackup(data, JSON.stringify(data, null, 2), includePending);
+      if (!silent) new Notice("备份已保存：" + path + (missingFiles.length ? `（${missingFiles.length} 个来源文件原本已缺失，清单已记录）` : ""));
+      return path;
     } catch (e) { this.report("备份失败，本次未记为成功",e); return ""; }
+  }
+
+  private async writeBackup(data: Partial<PluginData>, dataText: string, includePending: boolean, migration = false): Promise<{ path: string; missingFiles: string[] }> {
+    const vault = this.host.app.vault, adapter = vault.adapter;
+    const dir = "MarginStudyBackups/" + (migration ? "pre-v3-" : "") + new Date().toISOString().replace(/[:.]/g,"-") + "-" + uid("backup");
+    const paths = new Set<string>();
+    for (const card of data.cards ?? []) for (const source of this.sources(card)) paths.add(source.docPath);
+    for (const set of data.studySets ?? []) for (const path of set.docPaths) paths.add(path);
+    for (const doc of data.documents ?? []) if (!doc.missing) paths.add(doc.path);
+    const isBackupAsset = (path: string) => !path.startsWith("MarginStudyBackups/") && !path.startsWith("_marginstudy-recovery/")
+      && (path.endsWith(".mstudy.json") || path.startsWith("_marginstudy-audio/") || path.startsWith("_marginstudy-imports/") || path.startsWith("_marginstudy-media/"));
+    for (const file of vault.getFiles()) if (isBackupAsset(file.path)) paths.add(file.path);
+    if (migration && this.host.manifest?.dir) {
+      const folders = [""];
+      const excluded = new Set([vault.configDir, ".obsidian", ".git", ".trash", "MarginStudyBackups", "_marginstudy-recovery"]);
+      for (const folder of folders) {
+        const entries = await adapter.list(folder);
+        for (const path of entries.files) if (isBackupAsset(path)) paths.add(path);
+        for (const path of entries.folders) if (!excluded.has(path)) folders.push(path);
+      }
+    }
+    if (includePending) for (const path of this.annCache.keys()) paths.add(this.sidecarPath(path));
+    for (const path of [...paths]) if (!path.endsWith(".mstudy.json") && await adapter.exists(this.sidecarPath(path))) paths.add(this.sidecarPath(path));
+    await this.ensureDir(dir + "/files");
+    const dataPath = dir + "/data.json";
+    await adapter.write(dataPath, dataText);
+    if (migration && await adapter.read(dataPath) !== dataText) throw new Error("升级前备份的主数据校验失败");
+    const files: BackupFile[] = [], missingFiles: string[] = [];
+    for (const path of paths) {
+      safePath(path);
+      const cached = path.endsWith(".mstudy.json") ? this.annCache.get(path.slice(0,-".mstudy.json".length)) : undefined;
+      if (!await adapter.exists(path) && !(includePending && cached)) {
+        if (migration && isBackupAsset(path)) throw new Error("升级前备份期间文件已移动：" + path);
+        missingFiles.push(path);
+        continue;
+      }
+      const content = includePending && cached ? new TextEncoder().encode(JSON.stringify({ schemaVersion: SIDECAR_SCHEMA_VERSION, annotations: cached }, null, 2)).buffer : await adapter.readBinary(path);
+      const storedPath = "files/" + path, destination = dir + "/" + storedPath;
+      await this.ensureDir(destination.slice(0, destination.lastIndexOf("/")));
+      await adapter.writeBinary(destination, content);
+      const sha256 = sha(content);
+      if (migration && sha(await adapter.readBinary(destination)) !== sha256) throw new Error("升级前备份的文件校验失败：" + path);
+      files.push({ path, storedPath, sha256, bytes: content.byteLength });
+    }
+    const manifest: BackupManifest = { format: "margin-study-backup", version: 2, createdAt: new Date().toISOString(), dataSha256: sha(dataText), files, missingFiles };
+    const path = dir + "/manifest.json", manifestText = JSON.stringify(manifest, null, 2);
+    await adapter.write(path, manifestText);
+    if (migration && await adapter.read(path) !== manifestText) throw new Error("升级前备份的清单校验失败");
+    return { path, missingFiles };
   }
 
   private async readBackupObjects(manifestPath: string): Promise<ProtectedObject[]> {
