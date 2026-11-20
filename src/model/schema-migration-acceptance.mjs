@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 使用 Store、合成库和磁盘适配器。
- * [OUTPUT]: 输出主数据迁移、失败保全、备份恢复和冲突三方的证据。
+ * [OUTPUT]: 输出主数据迁移、备份恢复和桌面替换边界的证据。
  * [POS]: 经 Store 公开入口验证持久化协议。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
@@ -168,3 +168,4 @@ console.log("F05 Store migration, two failure stages, backup restore and conflic
 await writeEvidence("F07-store-bundle", { sha256: hash(built.outputFiles[0].contents), bytes: built.outputFiles[0].contents.byteLength });
 await verifyMigrationBackups({ Store, bundle, temporary, fixture, seed, host, hashes, hash, writeEvidence });
 console.log("F07 backup fault recovery, retry deduplication and existing backup preservation passed");
+await import("./desktop-replacement-acceptance.mjs");

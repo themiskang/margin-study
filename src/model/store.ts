@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 依赖 Obsidian 存储适配器、模型、标注和升级备份发布。
- * [OUTPUT]: 提供 Store、主数据版本迁移、学习集导入提交和文档提交错误类型。
- * [POS]: 串行提交主数据、侧车和恢复副本。主数据迁移前保留可恢复备份。
+ * [INPUT]: 依赖 Obsidian 存储适配器、模型、标注、升级备份和 macOS 主数据交换。
+ * [OUTPUT]: 提供 Store、主数据迁移、学习集导入提交和冲突恢复。
+ * [POS]: 串行提交主数据和侧车。检测到桌面替换冲突时暂停写入，直至选定版本。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 import { App, TFile, Notice } from "obsidian";
@@ -30,6 +30,7 @@ import { editedExcerptBlocks } from "../cards/excerptBlocks";
 import { applyMediaReplacements, externalizeMedia, hasInlineMedia } from "./mediaMigration";
 import { BACKUP_ROOT, clearAbandonedMigrationBackups, isMigrationBackup, isStagedMigrationBackup, migrationBackupPaths, publishMigrationBackup } from "./migrationBackup";
 import type { BackupFile, BackupManifest } from "./migrationBackup";
+import { DesktopMainConflict, recoverDesktopMainReplacement, replaceMacMain, resolveDesktopMainReplacement } from "./desktopMainReplacement";
 import { ProtectedObject, ProtectionSnapshot, ProtectionSnapshotInfo, protectedCollections, protectedObjects, protectedAnnotations, signProtectionSnapshot, validateProtectionSnapshot } from "./localProtection";
 import { isStudyDocumentPath } from "../documents/formats";
 import { measurePenCommit, perfEnabledForPen, recordPenPersistence } from "../annot/pen";
@@ -214,6 +215,7 @@ export class Store {
   private documentCommitOwner = false;
   private studySetImportCanvasId?: string;
   private pendingConflict: { local: PluginData; remote: PluginData } | null = null;
+  private desktopConflict: DesktopMainConflict | null = null;
   private localEvents: LocalEvent[] = [];
   private protectionSnapshots: ProtectionSnapshotInfo[] = [];
 
@@ -223,12 +225,24 @@ export class Store {
     try {
       await withSharedCommitLock(this.host.app.vault.adapter, async () => {
         await clearAbandonedMigrationBackups(this.host.app);
+        const location = this.desktopMainLocation();
+        let conflict = location && await recoverDesktopMainReplacement(location.base, location.path);
         let data = await this.host.loadData();
         if (data != null) this.validateData(data);
         this.applyData(cloneSnapshot(data ?? {}));
-        if (!this.settings.diagnosticNoPersist && this.needsMainMigration(data)) data = await this.migrateMain(data);
+        if (!conflict && !this.settings.diagnosticNoPersist && this.needsMainMigration(data)) {
+          try { data = await this.migrateMain(data); }
+          catch (error) {
+            if (!(error instanceof DesktopMainConflict)) throw error;
+            conflict = error;
+            data = await this.host.loadData();
+            this.validateData(data);
+            this.applyData(cloneSnapshot(data));
+          }
+        }
         this.baseline = clone(data);
         this.loadBlocked = false;
+        if (conflict) this.markDesktopConflict(conflict);
       });
     } catch (error) {
       this.loadBlocked = true;
@@ -262,6 +276,7 @@ export class Store {
         await this.host.saveData(upgraded);
       }
     } catch (error) {
+      if (error instanceof DesktopMainConflict) throw error;
       const committed = await this.host.loadData().catch(() => null);
       if (!same(committed, upgraded)) throw error;
     }
@@ -425,7 +440,7 @@ export class Store {
     const pendingEvent = latest(event => event.kind === "pending");
     const pendingCount = this.annDirty.size + (this.mainDirty ? 1 : 0);
     return [
-      { key: "local", text: pending ? "本地待保存" : local ? "本地已保存" : "本地已读取（尚无本次保存记录）", evidenceEventIds: evidence(local), ...(pending ? { action: "save-local" as const } : {}) },
+      { key: "local", text: this.desktopConflict ? "本地写入已暂停（待处理冲突）" : pending ? "本地待保存" : local ? "本地已保存" : "本地已读取（尚无本次保存记录）", evidenceEventIds: evidence(this.desktopConflict ? conflictEvent : local), ...(pending && !this.desktopConflict ? { action: "save-local" as const } : {}) },
       { key: "pending-upload", text: pending ? `等待上传：${pendingCount} 项本地修改尚未落盘（保存后由宿主同步机制处理）` : "等待上传：无未落盘的本地修改", evidenceEventIds: evidence(pending ? pendingEvent : local) },
       { key: "missing", text: missingDocs.length ? `本机未找到 ${missingDocs.length} 个来源文件；iCloud 是否仍有副本无法由本插件确认` : "文件缺失：本机未发现缺失来源", evidenceEventIds: missingEvidence.length ? missingEvidence : evidence(), ...(missingDocs.length ? { action: "relink-source" as const } : {}) },
       { key: "conflict", text: conflict ? "冲突：需要处理" : "冲突：当前未发现", evidenceEventIds: evidence(conflictEvent), ...(conflict ? { action: "resolve-conflict" as const } : {}) },
@@ -647,7 +662,7 @@ export class Store {
     if (this.saveIdle !== null && typeof cancelIdleCallback === "function") cancelIdleCallback(this.saveIdle);
     this.saveTimer = null;
     this.saveIdle = null;
-    if (this.settings.diagnosticNoPersist || this.studySetImportCanvasId) return;
+    if (this.settings.diagnosticNoPersist || this.studySetImportCanvasId || this.desktopConflict) return;
     const attempt = () => {
       this.saveTimer = null;
       const remaining = INPUT_QUIET_MS - (Date.now() - this.lastInputAt);
@@ -682,6 +697,7 @@ export class Store {
     await this.enqueue(async () => {
       try {
         if (this.loadBlocked) throw new Error("主数据未成功读取，写入已锁定");
+        this.assertNoDesktopMainConflict();
         const legacy = this.baseline;
         if ((this.annDirty.size || this.mainDirty) && this.needsMainMigration(legacy)) {
           this.baseline = await withSharedCommitLock(this.host.app.vault.adapter, () => this.migrateMain(legacy));
@@ -696,10 +712,43 @@ export class Store {
         }
         this.lastSaveError = null;
       } catch (e) {
-        if (!this.studySetImportCanvasId) this.report("尚有修改未保存；原文件已保留，请重试保存或处理冲突。", e);
+        if (e instanceof DesktopMainConflict && this.desktopConflict !== e) this.markDesktopConflict(e);
+        else if (!(e instanceof DesktopMainConflict) && !this.studySetImportCanvasId) this.report("尚有修改未保存；原文件已保留，请重试保存或处理冲突。", e);
         throw e;
       }
     });
+  }
+
+  private desktopMainLocation(): { base: string; path: string } | null {
+    if (typeof process === "undefined" || process.platform !== "darwin" || !this.host.manifest?.dir) return null;
+    const adapter = this.host.app.vault.adapter as App["vault"]["adapter"] & { getBasePath?: () => string };
+    const base = adapter.getBasePath?.();
+    return base ? { base, path: `${this.host.manifest.dir}/data.json` } : null;
+  }
+
+  assertNoDesktopMainConflict(): void {
+    if (this.desktopConflict) throw this.desktopConflict;
+  }
+
+  hasDesktopMainConflict(): boolean { return this.desktopConflict !== null; }
+
+  private markDesktopConflict(conflict: DesktopMainConflict, notify = true): void {
+    this.desktopConflict = conflict;
+    this.conflictPath = conflict.path;
+    this.pendingConflict = null;
+    let objectIds: string[] = [];
+    try {
+      const local = JSON.parse(conflict.local), remote = JSON.parse(conflict.remote);
+      this.validateData(local);
+      this.validateData(remote);
+      this.pendingConflict = { local, remote };
+      objectIds = protectedObjects(local).map(item => item.id);
+    } catch {
+      notify = true;
+    }
+    this.recordLocalEvent("conflict-detected", objectIds, "检测到主数据外部修改；本地候选与外部版本已保留：" + conflict.path);
+    if (notify) this.report("主数据保存冲突，写入已暂停。", conflict);
+    this.localStatusChanged();
   }
 
   private async commitMainReplacement(path: string, disk: unknown, content: string, stamp: string, expectedText?: string): Promise<void> {
@@ -710,6 +759,10 @@ export class Store {
         throw new Error(expectedText === undefined ? "导入期间主数据发生变化，请重试。" : "迁移提交前主数据发生变化，请重新打开学习库。");
       }
     };
+    if (disk != null && this.desktopMainLocation() && basePath) {
+      await replaceMacMain(adapter, basePath, path, content, checkCurrent);
+      return;
+    }
     if (disk != null && !basePath) {
       await adapter.process(path, current => { checkCurrent(current); return content; });
       return;
@@ -731,7 +784,7 @@ export class Store {
     }
   }
 
-  private async persistMain(automatic = false): Promise<void> {
+  private async persistMain(automatic = false, resolvingDesktopConflict = false): Promise<void> {
     const started = perfEnabledForPen() ? performance.now() : 0;
     try { return await withSharedCommitLock(this.host.app.vault.adapter, async () => {
     const version = this.mainVersion;
@@ -739,6 +792,7 @@ export class Store {
     const local = JSON.parse(await serializeData(cloneSnapshot(this.data(false)), yieldForInput)) as PluginData;
     const disk = await this.host.loadData();
     if (await serializeData(disk, yieldForInput) !== await serializeData(this.baseline, yieldForInput)) {
+      if (resolvingDesktopConflict) throw new Error("处理冲突期间主数据再次变化；请重新选择。");
       if (disk != null) this.validateData(disk);
       // Preserve both versions before stopping. Choosing a winner is an explicit user action.
       const path = await this.writeRecovery("main-conflict", { local, remote: disk, baseline: this.baseline });
@@ -755,10 +809,10 @@ export class Store {
     const savedEvent: LocalEvent = { id: uid("local-event"), at: local.savedAt, kind: "saved", objectIds: [], detail: "本地数据已落盘。" };
     local.localEvents = [...(local.localEvents ?? []), savedEvent];
     if (!importCanvasId) await this.writeRecovery("pending-main", local, true, automatic);
-    if (importCanvasId && this.host.manifest?.dir) {
+    if ((importCanvasId || resolvingDesktopConflict) && this.host.manifest?.dir) {
       const path = this.host.manifest.dir + "/data.json";
       const content = await serializeData(local, yieldForInput);
-      await this.commitMainReplacement(path, disk, content, importCanvasId);
+      await this.commitMainReplacement(path, disk, content, importCanvasId ?? uid("resolution"));
     } else if (this.host.manifest?.dir) {
       const content = await serializeData(local, yieldForInput);
       await this.waitForInputQuiet(automatic);
@@ -781,15 +835,24 @@ export class Store {
 
   /** Resolve only after the UI presents the retained versions. */
   async resolveDataConflict(strategy: "local" | "remote" | "merge"): Promise<void> {
-    if (!this.pendingConflict) return;
     await this.enqueue(async () => {
+      if (!this.pendingConflict) {
+        if (this.desktopConflict) throw new Error("冲突版本未通过主数据校验。请检查保留的原始文件：" + this.desktopConflict.path);
+        return;
+      }
       const remote = await this.host.loadData();
       if (remote != null) this.validateData(remote);
       const current = this.data();
       const version = this.mainVersion;
-      const protection = await this.createProtectionSnapshot("处理主数据外部修改", protectedObjects(current), current, remote);
+      const desktop = this.desktopConflict, location = desktop && this.desktopMainLocation();
+      const pending = this.pendingConflict;
+      const local = desktop ? pending.local : current;
+      const external = desktop ? pending.remote : remote;
+      if (desktop) await this.createProtectionSnapshot("主数据冲突：外部版本", protectedObjects(pending.remote), pending.remote);
+      if (desktop && this.mainDirty) await this.createProtectionSnapshot("处理主数据冲突前的窗口修改", protectedObjects(current), current);
+      const protection = await this.createProtectionSnapshot(desktop ? "主数据冲突：本地候选" : "处理主数据外部修改", protectedObjects(local), local, remote);
       if (version !== this.mainVersion) throw new Error("生成保护快照期间本地数据发生变化；请重新处理冲突");
-      const resolved = strategy === "remote" ? clone(remote ?? {}) : strategy === "local" ? current : mergePreservingVersions(current, remote ?? {});
+      const resolved = strategy === "remote" ? clone(external ?? {}) : strategy === "local" ? local : mergePreservingVersions(local, external ?? {});
       const localEvents = this.localEventUnion(remote?.localEvents ?? [], this.localEvents);
       const previousBaseline = this.baseline;
       this.applyData(resolved);
@@ -800,15 +863,23 @@ export class Store {
       this.baseline = clone(remote);
       this.mainDirty = true; this.mainVersion++;
       const resolvingVersion = this.mainVersion;
-      try { await this.persistMain(); }
+      try { await this.persistMain(false, !!desktop); }
       catch (error) {
         const events = this.localEvents.filter(event => event.kind !== "conflict-merged" && event.kind !== "external-applied" || !event.detail.includes(protection.path));
         if (this.mainVersion === resolvingVersion) this.applyData(current);
         this.localEvents = this.localEventUnion(current.localEvents ?? [], events); this.baseline = previousBaseline;
-        this.mainDirty = true; this.mainVersion++; this.changed(); throw error;
+        this.mainDirty = true; this.mainVersion++;
+        if (error instanceof DesktopMainConflict) this.markDesktopConflict(error);
+        this.changed(); throw error;
       }
+      if (desktop && location) await resolveDesktopMainReplacement(location.base, desktop);
       this.pendingConflict = null;
       this.conflictPath = null;
+      this.desktopConflict = null;
+      if (desktop) this.lastSaveError = null;
+      const next = location && await recoverDesktopMainReplacement(location.base, location.path);
+      if (next) this.markDesktopConflict(next);
+      if (this.mainDirty || this.annDirty.size) this.scheduleFlush();
       this.changed();
     });
   }
@@ -1211,6 +1282,7 @@ export class Store {
   undoLibraryChange(): boolean { if (this.documentCommitPending) throw new Error("文档操作正在保存，请稍后重试。"); const item = this.history.pop(); if (!item) return false; this.future.push(item); this.libraryHistoryRevision++; if ('readOnly' in item) this.changed(); else if ('nodeMove' in item) { const node=this.getNode(item.nodeMove.id); if(node) Object.assign(node,item.nodeMove.before); this.save(); } else { this.restoreSnapshot(item.before, item.after); this.restoreCardAnchors(); } return true; }
   libraryTransaction<T>(label: string, action: () => T): T { return this.mutate(label, action); }
   async commitStudySetImport<T>(canvasId: string, action: () => T): Promise<T> {
+    this.assertNoDesktopMainConflict();
     if (this.documentCommitPending || this.settings.diagnosticNoPersist) throw new Error("当前无法保存学习集导入。");
     this.documentCommitPending = true;
     try {
@@ -1238,6 +1310,10 @@ export class Store {
           this.baseline = cloneSnapshot(disk);
           this.applyData(disk);
           this.mainDirty = false;
+          if (error instanceof DesktopMainConflict) {
+            this.markDesktopConflict(error, false);
+            throw error;
+          }
           this.lastSaveError = null;
           return result!;
         }

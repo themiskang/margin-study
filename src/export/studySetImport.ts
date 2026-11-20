@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 读取 v1 学习集 ZIP、目标 Store 与文件恢复清单。
+ * [INPUT]: 读取 v1 学习集 ZIP、目标 Store 与主数据及文件恢复状态。
  * [OUTPUT]: 提供包校验、学习集导入和导入对话框。
- * [POS]: 重映射资料引用和规范化导入元数据，将文件计划与 Store 提交合成一次导入。
+ * [POS]: 重映射资料引用。主数据有待处理冲突时保留候选引用的文件。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 import { Notice } from "obsidian";
@@ -12,6 +12,7 @@ import type MarginStudyPlugin from "../main";
 import { repairDuplicateIds } from "../model/duplicateIds";
 import { cardsIncludingMembers } from "../model/reviewPending";
 import { validateAnnotationCollection } from "../model/annotationValidation";
+import { DesktopMainConflict } from "../model/desktopMainReplacement";
 import type { Store } from "../model/store";
 import type { Annotation, Card, CardSource, Edge, MindCanvas, MindNode, PluginData, StudySet } from "../types";
 import { uid } from "../utils/id";
@@ -140,6 +141,7 @@ export async function importStudySetPackage(plugin: MarginStudyPlugin, bytes: Ar
   const firstCanvasId = `canvas-import-${key}-0`;
   const journal = new StudySetImportJournal(vault, key);
   return withStudySetImportLock(vault, async () => {
+    store.assertNoDesktopMainConflict();
     const committedSet = async () => {
       const disk: PluginData | null = await store.host.loadData();
       return !merging || disk?.canvases?.some(canvas => canvas.id === firstCanvasId && canvas.studySetId === setId)
@@ -377,6 +379,10 @@ export async function importStudySetPackage(plugin: MarginStudyPlugin, bytes: Ar
         }
       });
     } catch (error) {
+      if (error instanceof DesktopMainConflict) {
+        await journal.finish().catch(cleanup => console.warn("导入恢复清单尚未清除", cleanup));
+        throw error;
+      }
       const detail = error instanceof Error ? error.message : String(error);
       let committed: StudySet | undefined;
       try { committed = await committedSet(); if (!committed) await journal.rollback(); }

@@ -2,7 +2,9 @@
 
 > L2 | Parent: ../../AGENTS.md
 
-- `store.ts`：协调主数据、批注侧车和恢复快照。升级到 v3 前回读主数据和关联文件，提交已校验的备份。
+- `store.ts`：协调主数据、批注侧车和恢复快照。升级前发布已校验备份。桌面替换发生冲突时暂停写入，直至选定版本。
+- `desktopMainReplacement.ts`：在 macOS 原子交换主数据。回读实际移出的版本。保留冲突字节，回收已退出写入者的暂存。
+- `desktop-replacement-acceptance.mjs`：在 macOS 合成磁盘库验证升级与导入的并发、替换失败和进程终止。
 - `migrationBackup.ts`：暂存、校验并发布 v3 升级备份。复用等价备份，回收已退出进程的暂存目录。
 - `migration-backup-acceptance.mjs`：在真实合成磁盘库中注入异常和进程终止，核对恢复列表和逐文件差分。
 - `schema-migration-acceptance.mjs`：通过 Store 和合成磁盘库验证版本升级、失败保全、备份恢复和冲突三方。

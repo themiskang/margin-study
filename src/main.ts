@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 Obsidian 宿主、Store 和插件各视图。
  * [OUTPUT]: 注册 MarginStudy 插件、界面和命令。
- * [POS]: 将宿主生命周期接入 Store 和视图。恢复面板使用 Store 校验后的升级备份列表。
+ * [POS]: 将宿主生命周期接入 Store。恢复面板显示已校验备份和桌面冲突版本。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 import { Plugin, WorkspaceLeaf, TFile, TFolder, Notice, Menu, Platform } from "obsidian";
@@ -418,10 +418,11 @@ export default class MarginStudyPlugin extends Plugin {
     const { modal, close } = createModal("处理保存冲突");
     modal.append(el("p", { text: "另一处修改了磁盘文件。处理前会保留两份版本，恢复点位于 _marginstudy-recovery。" }));
     const choices: ["local" | "remote" | "merge", string][] = [["merge", "合并，保留冲突内容为独立副本"], ["local", "采用当前窗口版本"], ["remote", "采用磁盘版本"]];
-    const section = (title: string, resolve: (mode: "local" | "remote" | "merge") => Promise<void>) => {
+    const section = (title: string, resolve: (mode: "local" | "remote" | "merge") => Promise<void>, staged = false) => {
       const box = el("div", { class: "ms-conflict-options" }); box.append(el("h4", { text: title }));
       for (const [mode,label] of choices) {
-        const b = el("button", { class: "ms-btn", text: label });
+        const text = staged && mode !== "merge" ? (mode === "local" ? "采用本地候选" : "采用外部版本") : label;
+        const b = el("button", { class: "ms-btn", text });
         b.addEventListener("click", () => {
           box.querySelectorAll("button").forEach(node => { node.disabled = true; });
           void resolve(mode).then(() => { box.replaceChildren(el("p", { text: title + "：已处理" })); if (!this.store.conflictPath && !this.store.getAnnotationConflicts().length) close(); })
@@ -430,7 +431,7 @@ export default class MarginStudyPlugin extends Plugin {
       }
       modal.append(box);
     };
-    if (this.store.conflictPath) section("卡片、脑图与复习记录", mode => this.store.resolveDataConflict(mode));
+    if (this.store.conflictPath) section("卡片、脑图与复习记录", mode => this.store.resolveDataConflict(mode), this.store.hasDesktopMainConflict());
     for (const path of annotations) section("文档批注：" + path, mode => this.store.resolveAnnotationConflict(path, mode));
   }
 

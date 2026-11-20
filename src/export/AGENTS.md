@@ -3,7 +3,7 @@
 > L2 | Parent: ../../AGENTS.md
 
 - `studySetExport.ts` 限定学习集、复习状态和历史范围，生成带清单的 ZIP。
-- `studySetImport.ts` 校验学习集包、重映射实体引用并移除空 PDF 页编辑，通过 Store 提交主数据。
+- `studySetImport.ts` 校验学习集包和重映射引用。通过 Store 提交主数据。桌面冲突时保留候选引用的文件。
 - `studySetImportFiles.ts` 规划原件与侧车路径，在主数据提交前记录可回滚文件。
 - `studySetNotes.ts` 将学习集卡片导出为库内 Markdown。
 - `studySet-acceptance.mjs` 校验 ZIP 内容范围、完整性和脱敏。
