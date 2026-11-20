@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖库适配器、设备本地存储和备份内容校验。
+ * [INPUT]: 依赖库适配器、设备本地存储、备份内容校验和桌面运行时的主机名。
  * [OUTPUT]: 提供升级备份暂存、发布、去重、回收和恢复候选路径。
  * [POS]: 隔离未发布的升级备份，保留已发布备份和其他进程的暂存目录。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
@@ -20,7 +20,8 @@ const activeDirectories = runtime[runtimeKey] ??= new Set<string>();
 
 function stageOwner(app: App): { owner: string; pid: number } {
   if (typeof process !== "undefined" && process.versions?.node) {
-    const { hostname } = require("os") as typeof import("os");
+    const loadNodeModule = require;
+    const { hostname } = loadNodeModule("os") as typeof import("os");
     return { owner: sha256Hex(hostname()), pid: process.pid };
   }
   const vaultStorage = typeof app.loadLocalStorage === "function" && typeof app.saveLocalStorage === "function";

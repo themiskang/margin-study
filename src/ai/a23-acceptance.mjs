@@ -15,7 +15,8 @@ const dir = await mkdtemp(join(tmpdir(), "a23-test-")), path = join(dir, "test.c
 await writeFile(path, output.outputFiles[0].contents);
 const api = createRequire(import.meta.url)(path);
 const disk = { cards: [], nodes: [], edges: [], srs: {}, reviewPending: [], reviewLogs: [], studySets: [{ id: "s", name: "S", docPaths: [], cardIds: [], createdAt: "2020" }], canvases: [{ id: "m", name: "M", studySetId: "s", createdAt: "2020" }], activeStudySetId: "s", activeCanvasId: "m" };
-const app = { vault: { getFiles: () => [], getAbstractFileByPath: () => null }, loadLocalStorage: () => null, saveLocalStorage: () => {} };
+const adapter = { exists: async () => false };
+const app = { vault: { adapter, getFiles: () => [], getAbstractFileByPath: () => null }, loadLocalStorage: () => null, saveLocalStorage: () => {} };
 const host = { app, loadData: async () => structuredClone(disk), saveData: async () => {} };
 host.store = new api.Store(host); await host.store.load();
 const sample = "# 根\n## 子一\n### 孙\n## 子二";

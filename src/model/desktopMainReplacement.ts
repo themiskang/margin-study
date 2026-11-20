@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 macOS 原子交换、库路径和主数据字节。
+ * [INPUT]: 依赖桌面运行时的 Node 模块、macOS 原子交换、库路径和主数据字节。
  * [OUTPUT]: 提供替换、未完成暂存回收和冲突版本读取。
  * [POS]: 保留替换实际移出的文件。仅回收本次或已退出写入者的暂存。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
@@ -19,6 +19,10 @@ const runtime = globalThis as typeof globalThis & { [activeKey]?: Set<string> };
 const active = runtime[activeKey] ??= new Set<string>();
 const notFound = (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT";
 
+function loadNodeModule<Module>(name: string): Module {
+  return require(name) as Module;
+}
+
 export class DesktopMainConflict extends Error {
   #local: string;
   #remote: string;
@@ -34,9 +38,9 @@ export class DesktopMainConflict extends Error {
 }
 
 function desktopFiles(base: string, path: string) {
-  const fs = (require("fs") as typeof import("fs")).promises;
-  const paths = require("path") as typeof import("path");
-  const { hostname } = require("os") as typeof import("os");
+  const fs = loadNodeModule<typeof import("fs")>("fs").promises;
+  const paths = loadNodeModule<typeof import("path")>("path");
+  const { hostname } = loadNodeModule<typeof import("os")>("os");
   const main = paths.join(base, path);
   const prefix = `${paths.basename(main)}.ms-replace-${sha256Hex(hostname())}-`;
   return { fs, paths, main, prefix };
@@ -93,8 +97,8 @@ export async function recoverDesktopMainReplacement(base: string, path: string):
 }
 
 export async function resolveDesktopMainReplacement(base: string, conflict: DesktopMainConflict): Promise<void> {
-  const { rename } = (require("fs") as typeof import("fs")).promises;
-  const { join } = require("path") as typeof import("path");
+  const { rename } = loadNodeModule<typeof import("fs")>("fs").promises;
+  const { join } = loadNodeModule<typeof import("path")>("path");
   const dir = join(base, conflict.path);
   await rename(dir, dir + ".resolved");
 }
@@ -103,8 +107,8 @@ export async function replaceMacMain(
   adapter: DataAdapter, base: string, path: string, content: string, checkCurrent: (text: string) => void,
 ): Promise<void> {
   const { fs, paths, main, prefix } = desktopFiles(base, path);
-  const { randomUUID } = require("crypto") as typeof import("crypto");
-  const { execFile } = require("child_process") as typeof import("child_process");
+  const { randomUUID } = loadNodeModule<typeof import("crypto")>("crypto");
+  const { execFile } = loadNodeModule<typeof import("child_process")>("child_process");
   const dir = paths.join(paths.dirname(main), `${prefix}${process.pid}-${randomUUID()}`);
   const relative = paths.relative(base, dir);
   active.add(dir);
