@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 Obsidian 存储适配器、模型、标注、升级备份和 macOS 主数据交换。
  * [OUTPUT]: 提供 Store、来源指纹登记、主数据迁移、学习集导入提交和冲突恢复。
- * [POS]: 串行提交主数据和侧车。检测到桌面替换冲突时暂停写入，直至选定版本。
+ * [POS]: 串行提交主数据和侧车。桌面冲突暂停写入。立即保存命令可再次显示停写原因。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 import { App, TFile, Notice } from "obsidian";
@@ -691,7 +691,7 @@ export class Store {
   }
 
   /** Flush includes edits arriving while an earlier disk write is in progress. */
-  async flush(automatic = false): Promise<void> {
+  async flush(automatic = false, { notifyExistingConflict = false } = {}): Promise<void> {
     if (this.saveTimer !== null) { clearTimeout(this.saveTimer); this.saveTimer = null; }
     if (this.saveIdle !== null && typeof cancelIdleCallback === "function") cancelIdleCallback(this.saveIdle);
     this.saveIdle = null;
@@ -715,8 +715,12 @@ export class Store {
         }
         this.lastSaveError = null;
       } catch (e) {
-        if (e instanceof DesktopMainConflict && this.desktopConflict !== e) this.markDesktopConflict(e);
-        else if (!(e instanceof DesktopMainConflict) && !this.studySetImportCanvasId) this.report("尚有修改未保存；原文件已保留，请重试保存或处理冲突。", e);
+        if (e instanceof DesktopMainConflict) {
+          if (this.desktopConflict !== e) this.markDesktopConflict(e);
+          else if (notifyExistingConflict) new Notice(e.message, 12000);
+        } else if (!this.studySetImportCanvasId) {
+          this.report("尚有修改未保存；原文件已保留，请重试保存或处理冲突。", e);
+        }
         throw e;
       }
     });

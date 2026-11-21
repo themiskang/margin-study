@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖 Store、卡片编辑组件和 Obsidian 宿主。
+ * [OUTPUT]: 提供卡片列表、卡片详情和来源跳转。
+ * [POS]: 卡片详情将修改交给 Store。桌面冲突期间提示修改仅保留在内存。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import { applyCardTypography } from "./typography";
 import type MarginStudyPlugin from "../main";
 import { bindInlineCardLinks } from "../study/cardLink";
@@ -652,7 +658,13 @@ export function openDetail(plugin: MarginStudyPlugin, card: Card, onChanged?: ()
     onChanged?.();
     return true;
   };
-  save.addEventListener("click", () => { if (saveCard()) { new Notice("已保存"); close(); } });
+  save.addEventListener("click", () => {
+    if (!saveCard()) return;
+    new Notice(plugin.store.hasDesktopMainConflict()
+      ? "卡片修改已保留在内存，未写入磁盘。请运行「处理保存冲突」。"
+      : "已保存");
+    close();
+  });
   const jump = el("button", { class: "ms-btn", text: "跳转原文" });
   jump.addEventListener("click", () => {
     close();
