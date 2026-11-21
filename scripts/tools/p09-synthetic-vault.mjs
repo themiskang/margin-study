@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), ".."), require = createRequire(import.meta.url);
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "../.."), require = createRequire(import.meta.url);
 const { PDFDocument, StandardFonts, rgb } = require("pdf-lib");
 const vault = resolve(process.argv[2] ?? join(root, "evidence/package09-20261025/stability-vault"));
 try { await stat(vault); throw new Error(`Refusing to overwrite existing test vault: ${vault}`); } catch (error) { if (error.code !== "ENOENT") throw error; }

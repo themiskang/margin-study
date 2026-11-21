@@ -11,7 +11,7 @@ import { build } from "esbuild";
 const exec = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
 const project = await realpath(resolve(here, "../.."));
-const { runBrowser } = await import(pathToFileURL(join(project, "scripts/ego-harness.mjs")).href);
+const { runBrowser } = await import(pathToFileURL(join(project, "scripts/verify/ego-harness.mjs")).href);
 const fixtureRoot = join(here, "acceptance-fixtures");
 const temporary = await realpath(await mkdtemp(join(tmpdir(), "marginstudy-reader-")));
 const reportPath = join(temporary, "results.json");
@@ -33,7 +33,7 @@ for (const name of ["harness", "obsidian", "fakePdf", "fakeMammoth", "anchorCase
 await copyFile(join(fixtureRoot, "index.html"), join(temporary, "index.html"));
 await copyFile(join(fixtureRoot, "synthetic.pdf"), join(temporary, "synthetic.pdf"));
 await copyFile(join(project, "styles.css"), join(temporary, "styles.css"));
-await copyFile(join(project, "styles-reader.css"), join(temporary, "styles-reader.css"));
+await copyFile(join(project, "src/styles/styles-reader.css"), join(temporary, "styles-reader.css"));
 await copyFile(join(project, "pdf.worker.js"), join(temporary, "pdf.worker.js"));
 await writeFile(join(temporary,"unused-network.ts"), "export function request(){throw new Error('AI network is outside isolated reader fixture');}");
 await build({ entryPoints: [join(temporary, "harness.ts")], bundle: true, platform: "browser", format: "iife", target: "chrome120",

@@ -2,7 +2,7 @@
 """A22 独立 APKG 核验：zipfile + sqlite3（Python 标准库，独立于 JS 写入器）。
 
 用法：
-  python3 scripts/apkg-verify.py <file.apkg> [--manifest manifest.json]
+  python3 scripts/verify/apkg-verify.py <file.apkg> [--manifest manifest.json]
 
 不带 --manifest：输出结构报告（integrity、计数、笔记明细、媒体文件与哈希）。
 带 --manifest：额外比对卡片数/模板数/媒体数与逐笔记 ords、媒体引用、媒体哈希。

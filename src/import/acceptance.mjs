@@ -7,7 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { build } from "esbuild";
-import { runBrowser } from "../../scripts/ego-harness.mjs";
+import { runBrowser } from "../../scripts/verify/ego-harness.mjs";
 
 const exec = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
@@ -21,7 +21,7 @@ export async function requestUrl(input: any) {
   return {status:response.status,headers:Object.fromEntries(response.headers.entries()),arrayBuffer:bytes,text:new TextDecoder().decode(bytes)};
 }
 `);
-await writeFile(join(temporary, "styles.css"), [await readFile(join(project, "styles.css"), "utf8"), await readFile(join(project, "styles-import.css"), "utf8")].join("\n"));
+await writeFile(join(temporary, "styles.css"), [await readFile(join(project, "styles.css"), "utf8"), await readFile(join(project, "src/styles/styles-import.css"), "utf8")].join("\n"));
 await writeFile(join(temporary, "index.html"), '<!doctype html><meta charset="utf-8"><title>Web import acceptance</title><link rel="stylesheet" href="/styles.css"><body><main id="fixtures"></main><script type="module" src="/fixture.js"></script>');
 await build({ entryPoints: [join(temporary, "fixture.ts")], bundle: true, platform: "browser", format: "esm", target: "chrome120", outfile: join(temporary, "fixture.js"), plugins: [{ name: "isolated-obsidian", setup(builder) {
   builder.onResolve({ filter: /^obsidian$/ }, () => ({ path: join(temporary, "obsidian.ts") }));

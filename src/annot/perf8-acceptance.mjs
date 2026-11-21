@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { runBrowserSync } from "../../scripts/ego-harness.mjs";
+import { runBrowserSync } from "../../scripts/verify/ego-harness.mjs";
 
 const directory = mkdtempSync(join(tmpdir(), "marginstudy-perf8-"));
 const browser = (...args) => runBrowserSync(`perf8-${process.pid}`, ...args);

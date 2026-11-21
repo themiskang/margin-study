@@ -7,7 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { build } from "esbuild";
-import { runBrowser } from "../../scripts/ego-harness.mjs";
+import { runBrowser } from "../../scripts/verify/ego-harness.mjs";
 
 export async function runUIAcceptance({fixtureName, prefix, label, pdfArtifactPath}) {
 const exec = promisify(execFile);
@@ -43,7 +43,7 @@ const mockedObsidian = obsidian.replace(/export class Menu \{[\s\S]*?(?=\nexport
 }`);
 await writeFile(join(temporary, "obsidian.ts"), mockedObsidian);
 await writeFile(join(temporary, "index.html"), '<!doctype html><meta charset="utf-8"><title>MarginStudy UI acceptance</title><link rel="stylesheet" href="/styles.css"><body><main id="fixtures" style="height:95vh;background:#fff;color:#17252a"></main><script type="module" src="/fixture.js"></script>');
-await writeFile(join(temporary, "styles.css"), [await readFile(join(project, "styles.css"), "utf8"), await readFile(join(project, "styles-mindmap.css"), "utf8"), await readFile(join(project, "styles-organize.css"), "utf8")].join("\n"));
+await writeFile(join(temporary, "styles.css"), [await readFile(join(project, "styles.css"), "utf8"), await readFile(join(project, "src/styles/styles-mindmap.css"), "utf8"), await readFile(join(project, "src/styles/styles-organize.css"), "utf8")].join("\n"));
 await writeFile(join(temporary, "unused-network.ts"), "export function request(){throw new Error('AI network transport is outside this UI fixture');}\nexport function get(){}");
 await build({ entryPoints: [join(temporary, "fixture.ts")], bundle: true, platform: "browser", format: "esm", target: "chrome120", outfile: join(temporary, "fixture.js"),
   plugins: [{ name: "synthetic-obsidian", setup(builder) {

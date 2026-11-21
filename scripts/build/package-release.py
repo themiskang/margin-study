@@ -10,7 +10,7 @@ import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 CORE = ("main.js", "styles.css", "manifest.json", "pdf.worker.js", "ocr.swift", "versions.json")
 REQUIRED_NATIVE = (
     "native/MarginStudy Camera.app/Contents/MacOS/MarginStudyCamera",
@@ -141,7 +141,8 @@ def rollback(plugin, backup):
 def build(output):
     output.mkdir(parents=True, exist_ok=True)
     version = json.loads((ROOT / "manifest.json").read_text())["version"]
-    paths = sorted(set(CORE) | {p.relative_to(ROOT).as_posix() for p in (ROOT / "native").rglob("*") if p.is_file()})
+    native = ROOT / "native"
+    paths = sorted(set(CORE) | {p.relative_to(ROOT).as_posix() for p in native.rglob("*") if p.is_file() and not p.is_relative_to(native / "src")})
     files = {name: entry(ROOT / name) for name in paths}
     manifest = {"format": "margin-study-program-release-v1", "version": version, "files": files, "dataPolicy": "Program/runtime files only; never replace data.json or Claudian configuration."}
     archive = output / ("MarginStudy-" + version + "-P10-complete-candidate.zip")
@@ -149,11 +150,10 @@ def build(output):
         for name in paths:
             z.write(ROOT / name, name)
         z.writestr("release-manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
-        z.writestr("INSTALL.md", "# MarginStudy 本地安装候选包\n\n完整程序和桌面runtime；不含data.json、文档或Claudian配置。\n\n推荐使用源码中的 scripts/package-release.py install ARCHIVE PLUGIN_DIR BACKUP_DIR；它会逐文件备份、校验哈希、保持可执行权限，并检查data.json哈希不变。\n回退使用 scripts/package-release.py rollback PLUGIN_DIR BACKUP_DIR。\n手动安装时请用macOS Archive Utility/ditto解包并完整复制native目录；勿覆盖data.json。\n\n此候选包不代表MN4全界面验收已完成。\n")
+        z.writestr("INSTALL.md", "# MarginStudy 本地安装候选包\n\n完整程序和桌面runtime；不含data.json、文档或Claudian配置。\n\n推荐使用源码中的 scripts/build/package-release.py install ARCHIVE PLUGIN_DIR BACKUP_DIR；它会逐文件备份、校验哈希、保持可执行权限，并检查data.json哈希不变。\n回退使用 scripts/build/package-release.py rollback PLUGIN_DIR BACKUP_DIR。\n手动安装时请用macOS Archive Utility/ditto解包并完整复制native目录；勿覆盖data.json。\n\n此候选包不代表MN4全界面验收已完成。\n")
     load_payload(archive)
-    source = set(CORE) | {"README.md", "esbuild.config.mjs", "package.json", "package-lock.json", "tsconfig.json"}
-    source |= {p.name for p in ROOT.glob("styles-*.css")}
-    for directory in ("src", "scripts", "native", "native-src"):
+    source = set(CORE) | {"README.md", "esbuild.config.mjs", "package.json", "package-lock.json", "tsconfig.json", "LICENSE", "assets/licenses/LICENSE-ECDICT.txt"}
+    for directory in ("src", "scripts", "native"):
         source |= {p.relative_to(ROOT).as_posix() for p in (ROOT / directory).rglob("*") if p.is_file() and "__pycache__" not in p.parts and p.name != ".DS_Store"}
     identity = {name: entry(ROOT / name) for name in sorted(source)}
     write_json(output / "source-identity.json", identity)

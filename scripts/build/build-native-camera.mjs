@@ -5,7 +5,7 @@ import {fileURLToPath} from "node:url";
 import {join} from "node:path";
 
 if (process.platform !== "darwin") process.exit(0);
-const root=fileURLToPath(new URL("../",import.meta.url)),source=join(root,"native-src/CameraPicker.swift");
+const root=fileURLToPath(new URL("../../",import.meta.url)),source=join(root,"native/src/CameraPicker.swift");
 const app=join(root,"native/MarginStudy Camera.app"),contents=join(app,"Contents"),executable=join(contents,"MacOS/MarginStudyCamera");
 const hash=createHash("sha256").update(readFileSync(source)).update(process.arch+"camera-host-v2").digest("hex"),stamp=join(contents,"Resources/source-hash.txt");
 if(existsSync(stamp)&&existsSync(executable)&&readFileSync(stamp,"utf8").trim()===hash)process.exit(0);

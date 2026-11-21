@@ -1,5 +1,5 @@
 // 回归门控：跑验证套件 → 记录断言与构建指纹 → 与冻结基线比对。
-// 默认模式：跑套件并与 baseline/last-green.json 比对，不一致即非零退出。
+// 默认模式：跑套件并与 tests/baseline/last-green.json 比对，不一致即非零退出。
 // --freeze ：要求工作区干净 + 全集跑通，把当前指纹写进基线（需人工提交）。
 // --no-baseline：只跑不比对（首次冒烟用）。
 // --suites a,b：只跑指定套件（此时不比对，只报告）。
@@ -10,13 +10,13 @@ import {fileURLToPath} from "node:url";
 import {resolve, relative, sep} from "node:path";
 import {tmpdir} from "node:os";
 
-const root = fileURLToPath(new URL("../", import.meta.url));
+const root = fileURLToPath(new URL("../../", import.meta.url));
 const argv = process.argv.slice(2);
 const freeze = argv.includes("--freeze");
 const noBaseline = argv.includes("--no-baseline");
 const suiteAt = argv.indexOf("--suites");
 const suites = suiteAt >= 0 && argv[suiteAt + 1] ? argv[suiteAt + 1].split(",").map(s => s.trim()).filter(Boolean) : [];
-const BASELINE = "baseline/last-green.json";
+const BASELINE = "tests/baseline/last-green.json";
 const ARTIFACTS = ["main.js", "styles.css", "pdf.worker.js"];
 
 function run(cmd, args, opts = {}) {
@@ -121,7 +121,7 @@ let base;
 try {
   base = JSON.parse(await readFile(resolve(root, BASELINE), "utf8"));
 } catch {
-  console.log("[regress] 尚无基线，跳过比对。首次建立基线请跑：node scripts/regress.mjs --freeze");
+  console.log("[regress] 尚无基线，跳过比对。首次建立基线请跑：node scripts/verify/regress.mjs --freeze");
   process.exit(0);
 }
 

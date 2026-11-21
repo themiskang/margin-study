@@ -15,7 +15,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { build } from "esbuild";
-import { runBrowser } from "../../scripts/ego-harness.mjs";
+import { runBrowser } from "../../scripts/verify/ego-harness.mjs";
 
 const exec = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
@@ -39,7 +39,7 @@ await writeFile(join(temporary, "crypto.ts"),
   `const hashes=${JSON.stringify(hashes)};export function createHash(){let input;return{update(value){input=value;return this;},digest(){if(!(input in hashes))throw new Error('Unlisted synthetic hash input: '+input);return hashes[input];}}}`);
 await writeFile(join(temporary, "unused-network.ts"),
   "export function request(){throw new Error('AI network transport is outside this fixture');}");
-const styles = await Promise.all(["styles.css", "styles-reader.css", "styles-mindmap.css", "styles-organize.css", "styles-workspace.css"]
+const styles = await Promise.all(["styles.css", "src/styles/styles-reader.css", "src/styles/styles-mindmap.css", "src/styles/styles-organize.css", "src/styles/styles-workspace.css"]
   .map(name => readFile(join(project, name), "utf8")));
 await writeFile(join(temporary, "styles.css"), styles.join("\n"));
 await writeFile(join(temporary, "index.html"),

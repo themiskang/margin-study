@@ -9,9 +9,10 @@ import { execFileSync } from "node:child_process";
 const require = createRequire(import.meta.url);
 const pkgDir = dirname(require.resolve("pdfjs-dist/package.json"));
 const styleSources = ["styles-base.css", "styles-reader.css", "styles-mindmap.css", "styles-review.css", "styles-import.css", "styles-organize.css", "styles-workspace.css", "styles-ai.css", "styles-research.css"];
+const styleDir = join("src", "styles");
 function emitStyles() {
   const css = "/* Generated from the named style sources; edit styles-base.css or a feature stylesheet. */\n"
-    + styleSources.map(name => "/* Source: " + name + " */\n" + readFileSync(name, "utf8")).join("\n\n") + "\n";
+    + styleSources.map(name => "/* Source: " + name + " */\n" + readFileSync(join(styleDir, name), "utf8")).join("\n\n") + "\n";
   writeFileSync("styles.css", css, "utf8");
 }
 
@@ -71,9 +72,9 @@ function copyOcrScript() {
 }
 
 const prod = process.argv[2] === "production";
-if (process.platform === "darwin") execFileSync(process.execPath, ["scripts/build-native-photos.mjs"], { stdio: "inherit" });
-if (process.platform === "darwin") execFileSync(process.execPath, ["scripts/build-native-camera.mjs"], { stdio: "inherit" });
-if (process.platform === "darwin") execFileSync(process.execPath, ["scripts/build-native-recall.mjs"], { stdio: "inherit" });
+if (process.platform === "darwin") execFileSync(process.execPath, ["scripts/build/build-native-photos.mjs"], { stdio: "inherit" });
+if (process.platform === "darwin") execFileSync(process.execPath, ["scripts/build/build-native-camera.mjs"], { stdio: "inherit" });
+if (process.platform === "darwin") execFileSync(process.execPath, ["scripts/build/build-native-recall.mjs"], { stdio: "inherit" });
 
 const context = await esbuild.context({
   plugins: [{ name: "package-styles", setup(build) { build.onEnd(result => { if (!result.errors.length) emitStyles(); }); } }],
@@ -98,6 +99,6 @@ if (prod) {
   emitWorkerFile();
   copyOcrScript();
   emitStyles();
-  for (const name of styleSources) watchFile(name, { interval: 500 }, emitStyles);
+  for (const name of styleSources) watchFile(join(styleDir, name), { interval: 500 }, emitStyles);
   await context.watch();
 }

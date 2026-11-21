@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 
-const css = readFileSync(new URL("../styles-workspace.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+const css = readFileSync(new URL("../../src/styles/styles-workspace.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 const media = /@media\s*\(\s*max-width\s*:\s*900px\s*\)\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g;
 const declarations = {};
 let block;

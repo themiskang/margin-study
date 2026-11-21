@@ -7,7 +7,7 @@
     "dev": "node esbuild.config.mjs",
     "build": "node esbuild.config.mjs production",
     "verify": "node scripts/verify.mjs",
-    "gen-cmaps": "node scripts/gen-cmaps.mjs"
+    "gen-cmaps": "node scripts/build/gen-cmaps.mjs"
   },
   "keywords": [
     "obsidian",

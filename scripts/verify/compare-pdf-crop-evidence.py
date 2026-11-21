@@ -10,7 +10,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 
-DEV = Path(__file__).resolve().parents[1]
+DEV = Path(__file__).resolve().parents[2]
 NATIVE = DEV / "evidence/native-max-l4"
 BEFORE = DEV / "evidence/checkpoints/20261017-pdf-crop-before"
 PDF = "l4-sample-alpha.pdf"

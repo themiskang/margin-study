@@ -5,7 +5,7 @@ import {fileURLToPath} from "node:url";
 import {join} from "node:path";
 
 if (process.platform !== "darwin") process.exit(0);
-const root=fileURLToPath(new URL("../",import.meta.url)), source=join(root,"native-src/PhotoPicker.swift");
+const root=fileURLToPath(new URL("../../",import.meta.url)), source=join(root,"native/src/PhotoPicker.swift");
 const app=join(root,"native/MarginStudy Photos.app"), contents=join(app,"Contents"), executable=join(contents,"MacOS/MarginStudyPhotos");
 const hash=createHash("sha256").update(readFileSync(source)).update(process.arch+"photos-host-v2").digest("hex"), stamp=join(contents,"Resources/source-hash.txt");
 if (existsSync(stamp)&&existsSync(executable)&&readFileSync(stamp,"utf8").trim()===hash) process.exit(0);
