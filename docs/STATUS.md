@@ -10,5 +10,5 @@
 | 卡 C1/C2 PDF 橡皮擦 | 待定位间歇失败并验证修复 | [GAP-03](MN5-PARITY-GAP.md) |
 | A3 原生菜单矩阵 | 等待补齐 5.0.2 原生采集 | [采集规格](specs/mn502-capture-plan.md) |
 | A6 Pad 验收 | 等待设备在线 | [GAP-13](MN5-PARITY-GAP.md) |
-| 开源发版 | 待执行：清 73.6 MB 历史、外迁 `evidence/`、隐私复扫、首次公开推送。前 4 项不可逆，需业主确认 | [决策](archive/plans/) |
+| 开源发版 | 本地准备已完成：历史已清理（`.git` 84 MB → 7.9 MB，`dist/` 与 `handoff-to-edict/` 已从全部历史剔除）、`evidence/` 已外迁至仓库外、隐私复扫 0 命中。**尚未创建远端、尚未推送** | [决策](archive/plans/) |
 当前差距统一登记在 [MN5 差距表](MN5-PARITY-GAP.md)。工作顺序见 [路线图](ROADMAP.md)。阶段验收、历史计划和交接见 [归档索引](archive/README.md)。
