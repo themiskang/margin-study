@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 Obsidian 存储适配器、模型、标注、升级备份和 macOS 主数据交换。
- * [OUTPUT]: 提供 Store、主数据迁移、学习集导入提交和冲突恢复。
+ * [OUTPUT]: 提供 Store、来源指纹登记、主数据迁移、学习集导入提交和冲突恢复。
  * [POS]: 串行提交主数据和侧车。检测到桌面替换冲突时暂停写入，直至选定版本。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
@@ -116,6 +116,9 @@ async function serializeData(value: unknown, onYield?: () => Promise<void>): Pro
 }
 const HISTORY_LIMIT_BYTES = 32 * 1024 * 1024;
 const sha = (data: string | ArrayBuffer): string => sha256Hex(data);
+const documentFingerprint = (bytes: ArrayBuffer | Uint8Array) => ({ byteSize: bytes.byteLength, sha256: sha256Hex(bytes) });
+const hasDocumentFingerprint = (doc: DocumentRecord) => typeof doc.sha256 === "string" && /^[a-f0-9]{64}$/.test(doc.sha256)
+  && Number.isSafeInteger(doc.byteSize) && doc.byteSize! >= 0;
 function normalizeHandwritingPresets(value: unknown): HandwritingPresetSpec[] {
   if (!Array.isArray(value)) return DEFAULT_HANDWRITING_PRESETS.map(preset => ({ ...preset }));
   const ids = new Set<string>();
@@ -2294,27 +2297,31 @@ export class Store {
   updateDocMeta(path: string, patch: Partial<DocMeta>): void { this.docMeta[path] = { ...this.getDocMeta(path), ...patch }; this.save(); }
   toggleFoldPage(path: string, page: number): void { const values = new Set(this.getDocMeta(path).foldedPages ?? []); values.has(page) ? values.delete(page) : values.add(page); this.updateDocMeta(path, { foldedPages: [...values].sort((a,b) => a-b) }); }
   toggleBookmark(path: string, page: number): void { const values = new Set(this.getDocMeta(path).bookmarks ?? []); values.has(page) ? values.delete(page) : values.add(page); this.updateDocMeta(path, { bookmarks: [...values].sort((a,b) => a-b) }); }
-  registerDocument(path: string, sourceUrl?: string): DocumentRecord | undefined {
+  registerDocument(path: string, sourceUrl?: string, bytes?: Uint8Array): DocumentRecord | undefined {
     if (!path) return undefined;
     let doc = this.documents.find(d => d.path === path);
     if (this.documentCommitPending && !this.documentCommitOwner && !this.transactionDepth) {
-      if (doc && !doc.missing && (!sourceUrl || sourceUrl === doc.sourceUrl)) return doc;
+      if (doc && !doc.missing && !bytes && (!sourceUrl || sourceUrl === doc.sourceUrl)) return doc;
       throw new Error("文档操作正在保存，请稍后重试。");
     }
     if (!doc) { doc = { id: uid("doc"), path, kind: path.split(".").pop()?.toLowerCase() ?? "", createdAt: new Date().toISOString(), sourceUrl }; this.documents.push(doc); }
-    if (sourceUrl) doc.sourceUrl = sourceUrl; doc.missing = false; return doc;
+    if (sourceUrl) doc.sourceUrl = sourceUrl;
+    if (bytes) Object.assign(doc, documentFingerprint(bytes));
+    doc.missing = false;
+    return doc;
   }
   /** Lazily fingerprint a source through the vault adapter while retaining its existing identity. */
   async refreshDocumentFingerprint(path: string): Promise<DocumentRecord | undefined> {
     const adapter = this.host.app.vault.adapter;
     if (!await adapter.exists(path)) return undefined;
-    const bytes = await adapter.readBinary(path), record = this.registerDocument(path);
-    if (!record) return undefined;
-    const byteSize = bytes.byteLength, digest = sha(bytes);
-    if (record.sha256 !== digest || record.byteSize !== byteSize || record.missing) {
-      this.mutate("更新来源指纹", () => { record.sha256 = digest; record.byteSize = byteSize; record.missing = false; });
-    }
-    return record;
+    const fingerprint = documentFingerprint(await adapter.readBinary(path));
+    const record = this.documents.find(doc => doc.path === path);
+    if (record && record.sha256 === fingerprint.sha256 && record.byteSize === fingerprint.byteSize && !record.missing) return record;
+    return this.mutate("更新来源指纹", () => {
+      const target = this.registerDocument(path);
+      if (target) Object.assign(target, fingerprint);
+      return target;
+    });
   }
   /** Candidates are ordered by vault path and match bytes exactly; names and timestamps never participate. */
   async findMatchingDocumentPaths(documentId: string): Promise<string[]> {
@@ -2345,7 +2352,18 @@ export class Store {
   }
   async backfillDocumentFingerprints(): Promise<void> {
     const adapter = this.host.app.vault.adapter;
-    for (const doc of [...this.documents]) if (!doc.missing && await adapter.exists(doc.path)) await this.refreshDocumentFingerprint(doc.path);
+    const updates = new Map<DocumentRecord, { path: string; fingerprint: ReturnType<typeof documentFingerprint> }>();
+    for (const doc of this.documents) {
+      if (doc.missing || hasDocumentFingerprint(doc)) continue;
+      const path = doc.path;
+      if (!await adapter.exists(path).catch(() => false)) continue;
+      const bytes = await adapter.readBinary(path).catch(() => undefined);
+      if (bytes) updates.set(doc, { path, fingerprint: documentFingerprint(bytes) });
+    }
+    const pending = this.documents.filter(doc => !doc.missing && !hasDocumentFingerprint(doc) && updates.get(doc)?.path === doc.path);
+    if (pending.length) this.mutate("更新来源指纹", () => {
+      for (const doc of pending) Object.assign(doc, updates.get(doc)!.fingerprint);
+    });
   }
   /** Auto-relocate only a single byte-identical candidate; ambiguity remains explicit and untouched. */
   async recoverMissingDocuments(): Promise<{ recovered: { id: string; oldPath: string; newPath: string }[]; ambiguous: { id: string; oldPath: string; candidates: string[]; identicalCandidates: string[] }[] }> {
@@ -2355,7 +2373,7 @@ export class Store {
       // A move made while Obsidian or the plugin was offline has no delete event
       // to set `missing`. Reconcile the registered path against disk before
       // deciding whether this record needs exact-content recovery.
-      if (!doc.missing && await adapter.exists(doc.path)) continue;
+      if (!doc.missing && await adapter.exists(doc.path).catch(() => true)) continue;
       if (!doc.missing) this.markDocumentMissing(doc.path);
       const candidates = await this.findMatchingDocumentPaths(doc.id);
       if (candidates.length > 1) { ambiguous.push({ id: doc.id, oldPath: doc.path, candidates, identicalCandidates: candidates }); continue; }

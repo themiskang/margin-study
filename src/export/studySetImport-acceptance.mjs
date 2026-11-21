@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 使用合成学习集包、Store 和库适配器。
- * [OUTPUT]: 验证复习往返、文件回链、故障恢复、旧包兼容和主数据迁移后的导入重试。
+ * [OUTPUT]: 验证复习往返、文件回链、故障恢复、主数据迁移后的导入重试和冷启写盘次数。
  * [POS]: 从导入与导出的公开入口执行学习集回归。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
@@ -103,6 +103,7 @@ await test("page collection references follow imported document renames only", a
 function storeFixture(settings, seed = {}) {
   let disk = { schemaVersion: 3, revision: 4, cards: [], nodes: [], edges: [], srs: {}, studySets: [], canvases: [], documents: [], settings, ...seed };
   const files = new Map(), directories = new Set();
+  let mainWrites = 0;
   const adapter = {
     exists: async path => files.has(path) || directories.has(path),
     mkdir: async path => directories.add(path),
@@ -152,9 +153,108 @@ function storeFixture(settings, seed = {}) {
     createBinary: async (path, data) => { files.set(path, new Uint8Array(data)); return { path }; },
     modifyBinary: async (file, data) => files.set(file.path, new Uint8Array(data)),
     delete: async file => files.delete(file.path) };
-  const host = { app: { vault }, loadData: async () => structuredClone(disk), saveData: async value => { disk = structuredClone(value); } };
-  return { host, files, readDisk: () => structuredClone(disk) };
+  const host = { app: { vault }, loadData: async () => structuredClone(disk), saveData: async value => {
+    mainWrites++;
+    disk = JSON.parse(JSON.stringify(value));
+  } };
+  return { host, files, readDisk: () => structuredClone(disk), mainWrites: () => mainWrites };
 }
+
+const coldStart = async fixture => {
+  const before = fixture.readDisk(), writes = fixture.mainWrites();
+  const store = new Store(fixture.host);
+  await store.load();
+  await store.backfillDocumentFingerprints();
+  await store.recoverMissingDocuments();
+  await store.flush();
+  const after = fixture.readDisk();
+  return { writes: fixture.mainWrites() - writes, revisionDelta: after.revision - before.revision, diskUnchanged: JSON.stringify(after) === JSON.stringify(before) };
+};
+
+const noColdStartWrite = { writes: 0, revisionDelta: 0, diskUnchanged: true };
+const oneColdStartWrite = { writes: 1, revisionDelta: 1, diskUnchanged: false };
+const legacySchedule = { due: "2026-12-01", lastReviewed: "2026-11-25", interval: 6, reps: 1, ease: 2.5 };
+const legacyDocument = (path, fingerprint = {}) => ({ id: path, path, kind: "pdf", createdAt: "2026-11-01T00:00:00.000Z", ...fingerprint });
+const sourceBytes = strToU8("%PDF-1.4 cold-start source");
+const sourceFingerprint = { byteSize: sourceBytes.byteLength, sha256: sha(sourceBytes) };
+const coldResult = (id, values) => {
+  console.log(`${id} ${JSON.stringify(values)}`);
+  return values;
+};
+
+await test("A1 import commits exact final source fingerprints and UTC ISO review dates", async () => {
+  const fixture = storeFixture();
+  const store = new Store(fixture.host);
+  await store.load();
+  fixture.files.set("a.pdf", strToU8("collision"));
+  const collection = strToU8(JSON.stringify({ format: "marginstudy-page-collection", version: 1, pages: [{ sourcePath: "a.pdf" }] }));
+  await importStudySetPackage({ app: fixture.host.app, store }, pack({
+    payload: { ...payload(), srs: { c1: legacySchedule } },
+    documents: { "documents/a.pdf": sourceBytes, "documents/pages.msref": collection },
+  }));
+  const disk = fixture.readDisk();
+  assert.deepEqual(disk.documents.map(document => document.path).sort(), ["a (2).pdf", "pages.msref"]);
+  for (const doc of disk.documents) {
+    const bytes = fixture.files.get(doc.path);
+    assert.equal(doc.byteSize, bytes.byteLength);
+    assert.equal(doc.sha256, sha(bytes));
+  }
+  assert.notEqual(disk.documents.find(document => document.path === "pages.msref").sha256, sha(collection));
+  const schedule = disk.srs[disk.cards[0].id];
+  assert.equal(schedule.due, new Date(2026, 11, 1).toISOString());
+  assert.equal(schedule.lastReviewed, new Date(2026, 10, 25).toISOString());
+  return coldResult("A1", { documents: disk.documents.length, due: schedule.due, lastReviewed: schedule.lastReviewed });
+});
+
+await test("A2 imported library stays byte-identical through two cold starts", async () => {
+  const fixture = storeFixture();
+  const store = new Store(fixture.host);
+  await store.load();
+  await importStudySetPackage({ app: fixture.host.app, store }, pack({
+    payload: { ...payload(), srs: { c1: legacySchedule } }, documents: { "documents/a.pdf": sourceBytes },
+  }));
+  const first = await coldStart(fixture), second = await coldStart(fixture);
+  assert.deepEqual(first, noColdStartWrite);
+  assert.deepEqual(second, noColdStartWrite);
+  return coldResult("A2", { first, second });
+});
+
+await test("A3 legacy fingerprints and review dates are persisted together once", async () => {
+  const fixture = storeFixture(undefined, {
+    cards: payload().cards,
+    documents: [legacyDocument("a.pdf"), legacyDocument("blocked.pdf"), legacyDocument("slow.pdf")],
+    srs: { c1: legacySchedule },
+  });
+  for (const doc of fixture.readDisk().documents) fixture.files.set(doc.path, sourceBytes);
+  const adapter = fixture.host.app.vault.adapter, readBinary = adapter.readBinary;
+  adapter.readBinary = async path => {
+    if (path === "blocked.pdf") throw new Error("EACCES");
+    if (path === "slow.pdf") await new Promise(resolve => setTimeout(resolve, 850));
+    return readBinary(path);
+  };
+  const first = await coldStart(fixture), second = await coldStart(fixture);
+  assert.deepEqual(first, oneColdStartWrite);
+  assert.deepEqual(second, noColdStartWrite);
+  const disk = fixture.readDisk();
+  assert.equal(disk.documents[0].sha256, sourceFingerprint.sha256);
+  assert.equal(disk.documents[1].sha256, undefined);
+  assert.equal(disk.documents[2].sha256, sourceFingerprint.sha256);
+  assert.equal(disk.srs.c1.due, new Date(2026, 11, 1).toISOString());
+  assert.equal(disk.srs.c1.lastReviewed, new Date(2026, 10, 25).toISOString());
+  return coldResult("A3", { first, second, unreadableSourceSha256Persisted: false });
+});
+
+await test("A4 absent source is stable on the second cold start", async () => {
+  const fixture = storeFixture(undefined, { documents: [
+    legacyDocument("gone.pdf", { ...sourceFingerprint, missing: false }),
+    legacyDocument("never-fingerprinted.pdf"),
+  ] });
+  const first = await coldStart(fixture), second = await coldStart(fixture);
+  assert.deepEqual(first, oneColdStartWrite);
+  assert.deepEqual(second, noColdStartWrite);
+  assert.equal(fixture.readDisk().documents[0].missing, true);
+  return coldResult("A4", { first, second });
+});
 
 const sourcePath = "EV01-主流程.pdf", attachmentPath = "EV01-附件.pdf", supplementPath = "EV01-补充.docx";
 const seedTime = "2026-11-01T00:00:00.000Z";

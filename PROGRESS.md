@@ -3660,3 +3660,36 @@ F02 的 A1–A5 均通过，交规划席核签。最终 `main.js` SHA-256 为 `e
 2. **save-now 冲突态零反馈**：`src/main.ts:362-365` 回调 `.catch(() => {})` 吞异常，`src/model/store.ts:715` 在 `desktopConflict === e` 时不再 `report`，用户在冲突态点「立即保存学习库」界面无任何提示。属交互可观测性缺口。
 
 未覆盖边界（承前登记）：A1 合并分支、A3 merge 模式、原生面板无遮挡截图（本轮 panel.png 被系统授权提示遮挡，事实以 `ax-panel*.json` 为准）、非 macOS 与 Pad。
+
+## 2026-11-21 A3 重做（取证席）：真旧构建产出的旧库 + 三场景宿主实采
+
+复核席判原 A3 为 PARTIAL（`legacy-seed.json` 是脚本拼的等价 v3 JSON）。本轮按统筹指定用**真旧构建**重做，取证包 `evidence/card-A/forensics/a3-legacy-real/`（72 文件，`RESULT.json` 清单 71 条 + 自身，账实相等，无哈希不符）。旧 A3 产物保留不删，已在 `evidence/card-A/forensics/SUPERSEDED.txt` 标注被取代，根 `forensics/RESULT.json` 同步重生成（19 条 + 自身 = 20，`scenarios.A3.superseded=true`）。
+
+- 旧构建：`git worktree add /tmp/card-a-old f78573e` + `npm run build`，`main.js 44c324b8…ba2ea`（5 566 014 B）。首次因 `node_modules` 做成符号链接得到 `bd0c63f3…`（esbuild 模块键被改写），改为 worktree 内真实目录（`cp -al`）后复现指定哈希，二次构建同值。工作树已 `git worktree remove /tmp/card-a-old --force`（exit 0，目录消失，`git worktree list` 仅剩主树），产物已留 `a3-legacy-real/build-old/`。
+- 真旧库 L0：旧构建在隔离宿主 `1.12.7` 里走 `plugin.importStudySetBytes`（与「导入学习集」命令同一函数 `importStudySetPackage`）真实导入 3 文档/3 卡/3 节点/1 边/1 学习集/1 画布/2 批注/1 docMeta/3 date-only 调度；关停后落盘 `data.json 7dcad826…9814b05`，`schemaVersion=3`、`revision=2`、`localEvents=5`，3 条文档**无** `byteSize`/`sha256`，`srs` 三条共 6 个裸 `YYYY-MM-DD`。
+- 场景 1：冷启#1 `contentWrites=1`（`revision 2→3`，同一写盘内指纹补齐且与库内字节相等、裸日期 6→0）；冷启#2 `contentWrites=0`、`revisionDelta=0`、六项全等（`sha256 d0bfb7d0…bca1d3`）。
+- 场景 2：真实设置页 toggle 把 `backupEnabled` 先关后开（`true→false→true`，各落一次盘），主状态本会话 3 次写盘；真实命令「备份数据（MarginStudy）」经命令面板执行，新增 `MarginStudyBackups/2026-11-21T06-05-04-267Z-…/`（7 文件，含 Notice 原文），**未**引起主状态写盘；随后两次纯冷启各 `contentWrites=0`、`revisionDelta=0`、六项全等、备份目录无新增。
+- 场景 3：真实删/移/`chmod 000` 三种来源异常。子案 A（未回填指纹的 L0）：两次冷启均 `contentWrites=0`、六项全等，三条登记原样保留（`recoverMissingDocuments` 只处理已有指纹的登记项，故 missing 标记与重定位都没发生）。子案 B（L0 先做一次新构建冷启回填指纹）：冷启#1 `contentWrites=2`、`revision 3→7`，删除条被标 `missing=true`，移动条自动重定位（事件原文「已自动重定位内容一致的来源文件：sources-moved/a3-old-02.pdf」），`chmod 000` 条仍 `missing=false` 无 Notice；冷启#2 `contentWrites=0`、`revisionDelta=0`、六项全等；两次被动静默观察均文件不变，无异常、无重复扫描。
+- 未覆盖（需外部裁定，不冒充已覆盖）：① 统筹指定的旧构建 `f78573e` 自身已写 `schemaVersion=3` 且总写出 `reviewPending`/`reviewDecks`，复核席点名的「<3 双写迁移」「这两者缺失形态」无法由它产出，需另指定更旧构建或给范围豁免；② 新构建没有触发「当天首次备份」的机会（`lastBackup` 已被旧构建那次加载写掉），备份隔离靠旧构建那次 + 真实备份命令那次对照。证据与全部数字见 `a3-legacy-real/note.md`、`summary.json`。
+
+### 卡 A 收口 · PASS 8/8
+
+规划席断言（`.agent-artifacts/plans/card-A-B-C-plan.md`）A1–A8 全部通过，异厂复核两轮终裁 `PASS`（`audit/verdict.json` 与 `audit/recompute-report.json` 两份 `overallVerdict` 均为 PASS，各 8 PASS / 0 PARTIAL / 0 FAIL；r1 的 PARTIAL 原判完整保存在 `rounds[0]`，未删历史）。
+
+- [x] A1 新导入即规范：`import-snapshot.json`，2 条文档 `byteSize` 正整数 + 64 位小写 `sha256` 且与库内字节相等，`srs` 2 条全 ISO，裸 `YYYY-MM-DD` = 0。证据 `evidence/card-A/forensics/`。
+- [x] A2 新导入库首次冷重启零写盘（核心）：六项全等 `sha256=daf09ceb…`、`mtimeMs` 不变、`revision 2→2`、`writerId`/`savedAt` 不变、`localEvents 5→5`，冷启窗口 `contentWrites=0 / touches=0 / rawFsEventCount=0`。证据 `cold-restart-new-{before,after,diff}.json`。
+- [x] A3 历史旧库回填一次收敛：用真旧构建 `f78573e`（`main.js 44c324b8…`）产的旧库（`data.json 7dcad826…`、3 文档无指纹、6 个裸日期），冷启#1 写盘 1（`revision 2→3`，同一次写盘内指纹补齐 + 裸日期 6→0），冷启#2 写盘 0、`revisionDelta=0`、六项全等。证据 `evidence/card-A/forensics/a3-legacy-real/`（72 文件，清单 71 + 自身，71/71 复算 OK）。
+- [x] A4 缺文件边界不死循环写盘：缺文件 `first: 1 write / +1` → `second: 0 / 0`，未捕获异常 0。证据 `exec/unit-cold-start-idempotency.log`。
+- [x] A5 `tsc` 退出 0（日志无 error）；新增单测 20/20、0 fail。证据 `exec/tsc.log`、`exec/unit-test.log`。
+- [x] A6 `verify` 连续两轮各 53/53、退出 0，**首轮即绿**（12:20:08 / 12:25:24 两次真实全量，无重跑掩盖）。证据 `exec/verify-round1.log`、`verify-round2.log`。
+- [x] A7 `px-gap` 292/298、0 超差、0 缺失、6 跳过、退出 0；`tail-focus` 13/13、退出 0。证据 `exec/px-gap.log`、`exec/tail-focus.log`。
+- [x] A8 三权证据齐备且账实相等：`exec` 174/174（磁盘 175）、`forensics` 19/19（磁盘 20）、子包 `a3-legacy-real` 71/71（磁盘 72）；四件套与取证加载件逐项相等 `main.js 9cd732cf…f94a4`。证据各包 `RESULT.json`。
+
+范围豁免两项（复核席裁定，已写入 `audit/VERDICT.md`）：
+1. **Q2**：`schemaVersion<3` 双写迁移与 `reviewPending`/`reviewDecks` 缺失形态无法由 `f78573e` 产出（该构建已写 v3 且总写出这两个字段；双写由 `65dedcd` 引入、早于本卡）。A3 结论适用范围**限定为 schemaVersion=3 的 f78573e 线旧库**。已核 A3 断言原文无 schemaVersion 限制（`card-A-B-C-plan.md:36`）。
+2. **Q3**：新构建碰不上「当天首次备份」（`main.ts:375-376` 会额外写 `settings.lastBackup`，`lastBackup` 已被旧构建那次加载写掉），故「冷启#1 写盘=1」为该条件成立下的结果；备份隔离以旧构建首次备份 + 真实备份命令那次对照。
+
+本卡新开一张小卡（不属卡 A）：
+- **不可读源文件静默降级**：`chmod 000` 的源文件在冷启#1 后仍 `missing=false` 且无 Notice（`store.ts:2376` 的 `exists()` 为真即 `continue`，回填 `catch` 吞 `EACCES`）；同类还有「未回填指纹库的源文件消失后静默降级」。复核席判定为**预期行为而非缺陷**，但「存在但不可读无状态无提示」建议另立中低优先小卡改善可观测性。
+
+未覆盖边界：v1/v2 双写迁移形态、当天首次备份的新构建侧证据、非 macOS、Pad。

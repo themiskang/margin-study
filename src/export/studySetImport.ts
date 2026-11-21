@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 读取 v1 学习集 ZIP、目标 Store 与主数据及文件恢复状态。
+ * [INPUT]: 读取 v1 学习集 ZIP。依赖 Store 的来源指纹和 SRS 日期规范化。
  * [OUTPUT]: 提供包校验、学习集导入和导入对话框。
  * [POS]: 重映射资料引用。主数据有待处理冲突时保留候选引用的文件。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
@@ -14,6 +14,7 @@ import { cardsIncludingMembers } from "../model/reviewPending";
 import { validateAnnotationCollection } from "../model/annotationValidation";
 import { DesktopMainConflict } from "../model/desktopMainReplacement";
 import type { Store } from "../model/store";
+import { normalizeState } from "../srs";
 import type { Annotation, Card, CardSource, Edge, MindCanvas, MindNode, PluginData, StudySet } from "../types";
 import { uid } from "../utils/id";
 import { sha256Hex } from "../utils/sha256";
@@ -160,6 +161,7 @@ export async function importStudySetPackage(plugin: MarginStudyPlugin, bytes: Ar
     const name = target?.name ?? (options.name?.trim() || sourceSet?.name?.trim() || "导入的学习集");
     const plan = await planStudySetFiles(vault, files, path => store.sidecarPath(path));
     const { pathMap, documentPaths, writes } = plan;
+    const sourceBytes = new Map(writes.map(file => [file.path, file.bytes]));
     const summary = Object.assign(emptySummary(setId, name), { cards: payload.cards.length, nodes: payload.nodes.length,
       edges: payload.edges.length, documents: documentPaths.size, duplicateGroups: repaired, droppedDuplicates: duplicated,
       renamedDocuments: plan.renamedDocuments, pageCollectionRefs: plan.pageCollectionRefs });
@@ -322,13 +324,14 @@ export async function importStudySetPackage(plugin: MarginStudyPlugin, bytes: Ar
         }
         for (const path of documentPaths) {
           const metadata = payload.documents?.find(document => document.path === path);
-          store.registerDocument(documentPath(path), metadata?.sourceUrl);
+          const mapped = documentPath(path);
+          store.registerDocument(mapped, metadata?.sourceUrl, sourceBytes.get(mapped));
           const meta = payload.docMeta?.[path];
           if (meta && typeof meta === "object") {
-            const mapped = remapStrings(meta);
-            const edits = mapped.pdfPageEdits;
-            if (edits?.version === 1 && Array.isArray(edits.pages) && edits.pages.length === 0) delete mapped.pdfPageEdits;
-            store.updateDocMeta(documentPath(path), mapped);
+            const mappedMeta = remapStrings(meta);
+            const edits = mappedMeta.pdfPageEdits;
+            if (edits?.version === 1 && Array.isArray(edits.pages) && edits.pages.length === 0) delete mappedMeta.pdfPageEdits;
+            store.updateDocMeta(mapped, mappedMeta);
             summary.docMeta++;
           }
         }
@@ -364,7 +367,10 @@ export async function importStudySetPackage(plugin: MarginStudyPlugin, bytes: Ar
         }
         for (const [oldId, state] of Object.entries(payload.srs ?? {})) {
           const mapped = questionId(oldId);
-          if (mapped && state && typeof state === "object") { store.srs[mapped] = state; summary.reviewStates++; }
+          if (mapped && state && typeof state === "object") {
+            store.srs[mapped] = normalizeState(state, store.settings.defaultEase);
+            summary.reviewStates++;
+          }
         }
         for (const log of payload.reviewLogs ?? []) {
           const scope = mapScope(log);
