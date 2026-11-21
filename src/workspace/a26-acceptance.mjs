@@ -158,7 +158,7 @@ await check("A05 installation is idempotent for both field templates", async () 
 });
 
 await check("MIT license exists and is embedded in the distributable bundle", async () => {
-  const license = await readFile(join(root, "LICENSE-ECDICT.txt"), "utf8");
+  const license = await readFile(join(root, "assets/licenses/LICENSE-ECDICT.txt"), "utf8");
   assert.match(license, /MIT/i);
   assert.match(license, /Permission is hereby granted, free of charge/);
   assert.match(license, /THE SOFTWARE IS PROVIDED "AS IS"/);
