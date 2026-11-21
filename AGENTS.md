@@ -52,6 +52,10 @@ Codex 是本项目的执行席。用户已授权的任务中，发现问题后�
   3. 同一席位并行处理不同卡
 - 新开一律**不加 `--keep-open`**，交完由 Orca 自动收；确需保留给用户继续对话才加。
 
+**release 不等于断上下文**（已实测）：`worker-release` 只关标签页，席位会话与上下文保留；下次 `send --to dispatch:<id>` 会以 `delivery: reopened` 重新打开同一条会话。
+实测证据：复核席 `ctx_d48d00e8d4e6` 释放后，`send` 重开为 `ctx_beb1fa209c2c`，其回话准确复述上一轮判定（7 PASS / 1 PARTIAL，A3 因旧库系脚本构造判 PARTIAL）。
+因此**判定席不需要常留标签**，「常驻」指上下文常驻，不是标签常驻。收口后照常 release，需要时再 send。
+
 **席位台账**：`.agent-artifacts/seats.md`（已 gitignore）。每派一次包，立刻更新对应席位行：`席位 | dispatch id | 引擎/模型 | 最近任务 | 可续/勿续`。
 下次派包先查台账，不要翻 `worker-list` 历史去猜哪个 id 是谁——翻错过一次。
 
