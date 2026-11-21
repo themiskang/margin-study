@@ -20,6 +20,10 @@
   ],
   "author": "吴八哥",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OWNER/margin-study"
+  },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",
     "fflate": "^0.8.2",
