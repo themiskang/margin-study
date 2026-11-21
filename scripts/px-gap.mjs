@@ -3,10 +3,11 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { dirname, resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { publicFixture } from "./verify/fixtures.mjs";
 
 const project = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 process.chdir(project);
-const source = "evidence/mn5-5.0.2-baseline/BASELINE.json";
+const source = publicFixture("baseline/BASELINE.json");
 const anchorPath = "src/workspace/anchors-502.json";
 const baseline = JSON.parse(await readFile(source, "utf8"));
 const args = process.argv.slice(2);

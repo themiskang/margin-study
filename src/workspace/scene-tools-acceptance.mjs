@@ -16,12 +16,12 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { build } from "esbuild";
 import { runBrowser } from "../../scripts/verify/ego-harness.mjs";
+import { publicFixture } from "../../scripts/verify/fixtures.mjs";
 
 const exec = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
 const project = await realpath(resolve(here, "../.."));
-const mapPath = resolve(process.argv[2] ?? join(project,
-  "evidence/mn5-alignment-20261029/limit-candidates/step1-recovery/Hermes-DeepSeek-V4.1-Flash-20261030-1220/A01-A04-id-action-map.json"));
+const mapPath = resolve(process.argv[2] ?? publicFixture("alignment/A01-A04-id-action-map.json"));
 const map = JSON.parse(await readFile(mapPath, "utf8"));
 const temporary = await realpath(await mkdtemp(join(tmpdir(), "marginstudy-scene-tools-")));
 

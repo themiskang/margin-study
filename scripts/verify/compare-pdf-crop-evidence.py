@@ -8,11 +8,10 @@ import hashlib
 import json
 from copy import deepcopy
 from datetime import datetime, timezone
-from pathlib import Path
+from replay_support import EVIDENCE, replay_report, report_reference, required_matches
 
-DEV = Path(__file__).resolve().parents[2]
-NATIVE = DEV / "evidence/native-max-l4"
-BEFORE = DEV / "evidence/checkpoints/20261017-pdf-crop-before"
+NATIVE = EVIDENCE / "native-max-l4"
+BEFORE = EVIDENCE / "checkpoints/20261017-pdf-crop-before"
 PDF = "l4-sample-alpha.pdf"
 
 
@@ -21,7 +20,7 @@ def read(path):
 
 
 def file_for(number, suffix):
-    matches = list(NATIVE.glob(f"{number}-*.{suffix}"))
+    matches = required_matches(NATIVE, f"{number}-*.{suffix}")
     if len(matches) != 1:
         raise ValueError(f"Expected one capture {number}/{suffix}, got {matches}")
     return matches[0]
@@ -47,10 +46,10 @@ before = read(BEFORE / "host-before.json")
 raw_before = read(BEFORE / "installed-data.json")
 after = read(NATIVE / "322-plugin-pdf-crop-final-data.json")
 raw_after = capture(321)
-receipt = read(DEV / "evidence/checkpoints/20261017-pdf-crop-deployment.json")
-verification = read(DEV / "evidence/verification/pdf-crop-final-green/results.json")
-reader = read(DEV / "evidence/verification/pdf-crop-final-green/reader-results.json")
-workspace = read(DEV / "evidence/verification/pdf-crop-final-green/workspace-results.json")
+receipt = read(EVIDENCE / "checkpoints/20261017-pdf-crop-deployment.json")
+verification = read(EVIDENCE / "verification/pdf-crop-final-green/results.json")
+reader = read(EVIDENCE / "verification/pdf-crop-final-green/reader-results.json")
+workspace = read(EVIDENCE / "verification/pdf-crop-final-green/workspace-results.json")
 inner = {"left": 0.09913793103448276, "top": 0, "right": 1, "bottom": 1}
 expanded = {"left": -0.19827586206896552, "top": 0, "right": 1, "bottom": 1}
 checks = {}
@@ -199,8 +198,8 @@ report = {
         "Metadata revision/writerId/savedAt changed; whole data.json byte equality is not asserted. Historical empty pen records were preserved.",
     ],
 }
-target = NATIVE / "323-pdf-crop-comparison.json"
+target = replay_report("323-pdf-crop-comparison.json")
 target.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
-print(json.dumps({"report": str(target.relative_to(DEV)), "checks_passed": sum(checks.values()), "checks_total": len(checks), "failed": [name for name, passed in checks.items() if not passed]}, ensure_ascii=False, indent=2))
+print(json.dumps({"report": report_reference(target), "checks_passed": sum(checks.values()), "checks_total": len(checks), "failed": [name for name, passed in checks.items() if not passed]}, ensure_ascii=False, indent=2))
 if not all(checks.values()):
     raise SystemExit(1)

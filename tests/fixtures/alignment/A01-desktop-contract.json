@@ -1,0 +1,527 @@
+{
+  "schema": "mn5-a01-desktop-contract-v1",
+  "status": "frozen-desktop",
+  "referenceVersion": "5.0.0 (50010)",
+  "sample": "P10-Isolated-20261025",
+  "scope": "Only visible Mac states; feature completion and mobile/hardware acceptance remain separate.",
+  "templates": {
+    "standard": [
+      "excerpt",
+      "handwriting",
+      "organize",
+      "recall"
+    ],
+    "read-write-recall": [
+      "reading",
+      "writing",
+      "recall"
+    ]
+  },
+  "scenes": [
+    {
+      "id": "reading",
+      "label": "阅读",
+      "template": "read-write-recall",
+      "container": "Window[SceneWindow]/container/container/bottom capsule",
+      "state": "10-sample-reading",
+      "screenshot": "10-sample-reading.png",
+      "imageSize": [
+        3024,
+        1710
+      ],
+      "orderedVisibleControls": [
+        {
+          "label": "书签",
+          "nativeId": "book"
+        },
+        {
+          "label": "铅笔笔尖",
+          "nativeId": "pencil.tip"
+        },
+        {
+          "label": "显示大脑的头部侧影",
+          "nativeId": "brain.head.profile"
+        },
+        {
+          "label": "左半边实心的圆圈",
+          "nativeId": "circle.lefthalf.filled"
+        },
+        {
+          "label": "标题链接",
+          "nativeId": "character.bubble"
+        },
+        {
+          "label": "块选择",
+          "nativeId": "rectangle.grid.1x2"
+        },
+        {
+          "label": "紧凑向右V形",
+          "nativeId": null
+        }
+      ],
+      "controlIds": [
+        "book",
+        "pencil.tip",
+        "brain.head.profile",
+        "circle.lefthalf.filled",
+        "character.bubble",
+        "rectangle.grid.1x2",
+        "mn5.semantic.6.紧凑向右V形"
+      ],
+      "semanticIdPolicy": "IDs beginning mn5.semantic are local contract keys for controls lacking native accessibility IDs, not inferred MN internals."
+    },
+    {
+      "id": "excerpt",
+      "label": "摘录",
+      "template": "standard",
+      "container": "Window[SceneWindow]/container/container/bottom capsule",
+      "state": "01-standard-excerpt",
+      "screenshot": "01-standard-excerpt.png",
+      "imageSize": [
+        3024,
+        1710
+      ],
+      "orderedVisibleControls": [
+        {
+          "label": "摘录",
+          "nativeId": null
+        },
+        {
+          "label": "手写",
+          "nativeId": null
+        },
+        {
+          "label": "整理",
+          "nativeId": null
+        },
+        {
+          "label": "回忆",
+          "nativeId": null
+        },
+        {
+          "label": "手型（摘录笔盒）",
+          "nativeId": "immersive.tool.excerpt.0"
+        },
+        {
+          "label": "文本",
+          "nativeId": "immersive.tool.excerpt.1"
+        },
+        {
+          "label": "矩形",
+          "nativeId": "immersive.tool.excerpt.2"
+        },
+        {
+          "label": "更多",
+          "nativeId": "immersive.tool.excerpt.3"
+        },
+        {
+          "label": "铅笔笔尖",
+          "nativeId": "pencil.tip"
+        },
+        {
+          "label": "撤销",
+          "nativeId": "immersive.undo"
+        },
+        {
+          "label": "重做",
+          "nativeId": "immersive.redo"
+        },
+        {
+          "label": "标题链接",
+          "nativeId": "character.bubble"
+        },
+        {
+          "label": "块选择",
+          "nativeId": "rectangle.grid.1x2"
+        },
+        {
+          "label": "文档笔记本",
+          "nativeId": null
+        },
+        {
+          "label": "紧凑向右V形",
+          "nativeId": null
+        }
+      ],
+      "controlIds": [
+        "mn5.semantic.0.摘录",
+        "mn5.semantic.1.手写",
+        "mn5.semantic.2.整理",
+        "mn5.semantic.3.回忆",
+        "immersive.tool.excerpt.0",
+        "immersive.tool.excerpt.1",
+        "immersive.tool.excerpt.2",
+        "immersive.tool.excerpt.3",
+        "pencil.tip",
+        "immersive.undo",
+        "immersive.redo",
+        "character.bubble",
+        "rectangle.grid.1x2",
+        "mn5.semantic.13.文档笔记本",
+        "mn5.semantic.14.紧凑向右V形"
+      ],
+      "semanticIdPolicy": "IDs beginning mn5.semantic are local contract keys for controls lacking native accessibility IDs, not inferred MN internals."
+    },
+    {
+      "id": "handwriting",
+      "label": "手写",
+      "template": "standard",
+      "container": "Window[SceneWindow]/container/container/bottom capsule",
+      "state": "02-standard-handwriting",
+      "screenshot": "02-standard-handwriting.png",
+      "imageSize": [
+        3024,
+        1710
+      ],
+      "orderedVisibleControls": [
+        {
+          "label": "摘录",
+          "nativeId": null
+        },
+        {
+          "label": "手写",
+          "nativeId": null
+        },
+        {
+          "label": "整理",
+          "nativeId": null
+        },
+        {
+          "label": "回忆",
+          "nativeId": null
+        },
+        {
+          "label": "普通笔",
+          "nativeId": "immersive.tool.sketch.0"
+        },
+        {
+          "label": "普通笔",
+          "nativeId": "immersive.tool.sketch.1"
+        },
+        {
+          "label": "荧光笔",
+          "nativeId": "immersive.tool.sketch.2"
+        },
+        {
+          "label": "铅笔",
+          "nativeId": "immersive.tool.sketch.3"
+        },
+        {
+          "label": "套索",
+          "nativeId": "immersive.tool.sketch.4"
+        },
+        {
+          "label": "橡皮擦",
+          "nativeId": "immersive.tool.sketch.5"
+        },
+        {
+          "label": "手形工具",
+          "nativeId": "immersive.tool.sketch.6"
+        },
+        {
+          "label": "文本框",
+          "nativeId": "immersive.tool.sketch.7"
+        },
+        {
+          "label": "图片框",
+          "nativeId": "immersive.tool.sketch.8"
+        },
+        {
+          "label": "撤销文档手写",
+          "nativeId": "immersive.undo"
+        },
+        {
+          "label": "重做文档手写",
+          "nativeId": "immersive.redo"
+        },
+        {
+          "label": "手写层",
+          "nativeId": null
+        },
+        {
+          "label": "紧凑向右V形",
+          "nativeId": null
+        }
+      ],
+      "controlIds": [
+        "mn5.semantic.0.摘录",
+        "mn5.semantic.1.手写",
+        "mn5.semantic.2.整理",
+        "mn5.semantic.3.回忆",
+        "immersive.tool.sketch.0",
+        "immersive.tool.sketch.1",
+        "immersive.tool.sketch.2",
+        "immersive.tool.sketch.3",
+        "immersive.tool.sketch.4",
+        "immersive.tool.sketch.5",
+        "immersive.tool.sketch.6",
+        "immersive.tool.sketch.7",
+        "immersive.tool.sketch.8",
+        "immersive.undo",
+        "immersive.redo",
+        "mn5.semantic.15.手写层",
+        "mn5.semantic.16.紧凑向右V形"
+      ],
+      "semanticIdPolicy": "IDs beginning mn5.semantic are local contract keys for controls lacking native accessibility IDs, not inferred MN internals."
+    },
+    {
+      "id": "organize",
+      "label": "整理",
+      "template": "standard",
+      "container": "Window[SceneWindow]/container/container/bottom capsule",
+      "state": "03-standard-organize",
+      "screenshot": "03-standard-organize.png",
+      "imageSize": [
+        3024,
+        1710
+      ],
+      "orderedVisibleControls": [
+        {
+          "label": "摘录",
+          "nativeId": null
+        },
+        {
+          "label": "手写",
+          "nativeId": null
+        },
+        {
+          "label": "整理",
+          "nativeId": null
+        },
+        {
+          "label": "回忆",
+          "nativeId": null
+        },
+        {
+          "label": "卡片分组看板",
+          "nativeId": null
+        },
+        {
+          "label": "层级",
+          "nativeId": null
+        },
+        {
+          "label": "复制移动",
+          "nativeId": null
+        },
+        {
+          "label": "链接",
+          "nativeId": null
+        },
+        {
+          "label": "选择",
+          "nativeId": null
+        },
+        {
+          "label": "铅笔笔尖",
+          "nativeId": "pencil.tip"
+        },
+        {
+          "label": "撤销",
+          "nativeId": "immersive.undo"
+        },
+        {
+          "label": "重做",
+          "nativeId": "immersive.redo"
+        },
+        {
+          "label": "紧凑向右V形",
+          "nativeId": null
+        }
+      ],
+      "controlIds": [
+        "mn5.semantic.0.摘录",
+        "mn5.semantic.1.手写",
+        "mn5.semantic.2.整理",
+        "mn5.semantic.3.回忆",
+        "mn5.semantic.4.卡片分组看板",
+        "mn5.semantic.5.层级",
+        "mn5.semantic.6.复制移动",
+        "mn5.semantic.7.链接",
+        "mn5.semantic.8.选择",
+        "pencil.tip",
+        "immersive.undo",
+        "immersive.redo",
+        "mn5.semantic.12.紧凑向右V形"
+      ],
+      "semanticIdPolicy": "IDs beginning mn5.semantic are local contract keys for controls lacking native accessibility IDs, not inferred MN internals."
+    },
+    {
+      "id": "recall",
+      "label": "回忆",
+      "template": "standard",
+      "container": "Window[SceneWindow]/container/container/bottom capsule",
+      "state": "04-standard-recall",
+      "screenshot": "04-standard-recall.png",
+      "imageSize": [
+        3024,
+        1710
+      ],
+      "orderedVisibleControls": [
+        {
+          "label": "摘录",
+          "nativeId": null
+        },
+        {
+          "label": "手写",
+          "nativeId": null
+        },
+        {
+          "label": "整理",
+          "nativeId": null
+        },
+        {
+          "label": "回忆",
+          "nativeId": null
+        },
+        {
+          "label": "项目符号列表缩进、向下移动",
+          "nativeId": null
+        },
+        {
+          "label": "重新盖上",
+          "nativeId": null
+        },
+        {
+          "label": "灯泡",
+          "nativeId": "lightbulb"
+        },
+        {
+          "label": "编辑",
+          "nativeId": "slider.horizontal.3"
+        },
+        {
+          "label": "铅笔笔尖",
+          "nativeId": "pencil.tip"
+        },
+        {
+          "label": "带加号标记的叠放矩形",
+          "nativeId": null
+        },
+        {
+          "label": "复习",
+          "nativeId": null
+        },
+        {
+          "label": "紧凑向右V形",
+          "nativeId": null
+        }
+      ],
+      "controlIds": [
+        "mn5.semantic.0.摘录",
+        "mn5.semantic.1.手写",
+        "mn5.semantic.2.整理",
+        "mn5.semantic.3.回忆",
+        "mn5.semantic.4.项目符号列表缩进、向下移动",
+        "mn5.semantic.5.重新盖上",
+        "lightbulb",
+        "slider.horizontal.3",
+        "pencil.tip",
+        "mn5.semantic.9.带加号标记的叠放矩形",
+        "mn5.semantic.10.复习",
+        "mn5.semantic.11.紧凑向右V形"
+      ],
+      "semanticIdPolicy": "IDs beginning mn5.semantic are local contract keys for controls lacking native accessibility IDs, not inferred MN internals."
+    }
+  ],
+  "home": {
+    "root": "Window[SceneWindow]/container/container",
+    "sections": [
+      "学习集",
+      "复习卡组",
+      "资料库"
+    ],
+    "states": {
+      "studysets": "20-home-studysets",
+      "review": "21-home-review-decks",
+      "library": "22-home-library",
+      "categories": "52-home-category-filter",
+      "studyset-actions": "53-isolated-studyset-menu",
+      "no-match": "54-home-empty-filter"
+    },
+    "anchorsImagePixels": {
+      "20-home-studysets": {
+        "sidebar": [
+          16,
+          16,
+          544,
+          1694
+        ],
+        "sectionTitle": [
+          616,
+          126
+        ],
+        "firstStudySetCover": [
+          616,
+          252,
+          1054,
+          511
+        ],
+        "category": [
+          1998,
+          108
+        ],
+        "search": [
+          2346,
+          108
+        ]
+      }
+    }
+  },
+  "templateEditor": {
+    "root": "Window[SceneWindow]/container/container",
+    "states": {
+      "picker": "08-template-picker",
+      "editor": "11-template-editor-list",
+      "actions": "12-template-actions",
+      "copy": "13-template-copy-created",
+      "renamed": "15-template-copy-renamed",
+      "studyset-copy-empty": "16-copy-studyset-config-prompt",
+      "file-actions": "17-template-management"
+    },
+    "fields": [
+      "template name",
+      "excerpt tools",
+      "canvas tools",
+      "excerpt colors",
+      "selection quick menu",
+      "object names",
+      "studyset name",
+      "excerpt result feedback",
+      "merge bottom capsule into top",
+      "handwriting presets",
+      "excerpt presets"
+    ],
+    "persistence": "UI states automatic save and affects all local studysets using a template; copying creates and activates a separate personal template.",
+    "isolatedCopy": "P10-MN5-Evidence-20261029",
+    "copyStudysetBehavior": "Only explicitly stored fields can be copied; this sample has none, so Copy and Apply is disabled. Do not infer successful copy.",
+    "anchorsImagePixels": {
+      "11-template-editor-list": {
+        "editor": [
+          592,
+          184,
+          2432,
+          1543
+        ],
+        "sidebar": [
+          612,
+          280,
+          1030,
+          1450
+        ],
+        "content": [
+          1048,
+          280,
+          2426,
+          1450
+        ]
+      }
+    }
+  },
+  "unknowns": [
+    "Mobile scene/home/template layout",
+    "Custom scenario toolbar editing fields beyond observed common settings",
+    "MN proprietary file format; plugin uses its own versioned JSON",
+    "No CSS/device-pixel equivalence is inferred from native screenshot pixels"
+  ]
+}

@@ -1,0 +1,19 @@
+# scripts/verify/
+
+> L2 · 上级 [AGENTS.md](../../AGENTS.md)
+
+- `fixtures.mjs` 解析公开夹具和私有证据路径。缺失私有夹具时返回跳过标记，严格模式下报错。
+- `public-baseline.json` 冻结公开通过数下限，记录计数依据。
+- `replay_support.py` 将 Python 回放的缺失输入路径交给验收入口，并将回放报告写到独立目录。
+- `ego-harness.mjs` 统一隔离浏览器会话与命令接口。
+- `regress.mjs` 运行验收并比对断言数和构建指纹。
+- `pdf-save-acceptance.mjs` 验证 PDF 保存行为。
+- `apkg-verify.py` 独立检查 APKG 文件与 SQLite 内容。
+- `tab-width-guard.mjs` 检查文档标签宽度。
+- `compare-document-more-evidence.py` 复核文档菜单实机证据。
+- `compare-navigation-evidence.py` 复核导航实机证据。
+- `compare-pdf-crop-evidence.py` 复核 PDF 裁剪实机证据。
+- `compare-pen-undo-evidence.py` 复核手写撤销实机证据。
+- `compare-read-settings-evidence.py` 复核阅读设置实机证据。
+
+[PROTOCOL]: Update this header on change, then check AGENTS.md

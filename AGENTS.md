@@ -4,8 +4,9 @@ MarginStudy 是面向 Obsidian 的 MarginNote 5 风格学习插件。源码使�
 
 - `src/` 提供插件源码、合成验收夹具和 `src/styles/` 样式源。`src/pdf/cmaps.json` 是离线 PDF worker 的 CMap 与字体数据源。
 - `native/src/` 保存 Swift 桥接源码。`native/` 下的其他目录由构建或本机配置生成。
-- `scripts/build/` 保存构建与打包脚本。`scripts/verify/` 保存验收支持脚本。`scripts/tools/` 保存辅助采集工具。全量与几何验收入口为 `scripts/verify.mjs` 和 `scripts/px-gap.mjs`。
+- `scripts/build/` 保存构建与打包脚本。[`scripts/verify/`](scripts/verify/AGENTS.md) 保存验收支持脚本。`scripts/tools/` 保存辅助采集工具。自动化验收、历史回放与几何验收分别使用 `scripts/verify.mjs` 的运行模式和 `scripts/px-gap.mjs`。
 - `tests/baseline/` 保存冻结回归基线和旧安装版指纹。`assets/licenses/` 保存第三方许可。
+- `tests/fixtures/` 保存公开验收所需的轻量静态夹具。
 - `docs/STATUS.md` 保存当前项目状态。`docs/MN5-PARITY-GAP.md` 保存活动差距。`docs/archive/` 保存历史证据索引。
 
 Codex 是本项目的执行席。用户已授权的任务中，发现问题后自行定位、修改和验证，持续推进至完成或出现确实需要用户参与的阻塞；不要把可自行处理的修复重新派给 Codex 或要求用户转交。按实际证据报告结果，不把未完成的验收写成通过。
@@ -19,6 +20,12 @@ Codex 是本项目的执行席。用户已授权的任务中，发现问题后�
 - 用户明确要求“继续任务／做到停点／不要中途停”时，必须持续执行到该卡完成定义全部通过并登记，或达到上面的硬阻塞停点。阶段进度、列出待办、一次测试失败、工具可恢复故障、上下文切换都不是停点；先修复并重试，再继续验收。用户问进度或追问原因时，简短回答后继续工作，不结束本轮。
 - 每次准备结束执行轮前，逐项核对完成定义与尚未完成项；只要仍有可由 Codex 独立完成的项目，就继续，不用汇报代替执行。若确需硬阻塞，必须说明阻塞证据、已经尝试的恢复方式和唯一需要的外部条件，并把首个恢复动作写入任务卡的 `PROGRESS.md`。
 - 实机行为按原版状态、宿主状态和采集版本记录。L3 调用链、L4 实机操作、合成断言分别登记。保留失败记录与范围豁免。开发包只进入已授权的隔离库，正式部署需单独授权。禁止复制正式库的 Claudian 凭证。
+
+## 开源边界
+
+- 严禁提交 `evidence/` 或大体积私有夹具。
+- 新验收脚本通过 `MARGINSTUDY_EVIDENCE_DIR` 定位私有夹具。公开模式下缺失须显式记录 `SKIP`。严格模式下缺失须报错退出。
+- 保持纯 `git clone` 可以构建并通过公开测试。
 
 ## 六条执行纪律（镜像）
 

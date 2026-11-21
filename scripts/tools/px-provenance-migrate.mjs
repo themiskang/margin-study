@@ -1,8 +1,9 @@
 import { readFile, writeFile } from "node:fs/promises";
+import { publicFixture } from "../verify/fixtures.mjs";
 
 const path = "src/workspace/anchors-502.json";
 const table = JSON.parse(await readFile(path, "utf8"));
-const baseline = JSON.parse(await readFile("evidence/mn5-5.0.2-baseline/BASELINE.json", "utf8"));
+const baseline = JSON.parse(await readFile(publicFixture("baseline/BASELINE.json"), "utf8"));
 const selectors = {
   "书架": '[aria-label="打开学习集与文档"]',
   "学习集": '[aria-label^="学习集："]',

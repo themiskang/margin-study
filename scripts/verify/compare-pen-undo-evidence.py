@@ -7,12 +7,11 @@ Only reads saved evidence. The vault is never modified or read by this replay;
 import hashlib
 import json
 from datetime import datetime, timezone
-from pathlib import Path
+from replay_support import EVIDENCE, replay_report, report_reference
 
 
-DEV = Path(__file__).resolve().parents[2]
-NATIVE = DEV / "evidence/native-max-l4"
-BACKUP = DEV / "evidence/checkpoints/20261017-pen-undo-before"
+NATIVE = EVIDENCE / "native-max-l4"
+BACKUP = EVIDENCE / "checkpoints/20261017-pen-undo-before"
 TEST_ID = "ann-mvbn92sz-j25ck2"
 HISTORICAL_EMPTY_ID = "ann-mvb9jx0m-z47ea4"
 
@@ -29,7 +28,7 @@ before = read(NATIVE / "167-pen-before-draw-data.json")
 after = read(NATIVE / "173-pen-after-reload-data.json")
 disabled = read(NATIVE / "172-pen-disabled-state.json")
 host = read(NATIVE / "173-marginstudy-pen-after-reload-host-state.json")
-receipt = read(DEV / "evidence/checkpoints/20261017-pen-undo-deployment.json")
+receipt = read(EVIDENCE / "checkpoints/20261017-pen-undo-deployment.json")
 baseline_path = BACKUP / "synthetic-vault/l4-sample-alpha.pdf.mstudy.json"
 names = {
     "before": baseline_path,
@@ -147,8 +146,8 @@ report = {
         "No full functional or visual equivalence with MarginNote 4 is claimed. Document menu production code was not changed in this phase.",
     ],
 }
-target = NATIVE / "174-pen-undo-reload-comparison.json"
+target = replay_report("174-pen-undo-reload-comparison.json")
 target.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
-print(json.dumps({"report": str(target.relative_to(DEV)), "checks": checks}, ensure_ascii=False, indent=2))
+print(json.dumps({"report": report_reference(target), "checks": checks}, ensure_ascii=False, indent=2))
 if not all(checks.values()):
     raise SystemExit(1)

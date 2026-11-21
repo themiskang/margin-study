@@ -1,12 +1,12 @@
 import { mkdir, writeFile, copyFile, cp, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { privateFixture } from "../verify/fixtures.mjs";
 
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "../.."), require = createRequire(import.meta.url);
+const require = createRequire(import.meta.url);
 const { PDFDocument, StandardFonts, rgb } = require("pdf-lib");
-const vault = resolve(process.argv[2] ?? join(root, "evidence/package09-20261025/stability-vault"));
+const vault = resolve(process.argv[2] ?? privateFixture("package09-20261025/stability-vault"));
 try { await stat(vault); throw new Error(`Refusing to overwrite existing test vault: ${vault}`); } catch (error) { if (error.code !== "ENOENT") throw error; }
 const put = async (path, data) => { await mkdir(dirname(path), { recursive: true }); await writeFile(path, data); };
 const sha = data => createHash("sha256").update(data).digest("hex");
@@ -40,4 +40,4 @@ for(const file of ["main.js","styles.css","manifest.json","pdf.worker.js","ocr.s
 await cp(join(root,"native"),join(plugin,"native"),{recursive:true});
 await put(join(plugin,"data.json"),JSON.stringify(data));
 const report={vault,createdAt:new Date().toISOString(),syntheticOnly:true,documents:[{path:"p09-long-text.pdf",pages:500,bytes:longBytes.byteLength,sha256:sha(longBytes)},{path:"p09-scan-200.pdf",pages:200,bytes:scanBytes.byteLength,sha256:sha(scanBytes)},{path:"p09-1000-refs.msref",references:collection.pages.length,bytes:Buffer.byteLength(JSON.stringify(collection,null,2)),sha256:sha(Buffer.from(JSON.stringify(collection,null,2)))}],annotations:annotations.length,cards:cards.length,associationCount:annotations.filter(a=>cards.some(card=>card.anchorAnnId===a.id)).length,sidecar:{bytes:sidecar.byteLength,sha256:sha(sidecar)},seedData:{bytes:Buffer.byteLength(JSON.stringify(data)),sha256:sha(Buffer.from(JSON.stringify(data)))} };
-await put(join(root,"evidence/package09-20261025/stability-vault.json"),JSON.stringify(report,null,2)+"\n");console.log(JSON.stringify(report,null,2));
+await put(privateFixture("package09-20261025/stability-vault.json"),JSON.stringify(report,null,2)+"\n");console.log(JSON.stringify(report,null,2));

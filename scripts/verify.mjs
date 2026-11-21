@@ -1,9 +1,15 @@
-// All fixtures are synthetic. This runner never installs into an Obsidian vault.
+/**
+ * [INPUT]: 验收套件入口、运行模式与公开套件下限。
+ * [OUTPUT]: 套件日志、三态验收结果与 CI 摘要。
+ * [POS]: 构建门禁与验收套件的统一入口。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import {spawn} from "node:child_process";
-import {mkdir,writeFile} from "node:fs/promises";
+import {appendFile,mkdir,readFile,writeFile} from "node:fs/promises";
 import {fileURLToPath,pathToFileURL} from "node:url";
 import {resolve,relative,sep} from "node:path";
 import {tmpdir} from "node:os";
+import {missingPrivateFixture,missingPrivateFixtureExitCode,privateFixture,requirePrivateFixture} from "./verify/fixtures.mjs";
 const root=fileURLToPath(new URL("../",import.meta.url));
 // 证据护栏：默认写到临时目录，禁止默认覆盖 evidence/（2026-11-06 事故：14 个套件日志被覆盖）。
 const defaultDir=`${tmpdir()}${sep}marginstudy-verify-${Date.now()}`;
@@ -12,7 +18,7 @@ if(outDir.startsWith(resolve(root,"evidence")+sep)&&process.env.MARGINSTUDY_ALLO
 const output=pathToFileURL(outDir+sep);
 await mkdir(output,{recursive:true});
 console.log(`verify output: ${relative(root,outDir)}`);
-const allSuites=[
+const automatedSuites=[
   ["typecheck","node_modules/typescript/bin/tsc","--noEmit"],
   ["build","esbuild.config.mjs","production"],
   ["pdf-save","scripts/verify/pdf-save-acceptance.mjs"],
@@ -67,18 +73,74 @@ const allSuites=[
   ["study-set-export-ui","src/export/studySet-ui-acceptance.mjs"],
   ["study-set-import","src/export/studySetImport-acceptance.mjs"],
 ];
-const selected=process.argv.slice(2);
+const replaySuites=[
+  ["document-more","scripts/verify/compare-document-more-evidence.py"],
+  ["navigation","scripts/verify/compare-navigation-evidence.py"],
+  ["pdf-crop","scripts/verify/compare-pdf-crop-evidence.py"],
+  ["pen-undo","scripts/verify/compare-pen-undo-evidence.py"],
+  ["read-settings","scripts/verify/compare-read-settings-evidence.py"],
+];
+const options=process.argv.slice(2);
+const strict=options.includes("--strict")||process.env.VERIFY_STRICT==="1";
+const replay=options.includes("--replay");
+const publicRun=options.includes("--public")&&!replay;
+const selected=options.filter(option=>!["--strict","--public","--replay"].includes(option));
+const allSuites=replay?replaySuites:automatedSuites;
 if(selected.some(name=>!allSuites.some(suite=>suite[0]===name)))throw new Error("Unknown suite: "+selected.filter(name=>!allSuites.some(suite=>suite[0]===name)).join(", "));
 const suites=selected.length?allSuites.filter(suite=>selected.includes(suite[0])):allSuites;
-const result={startedAt:new Date().toISOString(),scope:"development copy; synthetic fixtures; real native-app evidence is documented separately",completeRun:!selected.length,suites:[]};
-for(const [name,...args] of suites) {
+const mode=replay?(strict?"replay-strict":"replay"):strict?"strict":publicRun?"public":"default";
+const result={startedAt:new Date().toISOString(),scope:replay?"saved native evidence":"automated acceptance",mode,completeRun:!selected.length,suites:[]};
+const executable=replay?"python3":process.execPath;
+const env=replay?{...process.env,MARGINSTUDY_EVIDENCE_DIR:privateFixture(""),MARGINSTUDY_REPLAY_REPORT_DIR:outDir}:process.env;
+for(const [name,...suiteArgs] of suites) {
+  const args=replay?["-B","scripts/verify/replay_support.py",...suiteArgs]:suiteArgs;
   const start=Date.now();let stdout="",stderr="";
-  const code=await new Promise((done,reject)=>{const child=spawn(process.execPath,args,{cwd:root});child.stdout.on("data",chunk=>stdout+=chunk);child.stderr.on("data",chunk=>stderr+=chunk);child.once("error",reject);child.once("close",done);});
-  await writeFile(new URL(name+".log",output),stdout+(stderr?"\nSTDERR\n"+stderr:""));
-  result.suites.push({name,args,exitCode:code,elapsedMs:Date.now()-start,log:relative(root,fileURLToPath(new URL(name+".log",output)))});
-  console.log(`${code===0?"PASS":"FAIL"} ${name} (${((Date.now()-start)/1000).toFixed(1)}s)`);
+  const code=await new Promise(done=>{
+    const child=spawn(executable,args,{cwd:root,env});
+    child.stdout.on("data",chunk=>stdout+=chunk);
+    child.stderr.on("data",chunk=>stderr+=chunk);
+    child.once("error",error=>{stderr+=String(error);done(1);});
+    child.once("close",done);
+  });
+  let status=code===0?"passed":"failed";
+  let missingPath;
+  if(replay&&code===missingPrivateFixtureExitCode){
+    try {
+      const {missingPrivateFixture: path}=JSON.parse(stdout);
+      if(typeof path!=="string"||!path)throw new Error("Replay did not report a missing fixture path");
+      missingPath=path;
+      if(requirePrivateFixture(path,name,strict)===missingPrivateFixture)status="skipped";
+      else stderr+=`${name}: fixture became available during replay (${path})`;
+    } catch(error) {
+      stderr+=error.message;
+    }
+  }
+  const logFile=new URL(name+".log",output);
+  await writeFile(logFile,stdout+(stderr?"\nSTDERR\n"+stderr+"\n":""));
+  result.suites.push({name,args,status,exitCode:status==="failed"&&missingPath?1:code,elapsedMs:Date.now()-start,log:relative(root,fileURLToPath(logFile)),...(missingPath?{missingPrivateFixture:missingPath}:{})});
+  if(status!=="skipped")console.log(`${status==="passed"?"PASS":"FAIL"} ${name} (${((Date.now()-start)/1000).toFixed(1)}s)`);
   const counts=stdout.match(/^.*\d+\s*\/\s*\d+.*$/gm);if(counts)console.log(counts.join("\n"));
-  if(code!==0){process.exitCode=1;break;}
+  if(status==="failed"&&stderr)console.error(stderr.trimEnd());
 }
-result.completedAt=new Date().toISOString();result.passed=result.suites.length===suites.length&&result.suites.every(suite=>suite.exitCode===0);
+const counts={passed:0,skipped:0,failed:0,total:result.suites.length};
+for(const suite of result.suites)counts[suite.status]++;
+let publicFloorMet=true;
+if(publicRun&&!selected.length){
+  const {minimumPassed}=JSON.parse(await readFile(new URL("./verify/public-baseline.json",import.meta.url),"utf8"));
+  publicFloorMet=counts.passed>=minimumPassed;
+  if(!publicFloorMet)console.error(`FAIL public suite floor: ${counts.passed} passed, expected at least ${minimumPassed}`);
+}
+result.counts=counts;
+result.completedAt=new Date().toISOString();
+result.passed=counts.failed===0&&publicFloorMet;
+console.log(`passed: ${counts.passed} / skipped (missing private fixtures): ${counts.skipped} / failed: ${counts.failed} / total: ${counts.total}`);
+if(!result.passed)process.exitCode=1;
 await writeFile(new URL("results.json",output),JSON.stringify(result,null,2)+"\n");
+if(publicRun&&process.env.GITHUB_STEP_SUMMARY){
+  await appendFile(process.env.GITHUB_STEP_SUMMARY,[
+    "| Passed | Skipped (private) | Failed | Total |",
+    "| ---: | ---: | ---: | ---: |",
+    `| ${counts.passed} | ${counts.skipped} | ${counts.failed} | ${counts.total} |`,
+    "",
+  ].join("\n"));
+}

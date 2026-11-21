@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os';
 import {join,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createRequire} from 'node:module';
+import {publicFixture} from '../../scripts/verify/fixtures.mjs';
 
 const here=dirname(fileURLToPath(import.meta.url)),temporary=await mkdtemp(join(tmpdir(),'marginstudy-scenes-'));
 const stamp='2026-10-29T00:00:00Z';
@@ -42,7 +43,7 @@ try {
   let importedDisk={};const importHost={app:host.app,loadData:async()=>structuredClone(importedDisk),saveData:async value=>{importedDisk=structuredClone(value);}};
   const importing=new Store(importHost);await importing.load();
   for(const filename of ['standard.json','u-e5c5a21ba4d9.json']) {
-    const original=JSON.parse(await readFile(join(here,'../../evidence/mn5-5.0.2-data/templates',filename),'utf8'));
+    const original=JSON.parse(await readFile(publicFixture(`templates/${filename}`),'utf8'));
     const mn5=importing.importSceneTemplate(JSON.stringify(original));
     const actual=JSON.parse(importing.exportSceneTemplate(mn5.id,'mn5'));
     const normalize=value=>({id:value.id,name:value.name,base:value.base,tabs:value.toolbar.tabs,

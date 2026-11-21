@@ -7,6 +7,9 @@
     "dev": "node esbuild.config.mjs",
     "build": "node esbuild.config.mjs production",
     "verify": "node scripts/verify.mjs",
+    "verify:public": "node scripts/verify.mjs --public",
+    "verify:full": "node scripts/verify.mjs --strict",
+    "verify:replay": "node scripts/verify.mjs --replay",
     "gen-cmaps": "node scripts/build/gen-cmaps.mjs"
   },
   "keywords": [
@@ -34,6 +37,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
+    "agent-browser": "0.39.0",
     "builtin-modules": "^4.0.0",
     "esbuild": "^0.23.0",
     "obsidian": "^1.7.2",
