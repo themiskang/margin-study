@@ -26,6 +26,9 @@ Codex 是本项目的执行席。用户已授权的任务中，发现问题后�
 - 严禁提交 `evidence/` 或大体积私有夹具。
 - 新验收脚本通过 `MARGINSTUDY_EVIDENCE_DIR` 定位私有夹具。公开模式下缺失须显式记录 `SKIP`。严格模式下缺失须报错退出。
 - 保持纯 `git clone` 可以构建并通过公开测试。
+- **任何测试不得写入仓库外路径**。`npm ci` / `npm install` 可能触发 postinstall 改写全局 bin（已发生一次：临时 clone 里的 `agent-browser` 把 `/opt/homebrew/bin/agent-browser` 重链到 `/tmp`，临时目录删除后主工作树所有 UI 套件报 `spawn ... ENOENT`）。
+  纯 clone 类验证必须隔离：临时 `HOME`、`npm_config_prefix` 与 `PATH` 都指向临时目录，且验证前后对全局 bin 目录做一次快照比对（`ls -l` 或 `readlink`），发现被改即为失败。
+  判定：验证脚本里有隔离环境变量，且 note 里贴全局 bin 前后快照。
 
 ## 六条执行纪律（镜像）
 
