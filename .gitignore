@@ -3,9 +3,11 @@ node_modules/
 /native/*
 !/native/src/
 analysis/
+# Private acceptance evidence & large fixtures (intentionally excluded from public repo; never commit)
 evidence/
 dist/
-scripts/*-forensics/
+/scripts/f08-forensics/
+/scripts/card-a-forensics/
 .local/
 .DS_Store
 

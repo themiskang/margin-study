@@ -9,7 +9,7 @@ export function toggleStudyInterface(store: Store): boolean {
   return true;
 }
 
-/** Mac MN5 5.0.0 evidence: evidence/mn5-alignment-20261029/step1-desktop/A01-desktop-contract.json.
+/** Mac MN5 5.0.0 evidence: tests/fixtures/alignment/A01-desktop-contract.json.
  * These semantic tool keys identify our adapters; they are not MN proprietary serialization IDs.
  */
 const templates: StudySceneTemplate[] = [

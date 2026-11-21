@@ -7,11 +7,10 @@ these data/AX checks supplement that observation, not pixel-equivalence testing.
 import hashlib
 import json
 from datetime import datetime, timezone
-from pathlib import Path
+from replay_support import EVIDENCE, replay_report, report_reference
 
 
-DEV = Path(__file__).resolve().parents[2]
-NATIVE = DEV / "evidence/native-max-l4"
+NATIVE = EVIDENCE / "native-max-l4"
 
 
 def read(name):
@@ -32,7 +31,7 @@ bookmarked = read("188-marginstudy-document-more-bookmark-data.json")
 hidden = read("195-marginstudy-tabs-hidden-host-state.json")
 disabled = read("196-document-tabs-hidden-disabled-state.json")
 reloaded = read("197-document-tabs-hidden-reloaded-state.json")
-receipt = json.loads((DEV / "evidence/checkpoints/20261017-document-more-final-deployment.json").read_text())
+receipt = json.loads((EVIDENCE / "checkpoints/20261017-document-more-final-deployment.json").read_text())
 
 checks = {}
 file_comparison = {
@@ -158,8 +157,8 @@ report = {
         "Whole data.json byte equality is not asserted; reading and tab preferences changed intentionally. Historical empty pen and bookmarks list are retained.",
     ],
 }
-target = NATIVE / "202-document-more-reload-comparison.json"
+target = replay_report("202-document-more-reload-comparison.json")
 target.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
-print(json.dumps({"report": str(target.relative_to(DEV)), "checks": checks}, ensure_ascii=False, indent=2))
+print(json.dumps({"report": report_reference(target), "checks": checks}, ensure_ascii=False, indent=2))
 if not all(checks.values()):
     raise SystemExit(1)

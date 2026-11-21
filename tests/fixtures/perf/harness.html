@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <title>MarginStudy 手写性能对照</title>
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #fff; }
+    #surface { position: fixed; inset: 0; overflow: hidden; touch-action: none; }
+    canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+    #panel { position: fixed; z-index: 2; top: 8px; right: 8px; max-width: min(370px, 62vw); max-height: 34vh; overflow: auto; padding: 8px 10px; border: 1px solid #aab3c0; border-radius: 8px; background: #fffffff2; color: #172231; font: 13px/1.35 system-ui, sans-serif; }
+    #panel strong { display: block; }
+    #panel pre { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+    button { margin: 3px 5px 0 0; padding: 5px 8px; }
+  </style>
+</head>
+<body>
+  <div id="surface" aria-label="画布：用触控笔连续绘制"><canvas id="committed"></canvas></div>
+  <section id="panel" aria-label="性能统计">
+    <strong>手写性能对照 · 在空白处画线</strong>
+    <pre id="stats">等待画笔输入…</pre>
+    <button id="download" type="button">下载数据</button><button id="clear" type="button">清空重测</button>
+  </section>
+  <script>
+    (() => {
+      const surface = document.getElementById("surface");
+      const committed = document.getElementById("committed");
+      const stats = document.getElementById("stats");
+      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      const ratio = isMobile ? Math.min(devicePixelRatio || 1, 1.25) : devicePixelRatio || 1;
+      const bounds = surface.getBoundingClientRect();
+      const width = Math.max(1, bounds.width), height = Math.max(1, bounds.height);
+      committed.width = Math.max(1, Math.ceil(width * ratio));
+      committed.height = Math.max(1, Math.ceil(height * ratio));
+      const longTasks = [], strokes = [];
+      let longtaskUnsupported = false, active = null, preview = null, frame = null, lastPaint = 0, previewIndex = 1, generation = 0;
+      let observer = null;
+      function recordLongTasks(entries) {
+        for (const entry of entries) longTasks.push({ start: entry.startTime, dur: entry.duration, name: entry.name,
+          attribution: Array.from(entry.attribution || [], item => item.containerType || "unknown") });
+      }
+      try {
+        if (typeof PerformanceObserver === "undefined" || (PerformanceObserver.supportedEntryTypes && !PerformanceObserver.supportedEntryTypes.includes("longtask"))) {
+          longtaskUnsupported = true;
+        } else {
+          observer = new PerformanceObserver(list => recordLongTasks(list.getEntries()));
+          observer.observe({ entryTypes: ["longtask"] });
+        }
+      } catch (error) {
+        if (observer) observer.disconnect();
+        observer = null; longtaskUnsupported = true;
+      }
+      function mark(stroke, phase) {
+        let time = performance.now();
+        try {
+          const name = stroke.markPrefix + ":" + phase;
+          time = performance.mark(name).startTime; performance.clearMarks(name);
+        } catch (error) {}
+        stroke.marks[phase].push(time);
+      }
+      function heap(stroke, phase) {
+        const memory = performance.memory;
+        const used = typeof memory?.usedJSHeapSize === "number" && Number.isFinite(memory.usedJSHeapSize) ? memory.usedJSHeapSize : null;
+        const total = typeof memory?.totalJSHeapSize === "number" && Number.isFinite(memory.totalJSHeapSize) ? memory.totalJSHeapSize : null;
+        if (used === null || total === null) stroke.heapUnsupported = true;
+        stroke.heap.push({ t: performance.now(), phase, used, total });
+      }
+      function point(event) {
+        return { x: Math.max(0, Math.min(1, (event.clientX - bounds.left) / width)),
+          y: Math.max(0, Math.min(1, (event.clientY - bounds.top) / height)),
+          ...(event.pointerType === "pen" ? { pressure: Math.max(.05, Math.min(1, event.pressure || .5)) } : {}) };
+      }
+      function paint() {
+        frame = null;
+        if (!active || !preview) return;
+        const context = preview.getContext("2d");
+        if (!context) return;
+        mark(active, "paintBatch");
+        context.setTransform(preview.width / width, 0, 0, preview.height / height, 0, 0);
+        context.strokeStyle = "#e53935"; context.lineCap = "round"; context.lineJoin = "round";
+        for (; previewIndex < active.points.length; previewIndex++) {
+          const previous = active.points[previewIndex - 1], current = active.points[previewIndex];
+          context.lineWidth = current.pressure === undefined ? 2 : .8 + 5 * ((previous.pressure ?? .5) + current.pressure) / 2;
+          context.beginPath(); context.moveTo(previous.x * width, previous.y * height);
+          context.lineTo(current.x * width, current.y * height); context.stroke();
+        }
+      }
+      function schedule(time) {
+        if (!active) return;
+        const start = performance.now();
+        let painted = false;
+        if (isMobile && lastPaint && time - lastPaint < 1000 / 30) frame = requestAnimationFrame(schedule);
+        else { lastPaint = time; paint(); painted = true; }
+        const end = performance.now();
+        active.frames.push({ t: time, dur: end - start, raf: time, start, end, painted });
+        if (active.frames.length % 10 === 0) heap(active, "frame");
+      }
+      function update() {
+        let maxGap = null, heapPeak = null;
+        for (const stroke of strokes) {
+          for (let index = 1; index < stroke.frames.length; index++) {
+            const gap = stroke.frames[index].t - stroke.frames[index - 1].t;
+            maxGap = maxGap === null ? gap : Math.max(maxGap, gap);
+          }
+          for (const sample of stroke.heap) if (sample.used !== null) heapPeak = heapPeak === null ? sample.used : Math.max(heapPeak, sample.used);
+        }
+        const recent = longTasks.slice(-8).map(task => `${task.start.toFixed(1)} + ${task.dur.toFixed(1)} ms (${task.name}; ${task.attribution.join(", ") || "无归属"})`);
+        stats.textContent = `笔数 ${strokes.length} · rAF 最大间隔 ${maxGap !== null ? maxGap.toFixed(1) + " ms" : "等待连续帧"}\n` +
+          `堆峰值 ${heapPeak !== null ? (heapPeak / 1048576).toFixed(2) + " MiB" : "不可用或未采样"}\n` +
+          `Long task ${longtaskUnsupported ? "不支持" : longTasks.length + " 条"}${recent.length ? "\n" + recent.join("\n") : ""}\n` +
+          `rAF 仅在绘制请求时采样；稀疏输入可能造成大间隔。`;
+      }
+      function exported() {
+        if (observer) recordLongTasks(observer.takeRecords());
+        const now = performance.now();
+        return { version: 1, timeOrigin: performance.timeOrigin, userAgent: navigator.userAgent,
+          viewport: { width, height, devicePixelRatio, canvasRatio: ratio }, longtaskUnsupported,
+          longTasks: longTasks.slice(), strokes: strokes.map(({ points, ...stroke }) => ({ ...stroke,
+            longTasks: longTasks.filter(task => task.start <= (stroke.observationEnd ?? now) && task.start + task.dur >= stroke.down.now) })) };
+      }
+      surface.addEventListener("pointerdown", event => {
+        if (active || event.button !== 0 || event.isPrimary === false) return;
+        event.preventDefault();
+        active = { pointerId: event.pointerId, pointerType: event.pointerType, down: { ts: event.timeStamp, now: performance.now() },
+          markPrefix: `MarginStudyHarness:${generation}:${strokes.length + 1}`,
+          marks: { down: [], paintBatch: [], up: [], commitStart: [], commitEnd: [], renderAfterCommit: [] },
+          frames: [], heap: [], heapUnsupported: false, longtaskUnsupported, points: [point(event)] };
+        strokes.push(active); mark(active, "down"); heap(active, "down");
+        preview = document.createElement("canvas"); preview.width = committed.width; preview.height = committed.height; surface.append(preview);
+        lastPaint = 0; previewIndex = 1;
+        try { surface.setPointerCapture(event.pointerId); } catch (error) {}
+        update();
+      });
+      surface.addEventListener("pointermove", event => {
+        if (!active || event.pointerId !== active.pointerId) return;
+        event.preventDefault();
+        const coalesced = event.getCoalescedEvents?.();
+        for (const sample of coalesced?.length ? coalesced : [event]) {
+          const next = point(sample), previous = active.points[active.points.length - 1];
+          if (Math.hypot((next.x - previous.x) * width, (next.y - previous.y) * height) > .75) active.points.push(next);
+        }
+        if (frame === null) frame = requestAnimationFrame(schedule);
+      });
+      function finish(event, cancelled = false) {
+        if (!active || event.pointerId !== active.pointerId) return;
+        const stroke = active;
+        stroke.up = { ts: event.timeStamp, now: performance.now(), cancelled };
+        mark(stroke, "up"); heap(stroke, "up");
+        const last = stroke.points[stroke.points.length - 1], endpoint = point(event);
+        if (Math.abs(last.x - endpoint.x) > 1e-7 || Math.abs(last.y - endpoint.y) > 1e-7) {
+          if (event.pointerType === "pen" && !event.pressure && last.pressure !== undefined) endpoint.pressure = last.pressure;
+          stroke.points.push(endpoint);
+        }
+        if (frame !== null) cancelAnimationFrame(frame);
+        paint(); mark(stroke, "commitStart");
+        const start = performance.now();
+        committed.getContext("2d").drawImage(preview, 0, 0);
+        stroke.commitMs = performance.now() - start;
+        mark(stroke, "commitEnd"); heap(stroke, "commitAfter");
+        preview.remove(); preview = null; active = null; frame = null;
+        const currentGeneration = generation;
+        requestAnimationFrame(() => {
+          if (generation !== currentGeneration) return;
+          mark(stroke, "renderAfterCommit"); stroke.observationEnd = performance.now(); update();
+        });
+        update();
+      }
+      surface.addEventListener("pointerup", event => finish(event));
+      surface.addEventListener("pointercancel", event => finish(event, true));
+      document.getElementById("clear").addEventListener("click", () => {
+        if (active) return;
+        if (observer) observer.takeRecords();
+        generation++; strokes.length = 0; longTasks.length = 0;
+        committed.getContext("2d").clearRect(0, 0, committed.width, committed.height); update();
+      });
+      document.getElementById("download").addEventListener("click", () => {
+        const blob = new Blob([JSON.stringify(exported(), null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob), link = document.createElement("a");
+        link.href = url; link.download = "MarginStudy-harness-perf.json"; link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      });
+      window.MarginStudyHarness = { export: exported };
+      setInterval(update, 500); update();
+    })();
+  </script>
+</body>
+</html>

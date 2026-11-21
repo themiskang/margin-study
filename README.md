@@ -34,14 +34,34 @@ MarginStudy 是面向 Obsidian 的 MarginNote 5 风格学习插件，集成文�
 ## 构建和验收
 
 ```sh
-npm ci --ignore-scripts
+npm ci
 npm run build
 npm run verify
 ```
 
-验收使用合成数据、临时文档与隔离浏览器，默认调用本机的 `agent-browser`。运行时打印结果目录。各套件及整体状态分别写入日志与 `results.json`。详细边界见 [阅读器验收](src/documents/ACCEPTANCE.md) 和 [L3 契约报告](docs/archive/acceptance/l3-contract-impl-acceptance.md)。
+验收使用合成数据、临时文档与隔离浏览器。公开验收需要 Node.js 26、Chrome 或 Chromium，以及 Python 3。`npm ci` 安装验收使用的 `agent-browser`。运行时打印结果目录。各套件及整体状态分别写入日志与 `results.json`。详细边界见 [阅读器验收](src/documents/ACCEPTANCE.md) 和 [L3 契约报告](docs/archive/acceptance/l3-contract-impl-acceptance.md)。
 
 手动安装时，在 Obsidian 库的 `.obsidian/plugins/margin-study/` 中放置 `manifest.json`、`main.js`、`styles.css`、`pdf.worker.js` 和 `ocr.swift`，然后在第三方插件设置中启用 MarginStudy。macOS 原生功能需要构建生成的 `native/` 运行时文件。
+
+## 测试与验证
+
+纯 `git clone` 即可完成构建并运行全部 53 个自动化验证套件。执行以下命令：
+
+    npm ci
+    npm run build
+    npm run verify:public
+
+GitHub Actions 默认运行这 53 个公开套件。轻量静态夹具位于 `tests/fixtures/`。`npm run verify:full` 以严格模式运行同一批套件。
+
+### 历史压测与实机回放
+
+历史压测和实机回放依赖私有样本库及历史取证。`evidence/` 永久私有，公开仓库有意排除这些资料。独立的 `npm run verify:replay` 运行已归档的回放。缺失私有夹具时，逐项输出套件及缺失路径，跳过项单独计数。回放结果与 53 个公开套件分开统计。
+
+维护者可通过 `MARGINSTUDY_EVIDENCE_DIR` 指定私有夹具目录，默认使用 `./evidence`。导航回放还需要该目录下的 `MarginStudy验收库/` 归档副本。
+
+严格回放在缺失私有夹具时退出 1：
+
+    MARGINSTUDY_EVIDENCE_DIR=/path/to/private-evidence VERIFY_STRICT=1 npm run verify:replay
 
 ## 数据与后续
 

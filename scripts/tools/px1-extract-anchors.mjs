@@ -1,7 +1,10 @@
 import { readFile, writeFile } from "node:fs/promises";
+import { relative } from "node:path";
+import { publicFixture } from "../verify/fixtures.mjs";
 
-const source = "evidence/mn5-5.0.2-baseline/BASELINE.json";
-const baseline = JSON.parse(await readFile(source, "utf8"));
+const fixturePath = publicFixture("baseline/BASELINE.json");
+const source = relative(".", fixturePath);
+const baseline = JSON.parse(await readFile(fixturePath, "utf8"));
 const anchors = [];
 const orphans = [];
 const add = (state, element, rect) => {

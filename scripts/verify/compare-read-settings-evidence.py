@@ -7,10 +7,9 @@ text, so this script deliberately makes no visible-paragraph or pixel claim.
 import hashlib
 import json
 from datetime import datetime, timezone
-from pathlib import Path
+from replay_support import EVIDENCE, replay_report, report_reference, required_matches
 
-DEV = Path(__file__).resolve().parents[2]
-NATIVE = DEV / "evidence/native-max-l4"
+NATIVE = EVIDENCE / "native-max-l4"
 
 
 def read(path):
@@ -18,14 +17,14 @@ def read(path):
 
 
 def capture(number, suffix="data.json"):
-    paths = list(NATIVE.glob(f"{number}-*.{suffix}"))
+    paths = required_matches(NATIVE, f"{number}-*.{suffix}")
     if len(paths) != 1:
         raise ValueError(f"Expected one capture {number}/{suffix}, got {paths}")
     return read(paths[0])
 
 
 def ax(number):
-    return next(NATIVE.glob(f"{number}-*.ax.txt")).read_text()
+    return required_matches(NATIVE, f"{number}-*.ax.txt")[0].read_text()
 
 
 def position(data, path):
@@ -34,9 +33,9 @@ def position(data, path):
 
 before = read(NATIVE / "221-read-settings-before-data.json")
 after = read(NATIVE / "279-read-settings-final-data.json")
-before_raw = read(DEV / "evidence/checkpoints/20261017-read-settings-before/installed-data.json")
-receipt = read(DEV / "evidence/checkpoints/20261017-read-settings-final-deployment.json")
-verification = read(DEV / "evidence/verification/read-settings-final-green/results.json")
+before_raw = read(EVIDENCE / "checkpoints/20261017-read-settings-before/installed-data.json")
+receipt = read(EVIDENCE / "checkpoints/20261017-read-settings-final-deployment.json")
+verification = read(EVIDENCE / "verification/read-settings-final-green/results.json")
 word, html, pdf = "合成Word位置验收.docx", "第二份资料.html", "l4-sample-alpha.pdf"
 checks = {}
 
@@ -150,8 +149,8 @@ report = {
         "Whole data.json byte equality is not asserted. Historical empty records remain; no migration or manual cleanup was performed.",
     ],
 }
-target = NATIVE / "280-read-settings-comparison.json"
+target = replay_report("280-read-settings-comparison.json")
 target.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
-print(json.dumps({"report": str(target.relative_to(DEV)), "checks_passed": sum(checks.values()), "checks_total": len(checks), "failed": [name for name, passed in checks.items() if not passed]}, ensure_ascii=False, indent=2))
+print(json.dumps({"report": report_reference(target), "checks_passed": sum(checks.values()), "checks_total": len(checks), "failed": [name for name, passed in checks.items() if not passed]}, ensure_ascii=False, indent=2))
 if not all(checks.values()):
     raise SystemExit(1)

@@ -1,0 +1,4 @@
+{
+  "minimumPassed": 53,
+  "source": "At 22298bb, scripts/verify.mjs registers 53 suites. After moving the workspace scene templates to public fixtures, none of those entries requires a private fixture."
+}

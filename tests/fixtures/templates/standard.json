@@ -1,0 +1,87 @@
+{
+  "bottom" : {
+    "modes" : [
+      {
+        "behavior" : "read",
+        "id" : "read",
+        "overflow" : [
+          "act.excerptSettingFromMore",
+          "pref.assistExcerpt",
+          "pref.excerptResultBar",
+          "choice.textSelection",
+          "choice.doubleTap",
+          "panel.childDict"
+        ]
+      },
+      {
+        "behavior" : "write",
+        "id" : "write",
+        "overflow" : [
+          "act.viewBlankNotebook",
+          "pref.docsketchontop",
+          "act.stopPencil"
+        ]
+      },
+      {
+        "behavior" : "recall",
+        "id" : "recall",
+        "tools" : [
+          "recall.level",
+          "recall.reset",
+          "recall.hint",
+          "recall.settings",
+          "recall.handwrite",
+          "pref.reviewAutoAdd"
+        ]
+      }
+    ]
+  },
+  "coach" : {
+    "enabled" : false
+  },
+  "home" : "studyset",
+  "id" : "standard",
+  "name" : "3-Mode Sample",
+  "plugins" : [
+
+  ],
+  "resume" : {
+    "card" : "silent"
+  },
+  "review" : {
+    "autoAdd" : "off",
+    "rule" : {
+      "excludeGroupChildren" : true,
+      "excludeToc" : true
+    }
+  },
+  "schema" : 3,
+  "surfaces" : {
+    "bottomRead" : {
+      "visible" : [
+        "theme",
+        "titleLinks",
+        "blockSelect"
+      ]
+    },
+    "dock" : {
+      "visible" : [
+        "contents",
+        "ai",
+        "research"
+      ]
+    },
+    "dockPinned" : [
+      "contents",
+      "ai"
+    ],
+    "excerptResultBar" : true
+  },
+  "toolbar" : {
+    "tabs" : [
+      "read",
+      "write",
+      "recall"
+    ]
+  }
+}

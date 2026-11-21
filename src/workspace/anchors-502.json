@@ -1,5 +1,5 @@
 {
-  "source": "evidence/mn5-5.0.2-baseline/BASELINE.json",
+  "source": "tests/fixtures/baseline/BASELINE.json",
   "capturedAt": "2026-11-11T19:36:24+08:00",
   "coordinateSystem": "window-relative; baseline screen coordinates minus per-state window origin",
   "optionalAnchorIds": ["attachment"],

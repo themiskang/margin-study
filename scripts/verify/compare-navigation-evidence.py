@@ -7,14 +7,14 @@ file checks, never the host's other plugin configuration.
 import copy
 import hashlib
 import json
+import os
 from datetime import datetime, timezone
-from pathlib import Path
+from replay_support import EVIDENCE, ROOT, replay_report, report_reference
 
 
-DEV = Path(__file__).resolve().parents[2]
-VAULT = DEV.parent / "MarginStudy验收库"
-NATIVE = DEV / "evidence/native-max-l4"
-CHECKPOINTS = DEV / "evidence/checkpoints"
+VAULT = (EVIDENCE if "MARGINSTUDY_EVIDENCE_DIR" in os.environ else ROOT.parent) / "MarginStudy验收库"
+NATIVE = EVIDENCE / "native-max-l4"
+CHECKPOINTS = EVIDENCE / "checkpoints"
 
 
 def read(path):
@@ -191,8 +191,8 @@ report = {
         "The historical 20261016-document-navigation-before/baseline-hashes.json is empty and is not used as a source/sidecar baseline.",
     ],
 }
-target = NATIVE / "164-navigation-reload-comparison.json"
+target = replay_report("164-navigation-reload-comparison.json")
 target.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
-print(json.dumps({"report": str(target.relative_to(DEV)), "checks": checks}, ensure_ascii=False, indent=2))
+print(json.dumps({"report": report_reference(target), "checks": checks}, ensure_ascii=False, indent=2))
 if not all(checks.values()):
     raise SystemExit(1)

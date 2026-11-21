@@ -2,9 +2,10 @@ import { build } from "esbuild";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runBrowserSync } from "../../scripts/verify/ego-harness.mjs";
+import { publicFixture } from "../../scripts/verify/fixtures.mjs";
 
 const directory = mkdtempSync(join(tmpdir(), "marginstudy-perf8-"));
 const browser = (...args) => runBrowserSync(`perf8-${process.pid}`, ...args);
@@ -110,7 +111,7 @@ try {
   })()`);
   assert(observerReset.length === 0, "callbacks from a disconnected observer must not pollute a later recording");
 
-  browser("open", pathToFileURL(resolve("evidence/pad-perf-20261113/harness.html")).href);
+  browser("open", pathToFileURL(publicFixture("perf/harness.html")).href);
   const harness = evaluate(`(async () => {
     const surface = document.querySelector("#surface");
     const event = (type, x, pressure=.5) => new PointerEvent(type, {bubbles:true,pointerId:7,pointerType:"pen",isPrimary:true,button:0,clientX:x,clientY:100,pressure});
