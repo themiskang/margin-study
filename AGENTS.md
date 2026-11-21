@@ -5,7 +5,7 @@ MarginStudy 是面向 Obsidian 的 MarginNote 5 风格学习插件。源码使�
 - `src/` 提供插件源码、合成验收夹具和 `src/styles/` 样式源。`src/pdf/cmaps.json` 是离线 PDF worker 的 CMap 与字体数据源。
 - `native/src/` 保存 Swift 桥接源码。`native/` 下的其他目录由构建或本机配置生成。
 - `scripts/build/` 保存构建与打包脚本。`scripts/verify/` 保存验收支持脚本。`scripts/tools/` 保存辅助采集工具。全量与几何验收入口为 `scripts/verify.mjs` 和 `scripts/px-gap.mjs`。
-- `tests/baseline/` 保存冻结回归基线。`assets/licenses/` 保存第三方许可。
+- `tests/baseline/` 保存冻结回归基线和旧安装版指纹。`assets/licenses/` 保存第三方许可。
 - `docs/STATUS.md` 保存当前项目状态。`docs/MN5-PARITY-GAP.md` 保存活动差距。`docs/archive/` 保存历史证据索引。
 
 Codex 是本项目的执行席。用户已授权的任务中，发现问题后自行定位、修改和验证，持续推进至完成或出现确实需要用户参与的阻塞；不要把可自行处理的修复重新派给 Codex 或要求用户转交。按实际证据报告结果，不把未完成的验收写成通过。

@@ -44,11 +44,11 @@
 | `使用教程.md` | [user-guide.zh-CN.md](../guide/user-guide.zh-CN.md) |
 | `分阶段任务/00-总控与交接规则.md` | [00-coordination-handoff-rules.md](phased-tasks/00-coordination-handoff-rules.md) |
 | `分阶段任务/01-Extend完整闭环.md` | [01-extend-workflow.md](phased-tasks/01-extend-workflow.md) |
-| `分阶段任务/02-PDF页编辑与导出收尾.md` | [02-qoder-mn4-screenshot-task.md](phased-tasks/02-qoder-mn4-screenshot-task.md) |
-| `分阶段任务/02-Qoder-MN4截图任务.md` | [02-handoff-delivery-package.md](phased-tasks/02-handoff-delivery-package.md) |
-| `分阶段任务/02-交接交付包.md` | [02-pdf-page-edit-export.md](phased-tasks/02-pdf-page-edit-export.md) |
-| `分阶段任务/03-启动交接-20261023.md` | [03-reader-document-tools.md](phased-tasks/03-reader-document-tools.md) |
-| `分阶段任务/03-阅读器与文档工具.md` | [03-launch-handoff-20261023.md](phased-tasks/03-launch-handoff-20261023.md) |
+| `分阶段任务/02-PDF页编辑与导出收尾.md` | [02-pdf-page-editing-and-export.md](phased-tasks/02-pdf-page-editing-and-export.md) |
+| `分阶段任务/02-Qoder-MN4截图任务.md` | [02-qoder-mn4-device-screenshots.md](phased-tasks/02-qoder-mn4-device-screenshots.md) |
+| `分阶段任务/02-交接交付包.md` | [02-delivery-handoff-package.md](phased-tasks/02-delivery-handoff-package.md) |
+| `分阶段任务/03-启动交接-20261023.md` | [03-package-launch-handoff-20261023.md](phased-tasks/03-package-launch-handoff-20261023.md) |
+| `分阶段任务/03-阅读器与文档工具.md` | [03-reader-and-document-tools.md](phased-tasks/03-reader-and-document-tools.md) |
 | `分阶段任务/04-卡片模板和组织视图.md` | [04-card-templates-organize-views.md](phased-tasks/04-card-templates-organize-views.md) |
 | `分阶段任务/05-卡组与复习完整流程.md` | [05-deck-review-workflow.md](phased-tasks/05-deck-review-workflow.md) |
 | `分阶段任务/06-现有Claudian的AI联动.md` | [06-claudian-ai-integration.md](phased-tasks/06-claudian-ai-integration.md) |
