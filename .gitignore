@@ -5,7 +5,7 @@ node_modules/
 analysis/
 evidence/
 dist/
-/scripts/card-a-forensics/
+scripts/*-forensics/
 .local/
 .DS_Store
 
