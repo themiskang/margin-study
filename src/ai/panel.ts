@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖 AI 服务、草稿保存、学习库保存反馈和 Claudian 桥接。
+ * [OUTPUT]: 提供 AI 设置和学习助手面板。
+ * [POS]: AI 草稿确认后写入新笔记或暂存到学习库。两者分别反馈。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import { AiError, aiErrorText } from "./contracts";
 import type { AiContext, AiDraft, AiHost, AiTask, ChatMessage } from "./contracts";
 import { AiService } from "./service";
@@ -8,6 +14,7 @@ import { buildClaudianPrompt, claudianAvailability, supportsClaudianRequest, sup
 import { requestClaudian } from "./claudianRequest";
 import { draftFromPastedReply } from "./resultImport";
 import { Notice } from "obsidian";
+import { saveFeedback } from "../model/saveFeedback";
 import { saveAnswerBranch, writeAnswerSelection } from "./a23";
 
 const services = new WeakMap<object, AiService>();
@@ -223,8 +230,8 @@ export function mountAiPanel(container: HTMLElement, host: AiHost, options: AiPa
         const edited = collect();
         const saved = edited.kind === "markdown" ? { kind: edited.kind, path: await saveMarkdownDraft(host, edited, filename!.value) }
           : { kind: edited.kind, ids: saveLibraryDraft(host, edited, sourceDocPath) };
-        resultStatus.textContent = edited.kind === "markdown" ? `已保存：${"path" in saved ? saved.path : ""}` : "已保存到当前学习集，可撤销。";
-        save.textContent = "已保存";
+        resultStatus.textContent = "path" in saved ? `已保存：${saved.path}` : saveFeedback(host.store, "已保存到当前学习集，可撤销。");
+        save.textContent = "path" in saved ? "笔记已写入" : saveFeedback(host.store, "已保存", "已保留在内存");
         content.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>("input, textarea, select").forEach(control => control.disabled = true);
         try { options.onSaved?.(saved); } catch { /* A workspace refresh failure must not repeat a completed save. */ }
       } catch (error) { resultStatus.textContent = aiErrorText(error); save.disabled = false; }

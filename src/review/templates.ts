@@ -1,9 +1,16 @@
+/**
+ * [INPUT]: 依赖 Store、卡片内容与学习库保存反馈。
+ * [OUTPUT]: 提供卡片模板展开和编辑控件。
+ * [POS]: 展开模板文本并将模板修改交给 Store。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import type MarginStudyPlugin from "../main";
 import type { Card } from "../types";
 import type { CardTemplate } from "./contracts";
 import { el, clear } from "../utils/dom";
 import { openConfirm, openTextModal, createModal } from "../utils/modal";
 import { Notice } from "obsidian";
+import { saveFeedback } from "../model/saveFeedback";
 
 export function applyTemplate(template: CardTemplate, card: Pick<Card, "front" | "back" | "docPath">, now = new Date()): { front: string; back: string } {
   const values: Record<string, string> = { front: card.front, back: card.back ?? "", source: card.docPath, date: now.toLocaleDateString() };
@@ -35,7 +42,7 @@ export function mountTemplateControls(container: HTMLElement, plugin: MarginStud
       if (!name.trim()) return;
       const template: CardTemplate = { id: `template-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, name: name.trim(), front: front.value, back: back?.value, type: card.type, createdAt: new Date().toISOString() };
       plugin.store.upsertCardTemplate(template); fill(); select.value = template.id; onApplied(template.id);
-      new Notice("模板已保存，可在其他卡片中使用");
+      new Notice(saveFeedback(plugin.store, "模板已保存，可在其他卡片中使用"));
     },
   }));
   const edit = el("button", { class: "ms-btn", text: "编辑模板" });

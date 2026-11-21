@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 依赖 Obsidian 存储适配器、模型、标注、升级备份和 macOS 主数据交换。
+ * [INPUT]: 依赖 Obsidian 存储适配器、模型、标注、升级备份、macOS 主数据交换和保存反馈。
  * [OUTPUT]: 提供 Store、来源指纹登记、主数据迁移、学习集导入提交和冲突恢复。
- * [POS]: 串行提交主数据和侧车。检测到桌面替换冲突时暂停写入，直至选定版本。
+ * [POS]: 串行提交主数据和侧车。桌面冲突暂停写入。立即保存命令在冷却期内只提示一次停写原因。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 import { App, TFile, Notice } from "obsidian";
@@ -31,6 +31,7 @@ import { applyMediaReplacements, externalizeMedia, hasInlineMedia } from "./medi
 import { BACKUP_ROOT, clearAbandonedMigrationBackups, isMigrationBackup, isStagedMigrationBackup, migrationBackupPaths, publishMigrationBackup } from "./migrationBackup";
 import type { BackupFile, BackupManifest } from "./migrationBackup";
 import { DesktopMainConflict, recoverDesktopMainReplacement, replaceMacMain, resolveDesktopMainReplacement } from "./desktopMainReplacement";
+import { errorDetail, LibrarySaveConflict, saveFailureText } from "./saveFeedback";
 import { ProtectedObject, ProtectionSnapshot, ProtectionSnapshotInfo, protectedCollections, protectedObjects, protectedAnnotations, signProtectionSnapshot, validateProtectionSnapshot } from "./localProtection";
 import { isStudyDocumentPath } from "../documents/formats";
 import { measurePenCommit, perfEnabledForPen, recordPenPersistence } from "../annot/pen";
@@ -54,6 +55,7 @@ const cloneSnapshot = <T>(value: T): T => typeof structuredClone === "function" 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 const SAVE_DEBOUNCE_MS = 800;
 const INPUT_QUIET_MS = 1200;
+const CONFLICT_NOTICE_COOLDOWN_MS = 10000;
 const SERIALIZE_CHUNK = 64 * 1024;
 const MAIN_SCHEMA_VERSION = 3;
 const SIDECAR_SCHEMA_VERSION = 2;
@@ -219,6 +221,7 @@ export class Store {
   private studySetImportCanvasId?: string;
   private pendingConflict: { local: PluginData; remote: PluginData } | null = null;
   private desktopConflict: DesktopMainConflict | null = null;
+  private lastExplicitConflictNotice: { text: string; at: number } | null = null;
   private localEvents: LocalEvent[] = [];
   private protectionSnapshots: ProtectionSnapshotInfo[] = [];
 
@@ -639,9 +642,19 @@ export class Store {
     for (const f of this.annListeners.get(path) ?? []) { try { f(); } catch (e) { console.error(e); } }
   }
   private report(message: string, error: unknown): void {
-    this.lastSaveError = message + " " + String(error);
-    console.error("MarginStudy:", message, error);
-    new Notice(this.lastSaveError, 12000);
+    const detail = errorDetail(error);
+    this.publishError(!detail || message.includes(detail) ? message : `${message} ${detail}`, error);
+  }
+  private publishError(text: string, error: unknown): void {
+    this.lastSaveError = text;
+    console.error("MarginStudy:", text, error);
+    new Notice(text, 12000);
+  }
+  private notifyExplicitConflict(conflict: DesktopMainConflict): void {
+    const text = saveFailureText(conflict), now = Date.now(), previous = this.lastExplicitConflictNotice;
+    if (previous?.text === text && now - previous.at < CONFLICT_NOTICE_COOLDOWN_MS) return;
+    this.lastExplicitConflictNotice = { text, at: now };
+    new Notice(text, CONFLICT_NOTICE_COOLDOWN_MS);
   }
   private track<T>(job: Promise<T>): void { this.jobs.add(job); void job.catch(e => this.report("关联数据保存失败", e)).finally(() => this.jobs.delete(job)); }
   private enqueue<T>(fn: () => Promise<T>): Promise<T> {
@@ -691,7 +704,7 @@ export class Store {
   }
 
   /** Flush includes edits arriving while an earlier disk write is in progress. */
-  async flush(automatic = false): Promise<void> {
+  async flush(automatic = false, { notifyExistingConflict = false } = {}): Promise<void> {
     if (this.saveTimer !== null) { clearTimeout(this.saveTimer); this.saveTimer = null; }
     if (this.saveIdle !== null && typeof cancelIdleCallback === "function") cancelIdleCallback(this.saveIdle);
     this.saveIdle = null;
@@ -715,8 +728,14 @@ export class Store {
         }
         this.lastSaveError = null;
       } catch (e) {
-        if (e instanceof DesktopMainConflict && this.desktopConflict !== e) this.markDesktopConflict(e);
-        else if (!(e instanceof DesktopMainConflict) && !this.studySetImportCanvasId) this.report("尚有修改未保存；原文件已保留，请重试保存或处理冲突。", e);
+        if (e instanceof DesktopMainConflict) {
+          if (this.desktopConflict !== e) {
+            this.markDesktopConflict(e);
+            if (notifyExistingConflict) this.lastExplicitConflictNotice = { text: saveFailureText(e), at: Date.now() };
+          } else if (notifyExistingConflict) this.notifyExplicitConflict(e);
+        } else if (!this.studySetImportCanvasId) {
+          this.publishError(saveFailureText(e), e);
+        }
         throw e;
       }
     });
@@ -750,7 +769,7 @@ export class Store {
       notify = true;
     }
     this.recordLocalEvent("conflict-detected", objectIds, "检测到主数据外部修改；本地候选与外部版本已保留：" + conflict.path);
-    if (notify) this.report("主数据保存冲突，写入已暂停。", conflict);
+    if (notify) this.publishError(saveFailureText(conflict), conflict);
     this.localStatusChanged();
   }
 
@@ -803,7 +822,7 @@ export class Store {
       this.conflictPath = path;
       this.recordLocalEvent("conflict-detected", protectedObjects(local).map(item => item.id), "检测到主数据外部修改；两份版本已保留：" + path);
       this.localStatusChanged();
-      throw new Error("发现外部修改。两份版本已保存到 " + path + "；请运行「处理保存冲突」。");
+      throw new LibrarySaveConflict("发现主数据外部修改。两份版本保留于 " + path);
     }
     const importCanvasId = this.studySetImportCanvasId;
     const media = importCanvasId ? undefined : await externalizeMedia(local, this.host.app.vault.adapter);
@@ -879,6 +898,7 @@ export class Store {
       this.pendingConflict = null;
       this.conflictPath = null;
       this.desktopConflict = null;
+      this.lastExplicitConflictNotice = null;
       if (desktop) this.lastSaveError = null;
       const next = location && await recoverDesktopMainReplacement(location.base, location.path);
       if (next) this.markDesktopConflict(next);
@@ -1079,7 +1099,7 @@ export class Store {
       this.annBlocked.add(path);
       this.recordLocalEvent("conflict-detected", anns.map(annotation => annotation.id), "检测到文档批注外部修改：" + path);
       this.localStatusChanged();
-      throw new Error("标注被外部修改，已保留两份版本：" + recovery);
+      throw new LibrarySaveConflict("标注被外部修改，已保留两份版本：" + recovery);
     }
     const media = await externalizeMedia({ annotations: anns }, adapter);
     const content = await serializeData({ schemaVersion: SIDECAR_SCHEMA_VERSION, annotations: anns }, () => this.waitForInputQuiet(automatic));

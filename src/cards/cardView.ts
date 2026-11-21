@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖 Store、保存反馈、卡片编辑组件和 Obsidian 宿主。
+ * [OUTPUT]: 提供卡片列表、卡片详情和来源跳转。
+ * [POS]: 卡片详情将修改交给 Store。桌面冲突期间提示修改仅保留在内存。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import { applyCardTypography } from "./typography";
 import type MarginStudyPlugin from "../main";
 import { bindInlineCardLinks } from "../study/cardLink";
@@ -23,6 +29,7 @@ import { mountNativeCardEditor } from "./nativeEditor";
 import { displayedExcerptBlocks } from "./excerptBlocks";
 import type { ExcerptBlock } from "../types";
 import { CARD_COLORS } from "../model/cardColors";
+import { saveFeedback } from "../model/saveFeedback";
 
 registerReviewCardEditor((plugin, card, onChanged) => openDetail(plugin, card, onChanged));
 
@@ -652,7 +659,11 @@ export function openDetail(plugin: MarginStudyPlugin, card: Card, onChanged?: ()
     onChanged?.();
     return true;
   };
-  save.addEventListener("click", () => { if (saveCard()) { new Notice("已保存"); close(); } });
+  save.addEventListener("click", () => {
+    if (!saveCard()) return;
+    new Notice(saveFeedback(plugin.store, "已保存"));
+    close();
+  });
   const jump = el("button", { class: "ms-btn", text: "跳转原文" });
   jump.addEventListener("click", () => {
     close();

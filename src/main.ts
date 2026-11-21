@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 Obsidian 宿主、Store 和插件各视图。
  * [OUTPUT]: 注册 MarginStudy 插件、界面和命令。
- * [POS]: 将宿主生命周期接入 Store。恢复面板显示已校验备份和桌面冲突版本。
+ * [POS]: 将宿主生命周期接入 Store。立即保存命令请求显示停写原因。恢复面板显示已校验备份和桌面冲突版本。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 import { Plugin, WorkspaceLeaf, TFile, TFolder, Notice, Menu, Platform } from "obsidian";
@@ -361,7 +361,7 @@ export default class MarginStudyPlugin extends Plugin {
 
     this.addCommand({ id: "save-now", name: "立即保存学习库", callback: () => {
       if (this.store.settings.diagnosticNoPersist) { new Notice("诊断模式：不会写盘。请先关闭诊断开关。"); return; }
-      void this.store.flush().then(() => new Notice("学习库已保存")).catch(() => {});
+      void this.store.flush(false, { notifyExistingConflict: true }).then(() => new Notice("学习库已保存")).catch(() => {});
     } });
     this.addCommand({ id: "restore-backup", name: "选择保护快照恢复对象", callback: () => this.showLocalStatus() });
     this.addCommand({ id: "resolve-save-conflict", name: "处理保存冲突", callback: () => this.showSaveConflict() });
