@@ -1,5 +1,12 @@
+/**
+ * [INPUT]: 依赖离线词表、词卡创建和学习库保存反馈。
+ * [OUTPUT]: 提供离线词典与释义转词卡界面。
+ * [POS]: 查询释义并将新词卡交给 Store。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import { Notice } from "obsidian";
 import type MarginStudyPlugin from "../main";
+import { saveFeedback } from "../model/saveFeedback";
 import { saveVocabularySense } from "../cards/vocabulary";
 import { el, clear } from "../utils/dom";
 import { createModal } from "../utils/modal";
@@ -35,8 +42,9 @@ export function openVocabularyLookup(plugin: MarginStudyPlugin, initial = "", do
         try {
           const before = plugin.store.cards.length;
           const card = saveVocabularySense(plugin.store, entry, sense, { docPath, example: example.value });
-          status.textContent = plugin.store.cards.length === before ? `已存在词卡：${card.front}；未覆盖原内容。` : `已写入一张词卡：${card.front}`;
-          new Notice(plugin.store.cards.length === before ? "这条释义已有词卡，未覆盖" : "已写入一张词卡");
+          const existing = plugin.store.cards.length === before;
+          status.textContent = existing ? `已存在词卡：${card.front}；未覆盖原内容。` : saveFeedback(plugin.store, `已写入一张词卡：${card.front}`);
+          new Notice(existing ? "这条释义已有词卡，未覆盖" : saveFeedback(plugin.store, "已写入一张词卡"));
         } catch (error) { status.textContent = `写入失败：${String(error)}`; new Notice(status.textContent); }
       });
       row.append(label, add); list.append(row);

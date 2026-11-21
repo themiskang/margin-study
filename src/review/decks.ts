@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖复习数据、卡片内容和 Obsidian 插件服务。
+ * [INPUT]: 依赖复习数据、保存反馈、卡片内容和 Obsidian 插件服务。
  * [OUTPUT]: 提供复习卡组浏览与操作界面。
  * [POS]: 连接卡组管理、卡片预览和复习流程。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
@@ -7,6 +7,7 @@
 import type MarginStudyPlugin from "../main";
 import type { Card } from "../types";
 import { Notice } from "obsidian";
+import { saveFeedback } from "../model/saveFeedback";
 import { el, clear } from "../utils/dom";
 import { createModal } from "../utils/modal";
 import { startReview, questionsForReview } from "./reviewView";
@@ -126,7 +127,7 @@ export function openReviewDecks(plugin: MarginStudyPlugin, options: DeckPickerOp
     intervalForm.append(intervalLabel, el("button", { class: "ms-btn", type: "submit", text: "保存最长间隔" }));
     intervalForm.addEventListener("submit", event => {
       event.preventDefault();
-      try { store.setReviewDeckMaxInterval(deck.id, interval.value.trim() ? Number(interval.value) : undefined); new Notice("卡组最长间隔已保存"); }
+      try { store.setReviewDeckMaxInterval(deck.id, interval.value.trim() ? Number(interval.value) : undefined); new Notice(saveFeedback(store, "卡组最长间隔已保存")); }
       catch (error) { new Notice(`无法保存最长间隔：${String(error)}`); }
     }); body.append(intervalForm);
   };

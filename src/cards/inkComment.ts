@@ -1,10 +1,11 @@
 /**
- * [INPUT]: 卡片数据、快照图片和手写输入。
+ * [INPUT]: 卡片数据、保存反馈、快照图片和手写输入。
  * [OUTPUT]: 卡片快照、手写评论显示与编辑入口。
  * [POS]: 以内容坐标保存卡片手写评论，旧数据读取时迁移。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 import { Notice } from "obsidian";
+import { saveFeedback } from "../model/saveFeedback";
 import type MarginStudyPlugin from "../main";
 import type { Card } from "../types";
 import { handwritingPresetWidth, handwritingPresets } from "../annot/handwritingPresets";
@@ -139,7 +140,7 @@ function offerUndo(plugin: MarginStudyPlugin, cardId: string, mediaId: string, o
     }
     if (plugin.store.undoLibraryChange()) { panel.remove(); onChanged?.(); new Notice("已撤销批注"); }
   });
-  dismiss.addEventListener("click", () => panel.remove()); panel.append(el("span", { text: "批注已保存" }), undo, dismiss); document.body.append(panel);
+  dismiss.addEventListener("click", () => panel.remove()); panel.append(el("span", { text: saveFeedback(plugin.store, "批注已保存") }), undo, dismiss); document.body.append(panel);
 }
 
 export function openCardInkComment(plugin: MarginStudyPlugin, cardId: string, mode: "snapshot" | "blank", onChanged?: () => void): void {

@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖百度网盘协议、导入流程和学习库保存反馈。
+ * [OUTPUT]: 提供百度网盘配置、授权、浏览与传输界面。
+ * [POS]: 将配置修改交给 Store，并区分暂存与落盘反馈。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import { Notice, TFile } from "obsidian";
 import { BaiduNetdiskClient, BaiduApiError, type BaiduFileEntry, type CloudTransport } from "./baiduNetdisk";
 import { importLocalDocuments, type ImportConflictPolicy, type ImportHost } from "./webImport";
@@ -5,6 +11,7 @@ import { isStudyDocumentPath } from "../documents/formats";
 import { createModal } from "../utils/modal";
 import { el, clear } from "../utils/dom";
 import { uid } from "../utils/id";
+import { saveFeedback } from "../model/saveFeedback";
 
 export interface BaiduUiOptions {
   activePath?: () => string | undefined;
@@ -52,7 +59,7 @@ export function openBaiduNetdisk(host: ImportHost, options: BaiduUiOptions = {})
       saveConfig();
     };
     const save = el("button", { class: "ms-btn", text: "保存应用配置" });
-    save.addEventListener("click", () => { try { persist(); status.textContent = "配置已保存到当前库；不会写入日志或导出清单。"; } catch (error) { fail(error); } });
+    save.addEventListener("click", () => { try { persist(); status.textContent = saveFeedback(host.store, "配置已保存到当前库；不会写入日志或导出清单。"); } catch (error) { fail(error); } });
     const auth = el("button", { class: "ms-btn primary", text: "生成官方授权链接" });
     const link = el("a", { text: "打开百度官方授权页", target: "_blank", rel: "noopener noreferrer", class: "ms-btn", style: "display:none" }) as HTMLAnchorElement;
     const code = el("input", { class: "ms-search", type: "text", placeholder: "授权完成后粘贴授权码", "aria-label": "百度授权码", autocomplete: "off" }) as HTMLInputElement;

@@ -1,10 +1,11 @@
 /**
- * [INPUT]: 依赖 Obsidian 工作区、学习集数据和阅读器组件。
+ * [INPUT]: 依赖 Obsidian 工作区、学习集数据、保存反馈和阅读器组件。
  * [OUTPUT]: 导出学习集工作区视图及其视图类型。
  * [POS]: 协调学习集工作区的导航、菜单和辅助面板。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 import { ItemView, Menu, Notice, Scope, TFile, WorkspaceLeaf, setIcon, Platform } from "obsidian";
+import { saveFeedback } from "../model/saveFeedback";
 import { setNativeIcon } from "./nativeIcons";
 import { builtinSceneTemplates, installableSceneTemplateIds } from "./scenes";
 import { openVocabularyLookup } from "../vocabulary/view";
@@ -1272,7 +1273,7 @@ export class StudyWorkspaceView extends ItemView {
       const keys: import("../types").RecallOptionKey[]=["maskCardBody","maskEmphasisImages","maskHighlighter","maskDocumentExcerpts","maskMindMapTitles","blurExcerpts","singleReveal","structuredHint","onDeviceAiHint"];
       const options=Object.fromEntries(keys.map(key=>[key,reader.getRecallSetting?.(key)??false])) as Record<import("../types").RecallOptionKey,boolean>;
       this.plugin.store.updateStudySet(setId,{recallSettings:{options,coverAll:reader.getRecallCoverAll(),hintLanguage:reader.getRecallHintLanguage?.()??"auto",mode:this.recallDisplayMode}});
-      new Notice("已保存当前学习集的回忆设置");
+      new Notice(saveFeedback(this.plugin.store, "已保存当前学习集的回忆设置"));
     }));
     if(setId&&this.plugin.store.studySets.find(set=>set.id===setId)?.recallSettings)menu.addItem(item=>item.setTitle("恢复默认回忆设置").onClick(()=>{
       this.recallSettingsSetId=null;
@@ -1577,7 +1578,7 @@ export class StudyWorkspaceView extends ItemView {
     let menuChanged=false;const menuOptions=[["copy","复制"],["fold","折叠"],["extend-ink","手写留白"],["extend-text","文字留白"],["ask","向 AI 提问"],["research","研究"],["speech","朗读"]] as const;const menuInputs=menuOptions.map(([id,label])=>{const box=el("input",{type:"checkbox","aria-label":"选区菜单："+label}) as HTMLInputElement;box.checked=menuIds.includes(id);box.addEventListener("change",()=>{menuChanged=true;});const row=el("label",{text:label});row.prepend(box);menuGroup.append(row);return{id,box};});pane.append(menuGroup);
     const presets=JSON.parse(JSON.stringify(draft.handwritingPresets??handwritingPresets(this.plugin.store.settings))) as HandwritingPresetSpec[];
     const penInputs=presets.map(preset=>{const row=el("div"),label=el("input",{type:"text","aria-label":"笔名称 "+preset.id}) as HTMLInputElement,color=el("input",{type:"color","aria-label":"笔颜色 "+preset.id}) as HTMLInputElement,width=el("input",{type:"number",min:"0.5",max:preset.type==="highlighter"?"64":"24",step:"0.1","aria-label":"笔宽 "+preset.id}) as HTMLInputElement;label.value=preset.label;color.value=preset.color;width.value=String(preset.width);row.append(label,color,width);pane.append(row);return{preset,label,color,width};});
-    const save=el("button",{class:"ms-scene-template-save",text:"保存模板"});save.addEventListener("click",()=>{try{draft.name=name.value.trim();draft.colors=colors.value.split(",").map(value=>value.trim());draft.excerptPopup=popup.checked;draft.statusBar=statusBar.value as "full"|"compact"|"hidden";if(cardFields&&cardFront&&cardBack)draft.cardTemplate={fields:cardFields.value.split(/[,，]/).map(value=>value.trim()).filter(Boolean),front:cardFront.value,back:cardBack.value};if(menuChanged||draft.textSelectionMenuActions)draft.textSelectionMenuActions=[...menuInputs.filter(item=>item.box.checked).map(item=>item.id),...menuIds.filter(id=>!menuOptions.some(option=>option[0]===id))];draft.handwritingPresets=penInputs.map(({preset,label,color,width})=>({...preset,label:label.value.trim(),color:color.value,width:Number(width.value),...(Number(width.value)===preset.width?{}:{documentWidth:Number(width.value),mindmapWidth:Number(width.value),cardWidth:Number(width.value)})}));this.plugin.store.saveSceneTemplate(draft);this.reader?.refreshSceneSettings?.();this.drawToolbar();new Notice("模板已保存");this.openSceneTemplateManager();}catch(error){new Notice("保存失败："+String(error));}});pane.append(save);
+    const save=el("button",{class:"ms-scene-template-save",text:"保存模板"});save.addEventListener("click",()=>{try{draft.name=name.value.trim();draft.colors=colors.value.split(",").map(value=>value.trim());draft.excerptPopup=popup.checked;draft.statusBar=statusBar.value as "full"|"compact"|"hidden";if(cardFields&&cardFront&&cardBack)draft.cardTemplate={fields:cardFields.value.split(/[,，]/).map(value=>value.trim()).filter(Boolean),front:cardFront.value,back:cardBack.value};if(menuChanged||draft.textSelectionMenuActions)draft.textSelectionMenuActions=[...menuInputs.filter(item=>item.box.checked).map(item=>item.id),...menuIds.filter(id=>!menuOptions.some(option=>option[0]===id))];draft.handwritingPresets=penInputs.map(({preset,label,color,width})=>({...preset,label:label.value.trim(),color:color.value,width:Number(width.value),...(Number(width.value)===preset.width?{}:{documentWidth:Number(width.value),mindmapWidth:Number(width.value),cardWidth:Number(width.value)})}));this.plugin.store.saveSceneTemplate(draft);this.reader?.refreshSceneSettings?.();this.drawToolbar();new Notice(saveFeedback(this.plugin.store, "模板已保存"));this.openSceneTemplateManager();}catch(error){new Notice("保存失败："+String(error));}});pane.append(save);
   }
   private toggleFocus(restoreReader = true): void {
     const reader=this.reader, state=restoreReader?reader?.getState():null;

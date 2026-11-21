@@ -1,9 +1,16 @@
+/**
+ * [INPUT]: 依赖卡片图片、Store 和学习库保存反馈。
+ * [OUTPUT]: 提供图片遮挡题编辑器。
+ * [POS]: 以图片相对坐标编辑遮挡，并将修改交给 Store。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import type MarginStudyPlugin from "../main";
 import type { Card } from "../types";
 import type { ImageOcclusion } from "./contracts";
 import { el } from "../utils/dom";
 import { createModal } from "../utils/modal";
 import { Notice } from "obsidian";
+import { saveFeedback } from "../model/saveFeedback";
 import { cardImages, imageUrl } from "./content";
 
 type Tool = "rectangle" | "free" | "adjust";
@@ -34,7 +41,7 @@ export function openOcclusionEditor(plugin: MarginStudyPlugin, card: Card, onCha
   const remove=el("button",{class:"ms-btn",text:"删除选中遮挡"});
   remove.addEventListener("click",()=>{if(masks[selected]){masks.splice(selected,1);selected=Math.max(0,selected-1);draw();}});
   const save=el("button",{class:"ms-btn primary",text:"保存遮挡题"});
-  save.addEventListener("click",()=>{plugin.store.updateCard(card.id,{occlusions:structuredClone(masks)});onChanged?.();new Notice("图片遮挡已保存");close();});
+  save.addEventListener("click",()=>{plugin.store.updateCard(card.id,{occlusions:structuredClone(masks)});onChanged?.();new Notice(saveFeedback(plugin.store, "图片遮挡已保存"));close();});
   const cancel=el("button",{class:"ms-btn",text:"取消"}); cancel.addEventListener("click",close);
   actions.append(remove,save,cancel);modal.append(actions);
   const pos=(e:PointerEvent)=>{const r=layer.getBoundingClientRect();return{x:clamp((e.clientX-r.left)/r.width),y:clamp((e.clientY-r.top)/r.height)};};

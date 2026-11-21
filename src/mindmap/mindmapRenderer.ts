@@ -2192,7 +2192,7 @@ export class MindmapRenderer {
     const { modal, close } = createModal("关联线");
     const source = this.plugin.store.getNode(edge.from), target = this.plugin.store.getNode(edge.to);
     modal.append(el("p", { text: `${source ? nodeContent(this.plugin.store, source).title : edge.from} → ${target ? nodeContent(this.plugin.store, target).title : edge.to}` }));
-    if (source?.parentId === edge.to || target?.parentId === edge.from) modal.append(el("p", { class: "ms-muted", text: "这是已保存的额外关联，断开后父子结构线仍会保留。" }));
+    if (source?.parentId === edge.to || target?.parentId === edge.from) modal.append(el("p", { class: "ms-muted", text: "这是额外关联，断开后父子结构线仍会保留。" }));
     const remove = el("button", { type: "button", class: "ms-btn", text: "断开此关联" });
     remove.addEventListener("click", () => { if (this.plugin.store.disconnectNodes(edge.from, edge.to)) { this.render(); this.plugin.refreshSidebar(); } close(); });
     const cancel = el("button", { type: "button", class: "ms-btn", text: "取消" }); cancel.addEventListener("click", close); modal.append(remove, cancel);
