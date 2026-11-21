@@ -2,7 +2,7 @@
 
 更新：2026-10-19。已补原版页编辑/Crop 281—295、插件裁边/扩页/重载 296—323，阅读设置旧证据保留；普通PDF的 Document - More 现有八个核心入口，与 macOS 系统菜单分开。清单 05 仍未完成。只采用实机观察、官方文档及插件结果；一个状态截图不证明全部动作已执行。
 
-原版实机为 4.4.6；Qoder 的 4.4.5 L3 契约另见 [契约报告](L3契约实现与验收.md)。相机、导出和页编辑撤销行使用各自单独命名证据目录，其余下表编号指 [实机证据目录](evidence/native-max-l4/README.md)。原版 AX 中没有名称的按钮不凭图标猜测动作。空列表不自动解释为卡组没有成员。
+原版实机为 4.4.6；Qoder 的 4.4.5 L3 契约另见 [契约报告](../archive/acceptance/l3-contract-impl-acceptance.md)。相机、导出和页编辑撤销行使用各自单独命名证据目录，其余下表编号指 实机证据目录（`evidence/native-max-l4/README.md`）。原版 AX 中没有名称的按钮不凭图标猜测动作。空列表不自动解释为卡组没有成员。
 
 ## 已有页面与状态
 
@@ -15,11 +15,11 @@
 | macOS Document 系统菜单 | 59、128、166 保存完整 AX；59 场景 Add Bookmark 可用/Remove 禁用，166 有书签时相反，没有菜单截图 | 插件没有单独复制此 macOS 系统菜单；既有完整阅读工具现从“学习集更多设置→工作区设置…→阅读与批注的全部工具”进入，199 已实点 | 不能把系统菜单 AX 当成顶部 Document - More 的布局。系统菜单的完整条件和快捷键仍待对照。07 |
 | 顶部 Document - More | 175 有书签显示 Remove、180 无书签显示 Add；295 确认 Edit PDF Pages→Crop→Go to Page 相对顺序，另有 Extend 等组 | 顶部“文档与工作区设置”在普通PDF中开八个既有入口加Extend模式组，297 实点 Crop 位于书签后/跳页前；旧 186 居中失败→187 修复保留 | 仍是菜单子集；页编辑剩余来源、Extend摘录/关联/完整菜单及其他剩余行、图标、点击区域和全部条件未等价。05—07 |
 | Crop 裁边/扩页 | 289 灰底、原页、八红手柄、Crop/Done；290 左内裁、291 Done 返回、292 重开保留；293 外拖过冲未保存，294 恢复初始。原版全部页范围和裁为一点恢复来自官方说明 | 298—303 八手柄、内裁保存重开、Esc 取消；307—308 外扩白边和四页缩略图更新；309—313 新增区笔迹 Undo/Redo/最终 Undo；315—321 真停用启用/重开后保留，323/28 项比较通过 | 原版内容/页面与宿主边框不同，未作全尺寸像素等价；特殊恢复、导出、异形页/原 CropBox 外内容未完成；四向旋转/另一阅读器/擦除套索由真实 PDF.js 合成回归覆盖。11、16 |
-| Edit PDF Pages | 281—283 页内操作覆盖与 Add Page 四项；285 当前页后插入空白2/5，286 上移1/5后 Remove/Up 禁用，287 下移，288 删除恢复四页。284 为坐标失败，旋转本轮未点击 | 已接入；独立页编辑样例10—18实点空白插页/上移/下移/旋转/删除/重开，22项限定比较通过，见 [阶段记录](P1PDF基础页编辑验收.md) | PDF/本地图片插页与本机相机真实拍摄已完成列明插件验证；原版Files最终插入及照片Use Photo输出仍待复核；编辑后PDF导出列明范围实现并通过插件验证，入口/尺寸策略及复杂结构仍未等价；撤销/恢复列明范围已通过，见下行；原版旋转未实点，不能称旋转已完成原版对照。11.2—11.7 |
-| 页编辑 Undo/Redo、恢复删除页 | 本轮原版03—07确认顶部Undo/Redo插空白、删除及撤销删除；02系统菜单与08—09退出后动作未确证，见[11.7页编辑撤销与恢复](P1页编辑撤销与删除页恢复验收.md) | 插件21—45实点插页/删除/移动/旋转Undo/Redo、编辑控件保持、清Redo、退出后撤销及重载。26项最终比较通过 | 原版移动/旋转撤销、批注/书签恢复、退出/跨重载规则及同尺寸视觉未测。插件历史仅当前阅读器会话；11.7列明验证通过，完整等价保留 |
-| Add Page → Camera | 本轮原版实拍→Retake→Cancel；黑底无标题580×640pt、快门/Cancel、拍后Retake/Use Photo；原版未点Use Photo，输出尺寸/插页未验收。命名证据01、02、02b、45 | AVFoundation/AppKit公开实现；实际1760×1328拍摄、Retake、Use Photo、独立附件及真实重载；Cancel/⌘W/切文档退出/清理通过，样例恢复。见[验收与证据](P1原生相机模板与真实拍摄验收.md) | 多设备/iPhone、原版最终照片输出、全部窗口像素和Photos真实成功选图未完成；重编译临时签名可能再次触发系统权限，11.5保持部分完成 |
-| File → Export → Export Document | 本轮真实选页/Clear/Annotated/Page Range/格式PDF/系统Save并输出四页，证据01—03；Contents范围未点验，原版同编辑组合/全部批注未测 | 学习集与文档→Export Document及命令；全屏缩略选页、范围、批注页，实际六页插页/旋转/裁边与可见插件批注导出；系统Save、Preview重开、真实重载通过，见[11.6验收](P1编辑后PDF导出验收.md) | Long Image禁用；入口/命名/尺寸策略和已有目标拒绝替换有差异；全部窗口视觉、复杂目录/表单/链接/原生批注、图片/特殊富文本、音频标记与大文档待验收。备用保存仅隔离取消及成功保存通过。11.6仍未完整等价 |
-| Extend 留白 | 原版三模式与Basic/Advanced/Favorites已观察；本轮选中Unique→Extend出现源高亮/空留白/自动脑图卡；删除留白保留来源 | 三模式与基础功能、文字选区/已有几何摘录关联、来源卡复用入脑图/定位、独立评论；真实重载及Undo/Redo通过，见[续轮验收](P1Extend摘录关联验收.md) | 11.8部分完成：直接区域拖选、普通留白成卡/评论完整联动、多脑图、完整菜单/精确视觉、图片/相机、独立评论区、虚拟页/导航、自动展开及原版持久化/拖动/导出/历史规则待完成；插件导出仅自动验证 |
+| Edit PDF Pages | 281—283 页内操作覆盖与 Add Page 四项；285 当前页后插入空白2/5，286 上移1/5后 Remove/Up 禁用，287 下移，288 删除恢复四页。284 为坐标失败，旋转本轮未点击 | 已接入；独立页编辑样例10—18实点空白插页/上移/下移/旋转/删除/重开，22项限定比较通过，见 [阶段记录](../archive/acceptance/p1-pdf-basic-page-edit.md) | PDF/本地图片插页与本机相机真实拍摄已完成列明插件验证；原版Files最终插入及照片Use Photo输出仍待复核；编辑后PDF导出列明范围实现并通过插件验证，入口/尺寸策略及复杂结构仍未等价；撤销/恢复列明范围已通过，见下行；原版旋转未实点，不能称旋转已完成原版对照。11.2—11.7 |
+| 页编辑 Undo/Redo、恢复删除页 | 本轮原版03—07确认顶部Undo/Redo插空白、删除及撤销删除；02系统菜单与08—09退出后动作未确证，见[11.7页编辑撤销与恢复](../archive/acceptance/p1-page-edit-undo-restore.md) | 插件21—45实点插页/删除/移动/旋转Undo/Redo、编辑控件保持、清Redo、退出后撤销及重载。26项最终比较通过 | 原版移动/旋转撤销、批注/书签恢复、退出/跨重载规则及同尺寸视觉未测。插件历史仅当前阅读器会话；11.7列明验证通过，完整等价保留 |
+| Add Page → Camera | 本轮原版实拍→Retake→Cancel；黑底无标题580×640pt、快门/Cancel、拍后Retake/Use Photo；原版未点Use Photo，输出尺寸/插页未验收。命名证据01、02、02b、45 | AVFoundation/AppKit公开实现；实际1760×1328拍摄、Retake、Use Photo、独立附件及真实重载；Cancel/⌘W/切文档退出/清理通过，样例恢复。见[验收与证据](../archive/acceptance/p1-native-camera-template-capture.md) | 多设备/iPhone、原版最终照片输出、全部窗口像素和Photos真实成功选图未完成；重编译临时签名可能再次触发系统权限，11.5保持部分完成 |
+| File → Export → Export Document | 本轮真实选页/Clear/Annotated/Page Range/格式PDF/系统Save并输出四页，证据01—03；Contents范围未点验，原版同编辑组合/全部批注未测 | 学习集与文档→Export Document及命令；全屏缩略选页、范围、批注页，实际六页插页/旋转/裁边与可见插件批注导出；系统Save、Preview重开、真实重载通过，见[11.6验收](../archive/acceptance/p1-edited-pdf-export.md) | Long Image禁用；入口/命名/尺寸策略和已有目标拒绝替换有差异；全部窗口视觉、复杂目录/表单/链接/原生批注、图片/特殊富文本、音频标记与大文档待验收。备用保存仅隔离取消及成功保存通过。11.6仍未完整等价 |
+| Extend 留白 | 原版三模式与Basic/Advanced/Favorites已观察；本轮选中Unique→Extend出现源高亮/空留白/自动脑图卡；删除留白保留来源 | 三模式与基础功能、文字选区/已有几何摘录关联、来源卡复用入脑图/定位、独立评论；真实重载及Undo/Redo通过，见[续轮验收](../archive/acceptance/p1-extend-excerpt-link.md) | 11.8部分完成：直接区域拖选、普通留白成卡/评论完整联动、多脑图、完整菜单/精确视觉、图片/相机、独立评论区、虚拟页/导航、自动展开及原版持久化/拖动/导出/历史规则待完成；插件导出仅自动验证 |
 | Show Document Tabs | 182—183 点击实际勾选框隐藏/恢复标签，菜单保持打开；文字行点击只高亮 | 195 隐藏、198 恢复，菜单保持打开；196—197 真实重载仍隐藏，四文档/PDF 第 3 页/0.432 缩放和导航保留，202 完整状态比较 | 插件整行 checkbox 可点击，与原版实际点击区域有差异；更多文档与窗口组合仍待核对。06—07 |
 | Read Settings | 203—209 实切五主题，选主题关闭弹层；210/216/217 模式选中与面板保持；211—215 未证实实际翻页 | 350px 锚定面板，五主题、PDF 两模式及 More Settings；240/253 模式切换保持弹层，241 Right 实显第 4 页；242—245 Sepia/Horizontal 真重载；267 最终 White/Vertical | 原版手势/动画及所有文档条件未通过；插件 Word/HTML 固定翻页禁用有实机证据。全媒体颜色、像素间距仍不等价。07、16 |
 | More Settings→UI Theme | 218 打开完整 Settings；219 五主题与图片颜色校正开关 | 246—248 两栏 UI Theme 子集，主题同步、选 Gray 保持、Close 退出 | 全套设置和图片原色校正未实现；不能把此子页称完整 Settings。07 |
@@ -46,9 +46,9 @@
 
 ## 原版 macOS Document 系统菜单的单场景记录
 
-来源：[59-mn4-document-menu.ax.txt](evidence/native-max-l4/59-mn4-document-menu.ax.txt)。以下仅对应该次打开菜单时的选中/禁用环境，不能扩大为永久可用性。后续 128 为新增菜单 AX；129—140 中实际打开的导航状态已另列在上表，不改写 59 当时的行为边界。
+来源：59-mn4-document-menu.ax.txt（`evidence/native-max-l4/59-mn4-document-menu.ax.txt`）。以下仅对应该次打开菜单时的选中/禁用环境，不能扩大为永久可用性。后续 128 为新增菜单 AX；129—140 中实际打开的导航状态已另列在上表，不改写 59 当时的行为边界。
 
-补充条件证据：[166-mn4-document-menu-bookmarked.ax.txt](evidence/native-max-l4/166-mn4-document-menu-bookmarked.ax.txt) 的当前页已有书签，**Add Bookmark 禁用、Remove Bookmark 可用**。与 59 对照只能确认这两个菜单项的条件变化；166 没有菜单截图，也没有逐项执行其他菜单动作。
+补充条件证据：166-mn4-document-menu-bookmarked.ax.txt（`evidence/native-max-l4/166-mn4-document-menu-bookmarked.ax.txt`） 的当前页已有书签，**Add Bookmark 禁用、Remove Bookmark 可用**。与 59 对照只能确认这两个菜单项的条件变化；166 没有菜单截图，也没有逐项执行其他菜单动作。
 
 | 分组 | 当时可用的入口 | 当时禁用的入口 | 行为验收边界 |
 |---|---|---|---|
@@ -61,18 +61,18 @@
 
 ## 顶部 Document - More 的本轮范围
 
-175/180/295 的顶部菜单与 59/128/166 的 macOS 系统菜单不是同一界面。[文档菜单阶段](P1文档菜单核心入口验收.md) 接入五个核心入口，随后新增 Read Settings、[Crop](P1PDF裁边与扩页验收.md) 和 [Edit PDF Pages](P1PDF基础页编辑验收.md)，普通PDF当前保留八个既有入口，新增Extend三段模式组，保持本轮观察的相对顺序；没有加入无功能占位行。
+175/180/295 的顶部菜单与 59/128/166 的 macOS 系统菜单不是同一界面。[文档菜单阶段](../archive/acceptance/p1-doc-menu-core-entries.md) 接入五个核心入口，随后新增 Read Settings、[Crop](../archive/acceptance/p1-pdf-crop-extend.md) 和 [Edit PDF Pages](../archive/acceptance/p1-pdf-basic-page-edit.md)，普通PDF当前保留八个既有入口，新增Extend三段模式组，保持本轮观察的相对顺序；没有加入无功能占位行。
 
 导出已从独立入口实现列明范围，不能称Document - More中的Export入口已等价。剩余Toggle Toolbar Mode、Extend剩余摘录/卡片关联/完整菜单、Margin Comment Area、Blank Background、Bi-Article Comparison、Attached Notebook、Show Scroll Bar、Handwriting on Top 及全套 Settings 继续核对。Crop特殊恢复和未测条件仍列缺口；11.6已验证列明裁边输出，全部原版输出语义未关闭。菜单出现仅证明入口存在，未执行动作仍标未测。
 
 ## 资料使用口径与下一步
 
 - [官方文档标签管理](https://manual.marginnote.com.cn/mn4/document-tab-management/) 与 [联动视图](https://manual.marginnote.com.cn/mn4/mind-map-document-linked-view/) 的文本快照保存在 `evidence/official-sources/`。官方描述不自动标为本机 L4 实测。
-- [官方文档导航](https://manual.marginnote.com.cn/mn4/search-view-document-table-contents-thumbnails/) 的快照为 `manual-document-navigation.txt`；五标签导航的本轮范围见 [文档导航验收](P1文档导航栏与来源定位验收.md)。
+- [官方文档导航](https://manual.marginnote.com.cn/mn4/search-view-document-table-contents-thumbnails/) 的快照为 `manual-document-navigation.txt`；五标签导航的本轮范围见 [文档导航验收](../archive/acceptance/p1-doc-navbar-source-anchor.md)。
 - [看板筛选手册](https://manual.marginnote.com.cn/mn4/card-grouping-board-precisely-filter-cards/) 用于编排后续场景。论坛 [68600](https://bbs.marginnote.com.cn/t/topic/68600) 的单节点多遮挡分别出题是需求讨论，不能当成已发布功能。
-- 页内文字、导航、手写撤销、文档菜单、[阅读设置](P1阅读主题与翻页验收.md) 及 [PDF Crop](P1PDF裁边与扩页验收.md) 有各自阶段验收。官方裁边与 Extend 来源分开保存，不能互相替代。当前11.4/11.5/11.6已完成各自列明范围，保留原版最终插入、设备/图库及导出等价缺口。11.7页编辑撤销/恢复列明范围已通过，原版完整历史规则与视觉保留；11.8 Extend基础实现及列明插件验收已通过，下一步仍补留白摘录/卡片关联/完整菜单、图片/虚拟页与视觉，再做11.9裁边剩余语义、其余菜单和全套设置，再补目录与模板；普通、空、选中、禁用、展开和重开逐状态记录。
+- 页内文字、导航、手写撤销、文档菜单、[阅读设置](../archive/acceptance/p1-reading-theme-pagination.md) 及 [PDF Crop](../archive/acceptance/p1-pdf-crop-extend.md) 有各自阶段验收。官方裁边与 Extend 来源分开保存，不能互相替代。当前11.4/11.5/11.6已完成各自列明范围，保留原版最终插入、设备/图库及导出等价缺口。11.7页编辑撤销/恢复列明范围已通过，原版完整历史规则与视觉保留；11.8 Extend基础实现及列明插件验收已通过，下一步仍补留白摘录/卡片关联/完整菜单、图片/虚拟页与视觉，再做11.9裁边剩余语义、其余菜单和全套设置，再补目录与模板；普通、空、选中、禁用、展开和重开逐状态记录。
 - 91 原版截图为 3024×1710，92 插件为 3024×1704，均为当前桌面捕获；页码、选区与节点内容不同，没有据此做像素验收。早期原版截图也有 2048×1536，不能跨尺寸宣称一模一样。
 
-2026-10-19 用户指出中间白区后复核：[空导航核对](evidence/navigation-blank-20261019/README.md)。原版打开空“手写标注”列表也保留白栏；此前两边展开状态未统一，不能将此图当成布局等价依据。插件现已收起导航，业务数据不变；没有按空列表自动隐藏改写原版行为。
+2026-10-19 用户指出中间白区后复核：空导航核对（`evidence/navigation-blank-20261019/README.md`）。原版打开空“手写标注”列表也保留白栏；此前两边展开状态未统一，不能将此图当成布局等价依据。插件现已收起导航，业务数据不变；没有按空列表自动隐藏改写原版行为。
 
-2026-10-19续轮：[Extend摘录关联](P1Extend摘录关联验收.md)。MN4选中Unique→Extend出现源高亮、空留白及当前设置下自动脑图卡；删除留白后来源仍在。插件文字选区与已有几何摘录菜单接入Extend，关联菜单提供编辑、Add to MindMap、定位和删除；真实重载/Undo/Redo通过。仍为功能子集，完整Basic/Advanced/Favorites及精确样式未等价；直接区域拖选、普通留白成卡/评论联动、多脑图、图片/评论区/虚拟页/自动展开和原版完整规则保留。Reader129/129、Workspace83/83及26/26最终比较通过。
+2026-10-19续轮：[Extend摘录关联](../archive/acceptance/p1-extend-excerpt-link.md)。MN4选中Unique→Extend出现源高亮、空留白及当前设置下自动脑图卡；删除留白后来源仍在。插件文字选区与已有几何摘录菜单接入Extend，关联菜单提供编辑、Add to MindMap、定位和删除；真实重载/Undo/Redo通过。仍为功能子集，完整Basic/Advanced/Favorites及精确样式未等价；直接区域拖选、普通留白成卡/评论联动、多脑图、图片/评论区/虚拟页/自动展开和原版完整规则保留。Reader129/129、Workspace83/83及26/26最终比较通过。
