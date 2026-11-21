@@ -3500,3 +3500,163 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - `npx tsc --noEmit` 通过；`hw-eraser` 240/240；`a19` 12/12；`review-long` 14/14；`px-gap` 298 总数、292 通过、0 超差、0 缺失、6 跳过。
 - `npm run verify` 串行两轮退出码均为 0，结果目录分别为 `/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-verify-1794816503752` 和 `/var/folders/t6/drs3g4rn65584bfmzxqhq4_r0000gn/T/marginstudy-verify-1794816811963`。
 - 未进行真实宿主或 Pad 验收；待异厂复核。
+
+## 2026-11-16 · R9-B1 断言返工
+
+- 留白图片断言改为记录 Canvas `strokeStyle` 的实际赋值；另补留白缩略图、留白导出和 PDF 笔迹导出断言。记录器在每次测试后恢复原始属性描述符。
+- 五次独立变异使用临时构建注入，每次只删除对应入口的颜色兜底；只执行五条无色断言，每次均为 4/5，错误原文分别为：
+  - 文档导航：`Error: colorless navigation stroke is not black`
+  - 留白图片：`Error: colorless extend media did not assign black`
+  - 留白缩略图：`Error: colorless extend thumbnail did not assign black`
+  - 留白导出：`Error: colorless extend export did not assign black`
+  - PDF 笔迹导出：`Error: colorless PDF ink export did not use black`
+- 无变异完整 `hw-eraser` 为 245/245；`npx tsc --noEmit` 退出 0；`a19` 12/12。两轮 verify 与 px-gap 正在串行运行，未完成前不计通过。
+- 变异日志位于 `/tmp/marginstudy-r9b1-mut-{navigation,media,thumbnail,export,pdf}.log`。下一步读取两轮 verify 和 px-gap 的实际结果，通过后提交任务范围文件。
+
+## 2026-11-16 · R9 笔色兜底和坐标参数
+
+- PDF 笔迹导出、文档导航笔迹预览及三处留白笔迹渲染统一使用 `INK_DEFAULT_COLOR` 兜底；卡片输入的 `reference` 类型收窄到坐标，保留 `viewScale: 1` 并注明兼容原因。
+- 新增无色导航 SVG 属性和留白图片像素断言。暂时移除导航兜底后，定向套件为 240/241，实际报错 `Error: colorless navigation stroke is not black`；恢复兜底后为 241/241。
+- `npx tsc --noEmit` 通过；`a19` 12/12；`px-gap` 292 通过、0 超差、0 缺失、6 跳过；`npm run verify` 串行两轮均 52/52，退出码 0。日志为 `/tmp/marginstudy-r9-verify1.log` 和 `/tmp/marginstudy-r9-verify2.log`。
+- 未进行真实宿主或 Pad 验收；待异厂复核。
+
+## 2026-11-16 · R10 窄屏页签 76px 下限
+
+- 根因（取证席实测 + 规划席读样式复核）：`styles-workspace.css:185` 基础规则的 `max-width:64%` 在 `@media(max-width:900px)` 分支内未被覆盖，而旧 `:187` 把 `min-width` 降到 0，故 756 三栏全开、页签条 clientWidth 33 时页签宽 20.836px（64%×32.56），标签按钮溢出到相邻页签盒内，`elementFromPoint` 命中后两个页签标题。
+- 修法：`@media (max-width:900px)` 内 `.ms-workspace-tab` 改为 `{width:auto;flex:1 0 76px;min-width:76px;max-width:none;}`，并移除依赖页签数的 `:has(.ms-workspace-tab:nth-child(3))` 分支；`≥901px` 默认规则一字未改（`px-gap` 292 通过未漂）。明确不给 `.ms-workspace-tabs`（条本身）加 `min-width`，条保持 33px、条内横向滚动。
+- 新增 `scripts/tab-width-guard.mjs`（纯 Node、无浏览器、无新依赖）：`min-width` < 76px 或页签仍受百分比 `max-width` 约束即退出 1。两条变异各自退出 1，恢复后 sha256 与变异前一致。
+- 门禁（规划席实跑）：`tsc --noEmit` 退出 0；`node src/pdf/hw-eraser-acceptance.mjs` 245/245；`a19` 12/12；`npm run verify` 串行两轮各 52/52；`px-gap` 298 总数、292 通过、0 超差、0 缺失、6 跳过；`node scripts/tab-width-guard.mjs` 退出 0。
+- 构建 `styles.css` md5 `c33c5e86ff807f7dd21d24fe14fbf098`。**（以下两条为同一节内的时间顺序记录）** 当时真实宿主 756 复测尚未进行（库内插件仍为 15:14 旧构建 `fb6c8533…`），`OVERLAP-AUDIT.md:12` 当时为「未关闭（部分成立）」。
+- 提交 `5d76c2b`（3 文件 `+28/−2`：`styles-workspace.css`、`scripts/tab-width-guard.mjs`、`src/annot/pen.ts` 一行注释）；`git status` 提交后只剩 `OVERLAP-AUDIT.md`、`PROGRESS.md` 两个 M。
+- 装库：旧构建备份到 `.obsidian/plugins/margin-study-backup-20261116-1930/`（`styles.css fb6c8533…` / `main.js 9197e724…`），新产物 `styles.css` md5 `c33c5e86ff807f7dd21d24fe14fbf098`（与仓库一致），安装后 grep `max-width:none` 命中。
+- 真实宿主 756 复测（规划席 CDP，同一窗口 reload 前后对照，`evidence/ovl-756-postfix-5d76c2b-20261116/`）：条 32.56×31 / clientWidth 33 不变，6 页签由 20.836px 变为 **76.000px**（`min-width:76px`、`max-width:none`），三栏变量 `--ms-library-width:206px` / `--ms-auxiliary-width:320px` / `--ms-reader-ratio:0.523006` 未变；6 页签 × 3 控件逐像素滚入后 `elementFromPoint` **18/18 命中自身、0 错命中**，修复前两条 FAIL-NEIGHBOR 不复现；1512 模拟视口页签仍 `64%×386=247.11`、`min-width:120px`（窄屏规则未泄漏）。
+- 注意：插件 reload 后首页「学习集」浮层会覆盖页签条，必须先点「关闭工具面板」再采样，否则命中全落在浮层上（首轮即如此误判）。
+- `OVERLAP-AUDIT.md` 该行改为「已关闭（规划席实测；取证席独立复跑在队）」。
+- 取证席独立复跑（`evidence/ovl-756-post-R10-20261116/`，23 文件 + `SHA256SUMS` 24/24 OK）：重新加载宿主后运行时注入样式表 md5 `c33c5e86…`（= 仓库 = 安装产物），窄屏规则被 `@media (max-width:900px)` 包裹；配置 B（条 clientWidth 33）6 页签 6/6 = 76.000px、`max-width:none`，配置 A（条 141）同；18 个控件 `elementFromPoint` 18/18 命中自身、FAIL-NEIGHBOR 0；12 次真实 CDP 点击 12/12 落在自身目标；条内滚动 `scrollLeft` 0↔423 可达；三栏渲染宽度 `206 / 160.563 / 146.438 / 240` 与修复前一致；756×760 临时高度复测后已复原 756×855。数字与本席实测一致，`OVERLAP-AUDIT.md:12` 定稿为「已关闭（规划席实测 + 取证席独立复跑，2026-11-16）」。
+- 遗留观察项（不阻断）：76px 页签里标题文字仍被裁（标题按钮内容宽 18px）；1512 宽取证席本轮未重测，沿用本席数据。
+- 取证席第二次独立复跑（`evidence/ovl-756-doctabs-r10-20261116/`，按要求新建目录，17 文件 + `SHA256SUMS` 17/17 OK，采集 21:12–21:15）：运行时注入样式表 md5 `c33c5e86…`（与仓库、验收库安装件三处同值），窄屏块被 `@media (max-width:900px)` 包裹；配置 B 条 `clientWidth 33 / scrollWidth 456 / maxScroll 423`，6 页签 `76.000×6`；标题+附件 12/12 PASS、另加关闭 6/6 PASS → 18/18、FAIL-NEIGHBOR 0；`B-middle` 第 2 页签附件中心 163 在条左界 239 之外记 NOT-VISIBLE、第 3 页签附件中心 239 PASS（各自滚入后命中自身）；配置 A 条 141 无回归；12 次真实点击 12/12 落在自身目标。本席复核了该目录：`shasum -a 256 -c` 17/17 OK，`capture.json` 的 `meta.css_blocks[0].md5`、`narrow_rule`、`media_wrapped` 与两条配置的 `minWidth/maxWidth/flex` 逐一读过，`clicks-B.json` 12 行 `landed_on_target`/`landed_on_own_tab` 各 12/12 true。
+- 复核席异厂签字（只读，未写工作树）：四题全部成立、**阻断项 0**。行号级依据：`@media (max-width:900px)` 块（`:186-188`）整块只有一条规则；`max-width:64%` 全文件仅 `:185` 一处且无 `!important`；含 `ms-workspace-tab` 的行中除 `:187` 外无一条在媒体块内设 `width/max-width/min-width/flex`；`:190` 的 `min-width:0;flex:1` 作用在按钮上；其余 `max-width:900px` 块里的 `tab` 全是 `.ms-bottom-scene-tab`。`pen.ts` 该提交只有 `+1` 注释行（`git show`），`delete ann.color` 全仓仅 `baseController.ts:1566`，函数入口 `:1552` 有 `type !== "pen"` 准入。无任何栏宽/CSS 变量改动，`:182`/`:183` 容器规则一行未动。
+- R10-followup（**已知判据偏弱，未在本包修**）：`scripts/tab-width-guard.mjs:4` 要求媒体条件整段等于 `(max-width:900px)`，`:9` 要求选择器 `trim()` 后恰等于 `.ms-workspace-tab`，`:22` 取 map 里最后一次赋值。复核席在 `/tmp` 副本上报了三种假绿，**本席在 `/tmp/r10v` 独立复现了三条（均 `PASS` 退出 0）**：① 另开 `@media (max-width:900px) and (max-height:600px){.ms-workspace-tab{max-width:64%;min-width:0}}` —— 脚本看不见（是否真赢取决于块序）；② 900 块内加 `.ms-study-workspace .ms-workspace-tab{max-width:64%;min-width:0}` —— **特异性真赢，属实际回归**；③ 基础规则改 `max-width:64%!important` —— **真赢，属实际回归**。这三种写法当前文件里都不存在，故不影响本次签字；`:has` 单独承载 76px 的写法反而是红的。硬化方向：媒体条件改 `/@media[^{]*\(max-width:\s*900px\)[^{]*\{/`、选择器按「含 `.ms-workspace-tab`」纳入并按特异性取最强、加一条基础 `:185` 无 `!important` 的断言。
+- 其余两条建议项（不阻断）：去 64% 上限后 ≤900px 且 1–2 页签时页签可超条宽 64%（旧行为被兜住），当前证据只有 6 页签场景；`pen.ts:14` 注释里「当前不可达」是静态结论，无断言保护。
+- 取证席第三次独立复跑（`evidence/ovl-756-postfix-recheck-20261116/`，9 文件 + `SHA256SUMS`，本席复核 `shasum -a 256 -c` **9/9 OK**，采集 21:17）：安装件与仓库 `styles.css` 双 md5 `c33c5e86…` / 258841 B；`controls18` 逐行 verdict **18 PASS / 0 其他**；`former_fail` 四条：第 2 页签附件中心 163 在条左界 239 外记 NOT-VISIBLE（命中处为「从电脑导入文档」），第 3 页签附件中心 239 PASS（`文档附件：PDF页编辑验收.pdf`），两条滚入 255.5 后各自命中自身 → 跨页签误命中不复现；1512 模拟视口 6 页签 `247.109×6`、`min-width:120px`、`max-width:64%`、`media900=false`，清除后回 756 / `76.000×6`；`after_clear` 条 `cw 33`。附带视口扫描 `sweep-901-1300.json`：900 走窄屏 76px；901–1199 实测 120px（基础 `min-width:120px` 托底，`min>max` 时 64% 让位，R10 前后一致，非回归）；1200 起 64% 生效 142.68 → 1300 的 176.15。
+- R10-followup 补一条相邻断点：守卫只解析 ≤900px 块，901–1199 的实际宽度由基础 `:185` 的 `min-width:120px` 决定 —— 若日后把基础 `min-width` 调小或把 `max-width:64%` 改小，那一带会重新塌缩而守卫仍 `PASS`。与已记录的三条假绿同属判据覆盖不足，不阻断本次结论（该区间 R10 未改，实测宽度与 R10 前一致）。
+- R9 复核席一张迟到的卡片在其 Q3 里称「第三条渲染路径漏了兜底：`workspace/documentNavigation.ts:417` 直接 `setAttribute("stroke", ann.color)`，无色时写字面 `undefined`、笔画整条不可见」，并称 `pdf/exportAnnotations.ts:72` 走 `#111111`。**本席核为不成立（该卡指向的是旧修订）**：HEAD `5d76c2b` 的 `src/workspace/documentNavigation.ts:424` 已是 `line.setAttribute("stroke", ann.color ?? INK_DEFAULT_COLOR)`，且该文件相对 HEAD 无改动（`git diff --stat` 为空）；`src/pdf/exportAnnotations.ts:79` 同样是 `color(ann.color ?? INK_DEFAULT_COLOR)`。全仓 `INK_DEFAULT_COLOR` 兜底点共 6 处（`pen.ts:140/629`、`documentNavigation.ts:424`、`exportAnnotations.ts:79`、`extendNavigation.ts:35`、`extendMedia.ts:30`、`extendExport.ts:135`），不存在「只有两路兜底」的缺口。**不新增待办**；唯一残留的是「导航预览这一路没有像素/属性断言护着」（与 `pen.ts:14` 注释无断言同类，建议项）。
+
+## 2026-11-19 · F04 分享包设置隔离
+
+价值是分享学习集时保护本地授权与库级偏好。ZIP 主载荷取学习集对象、文档和模板。历史 JSON 沿用学习集范围，旧 v1 包读取保持兼容。
+
+- [x] F04-01：当前设置与历史快照各种入 7 个不同假标记。`history=all` 导出 1 条实际历史。证据 `evidence/f04-20261119/F04-01-02-scan.json`。
+- [x] F04-02：主载荷及全部历史 JSON 的禁止字段和假标记均命中 0。修复前同一断言复现 9 个禁止字段和 7 个假标记。证据 `evidence/f04-20261119/F04-01-02-scan.json`、`evidence/f04-20261119/F04-02-before-scan.json`。
+- [x] F04-03：旧 v1 包新建与并入后分别重开 Store，目标库设置 31 个顶层键逐字段相等。证据 `evidence/f04-20261119/F04-03-settings-snapshots.json`。
+- [x] F04-04：`npx tsc --noEmit` 退出 0。证据 `evidence/f04-20261119/F04-04-tsc.log`。
+- [x] 定向 verify 退出 0。导出 13/13、导出界面 5/5、导入 8/8。首跑缺少隔离副本生成的 `styles.css`，构建后复跑通过。证据 `evidence/f04-20261119/verify-targeted-rerun.results.json`。
+- [x] 两轮串行全量 verify 各 52/52、退出 0。首跑留白缩放断言退出 1。证据 `evidence/f04-20261119/verify-full-1-first-error.log`、`evidence/f04-20261119/verify-full-2.results.json`、`evidence/f04-20261119/verify-full-3.results.json`。
+
+交付清单和自述位于 `evidence/f04-20261119/RESULT.json` 和 `evidence/f04-20261119/note.md`。隔离构建 `main.js` SHA-256 为 `4572fc5eacd53bc56db34090cd79e17fe429da876d9183f182cbe5423f203b66`。真实 Obsidian 和 Pad 待现场核验。
+
+## 2026-11-19 · F02 复习迁移与导入重试
+
+价值是迁库保住复习进度。导入失败后可重试，资料只落一套。
+
+- [x] A1：EV-01 原种子跨库重开后为 1/2/1/1，两条到期值逐字一致。追加包外夹具验证包外记录为 0。证据 `evidence/f02-20261119/F02-A1-frozen-EV01.json`、`evidence/f02-20261119/final-fixtures/F02-A1.json`。
+- [x] A2：附件 SHA-256、目标 `documentAttachments`、原件 SHA-256 与双向批注引用已核。最终构建在隔离 Obsidian 中实际打开附件，卡片从第 2 页回到导入副本第 1 页并高亮 `EV01-P1-ALPHA`。同名原件哈希相同。证据 `evidence/f02-20261119/host-page-edits-retest/RESULT.json`、`a2-05-landing-highlight.png`。
+- [x] A3：第 2 个文件、侧车写入和最终主数据保存失败均无半套。另核主数据原子改名生效前后两条路径。证据 `evidence/f02-20261119/final-fixtures/F02-A3.json`、`evidence/f02-20261119/final-fixtures/F02-A3-atomic-main.json`。
+- [x] A4：回滚中断后重开并重试、成功后重复请求、双 Store 并发并入，各自只保留一套。证据 `evidence/f02-20261119/final-fixtures/F02-A4.json`。
+- [x] A5：旧 v1 两条入口重开后目标设置相等。疑似旧半套给出提示并保留原数据。证据 `evidence/f02-20261119/final-fixtures/F02-A5-legacy-partial.json`、`evidence/f02-20261119/final-fixtures/F02-A5-settings-snapshots.json`。
+- [x] 定向 `verify` 4/4、`tsc` 均退出 0。证据 `evidence/f02-20261119/verify-targeted-final.results.json`、`evidence/f02-20261119/tsc-final.log`。
+- [x] 最终隔离构建连续两轮全量回归均为 52/52，退出 0，构建件 SHA-256 复算一致。证据 `evidence/f02-20261119/verify-final-2.results.json`、`evidence/f02-20261119/verify-final-3.results.json`、`evidence/f02-20261119/build-final-products.sha256`。
+- [x] F04 最终集成构建装库及宿主 T07 复扫。五件安装 SHA-256 相同，实际菜单导出 3 条非空历史。主载荷及每条历史的禁止字段与 14 个假标记均命中 0。证据 `evidence/f02-20261119/host-page-edits-retest/build-identity.json`、`t07-scan.json`。
+
+隔离构建 `main.js` SHA-256 为 `5c1172c4de71f5b1f83f1664a70ef05b7689eef381af3dd51674a3592f277fa4`。全量首轮复现 F04 首跑相同的留白缩放断言，后两轮通过。装库包与合成资料已齐备。当前会话只挂载 Browser。数据层已用原夹具与宿主样式适配器核验。恢复首个动作是由有桌面权限的取证席装入同一隔离构建，走实际附件按钮、卡片回跳和 `history=all` 导出。执行席按项目提交约定保留工作区，用基线提交加源码哈希定位隔离构建。
+
+### F02 宿主导入修复
+
+- [x] 原集成构建的 F04 实际分享菜单导出 6 条历史。主载荷和历史 JSON 的禁止字段与 14 个假标记均命中 0。证据 `evidence/f02-20261119/host/F04-T07-export-history-all.zip`、`evidence/f02-20261119/host/F04-T07-scan.json`。
+- [ ] 原集成构建 A2 FAIL，A5 宿主 BLOCKED。Obsidian 1.12.7 在目标已存在时拒绝适配器 `rename`，实际导入回滚。全新合成隔离库也复现。独立 `rename` 探针确认目标内容和暂存文件都保留。证据 `evidence/f02-20261119/host/RESULT.json`、`evidence/f02-20261119/host/a2-rename-probe.json`。
+- [x] 严格适配器在旧提交路径复现同一错误。桌面改用同目录原子替换，首次创建仍由适配器提交。无桌面文件系统路径时，已有数据经 `DataAdapter.process` 核对当前数据再提交。修复后导入回归 14/14，`npx tsc --noEmit` 退出 0。证据 `evidence/f02-20261119/host-fix/F02-A3-desktop-replace.json`、`evidence/f02-20261119/host-fix/F02-A3-atomic-main.json`、`evidence/f02-20261119/host-fix/verify-import-before.log`。
+- [x] 定向验证 4/4，修复构建全量第 1 轮为 52/52，两项均退出 0。证据 `evidence/f02-20261119/host-fix/verify-targeted.results.json`、`evidence/f02-20261119/host-fix/verify-full-1.results.json`。
+- [x] 修复构建全量第 2 轮为 52/52，退出 0。两轮串行，留白缩放失败均未复现。证据 `evidence/f02-20261119/host-fix/verify-full-2.results.json`。
+
+修复包 `evidence/f02-20261119/host-fix/F02-host-fix-build.zip`，`main.js` SHA-256 为 `88e3b9b035f71b6daf3458684af5e19c995076b24054edd5e27015e71b455f2e`。下一步是在合成隔离库复跑 A2 附件与回跳、A5 旧包两入口和 F04 实际菜单扫描。当前执行会话仅挂载 Browser，桌面宿主验收需取证席完成。旧宿主证据留存。
+
+### F02 宿主复测与锚点夹具修正
+
+- [x] 五件安装哈希与修复构建一致。Obsidian 1.12.7 重启后加载 1.4.0。证据 `evidence/f02-20261119/host-retest/build-identity.json`。
+- [x] A2 附件按钮打开 `EV01-附件.pdf`，正文命中 `ATTACHMENT-VERIFIED`。同名原件前后 SHA-256 一致。卡片回到 `EV01-主流程 (2).pdf` 第 1 页。证据 `evidence/f02-20261119/host-retest/RESULT.json`。
+- [x] A5 旧 v1 新建、并入均成功。重开后五份设置快照复算逐字段相同。证据 `evidence/f02-20261119/host-retest/RESULT.json` 及 `a5-S1-before-new.json` 至 `a5-S5-after-merge-reopen.json`。
+- [x] F04-T07 在修复构建的实际菜单导出 3 条非空历史。主载荷与全部历史的禁止字段复扫为 0。取证原扫描的 14 个假标记命中 0。证据 `evidence/f02-20261119/host-retest/F04-T07-scan.json` 与同目录导出 ZIP。
+- [ ] A2 批注页区待复验。`host-retest/a2-landing-geometry.json` 实测旧夹具的高亮仅 `0.42×0.028px`。旧夹具 `ann-a` 和 `ann-b` 写入 `0..1` 页面比例，却没有声明坐标空间。`projectRect` 按协议将未声明的矩形当作旧视口单位。取证席的点坐标对照能正常绘制。执行席从同一份 PDF 的目标文字提取 PDF 点坐标，生成新夹具与预期几何 `evidence/f02-20261119/host-coordinate-fixture/`。文档、附件、卡片和复习数据均保持一致。产品源码和构建保持同一版本。
+
+恢复首个动作是在全新合成隔离库用同一 `88e3b9b0…` 构建实际导入新夹具，从第 2 页点卡片回到第 1 页，核对锚点 `EV01-P1-ALPHA` 的可见几何。复验前保留旧夹具的 A2 FAIL。修复与宿主复测清单合计 61 份产物 SHA-256 全部复算一致。
+
+### F02 空 PDF 页编辑阻断回跳
+
+- [ ] 点坐标夹具的如实导入态仍 FAIL。`pdfPageEdits={version:1,pages:[]}` 被写入磁盘。`validatePdfPageEdits` 拒绝空列表，文档加载中止。取证席只在内存移除空记录后，原 PDF 可读 2 页，高亮覆盖 `EV01-P1-ALPHA`，几何误差 ≤ 0.00001。该结果只证明坐标对齐。证据 `evidence/f02-20261119/host-coordinate-retest/RESULT.json`、`a2c-pageedits-mechanism.json`。
+- [x] 导入提交前移除 v1 空页编辑。重开后保留非空编辑的顺序与旋转、书签及同名原件元数据。新断言修复前失败，修复后导入 15/15。定向验证 4/4、`tsc` 退出 0。证据 `evidence/f02-20261119/host-page-edits-fix/F02-A2-pdf-page-edits.json`、`import-before.log`、`targeted.results.json`。
+- [x] 用同一份点坐标 ZIP 重放导入。重开后导入副本不含空页编辑。原件与副本 SHA-256 各自一致，两条 PDF 点坐标和回链保持。证据 `evidence/f02-20261119/host-page-edits-fix/F02-A2-frozen-fixture.json`。
+- [x] 空页编辑修复后的全量 verify 第 1 轮为 52/52，退出 0。证据 `evidence/f02-20261119/host-page-edits-fix/full-1.results.json`。
+- [ ] 第 2 轮在 `study-ui` 第 20 个套件退出 1。混合遮罩断言测得纵向位移 1.125px，阈值 1px。通过和失败轮的 UI 夹具构建与样式哈希一致，夹具不含学习集导入模块。证据 `evidence/f02-20261119/host-page-edits-fix/full-2-study-ui.log`、`full-2-study-ui-contrast.json`。
+- [x] 串行复跑第 1 轮（总第 3 轮）为 52/52，退出 0。混合遮罩位移失败未复现。证据 `evidence/f02-20261119/host-page-edits-fix/full-3.results.json`。
+- [x] 串行复跑第 2 轮（总第 4 轮）为 52/52，退出 0。五件构建件 SHA-256 与打包时一致。证据 `evidence/f02-20261119/host-page-edits-fix/full-4.results.json`、`build-products.sha256`。
+- [x] 用新构建和同一冻结 ZIP 在全新合成库实际导入并重开，副本可读 2 页。点击卡片后落在 `EV01-主流程 (2).pdf` 第 1 页，可见高亮 `58.3×8.6px`，归一化矩形最大误差 `0.000016`。证据 `evidence/f02-20261119/host-page-edits-retest/RESULT.json`、`a2-landing-theme.json`。
+
+### F02 执行席收口
+
+- [x] A5 在最终构建的实际宿主完成旧 v1 新建与并入。重开后的五份设置快照逐字段相同，共 30 个键。证据 `evidence/f02-20261119/host-page-edits-retest/RESULT.json`、`a5-S1-before-new.json` 至 `a5-S5-after-merge-reopen.json`。
+- [x] 最终构建与当前工作区七个源码及模块文档哈希相符，包内及三套隔离库的五件安装件哈希一致。执行席复算七份阶段清单共 200 条证据引用，重新扫过宿主 T07 ZIP，核对五份设置快照和回跳截图。复核席独立定向 4/4，构建及源码增量无阻断。证据 `evidence/f02-20261119/closeout/RESULT.json`。
+
+F02 的 A1–A5 均通过，交规划席核签。最终 `main.js` SHA-256 为 `e7d49f096813138d81b150edbf71b1d37410b4fbf654a016e51dbe31ff4ff1e1`。当前 HEAD 为 `5d76c2b`，修复构建以该基线和工作区源码哈希定位。F04 宿主 T07 通过，单独提交及从新提交构建的门槛仍待有权限的席位处理。阶段性 FAIL 和首轮回归日志继续保留。收口自述 `evidence/f02-20261119/closeout/note.md`。
+
+## 2026-11-20 · F08 桌面宿主验收
+
+价值是保护升级冲突中的两版数据，并保证导入中断后可安全重试。
+
+- [x] 1. v2 升级冲突停写，重开后分别恢复本地候选和外部版本。停写 Notice 原文、`mainDirty=true`/`saveTimer=null`、磁盘零覆写（`external=after-blocked-flush=7c9ceaee…`）、冷重启 PID 变化且冲突态保持、两分支 `.resolved/` 双版原件哈希互证。证据 `evidence/f08-f78573e-20261121/forensics/a1-local/`、`a1-remote/`、`a1-local-reflush/`、`a1-remote-reflush/`；复判 `audit/VERDICT.md` A1-1..4 均 PASS。
+- [x] 2. v3 导入在替换前、替换后中断，重开引用完整，重试只生成一套。原生 `NSOpenPanel` 全链路（`AXEnabled=true`、选中、确认、面板关闭、落盘含 studySetId 与 2 条 reviewLogs）；`SIGKILL` 后 `after-import=post-exit=7bd7b18e…` 零字节差；`after-restart=final-exit=5e327f33…`；重试 `after-restart=after-retry=final-exit=5f0ba2dc…`，`cmp` 零字节差、8 类集合全 2/2 零重复。证据 `forensics/a3-native-panel/`、`a3-before/`、`a3-after/`；判据修订见 `RULING-A3-2.md`。
+- [x] 3. 取证席在登记的修复构建上采集四场景重启前后的 `git status --short`、库内文件清单和 SHA-256 原文。复算清单 292/292，重算 12 份差分一致。证据 `evidence/f08-20261120-recheck/{a1-local,a1-remote,a3-before,a3-after}/{before-restart,after-restart}.{git-status,files,sha256}.txt` 及各目录 `diff-before-restart-after-restart.*.diff`。
+- [x] 4. 每条通过即登记证据路径。14 条断言逐条复算命令、期望值、实测值与依据行号见 `evidence/f08-f78573e-20261121/audit/recompute-report.json`，终裁见同目录 `VERDICT.md`（14/14 PASS）。
+- [x] 5. `npx tsc --noEmit`、两轮连续全量 `npm run verify`、`node scripts/px-gap.mjs` 均退出 0。原文 `.agent-artifacts/f08-executor/gates-final/`。
+
+当前 HEAD `b176c6b`。源码 8/8、仓库内安装件 4/4 与 `evidence/f08-20261120/builds.json` 相符。统筹席批准使用全新临时库及端口 9333。执行席证据写 `evidence/f08-20261120/`。
+
+### 派包修正 · 执行席修复和配方
+
+统筹席将第 1–4 条宿主验收与采证交独立取证席。执行席交构建、门禁和配方。先前宿主试跑保留为开发自测，见 `evidence/f08-20261120/SMOKE-NOT-ACCEPTANCE.md`。
+
+- [x] `b176c6b` 的两轮全量 verify 均在 `review-a20` 打包退出 1，px-gap 同类错误退出 1。原文 `evidence/f08-20261120/host-gates/verify-{1,2}/review-a20.log`、`px-gap.log`。
+- [x] 修复桌面模块的运行时加载，A20 定向 6/6。原文 `.agent-artifacts/f08-executor/gates/a20-focus.log`。
+- [x] 桌面模块修复后 `npx tsc --noEmit` 退出 0。原文 `.agent-artifacts/f08-executor/gates/tsc.log`、`tsc.exit`。
+- [ ] 桌面模块修复后的全量第 1 轮走到 `ai-a23` 后退出 1。旧测试宿主缺少 `vault.adapter`，Store 加载无法用它作 WeakMap 键。原文 `.agent-artifacts/f08-executor/gates/verify-1/ai-a23.log`。第 2 轮在更新 A23 夹具前中断，见 `verify-2.interrupted.txt`。
+- [x] 最终工作树 `npx tsc --noEmit` 退出 0。原文 `.agent-artifacts/f08-executor/gates-final/tsc.log`、`tsc.exit`。
+- [x] A23 补齐空库适配器后，定向回归 13/13。原文 `.agent-artifacts/f08-executor/gates-final/tail-focus.log`。
+- [ ] 最终工作树首跑全量回归在 `pdf-hw-eraser` 得 244/245，退出 1。原文 `Error: frame resize did not follow both paper axes`，见 `.agent-artifacts/f08-executor/gates-final/verify-1/pdf-hw-eraser.log`。保留原断言和源码，后续按全量顺序复跑。
+- [x] 修复后首个全量 `npm run verify` 通过（最终工作树第 2 次）53/53，退出 0。原文 `.agent-artifacts/f08-executor/gates-final/verify-2.log`、`verify-2.exit`、`verify-2/results.json`。
+- [x] 修复后第二个连续全量 `npm run verify` 通过（最终工作树第 3 次）53/53，退出 0。原文 `.agent-artifacts/f08-executor/gates-final/verify-3.log`、`verify-3.exit`、`verify-3/results.json`。
+- [x] 修复后 `node scripts/px-gap.mjs --out .agent-artifacts/f08-executor/gates-final/px-gap` 退出 0。原文 `{"total":298,"passed":292,"exceeded":0,"missing":0,"skipped":6}`，见 `.agent-artifacts/f08-executor/gates-final/px-gap.log`、`px-gap.exit`。
+- [x] 复跑配方及两套构建哈希已登记。配方 `.agent-artifacts/f08-executor/recipe.md`。修复构建 `main.js` 为 `44c324b80b75311c5d9aa35c62071541d31bce548fb32a3ffaf3c83e0acba2ea`。建库脚本已核对 ZIP 清单，未继续执行宿主验收。
+
+执行席交付 `.agent-artifacts/f08-executor/note.md`、`RESULT.json` 和 `recipe.md`。A1/A3 及重启前后采证仍由独立取证席执行。
+
+### 独立取证回收
+
+执行席复算了独立取证清单和四场景差分。取证按修复构建 `44c324b8…` 执行，交接包同时指定原登记构建 `b5298433…`。原登记安装件 4/4、HEAD 源码 8/8 复算一致。修复构建的三个源码哈希与取证清单一致。现有独立证据对应修复构建，先前原构建宿主记录标为开发自测。A3 取证经实际导入对话框向文件输入注入 ZIP，再走插件的 `change` 处理链。补充原生会话打开了文件面板，未完成选件。证据 `evidence/f08-20261120-recheck/note.md`、`RESULT.json`。
+
+第 1、2 条等待统筹席确认适用的构建和现有 A3 证据口径。恢复后先按确认口径逐条核对并登记，若指定原构建则向取证席索取该构建的独立复跑原文。
+
+### F08 收口（基线重锁与终裁 PASS）
+
+基线裁定：三处桌面模块延迟加载改动提交为 `f78573e`（`git status --porcelain -- src/` 零行），据此重建四件套 `main.js 44c324b8…ba2ea` / `manifest 5bb313c4…` / `styles 2a1c1ae0…` / `pdf.worker a2197f11…`。实测该 commit 产物与先前脏树构建**逐字节相同**，故规划席「两构建行为不等价」的理由不成立，但「必须锁单一干净 commit」的结论仍执行。旧证据整体归档 `evidence/_archive/`，本轮交付根 `evidence/f08-f78573e-20261121/`，按 `exec/`（执行席）、`forensics/`（取证席）、`audit/`（复核席）单写者隔离。
+
+- [x] 阶段 1 干净构建与四门禁：`tsc` 退出 0 且日志 0 字节；`verify` 两轮各 53/53；`px-gap` 298 总数 / 292 通过 / 0 超差 / 0 缺失 / 6 跳过；尾焦点 13/13。`exec/RESULT.json` 175 文件 `shasum -c` 175/175。证据 `evidence/f08-f78573e-20261121/exec/`。
+- [x] 阶段 2 五场景实机取证：`forensics/RESULT.json` 156 文件复算 156/156，磁盘 157 = 156 + 1。证据 `evidence/f08-f78573e-20261121/forensics/`。
+- [x] `A3-2` 判据修订：原「四哈希全等」作废（冷重启必然触发来源指纹回填与 SRS 日期归一，`store.ts:351`、`main.ts:550`、`studySetImport.ts:325,367`），改为「两对原始字节相等 + 跨重启白名单逐字段校验」。裁定 `RULING-A3-2.md`，用户选定方案 A。
+- [x] `M1-1` 重采：CDP 50 条读取全为 getter，零 `store.flush()`；外部注入改单次 `rename(2)`（`writeCount=1`）；「主动 flush 抛错」改由真实 UI「备份数据（MarginStudy）」入口取得。复核席逐行核过驱动源码，无越界。
+- [x] 终裁：`PASS`，14/14 断言通过（G0-1、G0-2、G1-1..4、A1-1..4、A3-1..3、M1-1），0 PARTIAL，0 FAIL。证据 `audit/VERDICT.md`、`audit/recompute-report.json`。
+
+本轮新开两张卡（不在 F08 范围，未在本卡修）：
+
+1. **冷重启写盘**：冷启动触发一次 `mutate` 与落盘（指纹回填 + SRS 日期归一），源于导入期未填 `byteSize/sha256` 且写入日期串。属产品行为缺陷。
+2. **save-now 冲突态零反馈**：`src/main.ts:362-365` 回调 `.catch(() => {})` 吞异常，`src/model/store.ts:715` 在 `desktopConflict === e` 时不再 `report`，用户在冲突态点「立即保存学习库」界面无任何提示。属交互可观测性缺口。
+
+未覆盖边界（承前登记）：A1 合并分支、A3 merge 模式、原生面板无遮挡截图（本轮 panel.png 被系统授权提示遮挡，事实以 `ax-panel*.json` 为准）、非 macOS 与 Pad。
