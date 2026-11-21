@@ -1,7 +1,7 @@
-import { ReaderView } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/readerView';
+import { ReaderView } from '__PROJECT__/src/pdf/readerView';
 import { ReaderView as RealReaderView } from 'marginstudy-real-reader';
-import { PDFDocument, StandardFonts } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/node_modules/pdf-lib/es/index.js';
-import { clientRectToPdfRect, pdfRectToCssRect, pdfRectsIntersect } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/anchors/pdfGeometry';
+import { PDFDocument, StandardFonts } from '__PROJECT__/node_modules/pdf-lib/es/index.js';
+import { clientRectToPdfRect, pdfRectToCssRect, pdfRectsIntersect } from '__PROJECT__/src/anchors/pdfGeometry';
 
 export function croppedPdf(rotations=[0]): ArrayBuffer {
   const stream='BT /F1 12 Tf 100 600 Td (Synthetic CropBox reference) Tj ET\n';

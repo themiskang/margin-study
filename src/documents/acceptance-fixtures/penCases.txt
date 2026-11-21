@@ -1,16 +1,16 @@
-import { PenController, paintInkStrokes, startPenPerf, exportPenPerf, resetPenPerf } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/annot/pen';
-import { aiServiceFor } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/ai/panel';
-import { eraseInk, selectInk, transformSelectedInk } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/annot/penGeometry';
-import { ReaderView } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/readerView';
+import { PenController, paintInkStrokes, startPenPerf, exportPenPerf, resetPenPerf } from '__PROJECT__/src/annot/pen';
+import { aiServiceFor } from '__PROJECT__/src/ai/panel';
+import { eraseInk, selectInk, transformSelectedInk } from '__PROJECT__/src/annot/penGeometry';
+import { ReaderView } from '__PROJECT__/src/pdf/readerView';
 import { ReaderView as RealReaderView } from 'marginstudy-real-reader';
-import { PDFDocument } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/node_modules/pdf-lib/es/index.js';
-import { loadPdf } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/pdfjs';
-import { reviewDrawingInput } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/review/drawing';
-import { DocumentNavigation } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/workspace/documentNavigation';
-import { extendMediaImage } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/extendMedia';
-import { renderExtendThumbnail } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/extendNavigation';
-import { exportExtendCard } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/extendExport';
-import { flattenPdfAnnotations } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/exportAnnotations';
+import { PDFDocument } from '__PROJECT__/node_modules/pdf-lib/es/index.js';
+import { loadPdf } from '__PROJECT__/src/pdf/pdfjs';
+import { reviewDrawingInput } from '__PROJECT__/src/review/drawing';
+import { DocumentNavigation } from '__PROJECT__/src/workspace/documentNavigation';
+import { extendMediaImage } from '__PROJECT__/src/pdf/extendMedia';
+import { renderExtendThumbnail } from '__PROJECT__/src/pdf/extendNavigation';
+import { exportExtendCard } from '__PROJECT__/src/pdf/extendExport';
+import { flattenPdfAnnotations } from '__PROJECT__/src/pdf/exportAnnotations';
 
 function pointer(overlay:SVGSVGElement,host:HTMLElement,type:string,x:number,y:number,extra:any={}){
  const bounds=host.getBoundingClientRect();overlay.dispatchEvent(new PointerEvent(type,{clientX:bounds.left+x*bounds.width,clientY:bounds.top+y*bounds.height,pointerId:1,button:0,isPrimary:true,bubbles:true,...extra}));

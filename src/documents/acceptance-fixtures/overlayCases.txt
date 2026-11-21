@@ -1,9 +1,9 @@
-import { ReaderView } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/readerView';
+import { ReaderView } from '__PROJECT__/src/pdf/readerView';
 import { ReaderView as RealReaderView } from 'marginstudy-real-reader';
-import { WordReaderView } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/word/wordReader';
-import { DocumentReaderView } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/documents/documentReader';
-import { loadOverlayImage } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/annot/overlay';
-import { createPageCollection, readPageCollection, reorderPageReferences } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/documents/pageCollection';
+import { WordReaderView } from '__PROJECT__/src/word/wordReader';
+import { DocumentReaderView } from '__PROJECT__/src/documents/documentReader';
+import { loadOverlayImage } from '__PROJECT__/src/annot/overlay';
+import { createPageCollection, readPageCollection, reorderPageReferences } from '__PROJECT__/src/documents/pageCollection';
 import { croppedPdf } from './anchorCases';
 
 const control=(root:ParentNode,label:string)=>root.querySelector(`[aria-label="${label}"]`) as HTMLElement;

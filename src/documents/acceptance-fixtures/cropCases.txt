@@ -1,6 +1,6 @@
 import { ReaderView as RealReaderView } from 'marginstudy-real-reader';
 import { croppedPdf } from './anchorCases';
-import { DocumentNavigation } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/workspace/documentNavigation';
+import { DocumentNavigation } from '__PROJECT__/src/workspace/documentNavigation';
 
 export async function runCropAcceptance(context:any) {
   const {test,assert,wait,plugin,add,app,realPdf}=context;

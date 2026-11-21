@@ -54,7 +54,7 @@ function check(name, fn) {
   catch (error) { checks.push({ name, passed: false, info: String(error) }); console.error("✗ " + name + "\n  " + error); }
 }
 async function verifyWithPython(apkgPath, manifestPath) {
-  const args = [join(project, "scripts/apkg-verify.py"), apkgPath];
+  const args = [join(project, "scripts/verify/apkg-verify.py"), apkgPath];
   if (manifestPath) args.push("--manifest", manifestPath);
   const { stdout } = await exec("python3", args, { cwd: project });
   return JSON.parse(stdout);

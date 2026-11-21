@@ -3,7 +3,7 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { runBrowserSync } from "../../scripts/ego-harness.mjs";
+import { runBrowserSync } from "../../scripts/verify/ego-harness.mjs";
 
 const dir = await mkdtemp(join(tmpdir(), "margin-perf1-"));
 try {

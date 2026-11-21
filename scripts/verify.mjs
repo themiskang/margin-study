@@ -15,7 +15,7 @@ console.log(`verify output: ${relative(root,outDir)}`);
 const allSuites=[
   ["typecheck","node_modules/typescript/bin/tsc","--noEmit"],
   ["build","esbuild.config.mjs","production"],
-  ["pdf-save","scripts/pdf-save-acceptance.mjs"],
+  ["pdf-save","scripts/verify/pdf-save-acceptance.mjs"],
   ["pdf-hw-eraser","src/pdf/hw-eraser-acceptance.mjs"],
   ["word-hw-eraser","src/word/hw-eraser-acceptance.mjs"],
   ["review","src/review/acceptance.mjs","--audit"],

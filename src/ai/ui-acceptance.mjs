@@ -8,13 +8,13 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { build } from "esbuild";
-import { runBrowser } from "../../scripts/ego-harness.mjs";
+import { runBrowser } from "../../scripts/verify/ego-harness.mjs";
 const exec = promisify(execFile), here = dirname(fileURLToPath(import.meta.url)), project = resolve(here,"../.."), temporary = await mkdtemp(join(tmpdir(),"marginstudy-ai-ui-"));
 const evidence=join(process.env.MARGINSTUDY_VERIFY_DIR||tmpdir(),"ai-ui-acceptance-evidence");await mkdir(evidence,{recursive:true});
 const red="iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKElEQVR4nO3NsQ0AAAzCMP5/un0CNkuZ41wybXsHAAAAAAAAAAAAxR4yw/wuPL6QkAAAAABJRU5ErkJggg==";
 await writeFile(join(temporary,"fixture.ts"),(await readFile(join(here,"ui-fixture.txt"),"utf8")).replaceAll("__PROJECT__",project));
 await writeFile(join(temporary,"red.png"),Buffer.from(red,"base64"));
-await writeFile(join(temporary,"styles.css"),(await readFile(join(project,"styles-base.css"),"utf8"))+"\n"+(await readFile(join(project,"styles-ai.css"),"utf8")));
+await writeFile(join(temporary,"styles.css"),(await readFile(join(project,"src/styles/styles-base.css"),"utf8"))+"\n"+(await readFile(join(project,"src/styles/styles-ai.css"),"utf8")));
 await writeFile(join(temporary,"index.html"),'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>AI 侧栏交互验收</title><link rel="stylesheet" href="/styles.css"><style>:root{--background-primary:#fff;--background-secondary:#f7f7f7;--background-modifier-border:#d8d8dc;--text-normal:#141416;--text-muted:#7b8490}*{box-sizing:border-box}body{margin:0;font:14px -apple-system,sans-serif;background:#f2f2f2}.top{height:71px;background:white;border-bottom:1px solid #ddd;padding:24px;color:#7b8490}.document{position:absolute;left:0;top:71px;width:725px;height:788px;background:white;border-right:1px solid #ddd;padding:72px 60px}.document h1{font-size:20px}.document p{max-width:530px;line-height:1.8}#host{position:absolute;right:0;top:71px;width:440px;height:788px;border-left:1px solid #ddd}#drag-card{position:absolute;left:870px;top:570px;width:170px;background:#ffffa6;border:1px solid #e3e2ac;padding:12px;border-radius:5px}#undo{position:absolute;left:870px;top:700px}</style><body><div class="top">MarginStudy · 合成阅读工作区</div><article class="document"><h1>L4 Sample Document - Alpha</h1><p>Synthetic test PDF for MarginStudy runtime verification.</p><p>Only the selected paragraph or dragged card is attached to the AI request.</p></article><div id="drag-card" draggable="true">Selected card<br>EXPLICIT_DRAG_CARD</div><button id="undo">撤销库变更</button><div id="host"></div><script type="module" src="/fixture.js"></script></body></html>');
 await build({entryPoints:[join(temporary,"fixture.ts")],bundle:true,platform:"browser",format:"esm",target:"chrome120",outfile:join(temporary,"fixture.js"),plugins:[{name:"synthetic-host",setup(builder){
   builder.onResolve({filter:/^(obsidian|crypto|http|https)$/},args=>({path:args.path,namespace:"synthetic"}));

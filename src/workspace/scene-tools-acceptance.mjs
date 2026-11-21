@@ -15,7 +15,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { build } from "esbuild";
-import { runBrowser } from "../../scripts/ego-harness.mjs";
+import { runBrowser } from "../../scripts/verify/ego-harness.mjs";
 
 const exec = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
@@ -39,7 +39,7 @@ await writeFile(join(temporary, "crypto.ts"),
   `const hashes=${JSON.stringify(hashes)};export function createHash(){let input;return{update(value){input=value;return this;},digest(){if(!(input in hashes))throw new Error('Unlisted synthetic hash input: '+input);return hashes[input];}}}`);
 await writeFile(join(temporary, "unused-network.ts"),
   "export function request(){throw new Error('AI network transport is outside this fixture');}");
-const styles = await Promise.all(["styles.css", "styles-reader.css", "styles-mindmap.css", "styles-organize.css", "styles-workspace.css"]
+const styles = await Promise.all(["styles.css", "src/styles/styles-reader.css", "src/styles/styles-mindmap.css", "src/styles/styles-organize.css", "src/styles/styles-workspace.css"]
   .map(name => readFile(join(project, name), "utf8")));
 await writeFile(join(temporary, "styles.css"), styles.join("\n"));
 await writeFile(join(temporary, "index.html"),
@@ -80,7 +80,7 @@ try {
   if (state.fatal) throw new Error("fixture fatal: " + state.fatal);
 
   const probe = JSON.parse((await browser("eval", "window.sceneToolsProbe()")).stdout);
-  await writeFile(join(project, "scene-tools-probe.json"), JSON.stringify(probe, null, 2));
+  await writeFile(join(temporary, "scene-tools-probe.json"), JSON.stringify(probe, null, 2));
   const own = JSON.parse((await browser("eval", "({results:window.results||[],errors:window.testErrors||[]})")).stdout);
   const ownFailed = (own.results ?? []).filter(item => !item.passed);
 
@@ -196,7 +196,7 @@ try {
     .map(control => ({ sceneId: scene.sceneId, order: control.order, nativeLabel: control.nativeLabel,
       status: control.status, note: control.note, contractKey: control.contractKey })));
   const gapSummary = map.totals;
-  await writeFile(join(project, "scene-tools-gaps.json"), JSON.stringify({ totals: gapSummary, gaps }, null, 2));
+  await writeFile(join(temporary, "scene-tools-gaps.json"), JSON.stringify({ totals: gapSummary, gaps }, null, 2));
 
   const report = {
     schema: "a04-scene-tools-candidate-result-v1",
@@ -217,13 +217,13 @@ try {
     fixtureSuite: { checks: (own.results ?? []).length, failed: ownFailed.length, errors: own.errors ?? [] },
     probe,
   };
-  await writeFile(join(project, "scene-tools-results.json"), JSON.stringify(report, null, 2));
+  await writeFile(join(temporary, "scene-tools-results.json"), JSON.stringify(report, null, 2));
 
   console.log(`${report.totals.passed}/${report.totals.checks} scene-tool checks passed`);
   console.log(`declared gaps: ${JSON.stringify(gapSummary)}`);
-  console.log(`Results: ${join(project, "scene-tools-results.json")}`);
-  console.log(`Gaps: ${join(project, "scene-tools-gaps.json")}`);
-  console.log(`Probe: ${join(project, "scene-tools-probe.json")}`);
+  console.log(`Results: ${join(temporary, "scene-tools-results.json")}`);
+  console.log(`Gaps: ${join(temporary, "scene-tools-gaps.json")}`);
+  console.log(`Probe: ${join(temporary, "scene-tools-probe.json")}`);
   if (state.fatal || report.totals.failed) {
     console.error(JSON.stringify(results.filter(item => !item.passed), null, 2));
     process.exitCode = 1;

@@ -1,4 +1,4 @@
-import { ReaderView } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/readerView';
+import { ReaderView } from '__PROJECT__/src/pdf/readerView';
 
 export async function runDocumentNotebookAcceptance({test,assert,wait,plugin,add,app,htmlController,selection}:any){
  await test('Document notebooks isolate all annotations and handwriting layers, preserve legacy IDs, and source jumps switch notebooks',async()=>{

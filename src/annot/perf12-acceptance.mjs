@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
-import { runBrowserSync } from "../../scripts/ego-harness.mjs";
+import { runBrowserSync } from "../../scripts/verify/ego-harness.mjs";
 
 const directory = mkdtempSync(join(tmpdir(), "marginstudy-perf12-"));
 try {

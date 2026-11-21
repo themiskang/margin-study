@@ -8,7 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { build } from "esbuild";
-import { runBrowser } from "../../scripts/ego-harness.mjs";
+import { runBrowser } from "../../scripts/verify/ego-harness.mjs";
 
 const exec = promisify(execFile), here = dirname(fileURLToPath(import.meta.url));
 const project = await realpath(resolve(here, "../.."));
@@ -29,7 +29,7 @@ await writeFile(join(temporary, "obsidian.ts"), [
 // actual host selector/declarations here, with deterministic fixture variables.
 const hostButtonStyles = 'button:not(.clickable-icon){color:var(--text-color);background-color:var(--interactive-normal);box-shadow:var(--input-shadow)}';
 await writeFile(join(temporary, "index.html"), '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>MarginStudy 复习交互验收</title><link rel="stylesheet" href="/styles.css"><style>:root{--background-primary:#fff;--background-secondary:#f4f6fb;--background-modifier-border:#d8deeb;--text-normal:#1d2433;--text-muted:#606c80;--interactive-accent:#5269dc;--text-color:#222;--interactive-normal:#efefef;--input-shadow:0 1px 2px #0002}body{padding:24px;font:16px/1.5 system-ui;color:#1d2433;background:#f4f6fb}.scope{margin:16px 0;padding:16px;background:#fff;border-radius:10px}' + hostButtonStyles + '</style><body><h1>复习交互验收 · 合成数据</h1><button id="begin">打开复习</button> <button id="history">打开复习记录</button><div class="scope"><h2>画布 A · 强调即挖空</h2><div id="scope-a"></div></div><div class="scope"><h2>画布 B · 普通强调</h2><div id="scope-b"></div></div><div id="cards" class="scope"></div><script type="module" src="/fixture.js"></script></body></html>');
-await writeFile(join(temporary, "styles.css"), (await readFile(join(project, "styles.css"), "utf8")) + "\n" + (await readFile(join(project, "styles-review.css"), "utf8")));
+await writeFile(join(temporary, "styles.css"), (await readFile(join(project, "styles.css"), "utf8")) + "\n" + (await readFile(join(project, "src/styles/styles-review.css"), "utf8")));
 await build({ entryPoints: [join(temporary, "fixture.ts")], bundle: true, platform: "browser", format: "esm", target: "chrome120", outfile: join(temporary, "fixture.js"),
   plugins: [{ name: "synthetic-host", setup(builder) {
     builder.onResolve({ filter: /^obsidian$/ }, () => ({ path: join(temporary, "obsidian.ts") }));

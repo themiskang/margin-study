@@ -11,16 +11,15 @@ import { build } from "esbuild";
 const exec = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
 const project = await realpath(resolve(here, "../.."));
-const { runBrowser } = await import(pathToFileURL(join(project, "scripts/ego-harness.mjs")).href);
+const { runBrowser } = await import(pathToFileURL(join(project, "scripts/verify/ego-harness.mjs")).href);
 const fixtureRoot = join(here, "acceptance-fixtures");
 const temporary = await realpath(await mkdtemp(join(tmpdir(), "marginstudy-reader-")));
 const reportPath = join(temporary, "results.json");
 const pollLogPath = join(temporary, "acceptance-poll.log");
 const READY_TIMEOUT_MS = 120_000;
 const POLL_INTERVAL_MS = 250;
-const sampleRoot = "/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发";
 for (const name of ["harness", "obsidian", "fakePdf", "fakeMammoth", "anchorCases", "recallCases", "readerCases", "speechCases", "penCases", "notebookCases", "layerCases", "documentNotebookCases", "pageCollectionCases", "overlayCases", "cropCases", "pageEditCases", "pdfExportCases", "extendCases"]) {
-  let source = (await readFile(join(fixtureRoot, name + ".txt"), "utf8")).split(sampleRoot).join(project);
+  let source = (await readFile(join(fixtureRoot, name + ".txt"), "utf8")).replaceAll("__PROJECT__", () => project);
   const labels = [["Add Blank Page","添加空白页"],["Add Page From Files","从文件添加页面"],["Add Page From Photos","从相册添加页面"],["Add Page From Camera","拍照添加页面"],["Rotate Page","旋转页面"],["Add Selected","添加所选"],["Add All","全部添加"],["Close PDF Page Picker","关闭 PDF 选页"],["Cancel Camera","取消拍照"],["Capture Page","拍摄页面"],["Camera Device","相机设备"],["Done","完成"]];
   for (const [before, after] of labels) source = source.replaceAll(`aria-label="${before}"`, `aria-label="${after}"`);
   source = source.replaceAll("button(2,'Rotate Page')", "button(2,'旋转页面')").replaceAll("textContent==='Extend'", "textContent==='留白'");
@@ -33,7 +32,7 @@ for (const name of ["harness", "obsidian", "fakePdf", "fakeMammoth", "anchorCase
 await copyFile(join(fixtureRoot, "index.html"), join(temporary, "index.html"));
 await copyFile(join(fixtureRoot, "synthetic.pdf"), join(temporary, "synthetic.pdf"));
 await copyFile(join(project, "styles.css"), join(temporary, "styles.css"));
-await copyFile(join(project, "styles-reader.css"), join(temporary, "styles-reader.css"));
+await copyFile(join(project, "src/styles/styles-reader.css"), join(temporary, "styles-reader.css"));
 await copyFile(join(project, "pdf.worker.js"), join(temporary, "pdf.worker.js"));
 await writeFile(join(temporary,"unused-network.ts"), "export function request(){throw new Error('AI network is outside isolated reader fixture');}");
 await build({ entryPoints: [join(temporary, "harness.ts")], bundle: true, platform: "browser", format: "iife", target: "chrome120",

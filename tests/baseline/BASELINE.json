@@ -1,0 +1,7 @@
+{
+  "source": "${MARGINSTUDY_LEGACY_SOURCE}",
+  "workdir": ".",
+  "installed": "${OBSIDIAN_VAULT}/.obsidian/plugins/margin-study",
+  "baselineVersion": "1.2.12",
+  "baselineSha256": "be2bbfecf7f32a558c53af1f2ae2bfee10178e9f84b3024b5c5c60721b376fe9"
+}

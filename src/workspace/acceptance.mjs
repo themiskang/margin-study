@@ -8,7 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { build } from "esbuild";
-import { runBrowser } from "../../scripts/ego-harness.mjs";
+import { runBrowser } from "../../scripts/verify/ego-harness.mjs";
 
 const exec=promisify(execFile),here=dirname(fileURLToPath(import.meta.url)),project=await realpath(resolve(here,"../.."));
 const workspaceAnchors=JSON.parse(await readFile(join(here,"anchors-502.json"),"utf8")).anchors;
@@ -39,7 +39,7 @@ const hashes=Object.fromEntries(fixturePaths.map(path=>[path,createHash("sha256"
 await writeFile(join(temporary,"fakePdf.ts"),(await readFile(join(temporary,"fakePdf.ts"),"utf8"))+"\nexport async function initPdfWorker() {}\n");
 await writeFile(join(temporary,"crypto.ts"),`const hashes=${JSON.stringify(hashes)};export function createHash(){let input;return{update(value){input=value;return this;},digest(){if(!(input in hashes))throw new Error('Unlisted synthetic hash input: '+input);return hashes[input];}}}`);
 await writeFile(join(temporary,"unused-network.ts"),"export function request(){throw new Error('AI network transport is outside this workspace UI fixture');}");
-const styles=await Promise.all(["styles.css","styles-reader.css","styles-mindmap.css","styles-organize.css","styles-workspace.css"].map(name=>readFile(join(project,name),"utf8")));
+const styles=await Promise.all(["styles.css","src/styles/styles-reader.css","src/styles/styles-mindmap.css","src/styles/styles-organize.css","src/styles/styles-workspace.css"].map(name=>readFile(join(project,name),"utf8")));
 await writeFile(join(temporary,"styles.css"),styles.join("\n"));
 await writeFile(join(temporary,"index.html"),'<!doctype html><meta charset="utf-8"><title>MarginStudy workspace synthetic acceptance</title><link rel="stylesheet" href="/styles.css"><style>html,body{margin:0;height:100%}#fixtures{height:100vh;width:100vw}.test-item-view{height:100%;width:100%;display:flex;flex-direction:column}.test-item-view>.view-content{height:100%;width:100%;overflow:hidden}#test-menu{position:fixed;top:65px;right:8px;z-index:9999;background:white;border:1px solid #aaa;display:flex;flex-direction:column}#test-menu button{padding:8px}</style><main id="fixtures"></main><script type="module" src="/fixture.js"></script>');
 await build({entryPoints:[join(temporary,"acceptance-fixture.ts")],bundle:true,platform:"browser",format:"esm",target:"chrome120",outfile:join(temporary,"fixture.js"),plugins:[{name:"public-synthetic-host-adapters",setup(builder){

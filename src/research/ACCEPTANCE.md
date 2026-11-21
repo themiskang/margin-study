@@ -16,4 +16,4 @@ MN4 L4：八类菜单、底栏布局、Bing→Wikipedia→后退/前进本轮通
 
 研究PDF在学习集中的移除→Undo→Redo→重新加入→同id/来源/字节→来源定位已通过；系统Trash Put Back未测，与学习集关系恢复分开记录。验收库本轮文件已正常UI回收，原版打印测试文件已从样例移除；用户明确答复“允许，仅删除这个测试副本”后，已核对完整文件名并仅永久删除该资料库测试副本；Local/WebDownloads为空，原样例文档及空Review已恢复核对。第07包已关闭，证据见closeout/cleanup-authorized.json、mn4-test-deleted.ax.txt/png及mn4-final.ax.txt/png。
 
-最新证据在 `evidence/package07-20261024/closeout/`；完整矩阵和版本见 `分阶段任务/验收报告/07-结果.md`。旧本机A/B证据不会替代真实外站证据，所有登录/验证码限制继续有效。
+最新证据在 `evidence/package07-20261024/closeout/`；完整矩阵和版本见 [阶段报告](../../docs/archive/phased-tasks/acceptance-reports/07-results.md)。旧本机A/B证据不会替代真实外站证据，所有登录/验证码限制继续有效。

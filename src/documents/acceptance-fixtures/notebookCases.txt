@@ -1,5 +1,5 @@
-import { createNotebookBytes, readNotebookMetadata, NOTEBOOK_STYLES } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/documents/notebookFormat';
-import { createNotebook, updateNotebook, openNewNotebook } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/documents/notebook';
+import { createNotebookBytes, readNotebookMetadata, NOTEBOOK_STYLES } from '__PROJECT__/src/documents/notebookFormat';
+import { createNotebook, updateNotebook, openNewNotebook } from '__PROJECT__/src/documents/notebook';
 import { ReaderView as RealReaderView } from 'marginstudy-real-reader';
 
 export async function runNotebookAcceptance({test,assert,wait,plugin,app,realPdf,configs}:any){
