@@ -14,7 +14,7 @@
 
 src/audio/voice.ts；src/ocr/ocr.ts；src/annot/；src/mindmap/handwriting*；src/pdf/nativePhotoPicker.ts；朗读及原生适配相关文件。
 
-以上路径均相对开发目录 `/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发`；只读取本次需要的文件和函数，不批量输出整个目录。
+以上路径均相对开发目录 `${MARGINSTUDY_REPO}`；只读取本次需要的文件和函数，不批量输出整个目录。
 
 ## 具体关闭要求
 

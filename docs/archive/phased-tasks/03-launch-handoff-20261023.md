@@ -14,7 +14,7 @@ Settings、目录编辑/拖动、阅读布局、精确文字选择、自由元�
 
 src/pdf/readerView.ts、outline.ts；src/word/wordReader.ts、htmlAnnot.ts；src/annot/；src/anchors/；src/documents/readingPosition.ts；src/workspace/documentNavigation.ts；相关 styles。
 
-以上路径均相对开发目录 `/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发`；只读取本次需要的文件和函数，不批量输出整个目录。
+以上路径均相对开发目录 `${MARGINSTUDY_REPO}`；只读取本次需要的文件和函数，不批量输出整个目录。
 
 ## 具体关闭要求
 

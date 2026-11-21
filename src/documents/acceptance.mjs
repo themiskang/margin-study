@@ -18,9 +18,8 @@ const reportPath = join(temporary, "results.json");
 const pollLogPath = join(temporary, "acceptance-poll.log");
 const READY_TIMEOUT_MS = 120_000;
 const POLL_INTERVAL_MS = 250;
-const sampleRoot = "/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发";
 for (const name of ["harness", "obsidian", "fakePdf", "fakeMammoth", "anchorCases", "recallCases", "readerCases", "speechCases", "penCases", "notebookCases", "layerCases", "documentNotebookCases", "pageCollectionCases", "overlayCases", "cropCases", "pageEditCases", "pdfExportCases", "extendCases"]) {
-  let source = (await readFile(join(fixtureRoot, name + ".txt"), "utf8")).split(sampleRoot).join(project);
+  let source = (await readFile(join(fixtureRoot, name + ".txt"), "utf8")).replaceAll("__PROJECT__", () => project);
   const labels = [["Add Blank Page","添加空白页"],["Add Page From Files","从文件添加页面"],["Add Page From Photos","从相册添加页面"],["Add Page From Camera","拍照添加页面"],["Rotate Page","旋转页面"],["Add Selected","添加所选"],["Add All","全部添加"],["Close PDF Page Picker","关闭 PDF 选页"],["Cancel Camera","取消拍照"],["Capture Page","拍摄页面"],["Camera Device","相机设备"],["Done","完成"]];
   for (const [before, after] of labels) source = source.replaceAll(`aria-label="${before}"`, `aria-label="${after}"`);
   source = source.replaceAll("button(2,'Rotate Page')", "button(2,'旋转页面')").replaceAll("textContent==='Extend'", "textContent==='留白'");

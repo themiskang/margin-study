@@ -27,7 +27,7 @@ MarginStudy 是一个对标 **MarginNote 4** 的 Obsidian 社区插件，把「P
 
 ### 2.1 当前已安装状态（你的 yan vault）
 
-- 安装目录：`/Users/tanlihen/文档/yan/.obsidian/plugins/margin-study/`
+- 安装目录：`${OBSIDIAN_VAULT}/.obsidian/plugins/margin-study/`
 - 文件：`main.js` / `manifest.json` / `styles.css` / `pdf.worker.js` / `ocr.swift`（共 5 个，无其它依赖）
 - 已在 `community-plugins.json` 中启用（id：`margin-study`）
 

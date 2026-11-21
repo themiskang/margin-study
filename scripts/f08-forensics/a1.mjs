@@ -3,12 +3,13 @@
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { CDP, launchObsidian, waitWorkspace, waitExit, shaFile, sha256, jsonWrite, sleep, now, portFree } from "./lib.mjs";
 
 const [choice] = process.argv.slice(2);            // "local" | "remote"
 const caseName = `a1-${choice}`;
 const out = process.env.F08_OUT;
-const repo = "/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发";
+const repo = fileURLToPath(new URL("../../", import.meta.url));
 const stepsLog = path.join(out, "steps.log");
 process.env.F08_STEPS_LOG = stepsLog;
 const events = [];

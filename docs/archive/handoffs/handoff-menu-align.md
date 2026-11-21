@@ -42,7 +42,7 @@ A12/A14/A15/A16/A18/A19/A20/A21/A22(判定满足)/A23/A24/A26/A27/A28/A29 均已
 - Hermes 默认模型 `Qoder CN: dfmodel` 已禁用，`-m auto/deepseek-v4.1-flash-1017` 可跑通（后台可能长时间静默，需轮询产物而不是只看日志）。
 
 ## 环境与入口
-- 仓库：`/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发`
+- 仓库：`${MARGINSTUDY_REPO}`
 - 桌面隔离库：同级 `MarginStudy阶段一隔离库-20261026`
 - Pad 隔离库：`/storage/emulated/0/Documents/MarginStudy-A30-Isolated`（OPPO OPD2409，`/Applications/O+Connect.app/Contents/Resources/daemon/bin/adb`，勿 kill-server）
 - 证据：`evidence/acceptance-20261106/`（RESULT.md §1–§24 + 各 CC/HERMES-*.md）

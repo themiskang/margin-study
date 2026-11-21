@@ -23,7 +23,7 @@
 ## 2. 只允许写入的目录
 
 ```text
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/evidence/package02-20261022/mn4-qoder-20261022/
+${MARGINSTUDY_REPO}/evidence/package02-20261022/mn4-qoder-20261022/
 ```
 
 所有截图、导出的 PDF/PNG、说明都放这里；不要覆盖已有 evidence 文件。任务结束前不要改 `02-结果.md`（由 02 下一执行方整合）。

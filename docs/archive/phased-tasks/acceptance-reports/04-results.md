@@ -14,7 +14,7 @@
 
 改动文件：`src/review/templates.ts`、`src/model/store.ts`、`src/study/acceptance.mjs`、`src/study/organize-ui-fixture.txt`。没有样式源变化；沿用现有编辑器和预览外观。
 
-仅部署到 `/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy验收库/.obsidian/plugins/margin-study` 的 `main.js` 与 `styles.css`。部署前后 data.json 相同（SHA256 `2982bee20e9e735940c425ac05719973db560fc5597855259b383616be673bf2`）；两次真实 Obsidian 重载均确认插件界面可用。开发与安装产物：
+仅部署到 `${MARGINSTUDY_TEST_VAULT}/.obsidian/plugins/margin-study` 的 `main.js` 与 `styles.css`。部署前后 data.json 相同（SHA256 `2982bee20e9e735940c425ac05719973db560fc5597855259b383616be673bf2`）；两次真实 Obsidian 重载均确认插件界面可用。开发与安装产物：
 
 | 产物 | SHA256 |
 |---|---|

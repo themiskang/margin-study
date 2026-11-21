@@ -1,8 +1,8 @@
-import { SpeechCoordinator, speechChunks } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/audio/speech';
-import { readableDomText } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/audio/speechControls';
-import { ReaderView } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/readerView';
-import { DocumentReaderView } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/documents/documentReader';
-import { WordReaderView } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/word/wordReader';
+import { SpeechCoordinator, speechChunks } from '__PROJECT__/src/audio/speech';
+import { readableDomText } from '__PROJECT__/src/audio/speechControls';
+import { ReaderView } from '__PROJECT__/src/pdf/readerView';
+import { DocumentReaderView } from '__PROJECT__/src/documents/documentReader';
+import { WordReaderView } from '__PROJECT__/src/word/wordReader';
 
 class VoiceEngine {
  spoken:any[]=[];current:any=null;pauses=0;resumes=0;cancels=0;

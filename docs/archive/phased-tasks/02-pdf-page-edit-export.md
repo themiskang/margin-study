@@ -35,12 +35,12 @@
 | pdf.worker.js | `a2197f116566b0b80cab7a464f0b3955a66a509b52c1e51bc2783bf52c12ed8f` |
 | manifest.json | `905813cfbf218025870d606eea9b7592d91c4eeedd8ea8d78c6f3f642304e8a2`（1.2.12） |
 
-- 唯一部署目标：`/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy验收库/.obsidian/plugins/margin-study`。
+- 唯一部署目标：`${MARGINSTUDY_TEST_VAULT}/.obsidian/plugins/margin-study`。
 - 部署前备份：`evidence/package02-20261022/deploy-backup/before-{main.js,styles.css,pdf.worker.js}`（before-main 为旧版 `10316204…`）。
 - data.json：`b35b27e79583efd57ad98eab4d3cf3ca2679761fc5006b371045ec9205bd804c`，由真实宿主保存阅读/工作区状态造成，不是手工修改。
 - 两处保护 main.js 必须保持基线：`be2bbfecf7f32a558c53af1f2ae2bfee10178e9f84b3024b5c5c60721b376fe9`
-  - `/Users/tanlihen/WorkBuddy/2026-07-27-17-19-57/margin-study/main.js`
-  - `/Users/tanlihen/文档/yan/.obsidian/plugins/margin-study/main.js`
+  - `${MARGINSTUDY_LEGACY_SOURCE}/main.js`
+  - `${OBSIDIAN_VAULT}/.obsidian/plugins/margin-study/main.js`
 - 当前没有 Git。不要 `git reset`，不要用旧快照覆盖源码，不要替换验收库 data.json。
 - 01 包未关闭，且 01 报告仍记旧值 `db6aff9c…`；切回 01 时必须由 01 自己补写停点，不能代写、不能把 01 当已完成。
 
@@ -90,7 +90,7 @@
 ## 5. 复现、构建、部署
 
 ```bash
-cd /Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发
+cd ${MARGINSTUDY_REPO}
 node_modules/typescript/bin/tsc --noEmit --pretty false
 node scripts/verify.mjs build reader workspace
 

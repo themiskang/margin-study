@@ -1,6 +1,6 @@
-import { ReaderView } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/readerView';
-import { WordReaderView } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/word/wordReader';
-import { DocumentReaderView } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/documents/documentReader';
+import { ReaderView } from '__PROJECT__/src/pdf/readerView';
+import { WordReaderView } from '__PROJECT__/src/word/wordReader';
+import { DocumentReaderView } from '__PROJECT__/src/documents/documentReader';
 
 function pointer(host:HTMLElement,type:string,x:number,y:number){const overlay=host.querySelector('.ms-pen-overlay')!,rect=host.getBoundingClientRect();overlay.dispatchEvent(new PointerEvent(type,{clientX:rect.left+x*rect.width,clientY:rect.top+y*rect.height,pointerId:11,button:0,isPrimary:true,bubbles:true}));}
 export async function runLayerAcceptance({test,assert,plugin,add,app,htmlController}:any){

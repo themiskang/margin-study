@@ -21,11 +21,11 @@
 
 ## 保护与现场
 
-开发目录：`/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发`；仅部署验收库 `.obsidian/plugins/margin-study` 的main/styles（worker真需才核验），不覆盖data/manifest。无Git，改动前定向备份，不用旧源码快照覆盖共享实现。
+开发目录：`${MARGINSTUDY_REPO}`；仅部署验收库 `.obsidian/plugins/margin-study` 的main/styles（worker真需才核验），不覆盖data/manifest。无Git，改动前定向备份，不用旧源码快照覆盖共享实现。
 
 两处保护main基线均 `be2bbfecf7f32a558c53af1f2ae2bfee10178e9f84b3024b5c5c60721b376fe9`：
-- `/Users/tanlihen/WorkBuddy/2026-07-27-17-19-57/margin-study/main.js`
-- `/Users/tanlihen/文档/yan/.obsidian/plugins/margin-study/main.js`
+- `${MARGINSTUDY_LEGACY_SOURCE}/main.js`
+- `${OBSIDIAN_VAULT}/.obsidian/plugins/margin-study/main.js`
 
 保护正式插件、yan、真实笔记、Claudian配置；不清空Trash，不purge历史hidden/missing。完整data备份只留验收恢复目录，不复制包含真实相机内容的全data到开发证据。
 

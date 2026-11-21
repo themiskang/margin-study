@@ -1,6 +1,6 @@
-import { PDFDocument, rgb, degrees, StandardFonts } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/node_modules/pdf-lib/es/index.js';
+import { PDFDocument, rgb, degrees, StandardFonts } from '__PROJECT__/node_modules/pdf-lib/es/index.js';
 import { ReaderView as RealReaderView } from 'marginstudy-real-reader';
-import { createNotebookBytes } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/documents/notebookFormat';
+import { createNotebookBytes } from '__PROJECT__/src/documents/notebookFormat';
 export async function runExtendAcceptance({test,assert,wait,plugin,add,app}:any){
  await test('Positioned text paste preserves source sizes and resize handles capture pointers outside the frame',async()=>{
   const path='extend-rich-paste-resize.pdf';add(path,{bytes:createNotebookBytes({format:'marginstudy-notebook',version:1,id:'rich-paste',title:'Extend',style:'blank',pageCount:1,width:500,height:700,createdAt:'2026-10-21'})});const p=plugin();let view:any=new RealReaderView({app} as any,p);await view.onOpen();

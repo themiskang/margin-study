@@ -1,8 +1,11 @@
 node_modules/
 .tools/
-native/
+/native/*
+!/native/src/
 analysis/
 evidence/
+dist/
+/scripts/card-a-forensics/
 .local/
 .DS_Store
 
@@ -11,14 +14,10 @@ main.js
 styles.css
 pdf.worker.js
 
-# Git bundle 自排除，交接文本仍入库
-handoff-to-edict/margin-study.bundle
-handoff-to-edict/verify-final.log
 .agent-artifacts/
 
 # 兜底：换名的日志、bundle、增量缓存也不入库
 *.log
-handoff-to-edict/*.bundle
 *.tsbuildinfo
 .eslintcache
 .ctx-brief.md

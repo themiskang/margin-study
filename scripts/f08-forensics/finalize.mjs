@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 const root = process.env.F08_FORENSICS;
 const commit = "f78573e8b5f5660bdf19af26fc9fd0ac75cd14db";
@@ -150,7 +151,7 @@ walk(root);
 fs.writeFileSync(path.join(root, "RESULT.json"), json({
   package: "F08 f78573e 阶段 2 · 五场景实机取证",
   commit,
-  buildManifest: read("/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/evidence/f08-f78573e-20261121/exec/build-manifest.json").artifacts,
+  buildManifest: read(fileURLToPath(new URL("../../evidence/f08-f78573e-20261121/exec/build-manifest.json", import.meta.url))).artifacts,
   note: "files 以 forensics/ 为根；本清单不含 RESULT.json 自身。observations.json 只记录观测值，不含 PASS/FAIL。",
   scenes: { "a1-local": { criteria: "并发外部写 → 停写 → 冷重启 → 采用本地候选", dir: "a1-local/" }, "a1-remote": { criteria: "并发外部写 → 停写 → 冷重启 → 采用外部版本", dir: "a1-remote/" }, "a3-native-panel": { criteria: "真实导入按钮 + macOS 原生文件面板选件并确认", dir: "a3-native-panel/" }, "a3-before": { criteria: "导入落盘后立即 SIGKILL，post-exit 与重启/退出哈希与结构差分", dir: "a3-before/" }, "a3-after": { criteria: "导入 → 重启 → 重复导入同一 ZIP", dir: "a3-after/" } },
   fileCount: Object.keys(files).length,

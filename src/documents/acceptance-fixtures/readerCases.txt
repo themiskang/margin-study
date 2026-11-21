@@ -1,4 +1,4 @@
-import { ReaderView } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/readerView';
+import { ReaderView } from '__PROJECT__/src/pdf/readerView';
 
 export async function runReaderAcceptance({test,assert,wait,plugin,add,app}:any){
  await test('Recorded audio can be placed, undone, redone, deleted and restored through reader controls',async()=>{
@@ -6,7 +6,7 @@ export async function runReaderAcceptance({test,assert,wait,plugin,add,app}:any)
   Object.defineProperty(navigator.mediaDevices,'enumerateDevices',{configurable:true,value:async()=>[{kind:'audioinput',deviceId:'virtual',label:'Virtual input'},{kind:'audioinput',deviceId:'builtin',label:'Built-in microphone'}]});
   Object.defineProperty(navigator.mediaDevices,'getUserMedia',{configurable:true,value:async(options:any)=>{requested=options;return{getTracks:()=>[{stop(){}}]};}});
   (window as any).MediaRecorder=class{mimeType='audio/webm';ondataavailable:any;onstop:any;static isTypeSupported(){return true;}start(){}stop(){queueMicrotask(()=>{this.ondataavailable({data:new Blob(['RECORDED-AUDIO'])});this.onstop();});}};
-  add('recorded.docx',{content:'<p>Synthetic recording source.</p>'});const p=plugin(),v:any=new (await import('/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/word/wordReader')).WordReaderView({app} as any,p);await v.onOpen();await v.loadFileByPath('recorded.docx');
+  add('recorded.docx',{content:'<p>Synthetic recording source.</p>'});const p=plugin(),v:any=new (await import('__PROJECT__/src/word/wordReader')).WordReaderView({app} as any,p);await v.onOpen();await v.loadFileByPath('recorded.docx');
   try{v.getReaderToolbar().querySelector('[aria-label="语音批注"]').click();await wait(15);const input=document.querySelector('[aria-label="录音输入设备"]') as HTMLSelectElement;assert(input,'multiple inputs offered no device choice');input.value='builtin';(document.querySelector('[aria-label="确认输入并开始录音"]') as HTMLButtonElement).click();await wait(15);assert(requested.audio.deviceId.exact==='builtin','recording ignored selected input');const body=v.getBodyEl(),r=body.getBoundingClientRect();body.dispatchEvent(new MouseEvent('click',{bubbles:true,clientX:r.left+20,clientY:r.top+20}));await wait(70);
    assert(body.querySelector('[data-ann-id]')&&v.getEditHistoryState().canUndo,'recorded annotation has no undo');await v.undoLastEdit();assert(!body.querySelector('[data-ann-id]'),'recording undo left marker');await v.redoLastEdit();assert(body.querySelector('[data-ann-id]'),'recording redo lost marker');
    body.querySelector('[data-ann-id]').click();[...document.querySelectorAll('.ms-ann-pop button')].find((b:any)=>b.textContent==='删除').click();assert(!body.querySelector('[data-ann-id]'),'recording deletion failed');await v.undoLastEdit();assert(body.querySelector('[data-ann-id]'),'deleted recording not restored');
@@ -23,11 +23,11 @@ export async function runReaderAcceptance({test,assert,wait,plugin,add,app}:any)
   }finally{await v.onClose();(window as any).MediaRecorder=original;if(get)Object.defineProperty(navigator.mediaDevices,'getUserMedia',get);if(enumerate)Object.defineProperty(navigator.mediaDevices,'enumerateDevices',enumerate);else delete(navigator.mediaDevices as any).enumerateDevices;}
  });
  await test('Word source remains natively selectable when the desktop host disables inherited selection',async()=>{
-  add('selectable.docx',{content:'<p>Selectable source paragraph.</p>'});const p=plugin(),v:any=new (await import('/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/word/wordReader')).WordReaderView({app} as any,p);await v.onOpen();await v.loadFileByPath('selectable.docx');
+  add('selectable.docx',{content:'<p>Selectable source paragraph.</p>'});const p=plugin(),v:any=new (await import('__PROJECT__/src/word/wordReader')).WordReaderView({app} as any,p);await v.onOpen();await v.loadFileByPath('selectable.docx');
   const previous=document.body.style.userSelect;document.body.style.userSelect='none';try{assert(getComputedStyle(v.getBodyEl().querySelector('p')).userSelect==='text','desktop host prevents native source selection');}finally{document.body.style.userSelect=previous;await v.onClose();v.containerEl.remove();}
  });
  await test('Reader imports audio at a page location, reopens a controlled player and reports missing media',async()=>{
-  add('media.docx',{name:'Media',content:'<h1>Media attachment</h1><p>Source text remains selectable.</p>'});const p=plugin(),v:any=new (await import('/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/word/wordReader')).WordReaderView({app} as any,p);await v.onOpen();await v.loadFileByPath('media.docx');
+  add('media.docx',{name:'Media',content:'<h1>Media attachment</h1><p>Source text remains selectable.</p>'});const p=plugin(),v:any=new (await import('__PROJECT__/src/word/wordReader')).WordReaderView({app} as any,p);await v.onOpen();await v.loadFileByPath('media.docx');
   try{
    const input=v.getReaderToolbar().querySelector('[aria-label="选择音视频文件"]') as HTMLInputElement;assert(input,'media file input missing');
    const data=new DataTransfer();data.items.add(new File([new Uint8Array(48)],'sample.wav',{type:'audio/wav'}));input.files=data.files;input.dispatchEvent(new Event('change',{bubbles:true}));

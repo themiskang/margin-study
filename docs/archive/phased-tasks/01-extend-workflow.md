@@ -26,7 +26,7 @@ MN4 当前可能仍打开自动展开确认弹窗，详见检查点及 `evidence
 
 src/pdf/extendNotes.ts、extendMenu.ts、extendNavigation.ts、extendExport.ts、readerView.ts、annotationLayer.ts；src/annot/baseController.ts；src/cards/cardView.ts；src/workspace/documentNavigation.ts、studyWorkspace.ts；src/types.ts；styles-reader.css；src/documents/acceptance-fixtures/extendCases.txt。
 
-以上路径均相对开发目录 `/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发`；只读取本次需要的文件和函数，不批量输出整个目录。
+以上路径均相对开发目录 `${MARGINSTUDY_REPO}`；只读取本次需要的文件和函数，不批量输出整个目录。
 
 ## 具体关闭要求
 

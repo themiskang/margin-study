@@ -219,7 +219,7 @@ Codex 执行席已完成连续摘录主体、writing 补入口、完整 verify�
 - RE-4接受为候选控制图完成（仅预备、零GUI），未重采冻结16条；不解锁writing实机采集或A04。RE4选择器/地址和控件到机制绑定按原证据等级保留。
 - CC报告MN5已退出、无进程；当前桌面操作停止，MN5锁仍登记CC持有，待明确交锁/恢复交接。MN4动态对照因许可blocked。P2/P3、A04、三个完成flag保持原状；A06/A22不重验。
 ### CC定向逆向与MN5锁转交（2026-10-30，第9次规划登记）
-- 用户明确要求CC按`/Users/tanlihen/.workbuddy/plans/cosmic-beacon-darwin-2Ef-HQZQ.md`执行难点MN4/MN5逆向，并授权规划席转移MN5操作锁。**规划席批准锁从Hermes转给Claude Code，限本批RE-0、RE-1、受限RE-2路由分析、RE-3。** 交接条件、操作边界及输出见`planning-desk-20261030/CC-REA-LOCK-HANDOFF.md`。
+- 用户明确要求CC按`${USER_HOME}/.workbuddy/plans/cosmic-beacon-darwin-2Ef-HQZQ.md`执行难点MN4/MN5逆向，并授权规划席转移MN5操作锁。**规划席批准锁从Hermes转给Claude Code，限本批RE-0、RE-1、受限RE-2路由分析、RE-3。** 交接条件、操作边界及输出见`planning-desk-20261030/CC-REA-LOCK-HANDOFF.md`。
 - CC在任何原生应用操作前须提交接锁回执，确认Hermes已停止并交锁、当前现场对齐最新恢复证据、实际客户端×模型、两版应用身份/哈希与隔离样本。回执前不操作MN4/MN5，防止双席并发。用户授权任务范围内，CC可按计划对隔离合成样本做Frida/REA受控动态对照。
 - 用户计划明定P2/P3不自动解锁；故本批不做逐层/遮挡公式（P2）或浮窗跨重开/撤销（P3）。RE-2仅做不产生笔迹/不揭示卡片内容的工具路由实验。其余计划外项目、私有库、付费AI及绕过行为均不放行。
 - P2/P3仍未放行；A04依赖仍未解锁、不得派Codex或改代码/测试。写入锁仍归规划席。此次只是逆向证据批次与操作锁交接，不改变A00–A31卡或三个完成flag。
@@ -1425,7 +1425,7 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 - 基线口径：本会话 A 为 50/496，上轮 20/490（页面左侧带标注 PDF、设备已连续跑近 2 h、CPU 56–60 ℃），跨轮绝对值不可比，全部结论只用同会话交错对照。
 - 现场：未写入任何笔迹（`writes`=1/轮、仅内存 `lastWrite`，canvas `handwriting` 读回 undefined、DOM `[data-map-ink-stroke]`=0）；`data.json` 10,684 B / mtime 16:12 / md5 `b0c5f18455a86c00f6586128bb842400` 未变；`options.write` 已按 `mindmapRenderer.ts` 原实现逐字恢复；注入全局删除、`live/surface` 的 contain/willChange 复位、`[data-ab-overlay]`=0；手写模式关闭；回 A30-OPPO 学习集主页（与上轮 `ink-retest-close-verified.png` 同形态）；各轮 trace 已 end；`adb forward tcp:9333` 已移除，54779/37395 未动，未 kill/start server；产品代码未改未提交。
 - 未覆盖：`lineMode=auto/always`、荧光笔/无压力分支、已有大量笔迹的画布、书写中平移/缩放（覆盖层缓存了笔画起始的 rect/scale）、人手物理笔（InputManager 注入，pressure 恒 1）。
-- 证据：`evidence/acceptance-20261106/HERMES-INK-AB.md` + `ink-ab/`（`ab.js`/`ab.mjs`/`aggregate.mjs`/`analyze.mjs`/`visual-check.mjs`/`cleanup.mjs`、`ab-*.json`、`a12x-shot.png`/`d12x-shot.png`/`x12x-shot.png`/`xpair-early.png`/`xpair-late.png`、`ab-close-verified.png`）；trace 原始 JSON 在 `/Users/tanlihen/.hermes/cache/scratch/ink-ab/`。
+- 证据：`evidence/acceptance-20261106/HERMES-INK-AB.md` + `ink-ab/`（`ab.js`/`ab.mjs`/`aggregate.mjs`/`analyze.mjs`/`visual-check.mjs`/`cleanup.mjs`、`ab-*.json`、`a12x-shot.png`/`d12x-shot.png`/`x12x-shot.png`/`xpair-early.png`/`xpair-late.png`、`ab-close-verified.png`）；trace 原始 JSON 在 `${USER_HOME}/.hermes/cache/scratch/ink-ab/`。
 
 ## 2026-11-07（手写 canvas 实时覆盖层）
 - 画笔和荧光笔实时显示改用 fixed canvas，保存、取消、撤销仍沿用原路径；覆盖层位于脑图根容器，z-index 35，低于工具栏 40 和设置面板 45。每帧检查 world 矩形、缩放、DPR 和视口尺寸，变化时清空重投影；resize 主动重绘。
@@ -2885,7 +2885,7 @@ A30 验收裁定（2026-11-04）：用户明确裁定双指缩放、触控笔与
 
 ## 2026-11-13 03:20 · yan 真实库验收（YAN-1 部分 / YAN-2 派单）
 
-- YAN-1（`94a92ab2`）：插件已安装到 `/Users/tanlihen/文档/yan/.obsidian/plugins/margin-study`（`main.js` `c3013962…`）并加入启用列表。
+- YAN-1（`94a92ab2`）：插件已安装到 `${OBSIDIAN_VAULT}/.obsidian/plugins/margin-study`（`main.js` `c3013962…`）并加入启用列表。
   - 通过：主页三视口各 3 锚点 4px 内；启用耗时 **139.2ms**、主页渲染 **20.7ms**；真实 PDF 渲染成功；真实侧车解析 **10 条批注**；737 个受保护文件 mtime/大小未变。
   - 阻塞：为绝对不碰用户笔记用了 `sandbox-exec` 限写，导致插件正常写 `_marginstudy-recovery/` 被 EPERM（非产品问题）；且 yan 库无学习集，R6–R9 到不了。
   - 副作用：把 `data.json` 的 `settings.backupEnabled` 设为 false 以避免写 `MarginStudyBackups/`。

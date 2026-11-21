@@ -19,10 +19,10 @@
 ## 目标与环境
 
 - 最终标准：桌面端的功能、布局、呈现、模板、按钮逐项对齐 MarginNote 4；已认可的 Obsidian 侧栏隐藏等宿主适配保留。没有迁移需求。不能以自创简化界面代替已要求的原版呈现。
-- 开发：`/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发`。当前没有 Git；修改前保留可回退快照，不运行 git reset 或自动覆盖工作目录。
-- 唯一默认部署目标：`/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy验收库/.obsidian/plugins/margin-study`。
-- 保护原源码：`/Users/tanlihen/WorkBuddy/2026-07-27-17-19-57/margin-study`。
-- 保护正式插件：`/Users/tanlihen/文档/yan/.obsidian/plugins/margin-study`。以上两处 main.js 基线 SHA256 均为 `be2bbfecf7f32a558c53af1f2ae2bfee10178e9f84b3024b5c5c60721b376fe9`；开始/结束核对，不覆盖。
+- 开发：`${MARGINSTUDY_REPO}`。当前没有 Git；修改前保留可回退快照，不运行 git reset 或自动覆盖工作目录。
+- 唯一默认部署目标：`${MARGINSTUDY_TEST_VAULT}/.obsidian/plugins/margin-study`。
+- 保护原源码：`${MARGINSTUDY_LEGACY_SOURCE}`。
+- 保护正式插件：`${OBSIDIAN_VAULT}/.obsidian/plugins/margin-study`。以上两处 main.js 基线 SHA256 均为 `be2bbfecf7f32a558c53af1f2ae2bfee10178e9f84b3024b5c5c60721b376fe9`；开始/结束核对，不覆盖。
 - 不替换验收库 data.json，不复制 Claudian 密钥/配置，不动真实笔记。原 yan 有已配置 API 的 Claudian；验收库无此连接。AI 工作包不能把验收库无 API 当成原库也不能用。
 - 原版：`/Applications/MarginNote 4.app`；合成样例 `L4SampleSet/l4-sample-alpha`。避免另启磁盘映像中的第二个 MN4。
 
@@ -38,7 +38,7 @@
 ## 原版依据与验证
 
 - 官方手册：https://manual.marginnote.com.cn/mn4/ ；论坛：https://bbs.marginnote.com.cn/ 。按具体行为查，不每轮全文爬取。
-- Qoder：`/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginNote4调研/analysis/qoder-findings/README.md`。需要相关六专题时先读该 README，再按主题读取 evidence 下 L3 附档 §7 最小行为契约；§8 是待做 L4 场景。L3 调用链不是实机行为，推断/遗留/未确认项不能写成事实。复核用 tools/static 及附档 §9。
+- Qoder：`${MN4_RESEARCH_ROOT}/analysis/qoder-findings/README.md`。需要相关六专题时先读该 README，再按主题读取 evidence 下 L3 附档 §7 最小行为契约；§8 是待做 L4 场景。L3 调用链不是实机行为，推断/遗留/未确认项不能写成事实。复核用 tools/static 及附档 §9。
 - 使用插件自己的模型，禁止照搬 MN4 私有类/CoreData/私有 API。未确认行为先针对性实测，再实现。
 - 原生 UI 通过可用的电脑操作工具。测试网页可用隔离浏览器；隔离浏览器通过不能替代真实 Obsidian/原版验证。工具缺少可用窗口时先按 `窗口连接诊断.md` 排查，不归责于用户切屏。
 - 用户可以切换 Tab/桌面；重新观察窗口状态，不把状态变化归咎于用户。系统权限弹窗按工具政策处理；已有明确拍摄授权不重复索要，拍摄仍限事先安排的测试内容。

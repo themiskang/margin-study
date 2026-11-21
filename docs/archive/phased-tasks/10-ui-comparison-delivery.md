@@ -14,7 +14,7 @@
 
 全局入口由 src/workspace/studyWorkspace.ts、src/main.ts（以实际文件为准）、styles 与 package/manifest/打包配置检索；证据及前九包结果；scripts/verify.mjs。
 
-以上路径均相对开发目录 `/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发`；只读取本次需要的文件和函数，不批量输出整个目录。
+以上路径均相对开发目录 `${MARGINSTUDY_REPO}`；只读取本次需要的文件和函数，不批量输出整个目录。
 
 ## 具体关闭要求
 

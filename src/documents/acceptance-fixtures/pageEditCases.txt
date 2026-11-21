@@ -1,5 +1,5 @@
 import { ReaderView as RealReaderView } from 'marginstudy-real-reader';
-import { createNotebookBytes } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/documents/notebookFormat';
+import { createNotebookBytes } from '__PROJECT__/src/documents/notebookFormat';
 
 export async function runPageEditAcceptance({test,assert,wait,plugin,add,app}:any){
  await test('Page insertion, movement and rotation share chronological undo with real pointer ink and restore the same page identities',async()=>{

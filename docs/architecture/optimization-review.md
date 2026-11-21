@@ -140,7 +140,7 @@
 
 - 🔴 **根因**：`pdfjs.ts` 用 `URL.createObjectURL(blob)` 把 PDF 引擎 worker 以 **Blob URL** 形式加载，但 **Obsidian 跑在 Electron 里，默认 CSP 不允许 `blob:` 协议加载 Worker**。pdf.js 内部 `new Worker(blobURL)` 被浏览器拒绝 → `getDocument()` 直接 reject → 界面报「PDF 加载失败」。`esbuild.config.mjs` 的 `pdfWorkerPlugin` 把 `pdf.worker.min.js` 内联成字符串本身没错，**错在运行方式**。
 - ✅ **修法**：废弃 Blob worker，改用**物理 worker 文件 + `file://` 加载**（Obsidian 内置 PDF 查看器同款方案，已验证可行）：
-  - `scripts/gen-cmaps.mjs` 额外生成 `src/pdf/cmaps.json`（cMap+字体 base64）；
+  - `scripts/build/gen-cmaps.mjs` 生成 `src/pdf/cmaps.json`（CMap 和字体的 Base64 数据）；
   - `esbuild.config.mjs` 在 build 时拼接「cMap/fetch 拦截注入 + `pdf.worker.min.js`」写出独立 `pdf.worker.js`（3.52MB，顶部含内联 cMap 数据，离线中文仍生效），并移除内联 worker 的 `pdfWorkerPlugin`；
   - `pdfjs.ts` 删掉 Blob 逻辑，新增 `initPdfWorker(app)`：用 `FileSystemAdapter.getBasePath()` 拼出 `.obsidian/plugins/margin-study/pdf.worker.js` 的 `file://` URL 设 `GlobalWorkerOptions.workerSrc`；`main.ts` onload 调用之；
   - `pdfjs.ts` 不再 import cMap 数据 → `main.js` 从 5.4MB **瘦身到 1.97MB**。

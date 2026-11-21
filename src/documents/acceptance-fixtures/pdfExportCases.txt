@@ -1,9 +1,9 @@
 import { ReaderView } from 'marginstudy-real-reader';
-import { PDFDocument, StandardFonts, degrees, rgb, PDFName, PDFString, PDFArray, PDFNumber } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/node_modules/pdf-lib/es/index.js';
-import { loadPdf } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/pdfjs';
-import { savePdfExport } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/pdfExportSave';
-import { imagePagesPdf, isPageImage } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/imagePages';
-import { createPageCollection } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/documents/pageCollection';
+import { PDFDocument, StandardFonts, degrees, rgb, PDFName, PDFString, PDFArray, PDFNumber } from '__PROJECT__/node_modules/pdf-lib/es/index.js';
+import { loadPdf } from '__PROJECT__/src/pdf/pdfjs';
+import { savePdfExport } from '__PROJECT__/src/pdf/pdfExportSave';
+import { imagePagesPdf, isPageImage } from '__PROJECT__/src/pdf/imagePages';
+import { createPageCollection } from '__PROJECT__/src/documents/pageCollection';
 
 export async function runPdfExportAcceptance({test,assert,wait,plugin,add,app}:any){
  const make=async(labels:string[],rotation=0)=>{const pdf=await PDFDocument.create(),font=await pdf.embedFont(StandardFonts.Helvetica);for(const label of labels){const page=pdf.addPage([500,700]);page.drawText(label,{x:80,y:500,font,size:20});page.drawRectangle({x:100,y:100,width:50,height:50,color:rgb(1,0,0)});page.setRotation(degrees(rotation));}return (await pdf.save()).slice().buffer;};

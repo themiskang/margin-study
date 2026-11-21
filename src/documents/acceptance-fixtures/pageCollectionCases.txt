@@ -1,8 +1,8 @@
-import { createNotebookBytes } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/documents/notebookFormat';
-import { createPageCollection, readPageCollection, appendPageReferences, reorderPageReferences, openPageCollectionDocument, PageCollectionDocument, parsePageCollection, parsePageRange, openPageReorganization, updatePageCollectionSourcePath } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/documents/pageCollection';
+import { createNotebookBytes } from '__PROJECT__/src/documents/notebookFormat';
+import { createPageCollection, readPageCollection, appendPageReferences, reorderPageReferences, openPageCollectionDocument, PageCollectionDocument, parsePageCollection, parsePageRange, openPageReorganization, updatePageCollectionSourcePath } from '__PROJECT__/src/documents/pageCollection';
 import { ReaderView as RealReaderView } from 'marginstudy-real-reader';
-import { getOutline } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/pdf/outline';
-import { DocumentNavigation } from '/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/src/workspace/documentNavigation';
+import { getOutline } from '__PROJECT__/src/pdf/outline';
+import { DocumentNavigation } from '__PROJECT__/src/workspace/documentNavigation';
 
 function bytes(style:any,pages=3,width=595,height=842){return createNotebookBytes({format:'marginstudy-notebook',version:1,id:'source-'+style,title:'Source '+style,style,pageCount:pages,width,height,createdAt:'2026-10-15T00:00:00Z'});}
 export async function runPageCollectionAcceptance({test,assert,wait,plugin,add,app,configs,writes}:any){

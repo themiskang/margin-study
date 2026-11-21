@@ -14,7 +14,7 @@
 
 src/ai/claudianBridge.ts、service.ts、transport.ts、panel.ts、resultImport.ts、drafts.ts；src/workspace/studyWorkspace.ts、hostSidebars.ts；原库 Claudian 只按需读取稳定接口，禁止输出密钥。
 
-以上路径均相对开发目录 `/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发`；只读取本次需要的文件和函数，不批量输出整个目录。
+以上路径均相对开发目录 `${MARGINSTUDY_REPO}`；只读取本次需要的文件和函数，不批量输出整个目录。
 
 ## 具体关闭要求
 

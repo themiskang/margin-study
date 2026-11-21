@@ -1,10 +1,16 @@
-# MarginStudy 开发副本
+# MarginStudy
 
-当前进度以 [PROGRESS.md](PROGRESS.md) 与 [高效率对齐计划](evidence/efficient-alignment-20261028/PLAN.md) 为准。P1尚未整体完成，正式部署与第10包关闭仍待用户签收。
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-以下能力说明保留 **2026-10-17 未发布开发检查点** 的历史范围：此目录基于原有 Obsidian 插件开发，面向 macOS 桌面。01—04 完成列明范围，05—08、11、14、16 局部推进；最新 [PDF 裁边与扩页验收](P1PDF裁边与扩页验收.md) 已完成本阶段范围，阅读主题阶段记录保留。仅安装到合成验收库，原源码和 yan 正式版保持基线。
+MarginStudy 是面向 Obsidian 的 MarginNote 5 风格学习插件，集成文档阅读、批注、卡片、脑图与复习。当前目标为 MarginNote 5.0.2，主要验收平台为 macOS 桌面。项目仍处于开发阶段。
 
-本轮改动、契约映射、证据冲突的指令重放及待确认范围见 [L3 契约实现与验收](L3契约实现与验收.md)。插件自身测试与原版 L4 分开记录；目前不能宣称全部差距已覆盖或已经超越 MarginNote 4。
+## 文档
+
+- [使用教程](docs/guide/user-guide.zh-CN.md)
+- [当前状态](docs/STATUS.md) · [路线图](docs/ROADMAP.md) · [MN5 差距](docs/MN5-PARITY-GAP.md)
+- [架构决策](docs/architecture/decisions-mn502.md) · [实现差异](docs/architecture/implementation-deltas.md) · [技术评审](docs/architecture/optimization-review.md)
+- [5.0.2 规格](docs/specs/mn5-5.0.2-delta.md) · [完整验收定义](docs/specs/full-mn5-replication.md) · [菜单矩阵](docs/specs/page-menu-state-matrix.md)
+- [阶段验收与历史归档](docs/archive/README.md)
 
 ## 当前能力
 
@@ -33,9 +39,9 @@ npm run build
 npm run verify
 ```
 
-验收运行在合成数据、临时文档与隔离浏览器中，需要本机已有 `agent-browser`。统一结果和每项输出保存在 [evidence/verification](evidence/verification/results.json)。详细边界见 [阅读器验收](src/documents/ACCEPTANCE.md) 和 [L3 契约报告](L3契约实现与验收.md)。
+验收使用合成数据、临时文档与隔离浏览器，默认调用本机的 `agent-browser`。运行时打印结果目录。各套件及整体状态分别写入日志与 `results.json`。详细边界见 [阅读器验收](src/documents/ACCEPTANCE.md) 和 [L3 契约报告](docs/archive/acceptance/l3-contract-impl-acceptance.md)。
 
-构建生成 `main.js` 和私有 `pdf.worker.js`；`ocr.swift` 需一起分发。manifest 的 1.2.12 与 package 的 0.2.0 是沿用旧标记，当前没有正式发布或覆盖安装。
+手动安装时，在 Obsidian 库的 `.obsidian/plugins/margin-study/` 中放置 `manifest.json`、`main.js`、`styles.css`、`pdf.worker.js` 和 `ocr.swift`，然后在第三方插件设置中启用 MarginStudy。macOS 原生功能需要构建生成的 `native/` 运行时文件。
 
 ## 数据与后续
 
@@ -49,4 +55,8 @@ npm run verify
 
 成功后「导出学习集」进入当前会话的撤销历史；撤销或重做只移动该历史记录，不删除导出文件，也不改变学习数据。取消或失败不生成历史记录。导出文件包含原始文档和卡片内容，分享前请检查隐私。
 
-[页面、菜单、状态对照表](页面菜单与状态对照表.md) 已补阅读设置子集与 Crop。[PDF 基础页编辑](P1PDF基础页编辑验收.md) 已通过验收库实点及 22 项限定比较；最新针对性检查 Reader 90/90、Workspace 79/79。继续页编辑剩余来源/导出/恢复、Extend 留白、其余菜单、目录编辑和模板，见 [后续工作清单](后续工作清单.md)。最新完整 20 套件通过，工作区 78 项、阅读器 84 组；不代表原版覆盖比例。[323 的 28 项限定比较](evidence/native-max-l4/323-pdf-crop-comparison.json) 确认八源/sidecar、11 模型区段、全部设置和完整工作区不变，docMeta 仅新增 alpha 的精确扩页边界。验收笔迹已撤回，历史空记录保留，无迁移或手工清理。旧阅读主题阶段的 [280/30 项](evidence/native-max-l4/280-read-settings-comparison.json)、首次激活偏移失败及修复后基线保留。已有 Qoder 与实机材料可继续使用，当前无需转交新资料。
+历史浏览器回归与原版实机对照分别记录在 [归档索引](docs/archive/README.md)。当前待验事项见 [MN5 差距表](docs/MN5-PARITY-GAP.md)。
+
+## 许可
+
+项目使用 [MIT 许可](LICENSE)。内置词典数据来自 ECDICT，适用 [ECDICT 第三方许可](assets/licenses/LICENSE-ECDICT.txt)。

@@ -8,9 +8,9 @@
 
 ```text
 请实施 MarginStudy 第01包。先读：
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/分阶段任务/00-总控与交接规则.md
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/后续工作清单.md
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/分阶段任务/01-Extend完整闭环.md
+${MARGINSTUDY_REPO}/分阶段任务/00-总控与交接规则.md
+${MARGINSTUDY_REPO}/后续工作清单.md
+${MARGINSTUDY_REPO}/分阶段任务/01-Extend完整闭环.md
 按任务书继续现有实现，完成整包功能、MN4视觉对照、保存恢复和真实Obsidian验收。只读本包所需材料，不继承或通读旧长对话；默认仅部署验收库。最后按模板写本包结果并更新实时清单，未完成项明确保留。
 ```
 
@@ -18,9 +18,9 @@
 
 ```text
 请实施 MarginStudy 第02包。先读：
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/分阶段任务/00-总控与交接规则.md
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/后续工作清单.md
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/分阶段任务/02-PDF页编辑与导出收尾.md
+${MARGINSTUDY_REPO}/分阶段任务/00-总控与交接规则.md
+${MARGINSTUDY_REPO}/后续工作清单.md
+${MARGINSTUDY_REPO}/分阶段任务/02-PDF页编辑与导出收尾.md
 按任务书继续现有实现，完成整包功能、MN4视觉对照、保存恢复和真实Obsidian验收。只读本包所需材料，不继承或通读旧长对话；默认仅部署验收库。最后按模板写本包结果并更新实时清单，未完成项明确保留。
 ```
 
@@ -28,9 +28,9 @@
 
 ```text
 请实施 MarginStudy 第03包。先读：
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/分阶段任务/00-总控与交接规则.md
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/后续工作清单.md
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/分阶段任务/03-阅读器与文档工具.md
+${MARGINSTUDY_REPO}/分阶段任务/00-总控与交接规则.md
+${MARGINSTUDY_REPO}/后续工作清单.md
+${MARGINSTUDY_REPO}/分阶段任务/03-阅读器与文档工具.md
 按任务书继续现有实现，完成整包功能、MN4视觉对照、保存恢复和真实Obsidian验收。只读本包所需材料，不继承或通读旧长对话；默认仅部署验收库。最后按模板写本包结果并更新实时清单，未完成项明确保留。
 ```
 
@@ -38,9 +38,9 @@
 
 ```text
 请实施 MarginStudy 第04包。先读：
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/分阶段任务/00-总控与交接规则.md
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/后续工作清单.md
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/分阶段任务/04-卡片模板和组织视图.md
+${MARGINSTUDY_REPO}/分阶段任务/00-总控与交接规则.md
+${MARGINSTUDY_REPO}/后续工作清单.md
+${MARGINSTUDY_REPO}/分阶段任务/04-卡片模板和组织视图.md
 按任务书继续现有实现，完成整包功能、MN4视觉对照、保存恢复和真实Obsidian验收。只读本包所需材料，不继承或通读旧长对话；默认仅部署验收库。最后按模板写本包结果并更新实时清单，未完成项明确保留。
 ```
 
@@ -48,9 +48,9 @@
 
 ```text
 请实施 MarginStudy 第05包。先读：
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/分阶段任务/00-总控与交接规则.md
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/后续工作清单.md
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/分阶段任务/05-卡组与复习完整流程.md
+${MARGINSTUDY_REPO}/分阶段任务/00-总控与交接规则.md
+${MARGINSTUDY_REPO}/后续工作清单.md
+${MARGINSTUDY_REPO}/分阶段任务/05-卡组与复习完整流程.md
 按任务书继续现有实现，完成整包功能、MN4视觉对照、保存恢复和真实Obsidian验收。只读本包所需材料，不继承或通读旧长对话；默认仅部署验收库。最后按模板写本包结果并更新实时清单，未完成项明确保留。
 ```
 
@@ -58,9 +58,9 @@
 
 ```text
 请实施 MarginStudy 第06包。先读：
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/分阶段任务/00-总控与交接规则.md
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/后续工作清单.md
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/分阶段任务/06-现有Claudian的AI联动.md
+${MARGINSTUDY_REPO}/分阶段任务/00-总控与交接规则.md
+${MARGINSTUDY_REPO}/后续工作清单.md
+${MARGINSTUDY_REPO}/分阶段任务/06-现有Claudian的AI联动.md
 按任务书继续现有实现，完成整包功能、MN4视觉对照、保存恢复和真实Obsidian验收。只读本包所需材料，不继承或通读旧长对话；默认仅部署验收库。最后按模板写本包结果并更新实时清单，未完成项明确保留。
 ```
 
@@ -68,9 +68,9 @@
 
 ```text
 请实施 MarginStudy 第07包。先读：
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/分阶段任务/00-总控与交接规则.md
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/后续工作清单.md
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/分阶段任务/07-研究网页完整流程.md
+${MARGINSTUDY_REPO}/分阶段任务/00-总控与交接规则.md
+${MARGINSTUDY_REPO}/后续工作清单.md
+${MARGINSTUDY_REPO}/分阶段任务/07-研究网页完整流程.md
 按任务书继续现有实现，完成整包功能、MN4视觉对照、保存恢复和真实Obsidian验收。只读本包所需材料，不继承或通读旧长对话；默认仅部署验收库。最后按模板写本包结果并更新实时清单，未完成项明确保留。
 ```
 
@@ -78,9 +78,9 @@
 
 ```text
 请实施 MarginStudy 第08包。先读：
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/分阶段任务/00-总控与交接规则.md
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/后续工作清单.md
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/分阶段任务/08-系统能力与硬件验收.md
+${MARGINSTUDY_REPO}/分阶段任务/00-总控与交接规则.md
+${MARGINSTUDY_REPO}/后续工作清单.md
+${MARGINSTUDY_REPO}/分阶段任务/08-系统能力与硬件验收.md
 按任务书继续现有实现，完成整包功能、MN4视觉对照、保存恢复和真实Obsidian验收。只读本包所需材料，不继承或通读旧长对话；默认仅部署验收库。最后按模板写本包结果并更新实时清单，未完成项明确保留。
 ```
 
@@ -88,9 +88,9 @@
 
 ```text
 请实施 MarginStudy 第09包。先读：
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/分阶段任务/00-总控与交接规则.md
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/后续工作清单.md
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/分阶段任务/09-数据恢复与长期稳定性.md
+${MARGINSTUDY_REPO}/分阶段任务/00-总控与交接规则.md
+${MARGINSTUDY_REPO}/后续工作清单.md
+${MARGINSTUDY_REPO}/分阶段任务/09-数据恢复与长期稳定性.md
 按任务书继续现有实现，完成整包功能、MN4视觉对照、保存恢复和真实Obsidian验收。只读本包所需材料，不继承或通读旧长对话；默认仅部署验收库。最后按模板写本包结果并更新实时清单，未完成项明确保留。
 ```
 
@@ -98,9 +98,9 @@
 
 ```text
 请实施 MarginStudy 第10包。先读：
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/分阶段任务/00-总控与交接规则.md
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/后续工作清单.md
-/Users/tanlihen/Documents/Qoder/2026-10-14/d20fd1f9/MarginStudy开发/分阶段任务/10-全界面对照与正式交付.md
+${MARGINSTUDY_REPO}/分阶段任务/00-总控与交接规则.md
+${MARGINSTUDY_REPO}/后续工作清单.md
+${MARGINSTUDY_REPO}/分阶段任务/10-全界面对照与正式交付.md
 按任务书继续现有实现，完成整包功能、MN4视觉对照、保存恢复和真实Obsidian验收。只读本包所需材料，不继承或通读旧长对话；默认仅部署验收库。最后按模板写本包结果并更新实时清单，未完成项明确保留。
 ```
 
