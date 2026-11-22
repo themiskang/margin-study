@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 浏览器后端环境变量、验收脚本的会话和命令参数，以及 ego-browser 的 TaskSpace 或 agent-browser 的 CDP 地址。
+ * [INPUT]: 浏览器后端环境变量、验收脚本的会话和命令参数，以及 agent-browser 的 CDP 地址。
  * [OUTPUT]: runBrowser 和 runBrowserSync，返回兼容验收脚本的标准输出。
- * [POS]: 验收脚本与 ego TaskSpace（默认）或 agent-browser（legacy）之间的命令适配层。
+ * [POS]: 验收脚本与 agent-browser 或 ego TaskSpace 之间的命令适配层。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 import { execFile, spawnSync } from "node:child_process";
@@ -115,10 +115,8 @@ function runEgoSync(session, ...args) {
   }
 }
 
-// 默认后端：ego-browser（ego lite）。两者同为 chromium 内核，页面结构与几何测量一致，
-// 因此 px-gap 的 298 行基线在两个后端下通用；需要旧后端时显式设 MARGINSTUDY_BROWSER=agent-browser。
 export async function runBrowser(session, ...args) {
-  if (process.env.MARGINSTUDY_BROWSER !== "agent-browser") return runEgo(session, ...args);
+  if (process.env.MARGINSTUDY_BROWSER === "ego") return runEgo(session, ...args);
   if (args[0] === "cdp" && args[1] === "Input.dispatchMouseEvent") {
     const browserUrl = (await exec("agent-browser", ["--session", session, "get", "cdp-url"])).stdout.trim();
     const pageUrl = (await exec("agent-browser", ["--session", session, "get", "url"])).stdout.trim();
@@ -146,7 +144,7 @@ export async function runBrowser(session, ...args) {
 }
 
 export function runBrowserSync(session, ...args) {
-  if (process.env.MARGINSTUDY_BROWSER !== "agent-browser") return runEgoSync(session, ...args);
+  if (process.env.MARGINSTUDY_BROWSER === "ego") return runEgoSync(session, ...args);
   const result = spawnSync("agent-browser", ["--session", session, ...args], { encoding: "utf8", maxBuffer: 8 * 1024 * 1024, timeout: 125000 });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(result.stderr || `agent-browser exited with ${result.status}`);
