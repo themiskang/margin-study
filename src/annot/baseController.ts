@@ -27,7 +27,7 @@ import { RecallSession } from "../recall/session";
 import { cloneStrokes } from "./penGeometry";
 import { measurePenCommit } from "./pen";
 import type { HandwritingMode, InkChange, InkRecord, PenTool } from "./penGeometry";
-import { annotationInkLayer, inkLayerState, InkLayerControls } from "./inkLayers";
+import { annotationInkLayer, inkLayerState, InkLayerControls, isInkLayerBound } from "./inkLayers";
 import type { InkLayerState } from "./inkLayers";
 import { annotationNotebook, documentNotebookState, DocumentNotebookControls, notebookMeta, updateNotebookMeta } from "./documentNotebooks";
 import type { DocumentNotebookState } from "./documentNotebooks";
@@ -1126,6 +1126,7 @@ export abstract class BaseAnnotationController {
     const readonly = this.isNotebookReference(ann) || this.isInkReference(ann);
     const rendered = createFreeOverlay(ann, surface, { readonly, imageSource: ann.image ? imageUrl(this.plugin, ann.image) : undefined,
       rotate:angle=>{const current=this.editableOverlay(ann.id);if(current)this.commitOverlayUpdate(ann.id,{overlay:{...current.overlay!,rotation:angle}});},
+      toggleBind:()=>{const current=this.editableOverlay(ann.id);if(current)this.setOverlayBindToInkLayer(ann.id,current.bindToInkLayer===false);},
       commit: box => {
         const geometry = surface.geometry(box); if (!geometry) return;
         const { box: normalized, ...patch } = geometry;
@@ -1134,6 +1135,14 @@ export abstract class BaseAnnotationController {
       }, crop: () => this.cropFreeImage(ann.id), edit: () => this.editFreeOverlay(ann.id), remove: () => this.deleteFreeOverlay(ann.id), undo: () => this.undoOverlayChange(), redo: () => this.redoOverlayChange(), card: () => { const current = this.editableOverlay(ann.id); if (current) this.makeCard(current,"excerpt"); } });
     rendered.element.classList.toggle("ms-ink-reference", readonly);
     this.overlayElements.set(rendered.element, rendered.dispose); return rendered.element;
+  }
+  setOverlayBindToInkLayer(id: string, bound: boolean): void {
+    const ann = this.editableOverlay(id); if (!ann) return;
+    const state = this.getInkLayers();
+    const inkLayerId = bound
+      ? (ann.inkLayerId && state.layers.some(layer => layer.id === ann.inkLayerId) ? ann.inkLayerId : state.active)
+      : ann.inkLayerId;
+    this.commitOverlayUpdate(id, { bindToInkLayer: bound, ...(inkLayerId !== undefined ? { inkLayerId } : {}) });
   }
   protected detachAnnotationElement(element: HTMLElement): void {
     const dispose = this.overlayElements.get(element); if (dispose) { this.overlayElements.delete(element); dispose(); } else element.remove();
@@ -1144,7 +1153,7 @@ export abstract class BaseAnnotationController {
     return ann?.overlay && !ann.overlay.deleted && !this.isNotebookReference(ann) && !this.isInkReference(ann) && !this.disposed && !this.releasing ? ann : null;
   }
   private cloneAnnotation(ann: Annotation): Annotation { return JSON.parse(JSON.stringify(ann)); }
-  private overlayFingerprint(ann: Annotation): string { return JSON.stringify([ann.text,ann.image,ann.color,ann.page,ann.rects,ann.pdfGeometry,ann.pdfCoordinateSpace,ann.overlay,ann.inkLayerId,ann.documentNotebookId,ann.pdfReferencePages]); }
+  private overlayFingerprint(ann: Annotation): string { return JSON.stringify([ann.text,ann.image,ann.color,ann.page,ann.rects,ann.pdfGeometry,ann.pdfCoordinateSpace,ann.overlay,ann.inkLayerId,ann.bindToInkLayer,ann.documentNotebookId,ann.pdfReferencePages]); }
   private recordOverlayChange(before: Annotation, after: Annotation): void {
     this.recordEditChange({ kind: "overlay", sequence: ++this.editSequence, label: after.overlay?.kind === "image" ? "图片批注" : "自由文字批注", before: this.cloneAnnotation(before), after: this.cloneAnnotation(after) });
   }
@@ -1204,7 +1213,7 @@ export abstract class BaseAnnotationController {
     const current = this.cache.find(ann => ann.id === change.after.id), expected = redo ? change.before : change.after, desired = redo ? change.after : change.before;
     if (!current || this.overlayFingerprint(current) !== this.overlayFingerprint(expected)) { this.clearEditHistory(); new Notice("批注已在其他视图修改，已清除此视图的阅读编辑撤销记录"); return false; }
     const saved = this.cloneAnnotation(desired);
-    for (const key of ["text","image","color","page","rects","pdfGeometry","pdfCoordinateSpace","overlay","inkLayerId","pdfReferencePages"] as const) {
+    for (const key of ["text","image","color","page","rects","pdfGeometry","pdfCoordinateSpace","overlay","inkLayerId","bindToInkLayer","pdfReferencePages"] as const) {
       if (key in saved) (current as any)[key] = saved[key]; else delete (current as any)[key];
     }
     this.persist(); this.onAnnotationsChanged(); return true;
@@ -1673,10 +1682,16 @@ export abstract class BaseAnnotationController {
   }
   protected isInkVisible(ann: Annotation): boolean {
     if (!this.isAnnotationVisible(ann)) return false;
+    if (!isInkLayerBound(ann)) return true;
     const state = this.isNotebookReference(ann) ? inkLayerState(notebookMeta(this.docPath ? this.plugin.store.getDocMeta(this.docPath) : {}, annotationNotebook(ann))) : this.getInkLayers();
     const layer = annotationInkLayer(ann, state); return layer === state.active || layer === state.overlay;
   }
-  protected isInkReference(ann: Annotation): boolean { const state = this.getInkLayers(); return this.isNotebookReference(ann) || annotationInkLayer(ann, state) !== state.active; }
+  protected isInkReference(ann: Annotation): boolean {
+    if (this.isNotebookReference(ann)) return true;
+    if (!isInkLayerBound(ann)) return false;
+    const state = this.getInkLayers();
+    return annotationInkLayer(ann, state) !== state.active;
+  }
   private syncInkLayers(redraw = true): void {
     if (!this.docPath) return;
     const fingerprint = JSON.stringify(this.getInkLayers()); if (fingerprint === this.inkLayerFingerprint) return;
@@ -1719,7 +1734,7 @@ export abstract class BaseAnnotationController {
     const state = this.getInkLayers(); if (![source, target].every((id) => state.layers.some((layer) => layer.id === id))) return;
     if (this.penMode) this.teardownPen();
     this.closeOverlayEditor?.();
-    for (const ann of this.cache) if (annotationNotebook(ann) === this.activeNotebookId && (ann.type === "pen" || !!ann.overlay) && annotationInkLayer(ann, state) === source) ann.inkLayerId = target;
+    for (const ann of this.cache) if (annotationNotebook(ann) === this.activeNotebookId && isInkLayerBound(ann) && annotationInkLayer(ann, state) === source) ann.inkLayerId = target;
     this.persist();
     const active = state.active === source ? target : state.active;
     this.updateCurrentNotebookMeta({ handwritingLayers: state.layers.filter((layer) => layer.id !== source || layer.id === "default"), activeHandwritingLayerId: active,
@@ -1733,7 +1748,7 @@ export abstract class BaseAnnotationController {
     const state = this.getInkLayers(); if (!state.layers.some((layer) => layer.id === id)) return;
     if (this.penMode) this.teardownPen();
     // As with erasing the last stroke, keep annotation identities for saved source cards.
-    for (const ann of this.cache) if (annotationNotebook(ann) === this.activeNotebookId && annotationInkLayer(ann, state) === id) { if (ann.type === "pen") ann.strokes = []; else if (ann.overlay) ann.overlay.deleted = true; }
+    for (const ann of this.cache) if (annotationNotebook(ann) === this.activeNotebookId && isInkLayerBound(ann) && annotationInkLayer(ann, state) === id) { if (ann.type === "pen") ann.strokes = []; else if (ann.overlay) ann.overlay.deleted = true; }
     this.persist();
     this.updateCurrentNotebookMeta({ handwritingLayers: state.layers.filter((layer) => layer.id !== id),
       activeHandwritingLayerId: state.active === id ? "default" : state.active,

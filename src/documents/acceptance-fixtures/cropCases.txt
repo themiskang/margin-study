@@ -83,7 +83,7 @@ export async function runCropAcceptance(context:any) {
     };
     try {
       await view.loadFileByPath(path);await view.setPageCrop({left:.1,top:.1,right:.9,bottom:.9});await view.renderPage(1);
-      const canvas=view.getPageRecord(1)!.annLayer.querySelector<HTMLCanvasElement>('canvas.ms-ink-raster')!,ctx=canvas.getContext('2d')!,sx=canvas.width/view.getPageRecord(1)!.annLayer.clientWidth,sy=canvas.height/view.getPageRecord(1)!.annLayer.clientHeight;
+      const canvas=view.getPageRecord(1)!.wrapper.querySelector<HTMLCanvasElement>('canvas.ms-ink-raster')!,ctx=canvas.getContext('2d')!,sx=canvas.width/view.getPageRecord(1)!.annLayer.clientWidth,sy=canvas.height/view.getPageRecord(1)!.annLayer.clientHeight;
       assert(ctx.getImageData(Math.round(75*sx),Math.round(140*sy),1,1).data[3]>0&&ctx.getImageData(Math.round(60*sx),Math.round(140*sy),1,1).data[3]===0,'old ink did not start at crop-projected (75,140)');
       assert(JSON.stringify((await p.store.loadAnnotations(path))[0])===before,'crop rewrote old ink');
       view.setHandwritingMode('eraser');draw([[.3,.2],[.3,.3]]);

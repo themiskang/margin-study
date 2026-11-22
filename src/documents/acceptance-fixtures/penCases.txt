@@ -78,16 +78,16 @@ export async function runPenAcceptance({test,assert,wait,plugin,add,app,htmlCont
   const controller=view.annController,first=view.getPageRecord(1),second=view.getPageRecord(2);
   const pixels=(canvas:HTMLCanvasElement)=>Array.from(canvas.getContext('2d')!.getImageData(0,0,canvas.width,canvas.height).data);
   try{
-   assert(!second.annLayer.querySelector('.ms-ink-raster'),'unrendered page allocated an ink canvas');
-   const canvas=first.annLayer.querySelector<HTMLCanvasElement>('canvas.ms-ink-raster')!;
-   assert(canvas&&first.annLayer.querySelectorAll('canvas.ms-ink-raster').length===1,'rendered page must have one ink canvas');
+   assert(!second.wrapper.querySelector('.ms-ink-raster'),'unrendered page allocated an ink canvas');
+   const canvas=first.wrapper.querySelector<HTMLCanvasElement>('canvas.ms-ink-raster')!;
+   assert(canvas&&first.wrapper.querySelectorAll('canvas.ms-ink-raster').length===1,'rendered page must have one ink canvas');
    assert(getComputedStyle(canvas).pointerEvents==='none'&&canvas.clientWidth===first.annLayer.clientWidth&&canvas.clientHeight===first.annLayer.clientHeight,'raster bounds or pointer events differ');
    controller.createPenAnnotation(1,[[{x:.1,y:.2,pressure:.2},{x:.45,y:.2,pressure:.8}]]);
    const afterFirst=pixels(canvas);const duplicate=pixels(canvas);assert(afterFirst.every((value,index)=>value===duplicate[index]),'repeated raster read differs before edits');assert(afterFirst.some((value,index)=>index%4===3&&value),'first pen is absent from raster');
    let clears=0;const context=canvas.getContext('2d')!,clear=context.clearRect.bind(context);context.clearRect=(...args:any[])=>{clears++;return clear(...args as [number,number,number,number]);};
    controller.createPenAnnotation(1,[[{x:.1,y:.7},{x:.45,y:.7}]]);
    const afterSecond=pixels(canvas);assert(clears===0&&afterSecond.some((value,index)=>value!==afterFirst[index]),'new pen was not appended incrementally');
-   assert(!first.annLayer.querySelector('.ms-pen-render path')&&first.annLayer.querySelectorAll('canvas.ms-ink-raster').length===1,'committed PDF pen still creates SVG paths');
+   assert(!first.wrapper.querySelector('.ms-pen-render path')&&first.wrapper.querySelectorAll('canvas.ms-ink-raster').length===1,'committed PDF pen still creates SVG paths');
    assert(afterFirst.every((value,index)=>Math.floor(index/4/canvas.width)>canvas.height*.5||value===afterSecond[index]),'appending changed existing pixels');
    controller.undoPenChange();const undone=pixels(canvas),undoDiff=undone.reduce((count,value,index)=>count+Number(value!==afterFirst[index]),0);assert(clears>0&&undoDiff===0,'undo did not redraw the original raster: '+JSON.stringify({clears,undoDiff}));
    const undoClears=clears;controller.redoPenChange();const redone=pixels(canvas);assert(clears>undoClears&&redone.every((value,index)=>value===afterSecond[index]),'redo did not redraw and restore the raster');
@@ -95,7 +95,7 @@ export async function runPenAcceptance({test,assert,wait,plugin,add,app,htmlCont
    const annotations=await p.store.loadAnnotations(path),firstId=annotations[0].id;let clicked='';controller.onAnnClick=(annotation:any)=>{clicked=annotation.id;};
    const bounds=first.annLayer.getBoundingClientRect();first.wrapper.dispatchEvent(new MouseEvent('click',{bubbles:true,clientX:bounds.left+bounds.width*.25,clientY:bounds.top+bounds.height*.2}));assert(clicked===firstId,'rasterized pen lost annotation click hit testing');
    const deleteClears=clears;controller.deleteAnnotation(firstId);const deleted=pixels(canvas);assert(clears>deleteClears&&deleted.some((value,index)=>value!==afterSecond[index])&&context.getImageData(Math.round(canvas.width*.25),Math.round(canvas.height*.2),1,1).data[3]===0&&context.getImageData(Math.round(canvas.width*.25),Math.round(canvas.height*.7),1,1).data[3]>0,'deleting pen did not fully redraw remaining ink');
-   await view.renderPage(2);assert(second.annLayer.querySelectorAll('canvas.ms-ink-raster').length===1,'rendering the second page did not initialize its raster');
+   await view.renderPage(2);assert(second.wrapper.querySelectorAll('canvas.ms-ink-raster').length===1,'rendering the second page did not initialize its raster');
   }finally{await view.onClose();view.containerEl.remove();}
  });
  await test('PERF-9b canvas matches SVG ink appearance at pixel scale',async()=>{
@@ -117,7 +117,7 @@ export async function runPenAcceptance({test,assert,wait,plugin,add,app,htmlCont
  await test('PERF-9 PDF raster preserves layer references, recall and resizing',async()=>{
   const path='perf9-layers.pdf';add(path,{name:'Raster layers',pages:1});const p=plugin(),view:any=new ReaderView({app} as any,p);await view.onOpen();await view.loadFileByPath(path);
   try{
-   const controller=view.annController,record=view.getPageRecord(1),canvas=record.annLayer.querySelector<HTMLCanvasElement>('.ms-ink-raster')!;
+   const controller=view.annController,record=view.getPageRecord(1),canvas=record.wrapper.querySelector<HTMLCanvasElement>('.ms-ink-raster')!;
    const alpha=(x:number,y:number)=>canvas.getContext('2d')!.getImageData(Math.round(canvas.width*x),Math.round(canvas.height*y),1,1).data[3];
    controller.createPenAnnotation(1,[[{x:.15,y:.2},{x:.45,y:.2}]],'default','default','pen',8,1);assert(alpha(.3,.2)>220,'active pen not visible');
    let clears=0;const context=canvas.getContext('2d')!,clear=context.clearRect.bind(context);context.clearRect=(...args:any[])=>{clears++;return clear(...args as [number,number,number,number]);};
@@ -126,21 +126,21 @@ export async function runPenAcceptance({test,assert,wait,plugin,add,app,htmlCont
    assert(alpha(.3,.2)>0&&alpha(.3,.2)<120&&alpha(.3,.7)>220,'reference layer opacity or active ink differs');
    let previous=clears;controller.setRecallMode(true);assert(clears>previous&&alpha(.3,.2)===0&&alpha(.3,.7)>220,'recall did not fully redraw without reference ink');previous=clears;controller.setRecallMode(false);assert(clears>previous&&alpha(.3,.2)>0,'reference ink was not fully restored');
    previous=clears;controller.setInkOverlay(undefined);assert(clears>previous&&alpha(.3,.2)===0&&alpha(.3,.7)>220,'hiding overlay did not fully redraw');previous=clears;controller.selectInkLayer('default');assert(clears>previous&&alpha(.3,.2)>220&&alpha(.3,.7)===0,'switching active layer did not fully redraw');controller.selectInkLayer(controller.getInkLayers().layers.find((layer:any)=>layer.name==='second').id);controller.setInkOverlay('default');
-   const before=canvas.width;view.visiblePages.add(1);view.setScale(1.5);await view.renderPage(1);const resized=record.annLayer.querySelector<HTMLCanvasElement>('.ms-ink-raster')!;assert(resized.width!==before&&resized.getContext('2d')!.getImageData(Math.round(resized.width*.3),Math.round(resized.height*.7),1,1).data[3]>0,'scale change lost raster ink');
+   const before=canvas.width;view.visiblePages.add(1);view.setScale(1.5);await view.renderPage(1);const resized=record.wrapper.querySelector<HTMLCanvasElement>('.ms-ink-raster')!;assert(resized.width!==before&&resized.getContext('2d')!.getImageData(Math.round(resized.width*.3),Math.round(resized.height*.7),1,1).data[3]>0,'scale change lost raster ink');
   }finally{await view.onClose();view.containerEl.remove();}
  });
  await test('PERF-9b raster redraws moves, undo, redo, fold and document switches',async()=>{
   const firstPath='perf9b-move.pdf',secondPath='perf9b-switch.pdf';add(firstPath,{name:'Move and fold',pages:1});add(secondPath,{name:'Other document',pages:1});const p=plugin(),view:any=new ReaderView({app} as any,p);await view.onOpen();await view.loadFileByPath(firstPath);
   const pixels=(canvas:HTMLCanvasElement)=>Array.from(canvas.getContext('2d')!.getImageData(0,0,canvas.width,canvas.height).data);
   try{
-   const controller=view.annController,record=view.getPageRecord(1),canvas=record.annLayer.querySelector<HTMLCanvasElement>('.ms-ink-raster')!,ctx=canvas.getContext('2d')!;
+   const controller=view.annController,record=view.getPageRecord(1),canvas=record.wrapper.querySelector<HTMLCanvasElement>('.ms-ink-raster')!,ctx=canvas.getContext('2d')!;
    controller.createPenAnnotation(1,[[{x:.15,y:.2},{x:.45,y:.2}]],'default','default','pen',8,1);const before=pixels(canvas),annotation=(await p.store.loadAnnotations(firstPath))[0];
    let clears=0;const clear=ctx.clearRect.bind(ctx);ctx.clearRect=(...args:any[])=>{clears++;return clear(...args as [number,number,number,number]);};
    view.setHandwritingMode('lasso');const overlay=record.wrapper.querySelector<SVGSVGElement>('.ms-pen-overlay')!;drag(overlay,record.wrapper,[[.1,.15],[.5,.15],[.5,.25],[.1,.25],[.1,.15]]);drag(overlay,record.wrapper,[[.3,.2],[.3,.5]]);
    const moved=pixels(canvas),sourceAlpha=ctx.getImageData(Math.round(canvas.width*.3),Math.round(canvas.height*.2),1,1).data[3],targetAlpha=ctx.getImageData(Math.round(canvas.width*.3),Math.round(canvas.height*.5),1,1).data[3];assert(clears>0&&sourceAlpha===0&&targetAlpha>0,'lasso move did not fully redraw at the new location '+JSON.stringify({clears,sourceAlpha,targetAlpha,strokes:annotation.strokes,selection:!!overlay.querySelector('.ms-pen-selection')}));
    let previous=clears;controller.undoPenChange();assert(clears>previous&&pixels(canvas).every((value,index)=>value===before[index]),'move undo did not fully restore raster');previous=clears;controller.redoPenChange();assert(clears>previous&&pixels(canvas).every((value,index)=>value===moved[index]),'move redo did not fully restore raster');
-   view.setHandwritingMode('off');view.toggleFold(1);assert(!record.annLayer.querySelector('.ms-ink-raster')&&canvas.width===0,'fold did not release raster');view.toggleFold(1);await view.renderPage(1);
-   let restored=record.annLayer.querySelector<HTMLCanvasElement>('.ms-ink-raster')!;assert(restored!==canvas&&pixels(restored).every((value,index)=>value===moved[index]),'unfold did not reconstruct the current raster');
+   view.setHandwritingMode('off');view.toggleFold(1);assert(!record.wrapper.querySelector('.ms-ink-raster')&&canvas.width===0,'fold did not release raster');view.toggleFold(1);await view.renderPage(1);
+   let restored=record.wrapper.querySelector<HTMLCanvasElement>('.ms-ink-raster')!;assert(restored!==canvas&&pixels(restored).every((value,index)=>value===moved[index]),'unfold did not reconstruct the current raster');
    await view.loadFileByPath(secondPath);await view.renderPage(1);assert(!rasterInk(pageHost(view)),'previous document ink leaked into the next document');await view.loadFileByPath(firstPath);await view.renderPage(1);restored=pageHost(view).querySelector<HTMLCanvasElement>('.ms-ink-raster')!;assert(pixels(restored).every((value,index)=>value===moved[index]),'switching back lost or changed ink');
   }finally{await view.onClose();view.containerEl.remove();}
  });
@@ -155,7 +155,7 @@ export async function runPenAcceptance({test,assert,wait,plugin,add,app,htmlCont
   const path='perf9b-ratio.pdf';add(path,{name:'Ratio and size',pages:1});const p=plugin(),view:any=new ReaderView({app} as any,p);await view.onOpen();await view.loadFileByPath(path);
   const original=Object.getOwnPropertyDescriptor(window,'devicePixelRatio');
   try{
-   const record=view.getPageRecord(1),controller=view.annController,canvas=record.annLayer.querySelector<HTMLCanvasElement>('.ms-ink-raster')!,context=canvas.getContext('2d')!;
+   const record=view.getPageRecord(1),controller=view.annController,canvas=record.wrapper.querySelector<HTMLCanvasElement>('.ms-ink-raster')!,context=canvas.getContext('2d')!;
    controller.createPenAnnotation(1,[[{x:.15,y:.4},{x:.55,y:.4}]],'default','default','pen',8,1);const width=canvas.width,ratio=window.devicePixelRatio;
    Object.defineProperty(window,'devicePixelRatio',{configurable:true,value:ratio*2});window.dispatchEvent(new Event('resize'));assert(canvas.width>width&&context.getImageData(Math.round(canvas.width*.3),Math.round(canvas.height*.4),1,1).data[3]>0,'DPR resize did not reallocate and redraw ink');
    Object.defineProperty(window,'devicePixelRatio',{configurable:true,value:ratio});window.dispatchEvent(new Event('resize'));assert(canvas.width===width&&context.getImageData(Math.round(canvas.width*.3),Math.round(canvas.height*.4),1,1).data[3]>0,'restoring DPR lost ink');
@@ -216,7 +216,7 @@ export async function runPenAcceptance({test,assert,wait,plugin,add,app,htmlCont
   const path='perf7-pdf-shared.pdf';add(path,{bytes:await makePdf()});const p=plugin(),first=await openReader(path,p),second=await openReader(path,p);
   try{
    const ann={id:'shared-perf7-ink',docPath:path,docKind:'pdf',page:1,type:'pen',rects:[],text:'',color:'#000',createdAt:'today',strokes:[[{x:.1,y:.2,pressure:.3},{x:.3,y:.2,pressure:.5},{x:.5,y:.2,pressure:.7}]]};p.store.saveAnnotationsDebounced(path,[ann]);
-   const layer=second.getPageRecord(1).annLayer,canvas=layer.querySelector('canvas.ms-ink-raster'),original=Array.from(rasterPixels(layer));assert(canvas&&rasterInk(layer),'shared ink was not rendered');
+   const layer=second.getPageRecord(1).wrapper,canvas=layer.querySelector('canvas.ms-ink-raster'),original=Array.from(rasterPixels(layer));assert(canvas&&rasterInk(layer),'shared ink was not rendered');
    const unrelated={id:'other-perf7-ink',docPath:path,docKind:'pdf',page:1,type:'pen',rects:[],text:'',color:'#000',createdAt:'today',strokes:[[{x:.1,y:.8},{x:.5,y:.8}]]};p.store.saveAnnotationsDebounced(path,[ann,unrelated]);
    const afterAppend=Array.from(rasterPixels(layer));assert(layer.querySelector('canvas.ms-ink-raster')===canvas&&original.some((value,index)=>value!==afterAppend[index]),'unrelated stroke did not append to the existing raster');
    const edited=structuredClone(ann);edited.strokes[0][1].y=.35;p.store.saveAnnotationsDebounced(path,[edited,unrelated]);
@@ -335,11 +335,11 @@ export async function runPenAcceptance({test,assert,wait,plugin,add,app,htmlCont
   const controller=v.annController;controller.createPenAnnotation(1,[[{x:.2,y:.2,pressure:.2},{x:.4,y:.2,pressure:.9}]]);controller.createPenAnnotation(2,[[{x:.2,y:.2},{x:.4,y:.2}]]);
   controller.selectPenTool('erase');const host=v.getPageRecord(1).wrapper,overlay=host.querySelector('.ms-pen-overlay');drag(overlay,host,[[.3,.15],[.3,.25]]);
   let anns=await p.store.loadAnnotations('ink.pdf');assert(anns[0].strokes.length===0&&anns[1].strokes.length===1,'eraser crossed PDF page: '+JSON.stringify({ink:anns.map((ann:any)=>({page:ann.page,strokes:ann.strokes})),tool:overlay?.dataset.tool,host:host.getBoundingClientRect().toJSON()}));
-  assert(!rasterInk(v.getPageRecord(1).annLayer),'empty ink overlay retained');controller.undoPenChange();
-  v.visiblePages.add(1);v.visiblePages.add(2);v.setScale(2);await v.renderPage(1);await v.renderPage(2);assert(rasterInk(v.getPageRecord(1).annLayer),'pressure lost on zoom');
+  assert(!rasterInk(v.getPageRecord(1).wrapper),'empty ink overlay retained');controller.undoPenChange();
+  v.visiblePages.add(1);v.visiblePages.add(2);v.setScale(2);await v.renderPage(1);await v.renderPage(2);assert(rasterInk(v.getPageRecord(1).wrapper),'pressure lost on zoom');
   const id=anns[0].id;await v.onClose();const reopened:any=new ReaderView({app} as any,p);await reopened.onOpen();await reopened.loadFileByPath('ink.pdf');anns=await p.store.loadAnnotations('ink.pdf');
-  assert(anns[0].id===id&&anns[0].strokes[0][0].pressure===.2&&rasterInk(reopened.getPageRecord(1).annLayer),'reload lost ink');
-  assert(getComputedStyle(reopened.getPageRecord(1).annLayer.querySelector('.ms-ink-raster')).pointerEvents==='none','ink container blocks reading');await reopened.onClose();
+  assert(anns[0].id===id&&anns[0].strokes[0][0].pressure===.2&&rasterInk(reopened.getPageRecord(1).wrapper),'reload lost ink');
+  assert(getComputedStyle(reopened.getPageRecord(1).wrapper.querySelector('.ms-ink-raster')).pointerEvents==='none','ink container blocks reading');await reopened.onClose();
  });
  await test('[G1-A INK-01] Existing permanent ink survives persistence and a real-PDF reader reopen',async()=>{
   const path='g1-ink-01-permanent.pdf';add(path,{bytes:await makePdf()});const p=plugin();let view=await openReader(path,p);

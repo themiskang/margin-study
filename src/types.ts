@@ -117,6 +117,8 @@ export interface Annotation {
   sourceDocId?: string;
   sourcePage?: number;
   inkLayerId?: string;
+  /** Free text/image overlays bind to the active ink layer unless explicitly false (public across all ink layers). */
+  bindToInkLayer?: boolean;
   inkBrush?: "pen" | "highlight";
   inkWidth?: number;
   inkOpacity?: number;
@@ -557,6 +559,8 @@ export interface DocMeta {
   brightness?: number; // 0.4..1.4
   pdfLayout?: "single" | "spread";
   pdfContinuous?: boolean;
+  handwritingOnTop?: boolean;
+  blankBackground?: boolean;
   /** Display-oriented bounds relative to the original page; outside 0..1 extends paper. Shared by all pages/notebooks. */
   pdfCrop?: PdfCrop;
   pdfPageEdits?: PdfPageEdits;

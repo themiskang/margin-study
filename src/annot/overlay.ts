@@ -39,6 +39,7 @@ export function createFreeOverlay(ann: Annotation, surface: OverlaySurface, opti
   edit: () => void;
   crop?: () => void;
   rotate?: (angle:number) => void;
+  toggleBind?: () => void;
   remove: () => void;
   undo: () => void;
   redo: () => void;
@@ -46,6 +47,7 @@ export function createFreeOverlay(ann: Annotation, surface: OverlaySurface, opti
 }): { element: HTMLElement; dispose: () => void } {
   const element = el("div", { class: "ms-ann ms-free-overlay", tabindex: options.readonly ? "-1" : "0", role: "group", "aria-label": ann.overlay?.kind === "image" ? "图片批注" : "自由文字批注" });
   element.dataset.annId = ann.id; element.dataset.overlayKind = ann.overlay!.kind; element.dataset.inkLayerId = ann.inkLayerId ?? "default";
+  element.dataset.bindToInkLayer = String(ann.bindToInkLayer !== false);
   positionOverlay(element, surface.box);
   if(ann.overlay?.rotation)element.style.transform=`rotate(${ann.overlay.rotation}deg)`;
   element.style.color = ann.color; element.style.background = ann.overlay?.background ?? "transparent";
@@ -69,6 +71,7 @@ export function createFreeOverlay(ann: Annotation, surface: OverlaySurface, opti
     if(options.rotate){const angle=el("input",{type:"number",min:"-360",max:"360",step:"1",value:String(ann.overlay?.rotation??0),"aria-label":"旋转批注角度",title:"旋转角度（度）"});angle.style.width="56px";
       angle.addEventListener("change",()=>{const value=Number(angle.value);if(Number.isFinite(value)&&value>=-360&&value<=360)options.rotate?.((value%360+360)%360);else angle.value=String(ann.overlay?.rotation??0);});tools.append(angle);}
     if(ann.overlay?.kind==="image"&&options.crop){const crop=el("button",{text:"裁剪","aria-label":"裁剪"});crop.addEventListener("click",event=>{event.stopPropagation();options.crop?.();});tools.append(crop);}
+    if(options.toggleBind){const bound=ann.bindToInkLayer!==false;const bind=el("button",{class:"ms-free-overlay-bind",text:bound?"绑层":"公共",title:bound?"已绑定手写层（点击切换为全层公共）":"全层公共（点击绑定到手写层）","aria-label":"绑定手写层","aria-pressed":String(bound),"data-ms-overlay-bind-ink":""});bind.addEventListener("click",event=>{event.stopPropagation();options.toggleBind?.();});tools.append(bind);}
     tools.append(card, remove); element.append(tools, resize);
     edit.addEventListener("click", event => { event.stopPropagation(); options.edit(); });
     remove.addEventListener("click", event => { event.stopPropagation(); options.remove(); });

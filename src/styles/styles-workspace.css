@@ -397,7 +397,7 @@ body.ms-study-host-space .claudian-container.claudian-zen {display:none!importan
 .ms-study-workspace[data-reading-theme] .ms-mindmap-root .ms-native-map-icon:not(.is-active) {color:var(--ms-native-ink);}
 .ms-study-workspace[data-reading-theme] :is(.ms-board-native-footer button,.ms-organize-native-search .ms-organize-native-icon) {color:var(--ms-native-ink);}
 .ms-study-workspace[data-reading-theme] .ms-workspace-child-view .ms-page {background:var(--ms-reading-paper);}
-.ms-study-workspace[data-reading-theme] .ms-workspace-child-view .ms-page>canvas {filter:var(--ms-reading-filter);mix-blend-mode:var(--ms-reading-blend);}
+.ms-study-workspace[data-reading-theme] .ms-workspace-child-view .ms-page>.ms-page-canvas {filter:var(--ms-reading-filter);mix-blend-mode:var(--ms-reading-blend);}
 .ms-study-workspace[data-reading-theme] .ms-native-popover {background:var(--ms-reading-paper);color:var(--ms-reading-text);}
 .ms-study-workspace[data-reading-theme] .ms-document-more>.ms-native-popover-head {background:var(--ms-reading-raised);color:var(--ms-reading-text);}
 .ms-study-workspace[data-reading-theme] button.ms-document-more-row {background:var(--ms-reading-paper);color:var(--ms-reading-text);border-bottom-color:var(--ms-workspace-border);}

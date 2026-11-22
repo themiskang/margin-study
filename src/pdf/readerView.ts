@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: PDF.js、Store 中的文档偏好、批注与留白控制器。
+ * [OUTPUT]: PDF 阅读器、页坐标、视图操作与导出入口。
+ * [POS]: 协调独立阅读器与工作区共用的 PDF 页面生命周期。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import { pdfImageRegions } from "./imageRegions";
 import { orderTextColumns } from "./textColumns";
 import { recognizeImage,mergeOcrWords } from "../ocr/ocr";
@@ -96,6 +102,9 @@ export class ReaderView extends ItemView {
   private closePdfExport: (() => void) | null = null;
   private syncingPageEdits = false;
   private closePageEditor: (() => void) | null = null;
+  private extendBtn: HTMLButtonElement | null = null;
+  private closeExtendPopover: (() => void) | null = null;
+  private syncExtendPopover: (() => void) | null = null;
   private pageChangeListeners = new Set<() => void>();
   private currentPageListeners = new Set<() => void>();
   private readingStateListeners = new Set<() => void>();
@@ -171,6 +180,134 @@ export class ReaderView extends ItemView {
 
   /** The workspace owns the common top bar; the original controls remain callable. */
   getReaderToolbar(): HTMLElement { return this.toolbarEl; }
+  getHandwritingOnTop(): boolean {
+    return !!this.loadedPath && this.plugin.store.getDocMeta(this.loadedPath).handwritingOnTop === true;
+  }
+  setHandwritingOnTop(enabled: boolean): void {
+    if (!this.loadedPath) return;
+    this.plugin.store.updateDocMeta(this.loadedPath, { handwritingOnTop: enabled });
+    this.syncPdfDisplay();
+  }
+  getBlankBackground(): boolean {
+    return !!this.loadedPath && this.plugin.store.getDocMeta(this.loadedPath).blankBackground === true;
+  }
+  setBlankBackground(enabled: boolean): void {
+    if (!this.loadedPath) return;
+    this.plugin.store.updateDocMeta(this.loadedPath, { blankBackground: enabled });
+    this.syncPdfDisplay();
+  }
+  private syncPdfDisplay(): void {
+    const handwritingOnTop = this.getHandwritingOnTop();
+    const blankBackground = this.getBlankBackground();
+    this.scrollEl?.classList.toggle("ms-handwriting-on-top", handwritingOnTop);
+    this.scrollEl?.classList.toggle("ms-blank-bg", blankBackground);
+    for (const rec of this.pages.values()) rec.wrapper.classList.toggle("ms-blank-bg", blankBackground);
+    if (this.extendBtn) {
+      const supported = !!this.getPdfPageEdits();
+      this.extendBtn.disabled = !supported;
+      this.extendBtn.classList.toggle("is-active", supported && (this.getExtendMode() !== "normal" || this.getMarginCommentArea()));
+    }
+    this.syncExtendPopover?.();
+  }
+  private toggleExtendPopover(): void {
+    if (this.closeExtendPopover) { this.closeExtendPopover(); return; }
+    const anchor = this.extendBtn, path = this.loadedPath, notebook = this.getDocumentNotebookId();
+    if (!anchor || !path || !this.getPdfPageEdits()) return;
+    const current = () => !this.destroyed && this.loadedPath === path && this.getDocumentNotebookId() === notebook && !!this.getPdfPageEdits();
+    const popover = el("div", { class: "ms-reader-extend-popover", role: "dialog", "aria-label": "留白设置", "data-ms-reader-extend-popover": "" });
+    const title = el("div", { class: "ms-reader-extend-title", text: "留白 / 页边设置" });
+    const modes = el("div", { class: "ms-reader-extend-modes", role: "group", "aria-label": "留白" });
+    const modeButtons: { mode: PdfExtendMode; button: HTMLButtonElement }[] = [];
+    for (const [mode, label] of [["normal", "Normal"], ["margin", "Margin"], ["collapse", "Collapse"]] as const) {
+      const button = el("button", { type: "button", text: label, "aria-label": label, "data-ms-extend-mode": mode, "aria-pressed": String(this.getExtendMode() === mode) }) as HTMLButtonElement;
+      button.addEventListener("click", async () => {
+        if (!current()) return;
+        setBusy(true);
+        try { await this.setExtendMode(mode); }
+        catch (error) { if (current()) new Notice("切换留白失败：" + String(error)); }
+        finally { setBusy(false); sync(); }
+      });
+      modeButtons.push({ mode, button });
+      modes.append(button);
+    }
+    const marginBtn = el("button", { type: "button", class: "ms-reader-extend-check", role: "menuitemcheckbox", "aria-label": "Margin Comment Area", "data-ms-margin-comment-area": "", "aria-checked": String(this.getMarginCommentArea()) }) as HTMLButtonElement;
+    const marginCheck = el("span", { class: "ms-reader-extend-mark", "aria-hidden": "true" });
+    marginBtn.append(el("span", { text: "Margin Comment Area" }), marginCheck);
+    marginBtn.addEventListener("click", async () => {
+      if (!current()) return;
+      setBusy(true);
+      try { await this.setMarginCommentArea(!this.getMarginCommentArea()); }
+      catch (error) { if (current()) new Notice("切换页边批注区失败：" + String(error)); }
+      finally { setBusy(false); sync(); }
+    });
+    const addBtn = el("button", { type: "button", class: "ms-reader-extend-add", text: "添加留白", "aria-label": "添加留白", "data-ms-reader-extend-add": "" }) as HTMLButtonElement;
+    addBtn.addEventListener("click", () => { close(); if (current()) this.beginExtend(); });
+    popover.append(title, modes, marginBtn, addBtn);
+    document.body.append(popover);
+
+    const setBusy = (busy: boolean) => {
+      for (const item of modeButtons) item.button.disabled = busy || !current();
+      marginBtn.disabled = busy || !current();
+      addBtn.disabled = busy || !current();
+    };
+    const sync = () => {
+      if (!current()) { close(); return; }
+      const mode = this.getExtendMode(), margin = this.getMarginCommentArea();
+      for (const item of modeButtons) item.button.setAttribute("aria-pressed", String(mode === item.mode));
+      marginBtn.setAttribute("aria-checked", String(margin));
+      marginCheck.textContent = margin ? "✓" : "";
+    };
+    const place = () => {
+      const bounds = anchor.getBoundingClientRect();
+      const width = popover.offsetWidth || 236, height = popover.offsetHeight || 132;
+      const left = Math.max(8, Math.min(bounds.left, window.innerWidth - width - 8));
+      const top = Math.max(8, Math.min(bounds.bottom + 6, window.innerHeight - height - 8));
+      popover.style.left = `${left}px`;
+      popover.style.top = `${top}px`;
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target && (popover.contains(target) || anchor.contains(target))) return;
+      close();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); close(); anchor.focus(); }
+    };
+    let closed = false;
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      this.closeExtendPopover = null;
+      this.syncExtendPopover = null;
+      anchor.setAttribute("aria-expanded", "false");
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("resize", place);
+      popover.remove();
+    };
+    this.closeExtendPopover = close;
+    this.syncExtendPopover = sync;
+    anchor.setAttribute("aria-expanded", "true");
+    sync();
+    place();
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("resize", place);
+  }
+  private openPdfDisplayMenu(anchor: HTMLElement): void {
+    const path = this.loadedPath;
+    const menu = new Menu();
+    menu.addItem(item => item.setTitle("Blank Background").setChecked(this.getBlankBackground())
+      .setDisabled(!path).onClick(() => {
+        if (path && path === this.loadedPath) this.setBlankBackground(!this.getBlankBackground());
+      }));
+    menu.addItem(item => item.setTitle("Handwriting on Top").setChecked(this.getHandwritingOnTop())
+      .setDisabled(!path).onClick(() => {
+        if (path && path === this.loadedPath) this.setHandwritingOnTop(!this.getHandwritingOnTop());
+      }));
+    const bounds = anchor.getBoundingClientRect();
+    menu.showAtPosition({ x: bounds.left, y: bounds.bottom });
+  }
   setWorkspaceChrome(enabled: boolean): void {
     this.workspaceChrome = enabled;
     const root = this.containerEl.children[1] as HTMLElement | undefined;
@@ -226,6 +363,7 @@ export class ReaderView extends ItemView {
   beginTextAnnotation(): void { this.annController.beginTextAnnotation(); }
   placeExtendText(event: MouseEvent): boolean { return this.extendNotes.placeText(event); }
   insertImageAnnotation(file: File): Promise<void> { return this.annController.insertImageAnnotation(file); }
+  setOverlayBindToInkLayer(id: string, bound: boolean): void { this.annController.setOverlayBindToInkLayer(id, bound); }
   undoOverlayChange(): void { this.annController.undoOverlayChange(); }
   redoOverlayChange(): void { this.annController.redoOverlayChange(); }
   getEditHistoryState(): ReaderEditHistoryState { return this.annController.getEditHistoryState(); }
@@ -639,7 +777,12 @@ export class ReaderView extends ItemView {
   async onOpen(): Promise<void> {
     this.destroyed = false;
     window.addEventListener("marginstudy-reading-layout", this.onGlobalReadingLayout);
-    this.stopCropSync?.(); this.stopCropSync = this.plugin.store.subscribe(() => { this.syncPdfPageEdits(); this.syncPageCrop(); if (this.doc && this.loadedPath) void this.extendNotes.sync(); });
+    this.stopCropSync?.(); this.stopCropSync = this.plugin.store.subscribe(() => {
+      this.syncPdfPageEdits();
+      this.syncPageCrop();
+      this.syncPdfDisplay();
+      if (this.doc && this.loadedPath) void this.extendNotes.sync();
+    });
     this.register(this.plugin.store.subscribeDocumentRename?.((oldPath, newPath) => {
       if (this.destroyed) return;
       if (this.filePath === oldPath) this.filePath = newPath;
@@ -742,6 +885,7 @@ export class ReaderView extends ItemView {
     this.scrollEl?.removeEventListener("pointerdown", this.extendNotes.onRegionStart, true);
     this.closePdfExport?.();this.closePdfExport=null;
     this.closePageEditor?.(); this.closePageEditor = null;
+    this.closeExtendPopover?.();
     this.pageChangeListeners.clear();
     this.currentPageListeners.clear();
     this.readingStateListeners.clear();
@@ -804,6 +948,11 @@ export class ReaderView extends ItemView {
     this.scaleEl = el("span", { class: "ms-tb-scale", text: Math.round(this.scale * 100) + "%" });
     const zoomIn = btn("plus", "放大", () => this.setScale(this.scale * 1.2));
     const fit = btn("maximize", "适应宽度", () => this.fitWidth());
+    const display = btn("layers", "PDF 显示设置", () => this.openPdfDisplayMenu(display));
+    this.extendBtn = btn("between-horizontal-start", "留白 / 页边设置", () => this.toggleExtendPopover()) as HTMLButtonElement;
+    this.extendBtn.setAttribute("data-ms-reader-extend-btn", "");
+    this.extendBtn.setAttribute("aria-haspopup", "true");
+    this.extendBtn.setAttribute("aria-expanded", "false");
     this.pageTotalEl = el("span", { class: "ms-page-total", text: "/ 0" });
     this.layoutSelect = el("select", { class: "ms-layout-select", "aria-label": "页面布局", title: "页面布局" });
     this.layoutSelect.append(el("option", { value: "single", text: "单页" }), el("option", { value: "spread", text: "双页" }));
@@ -840,6 +989,8 @@ export class ReaderView extends ItemView {
       this.scaleEl,
       zoomIn,
       fit,
+      display,
+      this.extendBtn,
       this.layoutSelect,
       this.continuousSelect,
       this.notebookTools,
@@ -1494,6 +1645,7 @@ export class ReaderView extends ItemView {
       if (this.doc instanceof PageCollectionDocument) { const document=this.doc; document.onReferencesChanged=()=>{if(this.doc===document&&!this.destroyed)this.annController.refreshAll();}; }
       candidate = null;
       this.loadedPath = file.path;
+      this.syncPdfDisplay();
       this.crop = readPageCrop(this.plugin.store.getDocMeta(file.path).pdfCrop);
       this.notebook = edits ? null : notebook;
       if (this.notebookTools) renderNotebookControls(this.notebookTools, this.notebook, (patch) => this.updateNotebook(patch));
@@ -1534,7 +1686,9 @@ export class ReaderView extends ItemView {
     this.visiblePages.clear();
     this.pageSizes.clear();
     this.originalPageSizes.clear(); this.cropRevision++; this.applyingCrop = false; this.crop = { ...fullPageCrop };
+    this.closeExtendPopover?.();
     this.loadedPath = null;
+    this.syncPdfDisplay();
     this.widthFitted = false;
     this.notebook = null;
     if (this.notebookTools) { clear(this.notebookTools); this.notebookTools.hidden = true; }
@@ -1615,6 +1769,7 @@ export class ReaderView extends ItemView {
       wrapper.append(bar, canvas, textLayer, annLayer);
       if (this.folded.has(i)) wrapper.classList.add("ms-page-folded");
       if (this.bookmarked.has(i)) wrapper.classList.add("ms-page-bookmarked");
+      if (this.getBlankBackground()) wrapper.classList.add("ms-blank-bg");
       this.scrollEl.append(wrapper);
       this.pages.set(i, {
         wrapper,

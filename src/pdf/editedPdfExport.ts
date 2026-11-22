@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: PDF 阅读器中的页面编辑、裁边、批注、阅读偏好与留白。
+ * [OUTPUT]: 根据当前页面顺序生成 PDF 字节。
+ * [POS]: 组织源页复制、批注扁平化与留白拼页，保留源 PDF。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import { TFile } from "obsidian";
 import { PDFDocument, degrees } from "pdf-lib";
 import type { ReaderView } from "./readerView";
@@ -17,6 +23,7 @@ export interface EditedPdfExportOptions {
 export async function buildEditedPdf(reader: ReaderView, edits: PdfPageEdits, options: EditedPdfExportOptions, current: () => void): Promise<Uint8Array> {
   const output = await PDFDocument.create(), source = reader.getDoc(), crop = reader.getPageCrop();
   const annotations = options.includeAnnotations === false ? [] : reader.getPdfExportAnnotations();
+  const handwritingOnTop = reader.getHandwritingOnTop();
   const pages = options.pages === undefined ? edits.pages.map((_, index) => index + 1) : [...new Set(options.pages)].sort((a,b) => a-b);
   if (!pages.length || pages.some(page => !Number.isSafeInteger(page) || page < 1 || page > edits.pages.length)) throw new Error("请选择有效的导出页面");
   const documents = new Map<string, Promise<PDFDocument>>();
@@ -50,7 +57,7 @@ export async function buildEditedPdf(reader: ReaderView, edits: PdfPageEdits, op
       const mime = path.endsWith(".jpg") ? "jpeg" : path.slice(path.lastIndexOf(".") + 1);
       let binary = ""; for (let offset = 0; offset < bytes.length; offset += 0x8000) binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
       return `data:image/${mime};base64,${btoa(binary)}`;
-    });
+    }, handwritingOnTop);
     if(options.includeAnnotations!==false){const notes=reader.getExtendNotes().filter(note=>note.pageId===entry.id);if(notes.length)await exportExtendPage(output,page,reader,number,viewport,notes,current);}
   }
   current();preservePdfInteractions(output,exportedSources);

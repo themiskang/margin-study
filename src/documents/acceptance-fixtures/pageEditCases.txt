@@ -241,7 +241,7 @@ export async function runPageEditAcceptance({test,assert,wait,plugin,add,app}:an
   try{
    await view.loadFileByPath(path);await view.setPageCrop({left:.1,top:0,right:1,bottom:1});await view.rotatePdfPage(1);await view.renderPage(1);
    const rec=view.getPageRecord(1)!;assert(rec.canvas.clientWidth===700&&rec.canvas.clientHeight===450,'rotated crop has incorrect paper size');
-   const inkCanvas=rec.annLayer.querySelector<HTMLCanvasElement>('canvas.ms-ink-raster')!,inkCtx=inkCanvas.getContext('2d')!,sx=inkCanvas.width/rec.annLayer.clientWidth,sy=inkCanvas.height/rec.annLayer.clientHeight;
+   const inkCanvas=rec.wrapper.querySelector<HTMLCanvasElement>('canvas.ms-ink-raster')!,inkCtx=inkCanvas.getContext('2d')!,sx=inkCanvas.width/rec.annLayer.clientWidth,sy=inkCanvas.height/rec.annLayer.clientHeight;
    assert(inkCtx.getImageData(Math.round(490*sx),Math.round(100*sy),1,1).data[3]>0&&inkCtx.getImageData(Math.round(470*sx),Math.round(100*sy),1,1).data[3]===0,'ink did not rotate with cropped paper');
    const box=view.projectRect(1,canonical.rects[0],'pdf')!,old=view.projectRect(1,legacy.rects[0])!;
    assert(Math.abs(box.left-300)<.01&&Math.abs(box.top-50)<.01&&Math.abs(box.width-20)<.01&&Math.abs(box.height-100)<.01,'canonical rect rotation wrong');
@@ -268,11 +268,11 @@ export async function runPageEditAcceptance({test,assert,wait,plugin,add,app}:an
   try{
    await view.loadFileByPath(path);await view.insertBlankPage(1);
    assert(view.getDoc().numPages===4&&view.getState().position.page===2,'blank page not inserted and selected after page one');
-   await view.navigateToReference(3,[]);assert(view.getPageRecord(3)!.annLayer.querySelector<HTMLCanvasElement>('.ms-ink-raster')!.getContext('2d')!.getImageData(150,210,1,1).data[3]>0,'existing ink moved to another source page');
+   await view.navigateToReference(3,[]);assert(view.getPageRecord(3)!.wrapper.querySelector<HTMLCanvasElement>('.ms-ink-raster')!.getContext('2d')!.getImageData(150,210,1,1).data[3]>0,'existing ink moved to another source page');
    assert(p.store.getDocMeta(path).bookmarks.join(',')==='3'&&p.store.getDocMeta(path).documentNotebookMeta.other.bookmarks.join(',')==='4','notebook bookmarks were not remapped');
    await view.movePdfPage(2,1);assert(view.getState().position.page===1,'moved page not selected');
    await view.onClose();view.containerEl.remove();view=new RealReaderView({app} as any,p);await view.onOpen();await view.loadFileByPath(path);view.flashAnnotation('page-edit-excerpt');await wait(500);
-   assert(view.getState().position.page===3&&view.getPageRecord(3)!.annLayer.querySelector<HTMLCanvasElement>('.ms-ink-raster')!.getContext('2d')!.getImageData(150,210,1,1).data[3]>0,'reopened source jump lost original page identity '+JSON.stringify({state:view.getState(),html:view.getPageRecord(3)?.annLayer.innerHTML,edits:view.getPdfPageEdits()}));
+   assert(view.getState().position.page===3&&view.getPageRecord(3)!.wrapper.querySelector<HTMLCanvasElement>('.ms-ink-raster')!.getContext('2d')!.getImageData(150,210,1,1).data[3]>0,'reopened source jump lost original page identity '+JSON.stringify({state:view.getState(),html:view.getPageRecord(3)?.annLayer.innerHTML,edits:view.getPdfPageEdits()}));
    assert(JSON.stringify(await p.store.loadAnnotations(path))===original,'page editing rewrote existing annotation data');
    assert(new Uint8Array(await app.vault.readBinary(file)).every((byte,index)=>byte===new Uint8Array(bytes)[index]),'page editing rewrote the source PDF');
   }finally{await view.onClose();view.containerEl.remove();}
