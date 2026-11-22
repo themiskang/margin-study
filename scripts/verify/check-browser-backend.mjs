@@ -17,7 +17,8 @@ if (!path) {
 let resolved = path;
 try { resolved = realpathSync(path); } catch { console.error(`[browser-backend] ${backend} 的链接目标不存在：${path}`); process.exit(1); }
 const version = spawnSync(path, ["--version"], { encoding: "utf8" }).stdout?.split("\n")[0]?.trim() ?? "(无输出)";
-const inWorktree = /\/orca\/workspaces\/|\.px-gap-|node_modules\/(agent-browser|ego-browser)/.test(resolved);
+const stablePrefixes = ["/opt/homebrew/lib/node_modules/", "/opt/homebrew/bin/", "/Users/", "/usr/local/lib/node_modules/"];
+const inWorktree = /\/orca\/workspaces\//.test(resolved) || (resolved.includes("/node_modules/") && !stablePrefixes.some(prefix => prefix.endsWith("node_modules/") && resolved.startsWith(prefix)));
 console.log(`[browser-backend] backend=${backend} path=${path} resolved=${resolved} version=${version}`);
 if (inWorktree) {
   console.error("[browser-backend] 后端解析到 worktree/node_modules 内的副本，说明全局 bin 被 postinstall 重链。修复：ln -sfn /opt/homebrew/lib/node_modules/agent-browser/bin/agent-browser-darwin-arm64 /opt/homebrew/bin/agent-browser");
