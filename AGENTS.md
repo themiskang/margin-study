@@ -112,4 +112,4 @@ Codex 是本项目的执行席。用户已授权的任务中，发现问题后�
   ```
 - 拿不准 API 时先跑 `ego-browser skill`（会自己打印用法），或用 `help("page.click")` 看签名。
 - 覆盖范围：开页面、点击、输入、截图、读 DOM/几何、用业主登录态、下载。**需要业主介入时（CAPTCHA、2FA、无凭据登录）停下来提问，不许猜凭据、不许绕路。**
-- **验收套件例外**：`scripts/verify/ego-harness.mjs` 是双后端适配层。默认走 `agent-browser`；需要 ego 后端时用 `MARGINSTUDY_BROWSER=ego`（已实测：`l3-ui` 26/26 通过）。切换后端可能改变像素基线，`px-gap` 相关结论不得跨后端混用。
+- **验收套件也走 ego**：`scripts/verify/ego-harness.mjs` 的**默认后端已是 ego-browser**（`9e9b8ad`）。二者同为 chromium 内核，页面结构与 CDP 几何测量一致，故 `px-gap` 的 298 行基线在两个后端下通用，不需要各建一套。需要旧后端时显式设 `MARGINSTUDY_BROWSER=agent-browser`。
