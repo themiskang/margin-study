@@ -20,3 +20,11 @@
 问题：备份清单含 `MarginStudyBackups/…` 内部路径时，加载期守卫直接抛错，**整个插件加载失败**（Pad 实机 1.15.1 默认状态复现）。
 修复：加载期解除该类来源登记并记 `localEvent`（保留卡片正文、节点、学习集归属），校验侧跳过该类条目；`sha/bytes` 校验仍在跳过之前执行（篡改照样失败），危险路径仍抛错；备份创建侧对 data 与 files 两侧统一过滤。
 范围豁免：P5（`verify:public` 首轮即绿）受 GAP-03 负载敏感间歇阻塞，异厂裁定与本卡无关，**不标首轮即绿**。
+
+## 2026-11-22 · GAP-03 C2 收口（合并 `8f8b130`）
+
+- 根因：`src/pdf/extendNotes.ts` 的 `commitNotes` 把权威几何写入（`updateNotebookMeta`）排在重型预览渲染（双 `overlayPng` + `toBlob` 缩略图）之后，高负载下突破夹具裸 `wait(80)` → `frame resize did not follow both paper axes`。
+- 修法：几何同步提交在前、权威写入随后、预览异步生成；夹具改条件等待并内联两帧诊断；新增 `extendGeometry.test.mjs` 延迟单测（250ms 注入）。
+- 异厂验收 PASS（受控负载 30/30、低负载 10/10、px-gap 298 行零差异、W3 单测独立复跑 1/1）。
+- 主树合入后连续两轮 `verify:public` 各 **53/53**，`pdf-hw-eraser` **247/247** → 同时闭环 P0（备份守卫卡）挂起的 P5。
+- **覆盖范围勘误**：`hw-eraser-acceptance.mjs` 的夹具注入自 `2bfb044`（2026-11-15）起匹配零次，PDF 橡皮擦专项两组断言在此后从未运行。`2bfb044..a830592` 期间已收口的 10 张卡（卡 A/B/CI、GAP-04、GAP-06a/06b、P0 等）其 `pdf-hw-eraser 245/245` 记录**只覆盖 245 条中的 243 条实际断言**；已在差距表标注，不逐张补跑。
