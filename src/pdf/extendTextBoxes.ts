@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 留白纸面、文字框记录、提交回调及富文本渲染器。
+ * [OUTPUT]: 文字框交互、内容适配与 PNG 渲染。
+ * [POS]: 以纸面为坐标基准，提交拖动时保留完成的预览。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import type { Annotation, PdfExtendNote } from "../types";
 import { el } from "../utils/dom";
 import { applyTextStyle, normalizeTextStyle, renderTextRuns } from "../annot/textRuns";
@@ -27,9 +33,24 @@ export function renderExtendTextBoxes(paper: HTMLElement, note: PdfExtendNote, s
       const start={x:event.clientX,y:event.clientY},pointerId=event.pointerId;let next={...record},changed=false;
       const geometry=(value:TextBox)=>{box.style.left=`${value.x*100}%`;box.style.top=`${value.y*100}%`;box.style.width=`${value.w*100}%`;box.style.height=`${value.h*100}%`;};
       const move=(event:PointerEvent)=>{if(event.pointerId!==pointerId)return;const dx=event.clientX-start.x,dy=event.clientY-start.y;if(Math.abs(dx)>2||Math.abs(dy)>2)changed=true;next=resize?{...record,w:Math.min(1-record.x,Math.max(12/bounds.width,record.w+dx/bounds.width)),h:Math.min(1-record.y,Math.max(12/bounds.height,record.h+dy/bounds.height))}:{...record,x:Math.max(0,Math.min(1-record.w,record.x+dx/bounds.width)),y:Math.max(0,Math.min(1-record.h,record.y+dy/bounds.height))};geometry(next);};
-      const cleanup=()=>{window.removeEventListener("pointermove",move,true);window.removeEventListener("pointerup",up,true);window.removeEventListener("pointercancel",cancel,true);window.removeEventListener("blur",cancel);window.removeEventListener("keydown",key,true);cancelDrag=undefined;geometry(record);};
-      const cancel=()=>cleanup();const key=(event:KeyboardEvent)=>{if(event.key==="Escape"){event.preventDefault();event.stopPropagation();cancel();}};
-      const up=(event:PointerEvent)=>{if(event.pointerId!==pointerId)return;cleanup();if(!changed||!movement.current())return;const records=movement.latest();if(JSON.stringify(records.find(value=>value.id===record.id))!==JSON.stringify(record)){new Notice("留白文字框已在其他窗口更新，请重新操作");return;}void movement.save(records.map(value=>value.id===record.id?next:value)).catch(error=>new Notice(String(error)));};
+      const cleanup=()=>{window.removeEventListener("pointermove",move,true);window.removeEventListener("pointerup",up,true);window.removeEventListener("pointercancel",cancel,true);window.removeEventListener("blur",cancel);window.removeEventListener("keydown",key,true);cancelDrag=undefined;};
+      const cancel=()=>{cleanup();geometry(record);};const key=(event:KeyboardEvent)=>{if(event.key==="Escape"){event.preventDefault();event.stopPropagation();cancel();}};
+      const up=(event:PointerEvent)=>{
+        if(event.pointerId!==pointerId)return;
+        cleanup();
+        if(!changed||!movement.current()){geometry(record);return;}
+        const records=movement.latest();
+        const current=records.find(value=>value.id===record.id);
+        if(JSON.stringify(current)!==JSON.stringify(record)){
+          if(current)geometry(current);
+          new Notice("留白文字框已在其他窗口更新，请重新操作");return;
+        }
+        void movement.save(records.map(value=>value.id===record.id?next:value)).catch(error=>{
+          const current=movement.current()&&movement.latest().find(value=>value.id===record.id);
+          if(current)geometry(current);
+          new Notice(String(error));
+        });
+      };
       cancelDrag=cancel;window.addEventListener("pointermove",move,true);window.addEventListener("pointerup",up,true);window.addEventListener("pointercancel",cancel,true);window.addEventListener("blur",cancel);window.addEventListener("keydown",key,true);
     };
     box.addEventListener("pointerdown",event=>{if(!(event.target as Element).closest("button,[contenteditable],input,textarea"))begin(event,false);});

@@ -1,6 +1,30 @@
+/**
+ * [INPUT]: 隔离 PDF 阅读器与合成留白文档。
+ * [OUTPUT]: 留白编辑、坐标与重开验收组。
+ * [POS]: 从 Store 和 DOM 核对文字框提交，失败时记录两次几何采样。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import { PDFDocument, rgb, degrees, StandardFonts } from '__PROJECT__/node_modules/pdf-lib/es/index.js';
 import { ReaderView as RealReaderView } from 'marginstudy-real-reader';
 import { createNotebookBytes } from '__PROJECT__/src/documents/notebookFormat';
+
+async function waitForExtend(check: () => boolean, wait: (ms: number) => Promise<void>): Promise<boolean> {
+ const deadline = performance.now() + 3000;
+ while (!check() && performance.now() < deadline) await wait(10);
+ return check();
+}
+
+function afterTwoFrames(): Promise<number> {
+ return new Promise(resolve => {
+  let count = 0;
+  const timer = window.setTimeout(() => { cancelAnimationFrame(frame); resolve(count); }, 250);
+  let frame = requestAnimationFrame(function next() {
+   if (++count < 2) frame = requestAnimationFrame(next);
+   else { clearTimeout(timer); resolve(count); }
+  });
+ });
+}
+
 export async function runExtendAcceptance({test,assert,wait,plugin,add,app}:any){
  await test('Positioned text paste preserves source sizes and resize handles capture pointers outside the frame',async()=>{
   const path='extend-rich-paste-resize.pdf';add(path,{bytes:createNotebookBytes({format:'marginstudy-notebook',version:1,id:'rich-paste',title:'Extend',style:'blank',pageCount:1,width:500,height:700,createdAt:'2026-10-21'})});const p=plugin();let view:any=new RealReaderView({app} as any,p);await view.onOpen();
@@ -58,8 +82,40 @@ export async function runExtendAcceptance({test,assert,wait,plugin,add,app}:any)
  await test('A positioned Extend text box resizes its frame without changing font, siblings or position and supports cancellation, history and reopening',async()=>{
   const path='extend-text-frame-resize.pdf';add(path,{bytes:createNotebookBytes({format:'marginstudy-notebook',version:1,id:'text-frame',title:'Extend',style:'blank',pageCount:1,width:500,height:700,createdAt:'2026-10-21'})});const p=plugin();let view:any=new RealReaderView({app} as any,p);await view.onOpen();
   try{await view.loadFileByPath(path);const id=await view.createExtend(1,{x:.5,y:.3});await view.finishExtendEditing();const style={fontFamily:'Georgia',fontSize:20,bold:true,italic:false,underline:true,color:'#aa0000',background:'#ffff00'},original={id:'resizing',text:'Frame stays styled',runs:[{text:'Frame stays styled',style}],x:.1,y:.2,w:.3,h:.2},sibling={id:'sibling',text:'Stay here',x:.65,y:.7,w:.3,h:.2};const canvas=document.createElement('canvas');canvas.width=50;canvas.height=25;const image={id:'photo',src:canvas.toDataURL(),x:.7,y:.1,w:.2,h:.25};await view.updateExtend(id,{height:220,textBoxes:[original,sibling],images:[image]});await view.addExtendToMindmap(id);const before=JSON.stringify(view.getExtendNotes());
-   const resize=async(cancel=false)=>{const box=view.containerEl.querySelector('[data-text-box-id="resizing"]');box.click();const grip=box.querySelector('[aria-label="调整留白文字框大小"]');assert(grip&&getComputedStyle(grip).display!=='none'&&grip.getBoundingClientRect().width>=10,'selected text box has no visible resize handle');const rect=grip.getBoundingClientRect(),paper=box.closest('.ms-extend-note').getBoundingClientRect(),x=rect.left+rect.width/2,y=rect.top+rect.height/2;grip.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0,pointerId:86,clientX:x,clientY:y}));window.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:86,clientX:x+paper.width*.2,clientY:y+paper.height*.1}));assert(JSON.stringify(view.getExtendNotes())===before,'resize draft was saved before release');window.dispatchEvent(cancel?new KeyboardEvent('keydown',{bubbles:true,key:'Escape'}):new PointerEvent('pointerup',{bubbles:true,pointerId:86,clientX:x+paper.width*.2,clientY:y+paper.height*.1}));await wait(80);};
-   await resize(true);assert(JSON.stringify(view.getExtendNotes())===before,'cancelled frame resize saved geometry');await resize();let note=view.getExtendNotes()[0],resized=note.textBoxes[0];assert(Math.abs(resized.w-.5)<.002&&Math.abs(resized.h-.3)<.002,'frame resize did not follow both paper axes');assert(resized.x===original.x&&resized.y===original.y&&resized.text===original.text&&JSON.stringify(resized.runs)===JSON.stringify(original.runs),'frame resize changed position or font');assert(JSON.stringify(note.textBoxes[1])===JSON.stringify(sibling)&&JSON.stringify(note.images[0])===JSON.stringify(image),'frame resize changed a sibling');const saved=JSON.stringify(view.getExtendNotes());await view.undoLastEdit();assert(JSON.stringify(view.getExtendNotes())===before,'frame resize cannot undo');await view.redoLastEdit();assert(JSON.stringify(view.getExtendNotes())===saved,'frame resize cannot redo');
+   const frame=()=>view.containerEl.querySelector('[data-text-box-id="resizing"]') as HTMLElement | null;
+   const geometry=()=>view.getExtendNotes().find((note:any)=>note.id===id)?.textBoxes.find((box:any)=>box.id===original.id);
+   const resize=(cancel=false)=>{
+    const box=frame()!;box.click();const grip=box.querySelector('[aria-label="调整留白文字框大小"]')!;
+    assert(grip&&getComputedStyle(grip).display!=='none'&&grip.getBoundingClientRect().width>=10,'selected text box has no visible resize handle');
+    const rect=grip.getBoundingClientRect(),paper=box.closest('.ms-extend-note')!.getBoundingClientRect(),x=rect.left+rect.width/2,y=rect.top+rect.height/2;
+    grip.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0,pointerId:86,clientX:x,clientY:y}));
+    const target={bubbles:true,pointerId:86,clientX:x+paper.width*.2,clientY:y+paper.height*.1};
+    window.dispatchEvent(new PointerEvent('pointermove',target));
+    assert(JSON.stringify(view.getExtendNotes())===before,'resize draft was saved before release');
+    window.dispatchEvent(cancel?new KeyboardEvent('keydown',{bubbles:true,key:'Escape'}):new PointerEvent('pointerup',target));
+   };
+   const measure=()=>{
+    const box=frame(),pdfViewport=view.getPageRecord(1)?.viewport;
+    return {
+     committed:geometry(),
+     frameRect:box?.getBoundingClientRect().toJSON()??null,
+     paperRect:box?.closest('.ms-extend-note')?.getBoundingClientRect().toJSON()??null,
+     viewport:{width:innerWidth,height:innerHeight,pdfWidth:pdfViewport?.width,pdfHeight:pdfViewport?.height},
+     devicePixelRatio:window.devicePixelRatio,scale:view.getScale(),
+    };
+   };
+   const followsAxes=(sample:ReturnType<typeof measure>)=>{
+    const {committed,frameRect,paperRect}=sample;
+    return !!(committed&&frameRect&&paperRect
+      &&Math.abs(committed.w-.5)<.002&&Math.abs(committed.h-.3)<.002
+      &&Math.abs(frameRect.width-paperRect.width*.5)<1&&Math.abs(frameRect.height-paperRect.height*.3)<1);
+   };
+   resize(true);assert(JSON.stringify(view.getExtendNotes())===before,'cancelled frame resize saved geometry');
+   resize();const immediate=measure();
+   const settled=await waitForExtend(()=>followsAxes(measure()),wait);
+   const stableFrames=await afterTwoFrames(),stable=measure();
+   assert(settled&&stableFrames===2&&followsAxes(stable),'frame resize did not follow both paper axes: '+JSON.stringify({immediate,stable,stableFrames}));
+   const note=view.getExtendNotes()[0],resized=note.textBoxes[0];assert(resized.x===original.x&&resized.y===original.y&&resized.text===original.text&&JSON.stringify(resized.runs)===JSON.stringify(original.runs),'frame resize changed position or font');assert(JSON.stringify(note.textBoxes[1])===JSON.stringify(sibling)&&JSON.stringify(note.images[0])===JSON.stringify(image),'frame resize changed a sibling');const saved=JSON.stringify(view.getExtendNotes());await view.undoLastEdit();assert(JSON.stringify(view.getExtendNotes())===before,'frame resize cannot undo');await view.redoLastEdit();assert(JSON.stringify(view.getExtendNotes())===saved,'frame resize cannot redo');
    const state=view.getState();await view.onClose();view.containerEl.remove();view=new RealReaderView({app} as any,p);await view.setState(state);await view.onOpen();await view.renderPage(1);assert(JSON.stringify(view.getExtendNotes())===saved,'frame resize did not survive reopening');await view.setExtendMode('margin');const box=view.containerEl.querySelector('[data-text-box-id="resizing"]'),paper=box.closest('.ms-extend-note').getBoundingClientRect();assert(Math.abs(box.getBoundingClientRect().width/paper.width-.5)<.01,'Margin did not retain resized frame proportions');
   }finally{await view.onClose();view.containerEl.remove();}
  });
@@ -278,9 +334,14 @@ export async function runExtendAcceptance({test,assert,wait,plugin,add,app}:any)
   try{await view.loadFileByPath(path);await view.renderPage(1);view.beginExtend();const span=view.getPageRecord(1).textLayer.querySelector('span'),range=document.createRange();range.setStart(span.firstChild,0);range.setEnd(span.firstChild,6);window.getSelection().removeAllRanges();window.getSelection().addRange(range);document.dispatchEvent(new Event('selectionchange'));await settle(()=>document.querySelector('.ms-context-primary'));([...document.querySelectorAll('.ms-context-primary button')].find((node:any)=>node.textContent==='更多') as HTMLButtonElement).click();
    const action:any=[...document.querySelectorAll('.ms-ann-pop button')].find((node:any)=>node.textContent==='Extend');action.click();await settle(()=>view.getExtendNotes().length===1&&view.containerEl.querySelector('[aria-label="留白文字"]'));const note=view.getExtendNotes()[0],anns=await p.store.loadAnnotations(path),source=anns.find((ann:any)=>ann.id===note.sourceAnnId);assert(note.text===''&&source?.text==='Unique'&&source.pdfCoordinateSpace==='pdf','source was copied into note body or lost its canonical anchor');assert(p.store.cards.length===1&&p.store.cards[0].anchorAnnId===source.id,'excerpt card did not link to the original selection');
    const editor=view.containerEl.querySelector('[aria-label="留白文字"]');editor.textContent='My separate comment';editor.dispatchEvent(new InputEvent('input',{bubbles:true}));await view.finishExtendEditing();assert(p.store.cards[0].front==='Unique','editing the note overwrote the source excerpt');assert(p.store.cards[0].back==='My separate comment','linked comment did not reach source card');p.store.cards[0].back='Edited source comment';p.store.save();await settle(()=>view.getExtendNotes()[0].text==='Edited source comment');
-   await view.updateExtend(note.id,{ink:[{id:'linked-ink',color:'#111111',brush:'pen',strokes:[[{x:.2,y:.2},{x:.8,y:.8}]]}]});const media=p.store.cards[0].extendMedia?.find((item:any)=>item.noteId===note.id);assert(media?.image?.startsWith('data:image/png;base64,'),'source card is missing its Extend handwriting preview');const bitmap=new Image();bitmap.src=media.image;await bitmap.decode();const probe=document.createElement('canvas');probe.width=bitmap.width;probe.height=bitmap.height;const ctx=probe.getContext('2d');ctx.drawImage(bitmap,0,0);const pixel=ctx.getImageData(Math.floor(bitmap.width*.5),Math.floor(bitmap.height*.5),1,1).data;assert(pixel[0]<80&&pixel[1]<80&&pixel[2]<80,'source handwriting preview does not contain the stroke');assert(p.store.cards[0].front==='Unique'&&p.store.cards[0].back==='Edited source comment','handwriting overwrote excerpt or textual comment');
+   await view.updateExtend(note.id,{ink:[{id:'linked-ink',color:'#111111',brush:'pen',strokes:[[{x:.2,y:.2},{x:.8,y:.8}]]}]});
+   const preview=()=>p.store.cards[0].extendMedia?.find((item:any)=>item.noteId===note.id);
+   assert(await waitForExtend(()=>preview()?.image?.startsWith('data:image/png;base64,'),wait),'source card is missing its Extend handwriting preview');
+   const media=preview(),bitmap=new Image();bitmap.src=media.image;await bitmap.decode();const probe=document.createElement('canvas');probe.width=bitmap.width;probe.height=bitmap.height;const ctx=probe.getContext('2d');ctx.drawImage(bitmap,0,0);const pixel=ctx.getImageData(Math.floor(bitmap.width*.5),Math.floor(bitmap.height*.5),1,1).data;assert(pixel[0]<80&&pixel[1]<80&&pixel[2]<80,'source handwriting preview does not contain the stroke');assert(p.store.cards[0].front==='Unique'&&p.store.cards[0].back==='Edited source comment','handwriting overwrote excerpt or textual comment');
    const add=async()=>{view.containerEl.querySelector('[aria-label="留白菜单"]').click();const button=view.containerEl.querySelector('[aria-label="Add to MindMap"]');assert(button,'linked note has no Add to MindMap action');button.click();await wait(20);};await add();await view.addExtendToMindmap(note.id);assert(p.store.cards.length===1&&p.store.nodes.filter((node:any)=>node.cardId===source.cardId).length===1,'repeated Add to MindMap duplicated source cards or nodes');
-   await view.removeExtend(note.id);assert(!view.getExtendNotes().length&&(await p.store.loadAnnotations(path)).some((ann:any)=>ann.id===source.id)&&p.store.cards[0].front==='Unique'&&!p.store.cards[0].hidden&&!p.store.cards[0].back&&!p.store.cards[0].extendMedia?.length,'deleting only the Extend destroyed its source or retained comment');await view.undoLastEdit();assert(view.getExtendNotes()[0].sourceAnnId===source.id&&view.getExtendNotes()[0].text==='Edited source comment'&&p.store.cards[0].back==='Edited source comment'&&p.store.cards[0].extendMedia?.[0]?.image===media.image,'undo did not recover linked note content');
+   await view.removeExtend(note.id);assert(!view.getExtendNotes().length&&(await p.store.loadAnnotations(path)).some((ann:any)=>ann.id===source.id)&&p.store.cards[0].front==='Unique'&&!p.store.cards[0].hidden&&!p.store.cards[0].back&&!p.store.cards[0].extendMedia?.length,'deleting only the Extend destroyed its source or retained comment');await view.undoLastEdit();
+   const restored=await waitForExtend(()=>preview()?.image===media.image,wait);
+   assert(view.getExtendNotes()[0].sourceAnnId===source.id&&view.getExtendNotes()[0].text==='Edited source comment'&&p.store.cards[0].back==='Edited source comment'&&restored,'undo did not recover linked note content');
   }finally{window.getSelection()?.removeAllRanges();await view.onClose();view.containerEl.remove();}
  });
  await test('An existing region excerpt opens the same Extend below its rotated cropped source, follows its sheet and cannot link across notebooks',async()=>{

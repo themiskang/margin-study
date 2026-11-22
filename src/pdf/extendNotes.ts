@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: ReaderView 的页面、笔记本与 Store，以及留白卡片渲染器。
+ * [OUTPUT]: ExtendNotes 的留白编辑、提交与显示，以及页面坐标投影。
+ * [POS]: 同步提交留白几何和卡片字段。异步生成派生卡片预览。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import { Menu, Notice, setIcon } from "obsidian";
 import { cardColorIndex } from "../model/cardColors";
 import { foldCoordinates, regionFoldBands, type FoldBand } from "./regionFolds";
@@ -25,6 +31,13 @@ import { openExtendSpeech } from "./extendSpeech";
 import { researchPreferences, engineSearchUrl } from "../research/contracts";
 
 export interface ExtendGap { note: PdfExtendNote; y: number; height: number; top: number; }
+type CardVisibility = { card?: boolean; nodes: Map<string, boolean | undefined> };
+type NoteChange = { id: string; value?: PdfExtendNote; expected?: PdfExtendNote; visibility: CardVisibility };
+
+function cardMediaKey(note?: PdfExtendNote): string {
+  return JSON.stringify(note && [note.pageId, note.sourceAnnId, note.height, note.ink, note.images, note.textBoxes, note.text, note.runs]);
+}
+
 /** All geometry stays in the original PDF. Only the view acquires inserted vertical bands. */
 export function extendProjection(base: any, gaps: ExtendGap[], folds: FoldBand[] = []): any {
   if (!gaps.length && !folds.length) return base;
@@ -180,14 +193,14 @@ export class ExtendNotes {
     await this.reader.navigateToReference(page,[]);this.popupId=id;this.render(page);
     this.reader.getScrollContainer().querySelector<HTMLElement>(`.ms-extend-note[data-extend-id="${id}"]`)?.scrollIntoView({block:"center"});
   }
-  private async syncOwnCard(id: string, next: PdfExtendNote | undefined, expected: PdfExtendNote | undefined, visibility: {card?:boolean;nodes:Map<string,boolean|undefined>}): Promise<void> {
+  private syncOwnCard({id, value: next, expected, visibility}: NoteChange): Card | undefined {
     const linked=next?.sourceAnnId?next:expected?.sourceAnnId?expected:undefined;
-    if(linked){const card=this.noteCard(linked);if(card){await this.syncCardMedia(card,id,next,expected);this.syncSourceText(card,id,next,expected);}return;}
+    if(linked){const card=this.noteCard(linked);if(card)this.syncSourceText(card,id,next,expected);return card;}
     const store=this.reader.plugin.store, card=this.ownCard(id); if(!card)return;
-    await this.syncCardMedia(card,id,next,expected);
     if(!next)card.hidden=true;else if(!expected)card.hidden=visibility.card;
     if(next){card.front=extendCardText(next);card.color=next.color;card.colorIndex=cardColorIndex(next.color);card.tags=next.tags??[];card.images=next.images?.map(image=>image.src);card.updatedAt=new Date().toISOString();}
     for(const node of store.nodes.filter(node=>node.cardId===card.id)){if(!next)node.hidden=true;else if(!expected)node.hidden=visibility.nodes.get(node.id);if(next){node.title=next.text.slice(0,60)||"留白";node.color=next.color;node.tags=next.tags;}}
+    return card;
   }
   private syncSourceText(card: Card, id: string, next?: PdfExtendNote, expected?: PdfExtendNote): void {
     const before=JSON.stringify([card.back,card.extendText]);
@@ -198,19 +211,38 @@ export class ExtendNotes {
     }else if(next?.text||expected?.text){card.back=next?extendCardText(next)||undefined:undefined;}
     if(before!==JSON.stringify([card.back,card.extendText]))card.updatedAt=new Date().toISOString();
   }
-  private async syncCardMedia(card: Card, id: string, next?: PdfExtendNote, expected?: PdfExtendNote): Promise<void> {
-    const existing=card.extendMedia?.find(item=>item.noteId===id);
-    if(next&&existing&&next.height===expected?.height&&JSON.stringify(next.ink)===JSON.stringify(expected.ink)&&JSON.stringify(next.images)===JSON.stringify(expected.images)&&JSON.stringify(next.textBoxes)===JSON.stringify(expected.textBoxes)&&next.text===expected.text&&JSON.stringify(next.runs)===JSON.stringify(expected.runs))return;
-    const path=this.reader.getFilePath(),notebook=this.reader.getDocumentNotebookId();
+  private async syncCardMedia(card: Card, id: string, next?: PdfExtendNote, expected?: PdfExtendNote, defer = false): Promise<void> {
+    const key = cardMediaKey(next);
+    if (next && card.extendMedia?.some(item => item.noteId === id) && key === cardMediaKey(expected)) return;
+    const store = this.reader.plugin.store, path = card.docPath, notebook = this.reader.getDocumentNotebookId();
+    const current = () => store.getCard(card.id) === card
+      && cardMediaKey(notebookMeta(store.getDocMeta(path), notebook).pdfExtendNotes?.find(note => note.id === id)) === key;
     const page=next?(this.reader.getPdfPageEdits()?.pages.findIndex(page=>page.id===next.pageId)??-1)+1:0;
+    const width = next ? this.reader.getPageBaseSize(page).width : 0;
     const composed=!!next&&!next.sourceAnnId&&!!(next.textBoxes?.length||!next.text&&next.images?.length);
-    const image=next?await extendMediaImage(next.sourceAnnId||composed?next:{...next,images:undefined},this.reader.getPageBaseSize(page).width,composed):undefined;
-    if(this.reader.getFilePath()!==path||this.reader.getDocumentNotebookId()!==notebook)throw new Error("文档或笔记本已切换，评论图片同步已取消");
-    if(this.reader.plugin.store.getCard(card.id)!==card)return;
-    const media=card.extendMedia?.filter(item=>item.noteId!==id)??[];
-    if(image)media.push({noteId:id,image,...(composed?{composed:true}:{})});
-    card.extendMedia=media.length?media:undefined;
+    if (next && defer) await new Promise<void>(resolve => setTimeout(resolve, 0));
+    if (!current()) return;
+    const image = next ? await extendMediaImage(next.sourceAnnId || composed ? next : {...next, images: undefined}, width, composed) : undefined;
+    if (!current()) return;
+    const existing = card.extendMedia?.find(item => item.noteId === id);
+    if (existing?.image === image && (!image || !!existing?.composed === composed)) return;
+    const media = card.extendMedia?.filter(item => item.noteId !== id) ?? [];
+    if (image) media.push({noteId:id,image,...(composed?{composed:true}:{})});
+    card.extendMedia = media.length ? media : undefined;
+    if (defer) store.save();
   }
+
+  private commitNotes(path: string, notebook: string, notes: PdfExtendNote[], changes: NoteChange[]): Promise<void> {
+    const cards = changes.map(change => this.syncOwnCard(change));
+    updateNotebookMeta(this.reader.plugin, path, { pdfExtendNotes: notes.length ? notes : undefined }, notebook);
+    changes.forEach(({id, value, expected}, index) => {
+      const card = cards[index];
+      if (card) void this.syncCardMedia(card, id, value, expected, true)
+        .catch(error => new Notice("留白卡片预览生成失败：" + String(error)));
+    });
+    return this.sync();
+  }
+
   private async ensureCard(note: PdfExtendNote): Promise<Card | undefined> {
     if(note.sourceAnnId){const syncing=this.syncingCards;this.syncingCards=true;try{const card=this.reader.ensureExtendSourceCard(note.sourceAnnId);if(card){this.syncSourceText(card,note.id,note);await this.syncCardMedia(card,note.id,note);}return card;}finally{this.syncingCards=syncing;}}
     const store=this.reader.plugin.store;let card=this.ownCard(note.id);
@@ -261,9 +293,7 @@ export class ExtendNotes {
       const index = notes.findIndex(note => note.id === id);
       if (value) { if (index < 0) notes.push(structuredClone(value)); else notes[index] = structuredClone(value); }
       else if (index >= 0) notes.splice(index, 1);
-      await this.syncOwnCard(id,value,expected,visibility);
-      updateNotebookMeta(this.reader.plugin, path, { pdfExtendNotes: notes.length ? notes : undefined }, notebook);
-      await this.sync();
+      await this.commitNotes(path, notebook, notes, [{ id, value, expected, visibility }]);
     };
     // Store notification starts the new layout, but history stays in the same reader session.
     const task = apply(next, before);
@@ -524,8 +554,8 @@ export class ExtendNotes {
     const apply=async(values:PdfExtendNote[],expected:PdfExtendNote[])=>{
       if(path!==this.reader.getFilePath()||notebook!==this.reader.getDocumentNotebookId())throw new Error("文档或笔记本已切换，剪切移动已取消");
       const notes=this.notes();for(const note of expected)if(JSON.stringify(notes.find(value=>value.id===note.id))!==JSON.stringify(note))throw new Error("留白已在其他窗口更新，请重新操作");
-      for(let index=0;index<values.length;index++)await this.syncOwnCard(values[index].id,values[index],expected[index],visibility[index]);
-      updateNotebookMeta(this.reader.plugin,path,{pdfExtendNotes:notes.map(note=>structuredClone(values.find(value=>value.id===note.id)??note))},notebook);await this.sync();
+      const next = notes.map(note => structuredClone(values.find(value => value.id === note.id) ?? note));
+      await this.commitNotes(path, notebook, next, values.map((value, index) => ({ id: value.id, value, expected: expected[index], visibility: visibility[index] })));
     };
     await apply(after,before);this.reader.recordExtendEdit("移动留白图片",redo=>apply(redo?after:before,redo?before:after));
   }
@@ -557,8 +587,8 @@ export class ExtendNotes {
     const apply=async(values:PdfExtendNote[],expected:PdfExtendNote[])=>{
       if(path!==this.reader.getFilePath()||notebook!==this.reader.getDocumentNotebookId())throw new Error("文档或笔记本已切换，剪切移动已取消");
       const notes=this.notes();for(const note of expected)if(JSON.stringify(notes.find(value=>value.id===note.id))!==JSON.stringify(note))throw new Error("留白已在其他窗口更新，请重新操作");
-      for(let index=0;index<values.length;index++)await this.syncOwnCard(values[index].id,values[index],expected[index],visibility[index]);
-      updateNotebookMeta(this.reader.plugin,path,{pdfExtendNotes:notes.map(note=>structuredClone(values.find(value=>value.id===note.id)??note))},notebook);await this.sync();
+      const next = notes.map(note => structuredClone(values.find(value => value.id === note.id) ?? note));
+      await this.commitNotes(path, notebook, next, values.map((value, index) => ({ id: value.id, value, expected: expected[index], visibility: visibility[index] })));
     };
     await apply(after,before);this.reader.recordExtendEdit("移动留白文字框",redo=>apply(redo?after:before,redo?before:after));
   }
