@@ -95,3 +95,21 @@ Codex 是本项目的执行席。用户已授权的任务中，发现问题后�
 **会话标签**：侧栏只允许出现「正在做」和「本轮需回看」的会话。已收口的卡、已作废的卡、超过 7 天不用的非判定席会话，一律 release。判定席（规划/复核）的会话记录可留作追溯，但标签不留。
 
 **判定**：`orca agent list` 里除「正在做」外不应出现已完成卡的标签；`ls /tmp | grep <卡号>` 应为空；根目录不新增证据或临时文件。做不到就是没清理。
+
+## 浏览器工具（所有席位统一）
+
+**凡需要真实浏览器的工作，一律用 `ego-browser`（ego lite），不用内置浏览器、不用 Playwright。**
+
+- 路径：`~/.pi/agent/bin/ego-browser`（0.6.3.17，chromium 156），先 `export PATH="$HOME/.pi/agent/bin:$PATH"`。
+- 用法：脚本通过 `ego-browser nodejs` 执行，API 是 **TaskSpace / Page**，不是 Playwright（没有 `locator()`/`context()`/`expect()`）：
+  ```bash
+  ego-browser nodejs <<'EOF'
+  const task = await taskSpace("用途一句话");
+  const page = task.page("p1");
+  await page.goto("https://example.com");
+  console.log(await page.snapshot());
+  EOF
+  ```
+- 拿不准 API 时先跑 `ego-browser skill`（会自己打印用法），或用 `help("page.click")` 看签名。
+- 覆盖范围：开页面、点击、输入、截图、读 DOM/几何、用业主登录态、下载。**需要业主介入时（CAPTCHA、2FA、无凭据登录）停下来提问，不许猜凭据、不许绕路。**
+- **验收套件例外**：`scripts/verify/ego-harness.mjs` 是双后端适配层。默认走 `agent-browser`；需要 ego 后端时用 `MARGINSTUDY_BROWSER=ego`（已实测：`l3-ui` 26/26 通过）。切换后端可能改变像素基线，`px-gap` 相关结论不得跨后端混用。
