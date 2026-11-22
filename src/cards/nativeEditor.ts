@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖卡片数据、编辑组件和 Obsidian 插件服务。
  * [OUTPUT]: 提供原生卡片编辑界面。
- * [POS]: 连接卡片内容编辑与手写评论。
+ * [POS]: 连接卡片内容编辑与手写评论，并提示已解除登记的来源。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 import type MarginStudyPlugin from "../main";
@@ -59,6 +59,7 @@ export function mountNativeCardEditor(plugin: MarginStudyPlugin, options: {
   save.innerHTML = `<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">${ICONS.save}</svg>`;
   top.append(type, handle, save);
   const sheet = el("div", { class: "ms-native-card-sheet" });
+  if (plugin.store.hasDetachedInternalSource(card)) sheet.append(el("div", { class: "ms-card-type", text: "来源缺失", "data-missing-source": card.id }));
   title.className = "ms-native-card-title"; title.placeholder = "卡片标题";title.style.textTransform=plugin.store.settings.cardTitleUppercase?"uppercase":"none";
   const composed=card.extendMedia?.some(media=>media.noteId===card.anchorAnnId&&media.composed);
   if(composed&&!front.value.trim())front.style.display="none";

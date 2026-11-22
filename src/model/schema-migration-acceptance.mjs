@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 使用 Store、合成库和磁盘适配器。
- * [OUTPUT]: 输出主数据迁移、备份恢复和桌面替换边界的证据。
+ * [OUTPUT]: 输出主数据迁移、历史备份路径兼容、恢复校验和桌面替换边界的证据。
  * [POS]: 经 Store 公开入口验证持久化协议。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
@@ -74,6 +74,169 @@ async function writeEvidence(name, data) {
   await mkdir(output, { recursive: true });
   await writeFile(join(output, `${name}.json`), `${JSON.stringify(data, null, 2)}\n`);
 }
+
+async function verifyBackupPathGuards() {
+  const historical = "MarginStudyBackups/pre-v3-historical";
+  const historicalManifest = `${historical}/manifest.json`;
+  const nestedPaths = Array.from({ length: 5 }, (_, index) => `MarginStudyBackups/earlier-${index}/files/sample.md`);
+  const recoveryPath = "_marginstudy-recovery/old-copy.mstudy.json";
+  const internalPaths = [...nestedPaths, recoveryPath];
+  const reserved = path => path.startsWith("MarginStudyBackups/") || path.startsWith("_marginstudy-recovery/");
+  const today = new Date();
+  const lastBackup = [today.getFullYear(), today.getMonth() + 1, today.getDate()].map(value => String(value).padStart(2, "0")).join("-");
+  const current = { ...seed(3), settings: { lastBackup } };
+  const root = await fixture("backup-guard-current", current);
+  const source = await readFile(join(root, sourcePath));
+  const fingerprint = { sha256: hash(source), byteSize: source.byteLength };
+  Object.assign(current.documents[0], fingerprint);
+  await writeFile(join(root, mainPath), ` ${JSON.stringify(current, null, 2)}\n`);
+  const writeVaultFile = async (vault, path, content) => {
+    const destination = join(vault, path);
+    await mkdir(dirname(destination), { recursive: true });
+    await writeFile(destination, content);
+  };
+  const legacy = { ...seed(2), settings: { lastBackup } };
+  Object.assign(legacy.documents[0], fingerprint);
+  const backupText = JSON.stringify(legacy);
+  const files = [];
+  for (const path of [sourcePath, ...internalPaths]) {
+    const content = Buffer.from(`backup bytes for ${path}\n`);
+    const storedPath = `files/${path}`;
+    await writeVaultFile(root, `${historical}/${storedPath}`, content);
+    files.push({ path, storedPath, sha256: hash(content), bytes: content.byteLength });
+  }
+  const manifest = { format: "margin-study-backup", version: 2, createdAt: stamp, dataSha256: hash(backupText), files };
+  await writeVaultFile(root, `${historical}/data.json`, backupText);
+  await writeVaultFile(root, historicalManifest, JSON.stringify(manifest));
+
+  const store = new Store(host(root));
+  const before = await hashes(root);
+  await store.load();
+  const readEvents = [];
+  const originalInfo = console.info;
+  console.info = (...args) => { readEvents.push(args); originalInfo(...args); };
+  let backupPaths;
+  try { backupPaths = await store.listBackupPaths(); }
+  finally { console.info = originalInfo; }
+  assert.ok(backupPaths.includes(historicalManifest), "历史清单应列为恢复候选");
+  assert.equal(readEvents.flat(Infinity).filter(value => internalPaths.includes(value)).length, internalPaths.length);
+  assert.equal(store.loadBlocked, false);
+  const after = await hashes(root);
+  assert.deepEqual(after, before);
+  await writeEvidence("backup-guard-P1", { root, historicalManifest, nestedPaths, loadBlocked: store.loadBlocked, before, after, readEvents });
+  const hostFixture = process.env.MARGINSTUDY_BACKUP_GUARD_HOST_FIXTURE;
+  if (hostFixture) await cp(root, join(hostFixture, "current"), { recursive: true, errorOnExist: true, force: false });
+
+  legacy.studySets[0].docPaths.push(...internalPaths, ...internalPaths.map(path => `${path}.missing`));
+  const affectedCards = [
+    { ...legacy.cards[0], id: "backup-card", docPath: nestedPaths[0], front: "legacy excerpt" },
+    { ...legacy.cards[0], id: "recovery-card", docPath: recoveryPath, sources: [{ docPath: sourcePath, text: "合法来源" }] },
+  ];
+  legacy.documents.push(...[nestedPaths[0], recoveryPath].map((path, index) => ({ ...legacy.documents[0], id: `internal-doc-${index}`, path })));
+  legacy.cards.push(...affectedCards);
+  legacy.nodes.push({ ...legacy.nodes[0], id: "backup-card-node", cardId: "backup-card" });
+  legacy.studySets[0].cardIds.push(...affectedCards.map(card => card.id));
+  const legacyRoot = await fixture("backup-guard-v2", legacy);
+  const legacyMainBefore = await readFile(join(legacyRoot, mainPath));
+  await cp(join(root, historical), join(legacyRoot, historical), { recursive: true });
+  for (const path of internalPaths) {
+    await writeVaultFile(legacyRoot, path, "internal file\n");
+    await writeVaultFile(legacyRoot, `${path}.mstudy.json`, "internal sidecar\n");
+  }
+  if (hostFixture) await cp(legacyRoot, join(hostFixture, "legacy"), { recursive: true, errorOnExist: true, force: false });
+  const legacyRuntime = host(legacyRoot);
+  const legacyStore = new Store(legacyRuntime);
+  await legacyStore.load();
+  assert.equal(legacyStore.loadBlocked, false);
+  assert.deepEqual(await legacyRuntime.loadData(), { ...legacy, schemaVersion: 3 });
+  assert.deepEqual(legacyStore.documents, legacy.documents.filter(doc => !reserved(doc.path)));
+  assert.deepEqual(legacyStore.getCard("card"), legacy.cards[0]);
+  assert.equal(legacyStore.cards.length, legacy.cards.length);
+  assert.equal(legacyStore.nodes.length, legacy.nodes.length);
+  assert.deepEqual(legacyStore.studySets[0].cardIds, legacy.studySets[0].cardIds);
+  assert.equal(legacyStore.getNode("backup-card-node").cardId, "backup-card");
+  const detached = [];
+  for (const card of affectedCards) {
+    const live = legacyStore.getCard(card.id);
+    const events = legacyStore.getLocalEvents().filter(event => event.kind === "file-missing" && event.objectIds.includes(card.id));
+    assert.equal(live.docPath, "");
+    assert.equal(hash(live.front), hash(card.front));
+    assert.deepEqual(live.sources, card.sources);
+    assert.equal(legacyStore.hasDetachedInternalSource(live), !card.sources?.length);
+    assert.ok(events.some(event => event.detail.includes("来源已解除登记，正文与关系保留")));
+    detached.push({ id: card.id, before: hash(card.front), after: hash(live.front), events, missingMarker: legacyStore.hasDetachedInternalSource(live) });
+  }
+  await writeEvidence("backup-guard-P7", {
+    before: { documents: legacy.documents.length, cards: legacy.cards.length, nodes: legacy.nodes.length, members: legacy.studySets[0].cardIds.length },
+    after: { documents: legacyStore.documents.length, cards: legacyStore.cards.length, nodes: legacyStore.nodes.length, members: legacyStore.studySets[0].cardIds.length },
+    invalidPaths: legacyStore.cards.filter(card => reserved(card.docPath)).length, detached,
+  });
+  const upgradePath = (await legacyStore.listBackupPaths()).find(path => path !== historicalManifest);
+  assert.ok(upgradePath);
+  const manualPath = await legacyStore.backupData(true);
+  assert.ok(manualPath);
+  for (const path of [upgradePath, manualPath]) {
+    const generated = JSON.parse(await readFile(join(legacyRoot, path), "utf8"));
+    assert.equal(generated.files.filter(file => reserved(file.path)).length, 0);
+    assert.equal(generated.missingFiles.filter(reserved).length, 0);
+    assert.ok(generated.files.some(file => file.path === sourcePath));
+    await writeEvidence(`backup-guard-P2-${path === upgradePath ? "upgrade" : "manual"}`, { path, ...generated });
+  }
+  const snapshotMain = path => readFile(join(legacyRoot, dirname(path), "data.json"));
+  const migrationMain = await snapshotMain(upgradePath);
+  assert.deepEqual(migrationMain, legacyMainBefore);
+  const manual = JSON.parse(await snapshotMain(manualPath));
+  const manualInternal = {
+    documents: manual.documents.filter(doc => reserved(doc.path)).length,
+    cards: manual.cards.filter(card => reserved(card.docPath)).length,
+  };
+  assert.deepEqual(manualInternal, { documents: 0, cards: 0 });
+  const restore = await legacyStore.prepareBackupRecovery(upgradePath);
+  const recovery = JSON.parse(await readFile(join(legacyRoot, restore.path), "utf8"));
+  assert.ok(!restore.scope.some(item => item.collection === "documents" && item.id.startsWith("internal-doc-")));
+  assert.equal(recovery.objects.find(item => item.collection === "cards" && item.id === "backup-card").value.docPath, "");
+  assert.equal(recovery.objects.find(item => item.collection === "cards" && item.id === "backup-card").value.front, affectedCards[0].front);
+  await writeEvidence("backup-guard-P8", { manualInternal, migration: { path: upgradePath, before: hash(legacyMainBefore), stored: hash(migrationMain) }, restoreScope: restore.scope });
+
+  const invalid = [
+    ["traversal", [{ ...files[1], path: `${nestedPaths[0]}/../escape.md` }], `无效的库内路径：${nestedPaths[0]}/../escape.md`],
+    ["stored-traversal", [{ ...files[1], storedPath: "files/../escape.md" }], "无效的库内路径：files/../escape.md"],
+    ["stored-prefix", [{ ...files[1], storedPath: "data.json" }], "备份含重复或不允许的文件路径"],
+    ["duplicate", [files[1], { ...files[1], storedPath: files[2].storedPath }], "备份含重复或不允许的文件路径"],
+  ];
+  const rejections = [];
+  for (const [sample, entries, message] of invalid) {
+    const path = `MarginStudyBackups/${sample}`;
+    await writeVaultFile(root, `${path}/data.json`, backupText);
+    await writeVaultFile(root, `${path}/manifest.json`, JSON.stringify({ ...manifest, files: entries }));
+    if (sample === "duplicate") await writeVaultFile(root, `${path}/${files[1].storedPath}`, await readFile(join(root, historical, files[1].storedPath)));
+    await assert.rejects(store.prepareBackupRecovery(`${path}/manifest.json`), error => {
+      rejections.push({ sample, entries, error: error.message });
+      return error.message === message;
+    });
+  }
+  await writeEvidence("backup-guard-P3", rejections);
+
+  const integrity = [];
+  for (const [sample, file] of [["sha", files[0]], ["bytes", files[0]], ["nested-sha", files[1]]]) {
+    const destination = join(root, historical, file.storedPath);
+    const original = await readFile(destination);
+    const corrupt = sample === "bytes" ? Buffer.concat([original, Buffer.of(0)]) : Buffer.from(original);
+    if (sample !== "bytes") corrupt[0] ^= 1;
+    const expected = sample === "bytes" ? { ...file, sha256: hash(corrupt) } : file;
+    await writeFile(destination, corrupt);
+    await writeVaultFile(root, historicalManifest, JSON.stringify({ ...manifest, files: files.map(item => item === file ? expected : item) }));
+    await assert.rejects(store.restoreBackup(historicalManifest, ["card"]), error => {
+      integrity.push({ sample, expected, actualSha256: hash(corrupt), actualBytes: corrupt.byteLength, error: error.message });
+      return error.message === `文件校验失败：${file.path}`;
+    });
+    await writeFile(destination, original);
+  }
+  await writeEvidence("backup-guard-P4", integrity);
+  console.log("Backup path guards: historical recovery, clean new backups, 4 unsafe paths and 3 integrity samples passed");
+}
+
+await verifyBackupPathGuards();
 
 const upgrades = [];
 for (const version of [1, 2]) {

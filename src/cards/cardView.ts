@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 Store、保存反馈、卡片编辑组件和 Obsidian 宿主。
  * [OUTPUT]: 提供卡片列表、卡片详情和来源跳转。
- * [POS]: 卡片详情将修改交给 Store。桌面冲突期间提示修改仅保留在内存。
+ * [POS]: 卡片列表提示已解除登记的来源。详情将修改交给 Store，并显示桌面停写反馈。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 import { applyCardTypography } from "./typography";
@@ -64,7 +64,7 @@ function appendDeckBadges(container: HTMLElement, plugin: MarginStudyPlugin, car
 
 /** Wait for the matching reader to finish opening before navigating. */
 export function jumpToCardSource(plugin: MarginStudyPlugin, card: Card, block?: ExcerptBlock): void {
-  const source = block?.source ?? (block ? card : card.sources?.[0] ?? card);
+  const source = block?.source ?? (block ? card : card.sources?.find(item => item.docPath) ?? card);
   if (!source.docPath) { new Notice("这张卡片没有来源文档"); return; }
   void (async () => {
     const file = plugin.app.vault.getAbstractFileByPath(source.docPath);
@@ -270,6 +270,7 @@ export function renderCardList(container: HTMLElement, plugin: MarginStudyPlugin
       item.append(chk);
     }
     item.append(el("div", { class: "ms-card-type", text: typeLabel(c.type) }));
+    if (plugin.store.hasDetachedInternalSource(c)) item.append(el("div", { class: "ms-card-type", text: "来源缺失", "data-missing-source": c.id }));
     appendDeckBadges(item, plugin, c.id);
     if (c.wrong)
       item.append(el("div", { class: "ms-card-wrong", text: "错题" }));
