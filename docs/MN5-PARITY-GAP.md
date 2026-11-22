@@ -6,6 +6,7 @@
 | --- | --- | --- | --- | --- |
 | GAP-01 | 卡 A，冷重启写盘与旧构建升级 | 已验收 8/8，适用范围见 [卡 A 收口](archive/progress/progress-legacy-202611.md#卡-a-收口--pass-88) | 新导入库重启零写盘。真实 `f78573e` 旧库首次写盘收敛，再次重启零写盘。核对主文件、备份、索引和范围豁免。 | P0 |
 | GAP-02 | 卡 B，`save-now` 冲突无反馈 | 已修复，合成桌面宿主执行验收 8/8，待实机复核 | 触发并发冲突后展示明确提示和恢复入口，保全较新的外部写入，自动用例全绿。 | P0 |
+| GAP-EGO-01 | ego-harness 适配 ego-browser 后端 | 待办（GAP-07a 实测触发） | ego 后端下 `verify:public` 48/53、`px-gap` fixture 初始化超时。根因五条：① 严格选择器遇重复元素报 `ElementResolutionError`（需 nth/first 语义）② `deviceScaleFactor:2` 致像素 4 倍 ③ 每次调用拉起 `ego-browser nodejs` 子进程（379 次/跑）致超时 ④ 跨子进程鼠标拖拽坐标归零 ⑤ 暗色主题与 DPR=2 下断言基线差异。验收：ego 后端下 `verify:public` 53/53、`px-gap` 292/298 且 top-3 3px/4px，与默认后端一致。 | P1 |
 | GAP-03 | 卡 C，`pdf-hw-eraser` 间歇失败 | **已修复（C2 PASS）**：根因为留白几何的权威写入排在重型预览渲染之后（`extendNotes.ts` 的 `commitNotes`），高负载下突破夹具裸 `wait(80)`。修法：几何同步提交在前 → 权威写入 → 预览异步生成（失败只发 Notice）；夹具改条件等待 + 两帧诊断；新增 `extendGeometry` 延迟单测。**附带修复**：`hw-eraser-acceptance.mjs` 的夹具注入自 `2bfb044`（2026-11-15 `const`→`let`）起匹配零次，两组断言从未运行，断言数 245→247。验收：受控负载 30/30、低负载 10/10、`px-gap` 298 行零差异、主树连续两轮 `verify:public` 各 53/53 且 `pdf-hw-eraser` 247/247。 | P0 已完成 |
 | GAP-04 | 编辑器内容坐标偏差 | **已核对，未复现**（合成宿主 A1/A2/A3 偏差 0 px；真实隔离库 A4 最大轴差 0.5 px；`px-gap` 三轮同为最大差 3 px / 阈值 4 px，节点 `.ms-study-home-screen .ms-native-popover-head strong`，`exceedsTolerance=false`）。余量仅 1 px，列为跟踪项 | 在缩放、滚动与编辑状态下，坐标与渲染边界偏差 ≤2 px，点击、选区和批注定位全部命中。复核文本框字号、越界把手与窄页裁字。 | P1 |
 | GAP-05 | A23 三按钮实机可达性 | 合成验收有记录，待实机 | 逐个验证可见、无遮挡、真实点击及状态变化。按 [遮挡审计](specs/overlap-audit.md) 补测滚动控件、窄页签与各视口次文字色。页签状态沿用审计原文。 | P1 |

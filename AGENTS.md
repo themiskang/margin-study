@@ -112,4 +112,6 @@ Codex 是本项目的执行席。用户已授权的任务中，发现问题后�
   ```
 - 拿不准 API 时先跑 `ego-browser skill`（会自己打印用法），或用 `help("page.click")` 看签名。
 - 覆盖范围：开页面、点击、输入、截图、读 DOM/几何、用业主登录态、下载。**需要业主介入时（CAPTCHA、2FA、无凭据登录）停下来提问，不许猜凭据、不许绕路。**
-- **验收套件也走 ego**：`scripts/verify/ego-harness.mjs` 的**默认后端已是 ego-browser**（`9e9b8ad`）。二者同为 chromium 内核，页面结构与 CDP 几何测量一致，故 `px-gap` 的 298 行基线在两个后端下通用，不需要各建一套。需要旧后端时显式设 `MARGINSTUDY_BROWSER=agent-browser`。
+- **验收套件的后端现状（实测，勿假设等价）**：`scripts/verify/ego-harness.mjs` 默认仍走 `agent-browser`；`MARGINSTUDY_BROWSER=ego` 可切 ego-browser。
+  两者**内核相同、几何测量口径相同**，但**适配层不等价**：ego 路径下实测 `verify:public` 48/53、`px-gap` 因 fixture 初始化超时无产出，根因是 harness 适配问题（严格选择器遇重复元素报错、`deviceScaleFactor:2` 致 4 倍像素、每次调用拉起 `ego-browser nodejs` 子进程致超时、跨子进程鼠标拖拽坐标归零、暗色主题/DPR 差异）。
+  **结论**：在 harness 适配完成前，仓库内既有门禁（`verify:public`、`px-gap`）用默认后端；席位自建的专项/取证脚本可以用 ego。适配作为独立卡处理（见 `docs/MN5-PARITY-GAP.md` GAP-EGO-01）。
