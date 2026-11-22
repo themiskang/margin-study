@@ -1,7 +1,14 @@
+/**
+ * [INPUT]: 依赖 Electron 目录选择器与 Obsidian 本地设置。
+ * [OUTPUT]: 提供外部来源目录登记界面。
+ * [POS]: 保存外部来源目录列表，独立于学习文档的导入事务。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import { Notice } from "obsidian";
 import type MarginStudyPlugin from "../main";
 import { createModal } from "../utils/modal";
 import { el } from "../utils/dom";
+import { getDesktopOpenDialog } from "./desktopDocumentPicker";
 
 const key = "marginstudy-external-sources";
 
@@ -23,10 +30,8 @@ export function openExternalSources(plugin: MarginStudyPlugin): void {
   const add = el("button", { type: "button", text: "选择文件夹" });
   add.addEventListener("click", () => {
     void (async () => {
-      const require = (window as any).require;
-      if (typeof require !== "function") throw new Error("当前设备不支持选择本地文件夹");
-      let dialog: any; try { dialog = require("@electron/remote")?.dialog; } catch {} if (!dialog) try { dialog = require("electron")?.remote?.dialog; } catch {}
-      if (!dialog?.showOpenDialog) throw new Error("当前设备不支持选择本地文件夹");
+      const dialog = getDesktopOpenDialog();
+      if (!dialog) throw new Error("当前设备不支持选择本地文件夹");
       const result = await dialog.showOpenDialog({ title: "添加外部源", properties: ["openDirectory"] });
       const path = result.canceled ? undefined : result.filePaths?.[0];
       if (typeof path === "string" && path) { plugin.app.saveLocalStorage(key, [...new Set([...read(), path])]); draw(); }
