@@ -1,0 +1,248 @@
+/**
+ * [INPUT]: 工作区合成宿主与隔离文件系统，加载真实 PDF.js。
+ * [OUTPUT]: 通过导入界面得出的文件、摘录和错误证据。
+ * [POS]: 由 desktop-import-acceptance.mjs 拼接至工作区夹具。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
+import { initPdfWorker } from "__PROJECT__/src/pdf/pdfjs";
+
+type Sample = { path: string; name: string; sha256: string };
+const noticePrefix = "导入未完成：";
+const permission = /权限|无权|拒绝访问|EACCES|EPERM/;
+const missing = /不存在|找不到|ENOENT/;
+const pathInput = "[data-ms-import-path-input]";
+const pathSubmit = "[data-ms-import-path-submit]";
+const modal = () => [...document.querySelectorAll(".ms-modal")].at(-1)!;
+
+async function fixtureFs(op: string, path?: string, options = {}): Promise<any> {
+  const response = await fetch("/fixture-fs", { method: "POST", body: JSON.stringify({ op, path, ...options }) });
+  const { value, error } = await response.json();
+  if (error) throw Object.assign(new Error(error.message), { code: error.code });
+  return value;
+}
+
+async function desktopVault() {
+  await closeAll();
+  await fixtureFs("clear");
+  const p = await fresh();
+  const { vault } = p.app;
+  const paths = new Set<string>();
+  const exists = vault.adapter.exists;
+  vault.adapter.exists = async (path: string) => paths.has(path) || exists(path);
+  vault.adapter.list = async (path: string) => ({
+    files: [...p.sources.keys()].filter(key => key.startsWith(`${path}/`)),
+    folders: [...paths].filter(key => key.startsWith(`${path}/`)),
+  });
+  vault.createFolder = async (path: string) => { paths.add(path); };
+  vault.createBinary = async (path: string, bytes: ArrayBuffer) => {
+    await fixtureFs("write", path, { bytes: [...new Uint8Array(bytes)] });
+    const file = new TFile(path, bytes.byteLength);
+    p.sources.set(path, { file, content: "", binary: bytes });
+    return file;
+  };
+  vault.rename = async (file: TFile, path: string) => {
+    await fixtureFs("rename", file.path, { next: path });
+    const entry = p.sources.get(file.path)!;
+    p.sources.delete(file.path);
+    Object.assign(file, new TFile(path, file.stat.size));
+    p.sources.set(path, entry);
+  };
+  vault.adapter.rmdir = async (path: string) => { await fixtureFs("delete", path); paths.delete(path); };
+  vault.delete = async (file: TFile) => { await fixtureFs("delete", file.path); p.sources.delete(file.path); };
+  p.store.settings.autoCardOnHighlight = true;
+  return p;
+}
+
+function openImport(p: Awaited<ReturnType<typeof desktopVault>>) {
+  button(p.root, "从电脑导入文档").click();
+  assert(modal()?.querySelector(pathInput), "路径输入框未出现");
+}
+
+async function submitPath(p: Awaited<ReturnType<typeof desktopVault>>, path: string, viaForm = false) {
+  openImport(p);
+  const input = modal().querySelector<HTMLInputElement>(pathInput)!;
+  input.value = path;
+  if (viaForm) input.form!.requestSubmit();
+  else modal().querySelector<HTMLButtonElement>(pathSubmit)!.click();
+}
+
+const conflictOpen = () => modal()?.querySelector("h3")?.textContent?.includes("同名处理");
+async function selectConflict(policy: string) {
+  await until(conflictOpen, "未出现同名处理");
+  const labels = Array.from(modal().querySelectorAll("button"), item => item.textContent);
+  assert(["拒绝覆盖", "复用既有文件", "重命名新文件"].every(label => labels.includes(label)), "同名处理选项不齐");
+  button(modal(), policy).click();
+}
+
+async function readExcerpt(p: Awaited<ReturnType<typeof desktopVault>>, doc: any) {
+  await until(() => p.view.getReader()?.getFilePath() === doc.path, "导入后没有打开文档");
+  const reader = await p.view.openFile(p.sources.get(doc.path)!.file) as ReaderView;
+  await until(() => reader.getDoc(), "PDF 未完成加载：" + notices.at(-1));
+  button(p.root, "文本摘录").click();
+  await reader.renderPage(1);
+  await until(() => {
+    const page = reader.getPageRecord(1);
+    return page?.renderedScale === reader.getScale() && page?.textLayer.querySelector("span")?.textContent;
+  }, "PDF 文本层未完成渲染");
+  const page = reader.getPageRecord(1)!;
+  const span = page.textLayer.querySelector("span");
+  assert(span?.textContent?.startsWith("Desktop import selection:"), "PDF 正文未渲染");
+  const excerpts = () => p.store.loadAnnotations(doc.path).then(items => items.filter(item => item.type === "highlight"));
+  const before = (await excerpts()).length;
+  const range = document.createRange();
+  const text = span!.firstChild!;
+  range.setStart(text, 0);
+  range.setEnd(text, text.textContent!.length);
+  const selectedText = range.toString();
+  const geometry = { canvas: page.canvas.getBoundingClientRect(), selection: range.getBoundingClientRect(), canvasStyle: page.canvas.style.cssText, spanStyle: span!.style.cssText };
+  window.getSelection()!.removeAllRanges();
+  window.getSelection()!.addRange(range);
+  document.dispatchEvent(new Event("selectionchange"));
+  try {
+    await until(() => document.querySelector(".ms-ann-pop button"), "摘录选区菜单未出现");
+  } catch (error) {
+    throw Error(`${error} ${JSON.stringify({ ...geometry, selectionAfter: window.getSelection()?.toString(), connected: text.isConnected, sameReader: p.view.getReader() === reader, pageNumbers: reader.getPageNumbers(), readerMode: reader.getHandwritingMode(), workspace: p.root.querySelector(".ms-study-workspace")?.getBoundingClientRect() })}`);
+  }
+  button(document.querySelector(".ms-ann-pop")!, `摘录颜色 ${p.store.settings.colors[0]}`).click();
+  await wait(150);
+  await p.store.flush();
+  const restored = await p.reloadStore();
+  const saved = (await restored.loadAnnotations(doc.path)).filter(item => item.type === "highlight");
+  const item = saved.at(-1)!;
+  const docId = restored.documents.find(candidate => candidate.path === item?.docPath)?.id;
+  const rectCount = item?.pdfGeometry?.flatMap(page => page.rects).length ?? 0;
+  assert(saved.length - before === 1 && docId === doc.id && item?.text === selectedText && rectCount > 0, "落盘摘录数量、正文、选区或回指不符");
+  return { before, after: saved.length, increment: saved.length - before, excerpt: { id: item.id, docId, docPath: item.docPath, text: item.text, rectCount }, selectedText };
+}
+
+(window as any).runDesktopImportAcceptance = async (samples: Record<string, Sample>, home: string) => {
+  await initPdfWorker({ vault: { configDir: ".obsidian", adapter: { read: () => fetch("/pdf.worker.js").then(response => response.text()) } } } as any);
+  const host = window as any;
+  let selected: string[] = [];
+  let canceled = false;
+  const calls: any[] = [];
+  const require = (name: string) => {
+    if (name === "@electron/remote") return { dialog: { showOpenDialog: async (options: any) => {
+      calls.push(options);
+      return { canceled, filePaths: selected };
+    } } };
+    if (name === "path") return { sep: "/", isAbsolute: (path: string) => path.startsWith("/"), basename: (path: string) => path.split("/").at(-1) };
+    if (name === "os") return { homedir: () => home };
+    if (name === "fs") return { promises: {
+      stat: async (path: string) => {
+        const info = await fixtureFs("stat", path);
+        return { ...info, isDirectory: () => info.directory, isFile: () => info.file };
+      },
+      readFile: async (path: string) => Uint8Array.from(await fixtureFs("readFile", path)),
+    } };
+    throw Error(`Unsupported fixture module ${name}`);
+  };
+  host.require = require;
+  const groups: Record<string, { cases: any[] }> = Object.fromEntries(
+    ["a1", "a2", "a3", "a4", "a5", "extra"].map(key => [key, { cases: [] }]),
+  );
+  const run = async (group: string, name: string, action: () => Promise<object>) => {
+    const start = errors.length;
+    try {
+      const evidence = await action();
+      const uncaught = errors.slice(start);
+      groups[group].cases.push({ name, ...evidence, uncaught, passed: uncaught.length === 0 });
+    } catch (error) {
+      groups[group].cases.push({ name, passed: false, error: String(error), uncaught: errors.slice(start) });
+    }
+  };
+  const pick = (p: Awaited<ReturnType<typeof desktopVault>>, ...paths: string[]) => {
+    selected = paths;
+    openImport(p);
+    button(modal(), "选择文件…").click();
+  };
+  const importExcerpt = async (sample: Sample, open: (p: Awaited<ReturnType<typeof desktopVault>>) => unknown) => {
+    const p = await desktopVault();
+    const before = p.store.documents.length;
+    const firstCall = calls.length;
+    await open(p);
+    await selectConflict("拒绝覆盖");
+    const path = `MarginStudyImports/${sample.name}`;
+    const find = () => p.store.documents.find(doc => doc.path === path);
+    await until(find, "新文档未登记");
+    const candidate = find()!;
+    const actualHash = await fixtureFs("hash", path);
+    const documentDelta = p.store.documents.length - before;
+    assert(documentDelta === 1 && actualHash === sample.sha256, "导入数量或 SHA-256 不符");
+    return { documentDelta, document: candidate, srcSha256: sample.sha256, vaultSha256: actualHash, ...await readExcerpt(p, candidate), dialogCalls: calls.slice(firstCall) };
+  };
+  await run("a1", "系统选择器含空格和中文的 PDF", async () => {
+    const result = await importExcerpt(samples.system, p => pick(p, samples.system.path));
+    assert(result.dialogCalls.length === 1 && ["openFile", "multiSelections"].every(item => result.dialogCalls[0].properties.includes(item)), "系统选择器参数不符");
+    assert(result.dialogCalls[0].filters[0].extensions.includes("pdf"), "缺少 PDF 扩展名筛选");
+    return result;
+  });
+  await run("a2", "普通绝对路径", () => importExcerpt(samples.plain, p => submitPath(p, samples.plain.path)));
+  await run("a2", "首尾空白、成对引号与 ~", () => importExcerpt(samples.quoted, p => submitPath(p, ` \t"~/${samples.quoted.name}"  `, true)));
+  for (const channel of ["system", "path"]) for (const policy of ["拒绝覆盖", "复用既有文件", "重命名新文件"]) {
+    await run("a3", `${channel} / ${policy}`, async () => {
+      const p = await desktopVault();
+      const path = "MarginStudyImports/Same.pdf";
+      const renamed = "MarginStudyImports/Same (1).pdf";
+      await submitPath(p, samples.original.path);
+      await selectConflict("拒绝覆盖");
+      await until(() => p.view.getReader()?.getFilePath() === path, "原文档未打开");
+      const original = p.store.documents.find(doc => doc.path === path)!;
+      const originalHash = await fixtureFs("hash", path);
+      assert(originalHash === samples.original.sha256, "原文件导入校验失败");
+      await p.view.openFile(p.alpha);
+      const before = p.store.documents.length, firstNotice = notices.length;
+      if (channel === "system") pick(p, samples.duplicate.path);
+      else await submitPath(p, samples.duplicate.path);
+      await selectConflict(policy);
+      const expected = policy === "重命名新文件" ? renamed : path;
+      if (policy === "拒绝覆盖") await until(() => notices.length > firstNotice, "无拒绝覆盖反馈");
+      else await until(() => p.view.getReader()?.getFilePath() === expected, "未打开返回文档");
+      await p.store.flush();
+      const actual = p.store.documents.find(doc => doc.path === p.view.getReader()?.getFilePath());
+      const documentDelta = p.store.documents.length - before;
+      const originalHashAfter = await fixtureFs("hash", path);
+      assert(originalHashAfter === originalHash && p.store.documents.find(doc => doc.path === path)?.id === original.id, "原文件被改写");
+      if (policy === "拒绝覆盖") assert(documentDelta === 0 && /^导入未完成：.*拒绝覆盖/.test(notices[firstNotice]), "拒绝覆盖结果不符");
+      if (policy === "复用既有文件") assert(documentDelta === 0 && actual?.id === original.id, "复用未返回原 docId");
+      const newHash = policy === "重命名新文件" ? await fixtureFs("hash", renamed) : null;
+      if (policy === "重命名新文件") assert(documentDelta === 1 && actual?.id !== original.id && newHash === samples.duplicate.sha256, "重命名结果不符");
+      return { documentDelta, originalDocId: original.id, returnedDocId: policy === "拒绝覆盖" ? null : actual?.id, originalHash, originalHashAfter, newHash, notice: notices[firstNotice] ?? null };
+    });
+  }
+  const failure = async (path: string, expected: RegExp, forbidden: RegExp) => {
+    const p = await desktopVault();
+    const before = p.store.documents.length, firstNotice = notices.length;
+    const files = p.app.vault.getFiles().map((file: TFile) => file.path);
+    await submitPath(p, path);
+    await until(() => notices.length > firstNotice, "无错误 Notice");
+    const notice = notices[firstNotice];
+    const documentDelta = p.store.documents.length - before;
+    const unchanged = JSON.stringify(p.app.vault.getFiles().map((file: TFile) => file.path)) === JSON.stringify(files);
+    assert(documentDelta === 0 && unchanged && !conflictOpen() && notice.startsWith(noticePrefix) && expected.test(notice) && !forbidden.test(notice) && !/undefined|\[object Object\]/.test(notice), `错误分类或副作用不符：${notice}`);
+    button(modal(), "取消").click();
+    return { documentDelta, vaultFilesUnchanged: unchanged, conflictDialog: false, notice, expected: expected.source, forbidden: forbidden.source };
+  };
+  await run("a4", "NOT_FOUND", () => failure(samples.missing.path, missing, permission));
+  await run("a4", "IS_DIRECTORY /tmp", () => failure("/tmp", /目录|不是文件|EISDIR/, permission));
+  await run("a4", "EMPTY_PATH", () => failure(" \t ", /为空/, permission));
+  await run("a4", "UNSUPPORTED_EXT", () => failure(samples.unsupported.path, /不支持|格式/, permission));
+  for (const [name, sample] of [["chmod 000", "locked"], ["EACCES", "EACCES"], ["EPERM", "EPERM"]]) {
+    await run("a5", name, () => failure(samples[sample].path, permission, missing));
+  }
+  await run("extra", "READ_FAILED 注入 EIO", () => failure(samples.EIO.path, /读取文件失败/, permission));
+  await run("extra", "系统选择取消", async () => {
+    const p = await desktopVault();
+    const before = p.store.documents.length, firstNotice = notices.length, firstCall = calls.length;
+    canceled = true;
+    try {
+      pick(p, samples.system.path);
+      await until(() => !(modal().querySelector<HTMLButtonElement>(pathSubmit)?.disabled), "取消未释放导入入口");
+      assert(calls.length === firstCall + 1 && !conflictOpen() && notices.length === firstNotice && p.store.documents.length === before, "取消产生副作用");
+      button(modal(), "取消").click();
+      return { calls: 1, documentDelta: 0, newNotices: 0 };
+    } finally { canceled = false; }
+  });
+  await closeAll();
+  return groups;
+};

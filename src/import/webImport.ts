@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 网页来源、文件字节、Obsidian 库和文档事务。
+ * [OUTPUT]: 提供网页和本地文档导入，并按文件、旧路径和目标路径识别暂存改名。
+ * [POS]: 先发布库内文件，再统一登记文档和学习集成员。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import { Notice, TFile, requestUrl } from "obsidian";
 import { Readability } from "@mozilla/readability";
 import type MarginStudyPlugin from "../main";
@@ -183,6 +189,12 @@ async function ensureFolder(host: ImportHost, path: string): Promise<void> {
 
 export type ImportConflictPolicy = "reject" | "reuse" | "rename";
 export interface LocalImportOptions { studySetId?: string | null; conflict: ImportConflictPolicy; }
+const localImportMoves = new WeakMap<TFile, { oldPath: string; newPath: string }>();
+
+export function isLocalImportStagingMove(file: TFile, oldPath: string): boolean {
+  const move = localImportMoves.get(file);
+  return move !== undefined && move.oldPath === oldPath && move.newPath === file.path;
+}
 
 export async function importLocalDocuments(host: ImportHost, inputs: File[], options: LocalImportOptions): Promise<TFile[]> {
   if (!inputs.length) return [];
@@ -258,7 +270,9 @@ export async function importLocalDocuments(host: ImportHost, inputs: File[], opt
         if (!(file instanceof TFile)) throw new Error(`无法创建暂存文件：${temporaryPath}`);
         if (await vault.adapter.exists(item.path)) throw new Error("目标已有同名文件，已拒绝覆盖：" + item.path);
         created.push({ file, target: item.path });
-        await vault.rename(file, item.path);
+        localImportMoves.set(file, { oldPath: temporaryPath, newPath: item.path });
+        try { await vault.rename(file, item.path); }
+        finally { localImportMoves.delete(file); }
         files.push(file);
       }
     }

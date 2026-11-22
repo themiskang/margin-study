@@ -15,5 +15,7 @@
 - `compare-pdf-crop-evidence.py` 复核 PDF 裁剪实机证据。
 - `compare-pen-undo-evidence.py` 复核手写撤销实机证据。
 - `compare-read-settings-evidence.py` 复核阅读设置实机证据。
+- `desktop-import-acceptance.mjs` 在合成宿主验证桌面导入的落盘、摘录、同名处理和错误分类。
+- `desktop-import-fixture.txt` 驱动桌面导入界面和 PDF 选区，调用隔离文件系统。
 
 [PROTOCOL]: Update this header on change, then check AGENTS.md

@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 Obsidian 宿主、Store 和插件各视图。
+ * [INPUT]: 依赖 Obsidian 宿主、Store、导入事务和插件各视图。
  * [OUTPUT]: 注册 MarginStudy 插件、界面和命令。
  * [POS]: 将宿主生命周期接入 Store。立即保存命令请求显示停写原因。恢复面板显示已校验备份和桌面冲突版本。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
@@ -30,7 +30,7 @@ import { todayStr } from "./srs";
 import { createModal } from "./utils/modal";
 import { el } from "./utils/dom";
 import { StudyWorkspaceView, VIEW_TYPE_STUDY_WORKSPACE } from "./workspace/studyWorkspace";
-import { openWebImport } from "./import/webImport";
+import { isLocalImportStagingMove, openWebImport } from "./import/webImport";
 import { ResearchView, VIEW_TYPE_RESEARCH } from "./research/view";
 import { updatePageCollectionSourcePath } from "./documents/pageCollection";
 import { openReviewDecks } from "./review/decks";
@@ -116,6 +116,7 @@ export default class MarginStudyPlugin extends Plugin {
     }));
     this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
       if (oldPath.endsWith(".mstudy.json") || (!(file instanceof TFile) && !(file instanceof TFolder))) return;
+      if (file instanceof TFile && isLocalImportStagingMove(file, oldPath)) return;
       const newPath=file.path, moves: {oldPath:string;newPath:string}[] = file instanceof TFolder
         ? this.documentPathsUnder(oldPath).map(path=>({oldPath:path,newPath:newPath+path.slice(oldPath.length)}))
         : [{oldPath,newPath}], revision=++this.renameRevision;

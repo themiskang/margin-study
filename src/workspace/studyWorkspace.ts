@@ -1,5 +1,5 @@
 /**
- * [INPUT]: 依赖 Obsidian 工作区、学习集数据、保存反馈和阅读器组件。
+ * [INPUT]: 依赖 Obsidian 工作区、学习集数据、阅读器组件和本地文档选择器。
  * [OUTPUT]: 导出学习集工作区视图及其视图类型。
  * [POS]: 协调学习集工作区的导航、菜单和辅助面板。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
@@ -37,6 +37,7 @@ import type { ResearchHandle, ResearchSession } from "../research/browser";
 import { mountAiPanel, openAiSettings } from "../ai";
 import type { AiPanelHandle, AiContext } from "../ai";
 import { importLocalDocuments, openWebImport } from "../import/webImport";
+import { noticeDocumentImportFailure, openLocalDocumentPicker } from "../import/desktopDocumentPicker";
 import { openBaiduNetdisk } from "../import/baiduNetdiskUi";
 import { openExternalSources } from "../import/externalSources";
 import type { ImportConflictPolicy } from "../import/webImport";
@@ -1973,8 +1974,7 @@ export class StudyWorkspaceView extends ItemView {
     query.addEventListener("input",draw); modal.append(query,list,load); draw(); query.focus();
   }
   private importFiles(studySetId: string | null = this.plugin.store.activeStudySetId ?? null): void {
-    const input = el("input", { type: "file", multiple: "true", accept: ".pdf,.msref,.docx,.epub,.html,.htm,.md" });
-    input.addEventListener("change", () => { if(input.files?.length) void this.importFileList([...input.files], studySetId); }); input.click();
+    openLocalDocumentPicker(this.root.ownerDocument, files => { void this.importFileList(files, studySetId); });
   }
   private async importFileList(files: File[], setId: string | null = this.plugin.store.activeStudySetId ?? null): Promise<void> {
     const run = async (conflict: ImportConflictPolicy) => {
@@ -1983,7 +1983,7 @@ export class StudyWorkspaceView extends ItemView {
         this.refresh(true); const latest = imported[imported.length - 1];
         if (latest && setId === (this.plugin.store.activeStudySetId ?? null)) try { await this.openFile(latest); } catch (error) { new Notice("文档已导入，但打开失败：" + String(error), 10000); }
         else if (latest) new Notice("文档已导入目标学习集。");
-      } catch(error) { new Notice("导入未完成：" + String(error),10000); }
+      } catch(error) { noticeDocumentImportFailure(error); }
     };
     const {modal,close}=createModal("导入文档 · 同名处理");
     modal.append(el("p",{text:`将导入 ${files.length} 份文档。目标已有同名文件时请选择处理方式；不会覆盖原文件。`}));
