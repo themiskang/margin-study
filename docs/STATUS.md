@@ -28,3 +28,15 @@
 - 异厂验收 PASS（受控负载 30/30、低负载 10/10、px-gap 298 行零差异、W3 单测独立复跑 1/1）。
 - 主树合入后连续两轮 `verify:public` 各 **53/53**，`pdf-hw-eraser` **247/247** → 同时闭环 P0（备份守卫卡）挂起的 P5。
 - **覆盖范围勘误**：`hw-eraser-acceptance.mjs` 的夹具注入自 `2bfb044`（2026-11-15）起匹配零次，PDF 橡皮擦专项两组断言在此后从未运行。`2bfb044..a830592` 期间已收口的 10 张卡（卡 A/B/CI、GAP-04、GAP-06a/06b、P0 等）其 `pdf-hw-eraser 245/245` 记录**只覆盖 245 条中的 243 条实际断言**；已在差距表标注，不逐张补跑。
+
+## 2026-11-22 · GAP-07a 收口（合并 `b53a83d`）
+
+四项 MN5 对齐图层能力完成：`Handwriting on Top`、`Blank Background`、独立阅读器留白入口、文本框/图片绑层（`bindToInkLayer?: boolean`）。
+异厂复核两轮：首轮 **FAIL**（文本框缩放柄被置顶笔迹视觉遮挡——`elementFromPoint` 仍命中，靠 3×3 像素采样才发现）→ `a0f141b` 新增 `.ms-overlay-handles-layer`（z=5）修复 → 复判 **PASS 7/7**。
+主树合入后 `tsc` 0、`build` 0、`verify:public` 53/53。
+**业主签收项未计入通过**：Pad 端 Apple Pencil 手感/防误触、深浅主题肉眼观感、macOS 窄窗格与分屏体验。
+
+### 浏览器后端守卫（`check-browser-backend.mjs`）
+
+同一故障第三次复现：worktree 内 `npm ci` 的 postinstall 把 `/opt/homebrew/bin/agent-browser` 重链进该 worktree，worktree 删除后所有 UI 套件报 `spawn agent-browser ENOENT`（表现为 `verify:public` 30/53）。
+新增 `scripts/verify/check-browser-backend.mjs`：跑验收前解析后端真实路径，指向 `/orca/workspaces/` 即退出 1 并给出修复命令；已正反向验证（正常 0 / 断链 1）。
