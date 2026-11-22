@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 Obsidian 存储适配器、模型、标注、升级备份、macOS 主数据交换和保存反馈。
  * [OUTPUT]: 提供 Store、来源指纹登记、主数据迁移、学习集导入提交和冲突恢复。
- * [POS]: 串行提交主数据和侧车。桌面冲突暂停写入。立即保存命令在冷却期内只提示一次停写原因。
+ * [POS]: 串行提交主数据和侧车。加载与备份解除内部来源登记，迁移备份保留原字节。桌面冲突暂停写入。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 import { App, TFile, Notice } from "obsidian";
@@ -147,6 +147,9 @@ const safePath = (path: string): string => {
   if (!path || path.startsWith("/") || path.includes("\\") || /^[A-Za-z]:/.test(path) || path.split("/").some(p => p === ".." || p === "." || p === ".obsidian" || p === "")) throw new Error("无效的库内路径：" + path);
   return path;
 };
+const isBackupInternalPath = (path: unknown): boolean => typeof path === "string" && (path.startsWith(`${BACKUP_ROOT}/`) || path.startsWith("_marginstudy-recovery/"));
+const detachedSourceDetail = "卡片来源位于备份或恢复目录，来源已解除登记，正文与关系保留";
+type SkippedSource = { id: string; detail: string };
 const sharedCommitTails = new WeakMap<object, Promise<void>>();
 async function withSharedCommitLock<T>(key: object, action: () => Promise<T>): Promise<T> {
   const prior = sharedCommitTails.get(key) ?? Promise.resolve();
@@ -235,7 +238,7 @@ export class Store {
         let conflict = location && await recoverDesktopMainReplacement(location.base, location.path);
         let data = await this.host.loadData();
         if (data != null) this.validateData(data);
-        this.applyData(cloneSnapshot(data ?? {}));
+        this.applyLoadedData(data ?? {});
         if (!conflict && !this.settings.diagnosticNoPersist && this.needsMainMigration(data)) {
           try { data = await this.migrateMain(data); }
           catch (error) {
@@ -243,7 +246,7 @@ export class Store {
             conflict = error;
             data = await this.host.loadData();
             this.validateData(data);
-            this.applyData(cloneSnapshot(data));
+            this.applyLoadedData(data);
           }
         }
         this.baseline = clone(data);
@@ -386,6 +389,13 @@ export class Store {
     this.repairGraph();
   }
 
+  private applyLoadedData(data: Partial<PluginData>): void {
+    const active = cloneSnapshot(data);
+    const skipped = this.detachBackupSources(active);
+    this.applyData(active);
+    this.recordSkippedSources(skipped);
+  }
+
   private data(copy = true): PluginData {
     const data: PluginData = { schemaVersion: MAIN_SCHEMA_VERSION, revision: this.revision, writerId: this.writerId,
       settings: this.settings, cards: this.cards, nodes: this.nodes, edges: this.edges,
@@ -410,6 +420,10 @@ export class Store {
       for (const doc of this.documents.filter(item => item.missing)) {
         const event = [...this.localEvents].reverse().find(item => item.kind === "file-missing" && item.objectIds.includes(doc.id));
         if (event) pinned.add(event.id);
+      }
+      const unlinkedCards = new Set(this.cards.filter(card => !card.docPath && !card.sources?.some(source => source.docPath)).map(card => card.id));
+      for (const event of [...this.localEvents].reverse()) {
+        if (event.kind === "file-missing" && event.detail.startsWith(detachedSourceDetail) && event.objectIds.some(id => unlinkedCards.delete(id))) pinned.add(event.id);
       }
       const latestLoaded = [...this.localEvents].reverse().find(item => item.kind === "loaded");
       if (latestLoaded) pinned.add(latestLoaded.id);
@@ -2496,12 +2510,68 @@ export class Store {
     doc.missing = true; this.recordLocalEvent("file-missing", [doc.id], "来源文件缺失：" + path); this.save();
   }
 
+  private detachBackupSources(data: Partial<PluginData>): SkippedSource[] {
+    const skipped: SkippedSource[] = [];
+    const detachPath = (path: string): string => {
+      if (!isBackupInternalPath(path)) return path;
+      safePath(path);
+      return "";
+    };
+    if (data.documents) data.documents = data.documents.filter(doc => {
+      if (detachPath(doc.path) === doc.path) return true;
+      skipped.push({ id: doc.id, detail: "已跳过备份或恢复目录中的文档登记：" + doc.path });
+      return false;
+    });
+    const internalCardPaths = new Map<string, string[]>();
+    for (const card of cardsIncludingMembers(data.cards ?? [])) {
+      const paths = [...new Set([
+        card.docPath,
+        ...(card.sources ?? []).map(source => source.docPath),
+        ...(card.excerptBlocks ?? []).flatMap(block => block.source ? [block.source.docPath] : []),
+      ].filter(isBackupInternalPath))];
+      if (!paths.length) continue;
+      internalCardPaths.set(card.id, this.sources(card).map(source => source.docPath).filter(isBackupInternalPath));
+      card.docPath = detachPath(card.docPath);
+      for (const source of card.sources ?? []) source.docPath = detachPath(source.docPath);
+      for (const block of card.excerptBlocks ?? []) if (block.source) block.source.docPath = detachPath(block.source.docPath);
+      skipped.push({ id: card.id, detail: `${detachedSourceDetail}：${paths.join("、")}` });
+    }
+    for (const set of data.studySets ?? []) {
+      const removed = new Set(set.docPaths.filter(isBackupInternalPath));
+      if (!removed.size) continue;
+      set.docPaths = set.docPaths.filter(path => detachPath(path) === path);
+      const canvases = new Set((data.canvases ?? []).filter(canvas => canvas.studySetId === set.id).map(canvas => canvas.id));
+      const linkedCards = new Set((data.nodes ?? []).filter(node => node.canvasId && canvases.has(node.canvasId)).map(node => node.cardId));
+      for (const card of data.cards ?? []) {
+        if (!internalCardPaths.get(card.id)?.some(path => removed.has(path))) continue;
+        if (set.cardIds?.includes(card.id) || linkedCards.has(card.id) || this.sources(card).some(source => set.docPaths.includes(source.docPath))) continue;
+        (set.cardIds ??= []).push(card.id);
+      }
+    }
+    return skipped;
+  }
+
+  private recordSkippedSources(skipped: SkippedSource[]): void {
+    for (const { id, detail } of skipped) {
+      if (!this.localEvents.some(event => event.kind === "file-missing" && event.detail === detail && event.objectIds.includes(id))) {
+        this.recordLocalEvent("file-missing", [id], detail);
+      }
+    }
+  }
+
+  hasDetachedInternalSource(card: Card): boolean {
+    return !card.docPath && !card.sources?.some(source => source.docPath) && this.localEvents.some(event =>
+      event.kind === "file-missing" && event.detail.startsWith(detachedSourceDetail) && event.objectIds.includes(card.id));
+  }
+
   /** A self-contained backup includes source documents, annotations and recordings. */
   async backupData(silent = false, includePending = false): Promise<string> {
     try {
       if (!includePending) await this.flush();
       await clearAbandonedMigrationBackups(this.host.app);
       const data = this.data();
+      this.recordSkippedSources(this.detachBackupSources(data));
+      data.localEvents = clone(this.localEvents);
       const dir = `${BACKUP_ROOT}/${new Date().toISOString().replace(/[:.]/g, "-")}-${uid("backup")}`;
       const { path, manifest } = await this.writeBackup(data, JSON.stringify(data, null, 2), includePending, dir);
       const missing = manifest.missingFiles?.length ?? 0;
@@ -2516,12 +2586,12 @@ export class Store {
     for (const card of data.cards ?? []) for (const source of this.sources(card)) paths.add(source.docPath);
     for (const set of data.studySets ?? []) for (const path of set.docPaths) paths.add(path);
     for (const doc of data.documents ?? []) if (!doc.missing) paths.add(doc.path);
-    const isBackupAsset = (path: string) => !path.startsWith("MarginStudyBackups/") && !path.startsWith("_marginstudy-recovery/")
+    const isBackupAsset = (path: string) => !isBackupInternalPath(path)
       && (path.endsWith(".mstudy.json") || path.startsWith("_marginstudy-audio/") || path.startsWith("_marginstudy-imports/") || path.startsWith("_marginstudy-media/"));
     for (const file of vault.getFiles()) if (isBackupAsset(file.path)) paths.add(file.path);
     if (migration && this.host.manifest?.dir) {
       const folders = [""];
-      const excluded = new Set([vault.configDir, ".obsidian", ".git", ".trash", "MarginStudyBackups", "_marginstudy-recovery"]);
+      const excluded = new Set([vault.configDir, ".obsidian", ".git", ".trash", BACKUP_ROOT, "_marginstudy-recovery"]);
       for (const folder of folders) {
         const entries = await adapter.list(folder);
         for (const path of entries.files) if (isBackupAsset(path)) paths.add(path);
@@ -2529,13 +2599,17 @@ export class Store {
       }
     }
     if (includePending) for (const path of this.annCache.keys()) paths.add(this.sidecarPath(path));
-    for (const path of [...paths]) if (!path.endsWith(".mstudy.json") && await adapter.exists(this.sidecarPath(path))) paths.add(this.sidecarPath(path));
+    for (const path of paths) {
+      safePath(path);
+      if (isBackupInternalPath(path)) paths.delete(path);
+      else if (!path.endsWith(".mstudy.json") && await adapter.exists(this.sidecarPath(path))) paths.add(this.sidecarPath(path));
+    }
     await this.ensureDir(dir + "/files");
     const dataPath = dir + "/data.json";
+    // 迁移备份以升级前原字节作为回滚依据。来源登记只在读取副本时解除。
     await adapter.write(dataPath, dataText);
     const files: BackupFile[] = [], missingFiles: string[] = [];
     for (const path of paths) {
-      safePath(path);
       const cached = path.endsWith(".mstudy.json") ? this.annCache.get(path.slice(0,-".mstudy.json".length)) : undefined;
       if (!await adapter.exists(path) && !(includePending && cached)) {
         if (migration && isBackupAsset(path)) throw new Error("升级前备份期间文件已移动：" + path);
@@ -2570,7 +2644,7 @@ export class Store {
   private async readBackup(manifestPath: string, collectObjects: boolean): Promise<{ manifest: BackupManifest; objects: ProtectedObject[] }> {
     const adapter = this.host.app.vault.adapter;
     safePath(manifestPath);
-    if (!manifestPath.startsWith("MarginStudyBackups/") || !manifestPath.endsWith("/manifest.json")) throw new Error("不是有效的备份清单路径");
+    if (!manifestPath.startsWith(`${BACKUP_ROOT}/`) || !manifestPath.endsWith("/manifest.json")) throw new Error("不是有效的备份清单路径");
     const root = manifestPath.slice(0, manifestPath.lastIndexOf("/"));
     const manifest = JSON.parse(await adapter.read(manifestPath)) as BackupManifest;
     if (manifest.format !== "margin-study-backup" || manifest.version !== 2 || !Array.isArray(manifest.files)) throw new Error("备份清单格式不支持");
@@ -2582,18 +2656,27 @@ export class Store {
     const data = repaired.data;
     if (collectObjects && repaired.repaired.length) this.recordLocalEvent("restored", repaired.repaired.map(entry => entry.id), "备份含重复 ID，已修复 " + repaired.repaired.length + " 组：" + repaired.repaired.map(entry => `${entry.collection}/${entry.id}(${entry.strategy})`).join("、"));
     this.validateData(data);
-    const objects = collectObjects ? protectedObjects(data) : [], seen = new Set<string>();
+    const seen = new Set<string>(), skipped: string[] = [], annotations: ProtectedObject[] = [];
     for (const item of manifest.files) {
       const path = safePath(item.path), storedPath = safePath(item.storedPath);
-      if (path.startsWith("MarginStudyBackups/") || path.startsWith("_marginstudy-recovery/") || !storedPath.startsWith("files/") || seen.has(path)) throw new Error("备份含重复或不允许的文件路径");
+      if (!storedPath.startsWith("files/") || seen.has(path)) throw new Error("备份含重复或不允许的文件路径");
       seen.add(path);
       const bytes = await adapter.readBinary(root + "/" + storedPath);
       if (sha(bytes) !== item.sha256 || bytes.byteLength !== item.bytes) throw new Error("文件校验失败：" + path);
+      if (isBackupInternalPath(path)) {
+        skipped.push(path);
+        continue;
+      }
       if (path.endsWith(".mstudy.json")) {
         const sidecar = JSON.parse(new TextDecoder().decode(bytes)); validateAnnotationCollection(sidecar?.annotations);
-        if (collectObjects) objects.push(...protectedAnnotations(path.slice(0, -".mstudy.json".length), sidecar.annotations));
+        if (collectObjects) annotations.push(...protectedAnnotations(path.slice(0, -".mstudy.json".length), sidecar.annotations));
       }
     }
+    if (skipped.length) console.info("MarginStudy: 已跳过历史备份中的内部路径", manifestPath, skipped);
+    const detached = this.detachBackupSources(data);
+    if (detached.length) console.info("MarginStudy: 已跳过历史备份中的内部来源登记", manifestPath, detached);
+    if (collectObjects) this.recordSkippedSources(detached);
+    const objects = collectObjects ? [...protectedObjects(data), ...annotations] : [];
     return { manifest, objects };
   }
 
