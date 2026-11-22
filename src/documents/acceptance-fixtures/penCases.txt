@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 合成阅读器、笔迹控制器及可选 PDF 橡皮擦用例。
+ * [OUTPUT]: 阅读器笔迹验收组。
+ * [POS]: 在 runPenAcceptance 中提供笔迹用例与专项插入位置。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import { PenController, paintInkStrokes, startPenPerf, exportPenPerf, resetPenPerf } from '__PROJECT__/src/annot/pen';
 import { aiServiceFor } from '__PROJECT__/src/ai/panel';
 import { eraseInk, selectInk, transformSelectedInk } from '__PROJECT__/src/annot/penGeometry';
@@ -40,6 +46,7 @@ async function drawPermanent(view:any,p:any,points:number[][],wait:any){
  view.setHandwritingMode('pen');const host=pageHost(view),overlay=host.querySelector<SVGSVGElement>('.ms-pen-overlay')!;drag(overlay,host,points);await wait(20);view.setHandwritingMode('off');await p.store.flush();
 }
 export async function runPenAcceptance({test,assert,wait,plugin,add,app,htmlController}:any){
+ /* PDF eraser cases */
  await test('Colorless ink previews use black instead of stale canvas or invalid SVG color',async()=>{
   const stroke=[[{x:.2,y:.5},{x:.8,y:.5}]];
   const preview=(DocumentNavigation.prototype as any).inkPreview({strokes:stroke});

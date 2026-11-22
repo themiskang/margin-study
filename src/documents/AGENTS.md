@@ -13,7 +13,7 @@
 - `recoveryPrompts.ts` 显示失联来源候选与恢复入口。
 - `NOTEBOOKS.md` 记录笔记本的文件与阅读约定。
 - `ACCEPTANCE.md` 记录阅读器验收场景与判据。
-- `acceptance.mjs` 驱动阅读器与批注验收。
+- `acceptance.mjs` 驱动阅读器与批注验收。PDF 橡皮擦入口在笔迹套件加入专项夹具。
 - `acceptance-results.json` 保存阅读器验收样本结果。
 - `acceptance-fixtures/` 提供阅读器验收的宿主、PDF 和交互场景。
 - `a28-ui-acceptance.mjs` 验证来源与本地状态界面。
