@@ -2195,7 +2195,7 @@ try{
     const p=await fresh();await p.view.openFile(p.delta);const reader=p.view.getReader() as ReaderView;
     const open=()=>{button(p.root,'文档与工作区设置').click();return p.root.querySelector<HTMLElement>('[aria-label="文档 - 更多"]')!;};
     let pane=open();const labels=[...pane.querySelectorAll<HTMLButtonElement>('button')].map(row=>row.getAttribute('aria-label'));
-    assert(labels.join('|')==='目录|缩略图|书签|标注|卡片|添加书签|编辑PDF页面|裁边|转到指定页码|回源|摘录与手写工具|合并到另一份文档…|返回|前进|文档笔记本|卡片分组看板|Normal|Margin|Collapse|Margin Comment Area|Audio & Video|录制语音批注|朗读控制|翻译|阅读设置|Show Document Tabs','supported document actions differ from the observed relative order or contain workspace management');
+    assert(labels.join('|')==='目录|缩略图|书签|标注|卡片|添加书签|编辑PDF页面|裁边|转到指定页码|回源|摘录与手写工具|合并到另一份文档…|返回|前进|文档笔记本|卡片分组看板|Normal|Margin|Collapse|Margin Comment Area|Blank Background|Audio & Video|录制语音批注|朗读控制|翻译|阅读设置|Show Document Tabs|Handwriting on Top','supported document actions differ from the observed relative order or contain workspace management');
     button(pane,'文档笔记本').click();assert(document.querySelector('.ms-document-notebook-modal'),'notebook menu action did not open its real manager');document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
     button(p.root,'复习卡组').click();button(open(),'卡片分组看板').click();assert(p.root.dataset.auxiliary==='cards'&&p.root.querySelector('.ms-card-board'),'board action did not display Cards');
     reader.gotoPage(2);await until(()=>Number((reader.getState() as any).position.page)===2,'page 2 did not settle');const before=reader.getState();

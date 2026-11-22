@@ -2,10 +2,10 @@
 
 > L2 · 上级 [AGENTS.md](../../AGENTS.md)
 
-- `readerView.ts` 挂载 PDF 阅读器，协调页面和留白生命周期。
+- `readerView.ts` 挂载 PDF 阅读器，协调文档显示偏好、页面和留白生命周期。
 - `pdfjs.ts` 加载 PDF.js 并解析文档。
 - `cmaps.json` 为离线 PDF worker 提供 CMap 和字体。
-- `annotationLayer.ts` 将 PDF 批注投影到阅读器页面。
+- `annotationLayer.ts` 将 PDF 批注、手写栅格和回忆遮罩投影到独立页面层。
 - `cropEditor.ts` 提供页面裁剪交互。
 - `pageCrop.ts` 转换裁剪前后的页面坐标。
 - `pageEditor.ts` 提供页面排列、旋转和增删交互。
@@ -15,7 +15,7 @@
 - `nativePhotoPicker.ts` 将原生相机与照片选取接入阅读器。
 - `editedDocument.ts` 维护页面编辑记录与来源映射。
 - `editedPdfExport.ts` 以页面编辑记录重建 PDF。
-- `exportAnnotations.ts` 将批注渲染为可导出的笔迹与图层。
+- `exportAnnotations.ts` 按文档的手写置顶偏好排列扁平化批注。
 - `pdfExportSave.ts` 写入导出文件。
 - `pdfExportUi.ts` 提供 PDF 导出交互。
 - `pdfInteractiveExport.ts` 生成可交互 PDF 批注。

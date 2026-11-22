@@ -5,7 +5,7 @@ import { uid } from "../utils/id";
 import { loadPdf } from "../pdf/pdfjs";
 import { annotationGeometry } from "../anchors/pdfGeometry";
 import { annotationNotebook, notebookMeta, updateNotebookMeta } from "../annot/documentNotebooks";
-import { annotationInkLayer, inkLayerState } from "../annot/inkLayers";
+import { annotationInkLayer, inkLayerState, isInkLayerBound } from "../annot/inkLayers";
 import { createModal } from "../utils/modal";
 import { el, clear } from "../utils/dom";
 
@@ -168,7 +168,7 @@ async function snapshotAnnotations(plugin: MarginStudyPlugin, targetPath: string
     const sourceMeta = notebookMeta(plugin.store.getDocMeta(entry.sourcePath),entry.sourceNotebookId), ink = inkLayerState(sourceMeta);
     for (const ann of cached.get(entry.sourcePath)!) {
       if (annotationNotebook(ann) !== entry.sourceNotebookId || ann.overlay?.deleted || excerptTypes.has(ann.type) || !annotationGeometry(ann).some((part) => part.page === entry.sourcePage)) continue;
-      if ((ann.type === "pen" || ann.overlay) && annotationInkLayer(ann,ink) !== ink.active) continue;
+      if (isInkLayerBound(ann) && annotationInkLayer(ann,ink) !== ink.active) continue;
       const page = collectionPageIndex(collection, entry.id), geometry = annotationGeometry(ann).filter((part) => part.page === entry.sourcePage).map((part) => ({page,rects:part.rects.map((rect) => ({...rect}))}));
       target.push({ ...ann, id: uid("ann"), docPath: targetPath, documentNotebookId: notebookId, cardId: undefined, page, rects: geometry[0]?.rects ?? [], pdfGeometry: geometry,
         pdfReferencePages: [{id:entry.id,page}], inkLayerId: "default", strokes: ann.strokes?.map((stroke) => stroke.map((point) => ({...point}))), overlay: ann.overlay ? {...ann.overlay,box:ann.overlay.box?{...ann.overlay.box}:undefined} : undefined });

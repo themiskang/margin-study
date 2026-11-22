@@ -1,5 +1,5 @@
 /**
- * [INPUT]: PDF 页面、批注几何和笔迹默认颜色。
+ * [INPUT]: PDF 页面、批注几何、手写置顶偏好和笔迹默认颜色。
  * [OUTPUT]: 批注图像及 PDF 扁平化导出。
  * [POS]: PDF 导出中的批注渲染入口。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
@@ -50,14 +50,17 @@ export async function overlayPng(ann: Annotation, width: number, height: number,
   } finally {root.remove();}
 }
 
-export async function flattenPdfAnnotations(output: PDFDocument, page: PDFPage, number: number, original: any, viewport: any, crop: PdfCrop, annotations: PdfExportAnnotation[], current: () => void, resolveImage: (path: string) => Promise<string>): Promise<void> {
+export async function flattenPdfAnnotations(output: PDFDocument, page: PDFPage, number: number, original: any, viewport: any, crop: PdfCrop, annotations: PdfExportAnnotation[], current: () => void, resolveImage: (path: string) => Promise<string>, handwritingOnTop = false): Promise<void> {
   const source = original.marginStudySourcePage ?? original, base = source.getViewport({scale:1}), rotation = original.marginStudyRotation ?? 0;
   const rawRect = (rect: PdfRect, space?: Annotation["pdfCoordinateSpace"]): PdfRect => {
     if (space === "pdf") return rect;
     const a=base.convertToPdfPoint(rect.x,base.height-rect.y-rect.h),b=base.convertToPdfPoint(rect.x+rect.w,base.height-rect.y);
     return {x:Math.min(a[0],b[0]),y:Math.min(a[1],b[1]),w:Math.abs(a[0]-b[0]),h:Math.abs(a[1]-b[1])};
   };
-  for (const {annotation:ann,opacity} of annotations) {
+  const drawPriority = ({ annotation }: PdfExportAnnotation) =>
+    Number((annotation.type === "pen" && !annotation.overlay) === handwritingOnTop);
+  const ordered = [...annotations].sort((first, second) => drawPriority(first) - drawPriority(second));
+  for (const {annotation:ann,opacity} of ordered) {
     current(); const rects=annotationGeometry(ann).find(part=>part.page===number)?.rects ?? [];
     if (ann.page!==number&&!rects.length) continue;
     if (ann.overlay && !ann.overlay.deleted && rects[0]) {

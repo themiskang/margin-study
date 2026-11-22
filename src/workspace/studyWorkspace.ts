@@ -2119,6 +2119,7 @@ export class StudyWorkspaceView extends ItemView {
       }
     }
     if(pdf?.getPdfPageEdits())row("Margin Comment Area","panel-right",()=>pdf.setMarginCommentArea(!pdf.getMarginCommentArea()),false,()=>pdf.getMarginCommentArea());
+    if(pdf)row("Blank Background","square",()=>pdf.setBlankBackground(!pdf.getBlankBackground()),false,()=>pdf.getBlankBackground());
     row("Audio & Video", "music", () => this.readerAction("添加音视频"), !reader);
     row("录制语音批注", "mic", () => this.readerAction("语音批注"), !reader?.getReaderToolbar().querySelector('[aria-label="语音批注"]'));
     row("朗读控制", "volume-2", () => this.openSpeechControls(), !reader);
@@ -2131,6 +2132,7 @@ export class StudyWorkspaceView extends ItemView {
     }, !pdf);
     row("阅读设置", "type", () => this.openReadSettings(), !reader);
     row("Show Document Tabs", "panel-top", () => { this.state.showTabs = !this.state.showTabs; this.layoutChanged(); }, false, () => this.state.showTabs);
+    if (pdf) row("Handwriting on Top", "layers", () => pdf.setHandwritingOnTop(!pdf.getHandwritingOnTop()), false, () => pdf.getHandwritingOnTop());
     this.anchorDocumentPopup(pane);
   }
   private getReadingTheme(): ReadingTheme {
