@@ -19,6 +19,7 @@ export interface OverlayGeometry {
 }
 export interface OverlaySurface {
   parent: HTMLElement;
+  handlesParent?: HTMLElement;
   box: OverlayBox;
   fontScale?: number;
   geometry: (box: OverlayBox) => OverlayGeometry | null;
@@ -60,6 +61,7 @@ export function createFreeOverlay(ann: Annotation, surface: OverlaySurface, opti
     renderTextRuns(text, annotationTextRuns(ann), surface.fontScale ?? 1); element.append(text);
   }
   let cleanupGesture: (() => void) | null = null;
+  let chrome: HTMLElement | null = null;
   if (!options.readonly) {
     const tools = el("div", { class: "ms-free-overlay-tools" });
     const move = el("button", { class: "ms-free-overlay-move", text: "⠿", title: "移动批注", "aria-label": "移动批注" });
@@ -72,14 +74,57 @@ export function createFreeOverlay(ann: Annotation, surface: OverlaySurface, opti
       angle.addEventListener("change",()=>{const value=Number(angle.value);if(Number.isFinite(value)&&value>=-360&&value<=360)options.rotate?.((value%360+360)%360);else angle.value=String(ann.overlay?.rotation??0);});tools.append(angle);}
     if(ann.overlay?.kind==="image"&&options.crop){const crop=el("button",{text:"裁剪","aria-label":"裁剪"});crop.addEventListener("click",event=>{event.stopPropagation();options.crop?.();});tools.append(crop);}
     if(options.toggleBind){const bound=ann.bindToInkLayer!==false;const bind=el("button",{class:"ms-free-overlay-bind",text:bound?"绑层":"公共",title:bound?"已绑定手写层（点击切换为全层公共）":"全层公共（点击绑定到手写层）","aria-label":"绑定手写层","aria-pressed":String(bound),"data-ms-overlay-bind-ink":""});bind.addEventListener("click",event=>{event.stopPropagation();options.toggleBind?.();});tools.append(bind);}
-    tools.append(card, remove); element.append(tools, resize);
-    edit.addEventListener("click", event => { event.stopPropagation(); options.edit(); });
+    tools.append(card, remove);
+    let hoverEl = false, hoverChrome = false, focused = false, dragging = false;
+    const syncChrome = () => {
+      if (!chrome) return;
+      const active = hoverEl || hoverChrome || focused || dragging;
+      chrome.classList.toggle("is-active", active);
+      element.classList.toggle("is-chrome-active", active);
+    };
+    if (surface.handlesParent) {
+      chrome = el("div", { class: "ms-free-overlay-chrome" });
+      chrome.dataset.annId = ann.id;
+      chrome.dataset.overlayKind = ann.overlay!.kind;
+      positionOverlay(chrome, surface.box);
+      if (ann.overlay?.rotation) chrome.style.transform = `rotate(${ann.overlay.rotation}deg)`;
+      chrome.append(tools, resize);
+      chrome.addEventListener("click", event => event.stopPropagation());
+      const onFocusIn = () => { focused = true; syncChrome(); };
+      const onFocusOut = (event: FocusEvent) => {
+        const next = event.relatedTarget as Node | null;
+        if (next && (element.contains(next) || chrome!.contains(next))) return;
+        focused = false; syncChrome();
+      };
+      const nativeFocus = element.focus.bind(element);
+      const nativeBlur = element.blur.bind(element);
+      element.focus = (opts?: FocusOptions) => { nativeFocus(opts); focused = document.activeElement === element || element.contains(document.activeElement); syncChrome(); };
+      element.blur = () => { nativeBlur(); if (!chrome!.contains(document.activeElement)) { focused = false; syncChrome(); } };
+      element.addEventListener("focusin", onFocusIn);
+      element.addEventListener("focusout", onFocusOut);
+      chrome.addEventListener("focusin", onFocusIn);
+      chrome.addEventListener("focusout", onFocusOut);
+      element.addEventListener("pointerenter", () => { hoverEl = true; syncChrome(); });
+      element.addEventListener("pointerleave", () => { hoverEl = false; syncChrome(); });
+      element.addEventListener("mouseenter", () => { hoverEl = true; syncChrome(); });
+      element.addEventListener("mouseleave", () => { hoverEl = false; syncChrome(); });
+      chrome.addEventListener("pointerenter", () => { hoverChrome = true; syncChrome(); });
+      chrome.addEventListener("pointerleave", () => { hoverChrome = false; syncChrome(); });
+      chrome.addEventListener("mouseenter", () => { hoverChrome = true; syncChrome(); });
+      chrome.addEventListener("mouseleave", () => { hoverChrome = false; syncChrome(); });
+      surface.handlesParent.append(chrome);
+    } else {
+      element.append(tools, resize);
+    }
+    const startEdit = () => { hoverEl = false; hoverChrome = false; focused = false; syncChrome(); options.edit(); };
+    edit.addEventListener("click", event => { event.stopPropagation(); startEdit(); });
     remove.addEventListener("click", event => { event.stopPropagation(); options.remove(); });
     card.addEventListener("click", event => { event.stopPropagation(); options.card(); });
-    element.addEventListener("dblclick", event => { event.stopPropagation(); if (!(event.target as HTMLElement).closest("button")) options.edit(); });
+    element.addEventListener("dblclick", event => { event.stopPropagation(); if (!(event.target as HTMLElement).closest("button")) startEdit(); });
     const begin = (event: PointerEvent, kind: "move" | "resize") => {
       if (event.button !== 0 || event.isPrimary === false) return;
       event.preventDefault(); event.stopPropagation(); cleanupGesture?.(); element.focus({ preventScroll: true });
+      dragging = true; syncChrome();
       const initial = { left:parseFloat(element.style.left),top:parseFloat(element.style.top),width:parseFloat(element.style.width),height:parseFloat(element.style.height) }, startX = event.clientX, startY = event.clientY, pointerId = event.pointerId;
       let next = initial;
       const parent = surface.parent.getBoundingClientRect();
@@ -97,11 +142,12 @@ export function createFreeOverlay(ann: Annotation, surface: OverlaySurface, opti
           next = boundedOverlayBox({ ...size, left: initial.left + (cosine * dw - sine * dh - dw) / 2, top: initial.top + (sine * dw + cosine * dh - dh) / 2 }, surface.parent.clientWidth, surface.parent.clientHeight);
         }
         positionOverlay(element, next);
+        if (chrome) positionOverlay(chrome, next);
       };
       const end = (sample: PointerEvent) => { if (sample.pointerId !== pointerId) return; update(sample); cleanup(); if (JSON.stringify(initial) !== JSON.stringify(next)) options.commit(next); };
-      const cancel = () => { positionOverlay(element, initial); cleanup(); };
+      const cancel = () => { positionOverlay(element, initial); if (chrome) positionOverlay(chrome, initial); cleanup(); };
       const key = (sample: KeyboardEvent) => { if (sample.key === "Escape") { sample.preventDefault(); sample.stopPropagation(); cancel(); } };
-      const cleanup = () => { window.removeEventListener("pointermove", update); window.removeEventListener("pointerup", end); window.removeEventListener("pointercancel", cancel); document.removeEventListener("keydown", key, true); cleanupGesture = null; };
+      const cleanup = () => { dragging = false; syncChrome(); window.removeEventListener("pointermove", update); window.removeEventListener("pointerup", end); window.removeEventListener("pointercancel", cancel); document.removeEventListener("keydown", key, true); cleanupGesture = null; };
       cleanupGesture = cancel;
       window.addEventListener("pointermove", update); window.addEventListener("pointerup", end); window.addEventListener("pointercancel", cancel); document.addEventListener("keydown", key, true);
     };
@@ -111,12 +157,12 @@ export function createFreeOverlay(ann: Annotation, surface: OverlaySurface, opti
       if ((event.target as HTMLElement).closest("button,input")) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") { event.preventDefault(); event.stopPropagation(); cleanupGesture?.(); if (event.shiftKey) options.redo(); else options.undo(); }
       else if (["Delete","Backspace"].includes(event.key)) { event.preventDefault(); event.stopPropagation(); options.remove(); }
-      else if (event.key === "Enter") { event.preventDefault(); options.edit(); }
+      else if (event.key === "Enter") { event.preventDefault(); startEdit(); }
     });
   }
   element.addEventListener("click", event => event.stopPropagation());
   surface.parent.append(element);
-  return { element, dispose: () => { cleanupGesture?.(); element.remove(); } };
+  return { element, dispose: () => { cleanupGesture?.(); chrome?.remove(); element.remove(); } };
 }
 export async function loadOverlayImage(file: File): Promise<{ image: string; width: number; height: number }> {
   if (!/^image\/(?:png|jpeg|gif|webp|avif)$/i.test(file.type) || file.size <= 0 || file.size > 20 * 1024 * 1024) throw new Error("请选择 20 MB 内的 PNG、JPEG、GIF、WebP 或 AVIF 图片");

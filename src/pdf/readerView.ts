@@ -53,6 +53,7 @@ interface PageRecord {
   canvas: HTMLCanvasElement;
   textLayer: HTMLElement;
   annLayer: HTMLElement;
+  handlesLayer: HTMLElement;
   imageRects?: import("../types").PdfRect[];
   renderedScale: number;
   renderTask: any | null;
@@ -1766,7 +1767,8 @@ export class ReaderView extends ItemView {
       canvas.width = canvas.height = 0;
       const textLayer = el("div", { class: "ms-text-layer" });
       const annLayer = el("div", { class: "ms-ann-layer" });
-      wrapper.append(bar, canvas, textLayer, annLayer);
+      const handlesLayer = el("div", { class: "ms-overlay-handles-layer" });
+      wrapper.append(bar, canvas, textLayer, annLayer, handlesLayer);
       if (this.folded.has(i)) wrapper.classList.add("ms-page-folded");
       if (this.bookmarked.has(i)) wrapper.classList.add("ms-page-bookmarked");
       if (this.getBlankBackground()) wrapper.classList.add("ms-blank-bg");
@@ -1776,6 +1778,7 @@ export class ReaderView extends ItemView {
         canvas,
         textLayer,
         annLayer,
+        handlesLayer,
         renderedScale: -1,
         renderTask: null,
         textTask: null,
@@ -1860,6 +1863,8 @@ export class ReaderView extends ItemView {
         rec.textLayer.style.setProperty("--scale-factor", String(viewport.scale));
         rec.annLayer.style.width = `${Math.floor(viewport.width)}px`;
         rec.annLayer.style.height = `${Math.floor(viewport.height)}px`;
+        rec.handlesLayer.style.width = `${Math.floor(viewport.width)}px`;
+        rec.handlesLayer.style.height = `${Math.floor(viewport.height)}px`;
         const context = rec.canvas.getContext("2d");
         if (!context) return;
         const task = page.render({ canvasContext: context, viewport: baseViewport,
@@ -1937,6 +1942,7 @@ export class ReaderView extends ItemView {
     rec.renderingScale = null;
     clear(rec.textLayer);
     clear(rec.annLayer);
+    clear(rec.handlesLayer);
     if (pending) void pending.finally(() => {
       if (rec.renderPromise === pending) rec.renderPromise = null;
     });

@@ -167,7 +167,7 @@ export class AnnotationController extends BaseAnnotationController {
   }
   private overlaySurface(page: number, box: OverlayBox): OverlaySurface | null {
     const rec = this.reader.getPageRecord(page); if (!rec?.viewport || rec.renderedScale !== this.reader.getScale()) return null;
-    return { parent: rec.annLayer, box, fontScale: this.reader.getScale(), geometry: value => {
+    return { parent: rec.annLayer, handlesParent: rec.handlesLayer, box, fontScale: this.reader.getScale(), geometry: value => {
       if (!rec.viewport || rec.renderedScale !== this.reader.getScale()) return null;
       const canvas = rec.canvas.getBoundingClientRect(), bounds = rec.annLayer.getBoundingClientRect();
       const rect = clientRectToPdfRect({ left: bounds.left+value.left, top: bounds.top+value.top, width: value.width, height: value.height, right: bounds.left+value.left+value.width, bottom: bounds.top+value.top+value.height },canvas,rec.viewport);
@@ -698,7 +698,7 @@ export class AnnotationController extends BaseAnnotationController {
   private onInkClick(pageNum: number, event: MouseEvent): void {
     const state = this.inkRasters.get(pageNum); if (!state || event.defaultPrevented) return;
     const target = event.target as Element | null;
-    if (target?.closest(".ms-ann, .ms-pen-overlay, .ms-extend-layer, button, a, input, textarea, select")) return;
+    if (target?.closest(".ms-ann, .ms-pen-overlay, .ms-overlay-handles-layer, .ms-extend-layer, button, a, input, textarea, select")) return;
     const bounds = state.layer.getBoundingClientRect(); if (!bounds.width || !bounds.height) return;
     const point = { x: (event.clientX - bounds.left) * state.width / bounds.width, y: (event.clientY - bounds.top) * state.height / bounds.height };
     const context = state.canvas.getContext("2d"); if (!context) return;
