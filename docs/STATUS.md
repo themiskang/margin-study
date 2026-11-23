@@ -40,3 +40,10 @@
 
 同一故障第三次复现：worktree 内 `npm ci` 的 postinstall 把 `/opt/homebrew/bin/agent-browser` 重链进该 worktree，worktree 删除后所有 UI 套件报 `spawn agent-browser ENOENT`（表现为 `verify:public` 30/53）。
 新增 `scripts/verify/check-browser-backend.mjs`：跑验收前解析后端真实路径，指向 `/orca/workspaces/` 即退出 1 并给出修复命令；已正反向验证（正常 0 / 断链 1）。
+
+## 2026-11-22 · GAP-07b-1 收口（合并 `86c7ef4`，8 轮）
+
+宿主几何跟随、层操作与合并事务语义。B1–B3 + D1–D4 全部通过，异厂复核 8 轮（前 7 轮 FAIL，逐轮修边界）。
+**流程改进生效**：第 6 轮起由复核席把失败场景**导出为可执行夹具**，执行席跑同一批脚本修复；7 个夹具原样入库 `scripts/verify/annotation-merge-d4/` 并注册为回归套件。前 6 轮「各写各的脚本」始终不收敛，改为共用夹具后 2 轮内收口。
+门禁：`tsc` 0、`build` 0、`verify:public` **60/60**、`px-gap` 292/298（top-3 3.00px 未变）。
+新增独立卡 **GAP-BUILD-01**（构建可复现 + 产物路径泄露）。
