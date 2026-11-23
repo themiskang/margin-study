@@ -47,3 +47,13 @@
 **流程改进生效**：第 6 轮起由复核席把失败场景**导出为可执行夹具**，执行席跑同一批脚本修复；7 个夹具原样入库 `scripts/verify/annotation-merge-d4/` 并注册为回归套件。前 6 轮「各写各的脚本」始终不收敛，改为共用夹具后 2 轮内收口。
 门禁：`tsc` 0、`build` 0、`verify:public` **60/60**、`px-gap` 292/298（top-3 3.00px 未变）。
 新增独立卡 **GAP-BUILD-01**（构建可复现 + 产物路径泄露）。
+
+## 2026-11-24 · GAP-BUILD-01 收口（合并 `1fe664f`，2 轮）
+
+构建可复现 + 产物零路径泄露。根因：worktree 的 `node_modules` 为符号链接，esbuild 把 CJS 模块键写成相对 cwd 的路径。
+修法：`absWorkingDir` + `preserveSymlinks`，模块键归一化为仓库内相对路径。
+四路径产物 SHA-256 全等；敏感路径命中 0（修复前 922 处）；体积 −63,618 B 完全来自前缀，去前缀后逐字节相同。
+新增 `scripts/verify/build-determinism-acceptance.mjs` 常驻套件（仓内临时根、仅 `node_modules` 符号链接、`realpath` 边界断言）。
+门禁：`tsc` 0、`build` 0、`verify:public` **61/61**、`px-gap` 292/298（top-3 3.00px 未变）。
+复核第一轮判 PARTIAL，抓出「新回归套件默认写系统 tmpdir」与「macOS 原生步骤沿符号链接写回真实树」两处隔离漏洞；
+修复后第二轮 PASS。新增 **GAP-BUILD-02**（隔离环境原生冷编译 `SIGTRAP`，另案跟踪）。
