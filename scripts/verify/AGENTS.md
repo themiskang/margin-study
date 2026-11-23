@@ -17,6 +17,7 @@
 - `compare-read-settings-evidence.py` 复核阅读设置实机证据。
 - `desktop-import-acceptance.mjs` 在合成宿主验证桌面导入的落盘、摘录、同名处理和错误分类。
 - `desktop-import-fixture.txt` 驱动桌面导入界面和 PDF 选区，调用隔离文件系统。
+- `build-determinism-acceptance.mjs` 无头校验构建产物零路径泄露与跨路径 symlink 构建哈希一致性。
 - `annotation-merge-d4/` 存放 GAP-07b-1 D4 批注冲突合并的 7 项复现回归夹具与共享支持。
 
 [PROTOCOL]: Update this header on change, then check AGENTS.md
