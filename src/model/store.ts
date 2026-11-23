@@ -1234,6 +1234,12 @@ export class Store {
     return true;
   }
 
+  private isRecoveryFilePath(path: string): boolean {
+    return path.startsWith("_marginstudy-recovery/") ||
+      /(?:^|\/)(?:pending-annotations-|pending-merge-tx-|pending-main-|resolved-annotation-conflict|document-migration-failed|document-content-change)/.test(path) ||
+      /\.(?:superseded|quarantine)-\d+$/.test(path);
+  }
+
   private async diskCoversTx(tx: {
     docPath: string;
     sidecarPath: string;
@@ -1244,8 +1250,10 @@ export class Store {
   }): Promise<boolean> {
     const adapter = this.host.app.vault.adapter;
     try {
-      if (!await adapter.exists(tx.sidecarPath)) return false;
-      const diskSidecar = await adapter.read(tx.sidecarPath);
+      const expectedSidecar = this.sidecarPath(tx.docPath);
+      if (tx.sidecarPath !== expectedSidecar || this.isRecoveryFilePath(expectedSidecar)) return false;
+      if (!await adapter.exists(expectedSidecar)) return false;
+      const diskSidecar = await adapter.read(expectedSidecar);
       if (sha(diskSidecar) !== tx.expectedSidecarHash) return false;
       const parsedSidecar = JSON.parse(diskSidecar);
       validateAnnotationCollection(parsedSidecar?.annotations);
@@ -1276,6 +1284,12 @@ export class Store {
   }
 
   static recoveryDeleteGateApprovals = 0;
+  static recoveryDeleteProofLog: {
+    path: string;
+    kind: "merge-tx" | "merge-tx-rolled-back" | "pending-annotations" | "tombstone" | "rollback-artifact";
+    contentDigest: string;
+    proofTxId: string;
+  }[] = [];
 
   /**
    * Single gate for deleting ANY annotation recovery file (Invariant R).
@@ -1286,6 +1300,7 @@ export class Store {
     file: string,
     context?: {
       multiBranch?: boolean;
+      recordProof?: boolean;
       expectedDocPath?: string;
       expectedWriterId?: string;
       expectedTxId?: string;
@@ -1297,22 +1312,37 @@ export class Store {
     },
   ): Promise<boolean> {
     const adapter = this.host.app.vault.adapter;
-    const approve = (ok: boolean): boolean => {
-      if (ok) Store.recoveryDeleteGateApprovals++;
-      return ok;
-    };
     try {
       if (!await adapter.exists(file)) return false;
+      const raw = await adapter.read(file);
+      const rawDigest = sha(raw);
+      const parsed = JSON.parse(raw);
+      const proofTxId =
+        (typeof parsed?.txId === "string" && parsed.txId) ? parsed.txId :
+        (typeof context?.expectedTxId === "string" && context.expectedTxId) ? context.expectedTxId :
+        (typeof parsed?.contentDigest === "string" && parsed.contentDigest) ? parsed.contentDigest :
+        rawDigest;
+      const approve = (ok: boolean): boolean => {
+        if (ok) {
+          Store.recoveryDeleteGateApprovals++;
+          if (context?.recordProof) {
+            Store.recoveryDeleteProofLog.push({ path: file, kind, contentDigest: rawDigest, proofTxId });
+          }
+        }
+        return ok;
+      };
       if (kind === "merge-tx") {
         if (context?.multiBranch) return false;
-        const tx = JSON.parse(await adapter.read(file));
+        const tx = parsed;
         if (!tx || typeof tx.docPath !== "string" || typeof tx.sidecarPath !== "string") return false;
         return approve(await this.diskCoversTx(tx));
       }
       if (kind === "merge-tx-rolled-back") {
-        const tx = JSON.parse(await adapter.read(file));
+        const tx = parsed;
         if (!tx || typeof tx.docPath !== "string" || typeof tx.sidecarPath !== "string") return false;
-        const diskSidecar = await adapter.exists(tx.sidecarPath) ? await adapter.read(tx.sidecarPath) : null;
+        const expectedSidecar = this.sidecarPath(tx.docPath);
+        if (tx.sidecarPath !== expectedSidecar || this.isRecoveryFilePath(expectedSidecar)) return false;
+        const diskSidecar = await adapter.exists(expectedSidecar) ? await adapter.read(expectedSidecar) : null;
         if (tx.previousDiskRaw === null) {
           if (diskSidecar === null) return approve(true);
         } else if (diskSidecar !== null && sha(diskSidecar) === sha(tx.previousDiskRaw)) {
@@ -1321,8 +1351,8 @@ export class Store {
         // Also allow if a valid third-party sidecar update superseded the uncommitted merge (not corrupted, not our expectedSidecarHash).
         if (diskSidecar !== null && sha(diskSidecar) !== tx.expectedSidecarHash) {
           try {
-            const parsed = JSON.parse(diskSidecar);
-            validateAnnotationCollection(parsed?.annotations);
+            const parsedSidecar = JSON.parse(diskSidecar);
+            validateAnnotationCollection(parsedSidecar?.annotations);
             return approve(true);
           } catch {
             return false;
@@ -1331,12 +1361,12 @@ export class Store {
         return false;
       }
       if (kind === "pending-annotations") {
-        const data = JSON.parse(await adapter.read(file));
+        const data = parsed;
         if (!data || typeof data.docPath !== "string" || !Array.isArray(data.annotations)) return false;
         return approve(await this.sidecarCoversAnnotations(data.docPath, data.annotations));
       }
       if (kind === "tombstone") {
-        const data = JSON.parse(await adapter.read(file));
+        const data = parsed;
         if (!data || typeof data.docPath !== "string") return false;
         const txSuccessorCoversTombstone = (tomb: any, succ: any): boolean => {
           if (typeof tomb.txId === "string" && tomb.txId && succ.txId !== tomb.txId) return false;
@@ -1405,7 +1435,7 @@ export class Store {
         return false;
       }
       if (kind === "rollback-artifact") {
-        const data = JSON.parse(await adapter.read(file));
+        const data = parsed;
         if (!data || typeof data.docPath !== "string") return false;
         if (!context?.expectedDocPath || data.docPath !== context.expectedDocPath) return false;
         if (!context.expectedArtifactDigest || !context.expectedArtifactKind) return false;
@@ -1450,7 +1480,7 @@ export class Store {
     file: string,
     context?: Parameters<Store["canDeleteRecovery"]>[2],
   ): Promise<boolean> {
-    if (!await this.canDeleteRecovery(kind, file, context)) return false;
+    if (!await this.canDeleteRecovery(kind, file, { ...context, recordProof: true })) return false;
     await this.host.app.vault.adapter.remove?.(file).catch(() => {});
     return true;
   }
@@ -1584,6 +1614,12 @@ export class Store {
     for (const entry of loadedTxs) if (entry.tx.txId) txIdCounts.set(entry.tx.txId, (txIdCounts.get(entry.tx.txId) ?? 0) + 1);
     loadedTxs.sort((a, b) => Number(registeredPaths.has(b.tx.docPath)) - Number(registeredPaths.has(a.tx.docPath)) || a.tx.docPath.localeCompare(b.tx.docPath));
     for (const { txPath, tx } of loadedTxs) {
+      const targetSidecar = this.sidecarPath(tx.docPath);
+      if (tx.sidecarPath !== targetSidecar || this.isRecoveryFilePath(targetSidecar)) {
+        this.annBlocked.add(tx.docPath);
+        this.report("待恢复合并事务侧车路径与文档不匹配或指向恢复类文件，已保留原文件：" + txPath, new Error("pending merge tx sidecarPath mismatch"));
+        continue;
+      }
       const multiBranch = !!tx.txId && (txIdCounts.get(tx.txId) ?? 0) > 1;
       const allEventsPresent = (tx.unbindEvents ?? []).every(ev =>
         this.localEvents.some(item =>
@@ -1595,7 +1631,7 @@ export class Store {
       if (tx.txId && seenCommittedTxIds.has(tx.txId) && allEventsPresent) {
         continue;
       }
-      const diskText = await adapter.exists(tx.sidecarPath) ? await adapter.read(tx.sidecarPath) : null;
+      const diskText = await adapter.exists(targetSidecar) ? await adapter.read(targetSidecar) : null;
       let diskValid = false;
       if (diskText !== null) {
         try {
@@ -1664,9 +1700,19 @@ export class Store {
         let diskClean = true;
         try {
           if (tx.previousDiskRaw !== null) {
-            if (diskText !== tx.previousDiskRaw) await adapter.write(tx.sidecarPath, tx.previousDiskRaw);
+            if (diskText !== tx.previousDiskRaw) await adapter.write(targetSidecar, tx.previousDiskRaw);
           } else if (diskText !== null) {
-            await adapter.remove?.(tx.sidecarPath);
+            const safeSidecarTarget =
+              targetSidecar === this.sidecarPath(tx.docPath) &&
+              targetSidecar.endsWith(".mstudy.json") &&
+              !this.isRecoveryFilePath(targetSidecar) &&
+              !diskValid;
+            if (safeSidecarTarget) {
+              await adapter.remove?.(targetSidecar);
+            } else {
+              diskClean = false;
+              this.report("回滚目标侧车未通过安全断言，已保留文件：" + targetSidecar, new Error("unsafe sidecar rollback target"));
+            }
           }
         } catch { diskClean = false; }
         this.annBlocked.add(tx.docPath);

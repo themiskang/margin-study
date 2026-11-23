@@ -1,9 +1,10 @@
 /**
  * [INPUT]: src/ 生产源码（经 TypeScript AST 解析）与内存编译的 Store 实例。
- * [OUTPUT]: 恢复文件删除 AST 静态扫描（精确调用点基线清单）与运行时哨兵断言结果。
- * [POS]: 强制收口所有批注恢复文件删除至 canDeleteRecovery/deleteRecoveryIfProved 单一闸门，杜绝正则绕过与方法级白名单。
+ * [OUTPUT]: 恢复文件删除 AST 静态扫描（精确调用点出现次数基线清单）与运行时证明-目标绑定哨兵断言结果。
+ * [POS]: 强制收口所有批注恢复文件删除至 canDeleteRecovery/deleteRecoveryIfProved 单一闸门，杜绝间接调用/动态导入/重复白名单绕过。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
+import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
@@ -24,11 +25,12 @@ const DELETE_METHOD_NAMES = new Set([
 const DELETE_VERB_RE = /(?:remove|delete|unlink|purge|drop|clear|clean|erase|\brm(?:Sync)?\b|^rm(?=[A-Z_]))/i;
 const RECOVERY_TOKEN_RE = /(?:pending|journal|tx|recover|tombstone|superseded|quarantine|_marginstudy-recovery|legacyPending)/i;
 const RECOVERY_HELPER_RE = /^(?:pendingAnnotationsPath|legacyPendingAnnotationsPath|pendingMergeTxPath|legacyPendingMergeTxPath)$/;
+const FS_MODULE_RE = /^(?:node:)?fs(?:\/promises)?$/;
 
 /**
  * Exact call-site allowlist: { file, method, expr, reason }.
  * Method-level or file-level exemptions are strictly forbidden.
- * Any addition or removal of a call site MUST update this exact baseline.
+ * Every occurrence is counted; duplicating an allowlisted call site is rejected.
  */
 export const ALLOWLIST = [
   {
@@ -52,8 +54,8 @@ export const ALLOWLIST = [
   {
     file: "src/model/store.ts",
     method: "recoverPendingAnnotationMerges",
-    expr: "adapter.remove?.(tx.sidecarPath)",
-    reason: "Deletes partially-written document sidecar on rollback when previousDiskRaw === null (target is sidecar, not recovery log).",
+    expr: "adapter.remove?.(targetSidecar)",
+    reason: "Deletes partially-written document sidecar on rollback after recomputing sidecarPath(docPath) and asserting non-recovery + invalid half-write.",
   },
   {
     file: "src/model/store.ts",
@@ -75,6 +77,8 @@ function unwrap(node) {
     if (ts.isParenthesizedExpression(cur) || ts.isAsExpression(cur) || ts.isTypeAssertionExpression(cur) ||
       ts.isNonNullExpression(cur) || (ts.isSatisfiesExpression && ts.isSatisfiesExpression(cur))) {
       cur = cur.expression;
+    } else if (ts.isBinaryExpression(cur) && cur.operatorToken.kind === ts.SyntaxKind.CommaToken) {
+      cur = cur.right;
     } else {
       break;
     }
@@ -104,20 +108,37 @@ function evalConstString(node, constStrings) {
   return null;
 }
 
-function isFsOrAdapterReceiver(node, adapterAliases) {
+function isFsModuleImportCall(node, constStrings) {
+  const n = unwrap(node);
+  if (!n || !ts.isCallExpression(n) || !n.arguments.length) return false;
+  const isDynamicImport = n.expression.kind === ts.SyntaxKind.ImportKeyword;
+  const callee = unwrap(n.expression);
+  const isRequire = ts.isIdentifier(callee) && callee.text === "require";
+  if (!isDynamicImport && !isRequire) return false;
+  const spec = evalConstString(n.arguments[0], constStrings);
+  return spec !== null && FS_MODULE_RE.test(spec);
+}
+
+function isFsOrAdapterReceiver(node, adapterAliases, constStrings) {
   const n = unwrap(node);
   if (!n) return false;
+  if (ts.isAwaitExpression(n)) {
+    return isFsOrAdapterReceiver(n.expression, adapterAliases, constStrings);
+  }
+  if (isFsModuleImportCall(n, constStrings)) {
+    return true;
+  }
   if (ts.isIdentifier(n)) {
     return /^(?:adapter|fs|fsp|promises)$/.test(n.text) || adapterAliases.has(n.text);
   }
   if (ts.isPropertyAccessExpression(n)) {
-    return /^(?:adapter|promises|fs)$/.test(n.name.text) || isFsOrAdapterReceiver(n.expression, adapterAliases);
+    return /^(?:adapter|promises|fs)$/.test(n.name.text) || isFsOrAdapterReceiver(n.expression, adapterAliases, constStrings);
   }
   if (ts.isCallExpression(n)) {
     // e.g. Object.assign({}, adapter)
     const callee = unwrap(n.expression);
     if (ts.isPropertyAccessExpression(callee) && callee.name.text === "assign") {
-      return n.arguments.some(arg => isFsOrAdapterReceiver(arg, adapterAliases));
+      return n.arguments.some(arg => isFsOrAdapterReceiver(arg, adapterAliases, constStrings));
     }
   }
   return false;
@@ -126,6 +147,9 @@ function isFsOrAdapterReceiver(node, adapterAliases) {
 function exprMentionsRecovery(node, taintedVars, constStrings) {
   if (!node) return false;
   const n = unwrap(node);
+  if (ts.isAwaitExpression(n) || ts.isSpreadElement(n)) {
+    return exprMentionsRecovery(n.expression, taintedVars, constStrings);
+  }
   if (ts.isIdentifier(n)) {
     return taintedVars.has(n.text) || RECOVERY_TOKEN_RE.test(n.text);
   }
@@ -149,6 +173,17 @@ function exprMentionsRecovery(node, taintedVars, constStrings) {
     if (ts.isPropertyAccessExpression(callee) && (RECOVERY_HELPER_RE.test(callee.name.text) || RECOVERY_TOKEN_RE.test(callee.name.text))) return true;
     return n.arguments.some(arg => exprMentionsRecovery(arg, taintedVars, constStrings));
   }
+  if (ts.isArrayLiteralExpression(n)) {
+    return n.elements.some(el => exprMentionsRecovery(el, taintedVars, constStrings));
+  }
+  if (ts.isObjectLiteralExpression(n)) {
+    return n.properties.some(prop => {
+      if (ts.isPropertyAssignment(prop)) return exprMentionsRecovery(prop.initializer, taintedVars, constStrings);
+      if (ts.isShorthandPropertyAssignment(prop)) return exprMentionsRecovery(prop.name, taintedVars, constStrings);
+      if (ts.isSpreadAssignment(prop)) return exprMentionsRecovery(prop.expression, taintedVars, constStrings);
+      return false;
+    });
+  }
   if (ts.isBinaryExpression(n)) {
     return exprMentionsRecovery(n.left, taintedVars, constStrings) || exprMentionsRecovery(n.right, taintedVars, constStrings);
   }
@@ -164,9 +199,29 @@ function exprMentionsRecovery(node, taintedVars, constStrings) {
 function resolveDeleteCallee(expr, deleteAliases, adapterAliases, constStrings) {
   const n = unwrap(expr);
   if (!n) return null;
+  if (ts.isCallExpression(n)) {
+    // Handle fn.bind(...) and Function.prototype.call.bind(adapter.remove) / Reflect.apply.bind(null, adapter.remove)
+    const callee = unwrap(n.expression);
+    if (ts.isPropertyAccessExpression(callee) && callee.name.text === "bind") {
+      const boundDirect = resolveDeleteCallee(callee.expression, deleteAliases, adapterAliases, constStrings);
+      if (boundDirect) return boundDirect;
+      const target = unwrap(callee.expression);
+      if (ts.isPropertyAccessExpression(target) && (target.name.text === "call" || target.name.text === "apply")) {
+        for (const arg of n.arguments) {
+          const boundTarget = resolveDeleteCallee(arg, deleteAliases, adapterAliases, constStrings);
+          if (boundTarget) return boundTarget;
+        }
+      }
+    }
+    return null;
+  }
   if (ts.isPropertyAccessExpression(n)) {
     const name = n.name.text;
-    if (DELETE_METHOD_NAMES.has(name) && isFsOrAdapterReceiver(n.expression, adapterAliases)) {
+    if (name === "call" || name === "apply") {
+      const indirect = resolveDeleteCallee(n.expression, deleteAliases, adapterAliases, constStrings);
+      if (indirect) return indirect;
+    }
+    if (DELETE_METHOD_NAMES.has(name) && isFsOrAdapterReceiver(n.expression, adapterAliases, constStrings)) {
       return name;
     }
     if (DELETE_VERB_RE.test(name) && RECOVERY_TOKEN_RE.test(name) && name !== "canDeleteRecovery" && name !== "deleteRecoveryIfProved" && name !== "supersedeRecoveryFile" && name !== "gcSupersededRecoveries" && name !== "pruneRecoveries") {
@@ -175,7 +230,7 @@ function resolveDeleteCallee(expr, deleteAliases, adapterAliases, constStrings) 
     return null;
   }
   if (ts.isElementAccessExpression(n)) {
-    if (!isFsOrAdapterReceiver(n.expression, adapterAliases)) return null;
+    if (!isFsOrAdapterReceiver(n.expression, adapterAliases, constStrings)) return null;
     const key = evalConstString(n.argumentExpression, constStrings);
     if (key !== null) {
       return DELETE_METHOD_NAMES.has(key) ? key : null;
@@ -250,6 +305,19 @@ export function scanSourceText(code, relPath) {
         return;
       }
 
+      if (ts.isImportDeclaration(n) && n.importClause && ts.isStringLiteral(n.moduleSpecifier) && FS_MODULE_RE.test(n.moduleSpecifier.text)) {
+        if (n.importClause.name) adapterAliases.add(n.importClause.name.text);
+        const bindings = n.importClause.namedBindings;
+        if (bindings && ts.isNamespaceImport(bindings)) {
+          adapterAliases.add(bindings.name.text);
+        } else if (bindings && ts.isNamedImports(bindings)) {
+          for (const spec of bindings.elements) {
+            const imported = spec.propertyName ? spec.propertyName.text : spec.name.text;
+            if (DELETE_METHOD_NAMES.has(imported)) deleteAliases.set(spec.name.text, imported);
+          }
+        }
+      }
+
       if (ts.isVariableDeclaration(n) && n.initializer) {
         const init = unwrap(n.initializer);
         if (ts.isIdentifier(n.name)) {
@@ -257,16 +325,10 @@ export function scanSourceText(code, relPath) {
           const strVal = evalConstString(init, constStrings);
           if (strVal !== null) constStrings.set(varName, strVal);
           if (exprMentionsRecovery(init, taintedVars, constStrings)) taintedVars.add(varName);
-          if (isFsOrAdapterReceiver(init, adapterAliases)) adapterAliases.add(varName);
-          // Alias: const rm = adapter.remove | adapter['remove'] | adapter.remove.bind(adapter)
-          let aliasTarget = init;
-          if (ts.isCallExpression(init)) {
-            const c = unwrap(init.expression);
-            if (ts.isPropertyAccessExpression(c) && c.name.text === "bind") aliasTarget = unwrap(c.expression);
-          }
-          const resolved = resolveDeleteCallee(aliasTarget, deleteAliases, adapterAliases, constStrings);
+          if (isFsOrAdapterReceiver(init, adapterAliases, constStrings)) adapterAliases.add(varName);
+          const resolved = resolveDeleteCallee(init, deleteAliases, adapterAliases, constStrings);
           if (resolved) deleteAliases.set(varName, resolved);
-        } else if (ts.isObjectBindingPattern(n.name) && isFsOrAdapterReceiver(init, adapterAliases)) {
+        } else if (ts.isObjectBindingPattern(n.name) && isFsOrAdapterReceiver(init, adapterAliases, constStrings)) {
           for (const el of n.name.elements) {
             const propName = el.propertyName ? (ts.isIdentifier(el.propertyName) ? el.propertyName.text : evalConstString(el.propertyName, constStrings)) : (ts.isIdentifier(el.name) ? el.name.text : null);
             if (propName && DELETE_METHOD_NAMES.has(propName) && ts.isIdentifier(el.name)) {
@@ -281,9 +343,52 @@ export function scanSourceText(code, relPath) {
       }
 
       if (ts.isCallExpression(n)) {
-        const calleeId = unwrap(n.expression);
-        if (ts.isIdentifier(calleeId) && wrapperFns.has(calleeId.text)) {
-          for (const entry of wrapperFns.get(calleeId.text)) {
+        const callee = unwrap(n.expression);
+
+        // Dynamic import('node:fs').then(m => m.unlink(p)) or modPromise.then(({ unlink }) => unlink(p))
+        if (ts.isPropertyAccessExpression(callee) && callee.name.text === "then" &&
+          isFsOrAdapterReceiver(callee.expression, adapterAliases, constStrings) && n.arguments.length >= 1) {
+          const cb = unwrap(n.arguments[0]);
+          if (ts.isArrowFunction(cb) || ts.isFunctionExpression(cb)) {
+            const cbAdapterAliases = new Set(adapterAliases);
+            const cbDeleteAliases = new Map(deleteAliases);
+            const firstParam = cb.parameters[0];
+            if (firstParam) {
+              if (ts.isIdentifier(firstParam.name)) {
+                cbAdapterAliases.add(firstParam.name.text);
+              } else if (ts.isObjectBindingPattern(firstParam.name)) {
+                for (const el of firstParam.name.elements) {
+                  const propName = el.propertyName ? (ts.isIdentifier(el.propertyName) ? el.propertyName.text : evalConstString(el.propertyName, constStrings)) : (ts.isIdentifier(el.name) ? el.name.text : null);
+                  if (propName && DELETE_METHOD_NAMES.has(propName) && ts.isIdentifier(el.name)) {
+                    cbDeleteAliases.set(el.name.text, propName);
+                  }
+                }
+              }
+            }
+            walkNode(callee.expression);
+            visitScope(cb, enclosingMethod, taintedVars, cbDeleteAliases, cbAdapterAliases, constStrings, wrapperFns);
+            for (let i = 1; i < n.arguments.length; i++) walkNode(n.arguments[i]);
+            return;
+          }
+        }
+
+        // Reflect.apply(adapter.remove, adapter, [p])
+        if (ts.isPropertyAccessExpression(callee) && callee.name.text === "apply" &&
+          ts.isIdentifier(unwrap(callee.expression)) && unwrap(callee.expression).text === "Reflect" &&
+          n.arguments.length >= 1) {
+          const op = resolveDeleteCallee(n.arguments[0], deleteAliases, adapterAliases, constStrings);
+          if (op) {
+            const recoveryArg = n.arguments.slice(1).some(arg => exprMentionsRecovery(arg, taintedVars, constStrings));
+            if (recoveryArg) {
+              const { line } = sf.getLineAndCharacterOfPosition(n.getStart(sf));
+              const exprText = n.getText(sf).replace(/\s+/g, " ").trim();
+              findings.push({ file: relPath, line: line + 1, method: enclosingMethod, op, expr: exprText });
+            }
+          }
+        }
+
+        if (ts.isIdentifier(callee) && wrapperFns.has(callee.text)) {
+          for (const entry of wrapperFns.get(callee.text)) {
             const arg = n.arguments[entry.paramIndex];
             if (arg && exprMentionsRecovery(arg, taintedVars, constStrings)) {
               findings.push({ file: relPath, line: entry.line, method: entry.method, op: entry.op, expr: entry.expr });
@@ -337,18 +442,39 @@ export async function scanProject(projectRoot = defaultRoot) {
     const code = await readFile(file, "utf8");
     allFindings.push(...scanSourceText(code, rel));
   }
-  const allowKeys = new Set(ALLOWLIST.map(item => `${item.file}\u0000${item.method}\u0000${item.expr}`));
-  const matchedAllowKeys = new Set();
+  const expectedCounts = new Map();
+  for (const item of ALLOWLIST) {
+    const key = `${item.file}\u0000${item.method}\u0000${item.expr}`;
+    expectedCounts.set(key, (expectedCounts.get(key) ?? 0) + 1);
+  }
+  const seenCounts = new Map();
   const violations = [];
+  let matchedCount = 0;
   for (const f of allFindings) {
     const key = `${f.file}\u0000${f.method}\u0000${f.expr}`;
-    if (allowKeys.has(key)) matchedAllowKeys.add(key);
-    else violations.push(`${f.file}:${f.line} (${f.method}): ${f.expr}`);
+    const limit = expectedCounts.get(key) ?? 0;
+    const next = (seenCounts.get(key) ?? 0) + 1;
+    seenCounts.set(key, next);
+    if (limit > 0 && next <= limit) {
+      matchedCount++;
+    } else if (limit > 0) {
+      violations.push(`DUPLICATE ALLOWLIST (${next}/${limit}): ${f.file}:${f.line} (${f.method}): ${f.expr}`);
+    } else {
+      violations.push(`${f.file}:${f.line} (${f.method}): ${f.expr}`);
+    }
   }
-  const staleAllowlist = ALLOWLIST
-    .filter(item => !matchedAllowKeys.has(`${item.file}\u0000${item.method}\u0000${item.expr}`))
-    .map(item => `${item.file} (${item.method}): ${item.expr}`);
-  return { allFindings, violations, staleAllowlist, matchedCount: matchedAllowKeys.size };
+  const staleAllowlist = [];
+  for (const item of ALLOWLIST) {
+    const key = `${item.file}\u0000${item.method}\u0000${item.expr}`;
+    if ((seenCounts.get(key) ?? 0) < (expectedCounts.get(key) ?? 0)) {
+      staleAllowlist.push(`${item.file} (${item.method}): ${item.expr}`);
+    }
+  }
+  return { allFindings, violations, staleAllowlist, matchedCount };
+}
+
+function sha256(text) {
+  return createHash("sha256").update(text).digest("hex");
 }
 
 if (process.argv[1] && pathToFileURL(realpathSync(process.argv[1])).href === import.meta.url) {
@@ -357,24 +483,50 @@ if (process.argv[1] && pathToFileURL(realpathSync(process.argv[1])).href === imp
     const { allFindings, violations, staleAllowlist, matchedCount } = await scanProject(project);
     console.log(`INFO recovery-delete-guard scanned call-sites (${allFindings.length}):`);
     for (const f of allFindings) console.log(`  - ${f.file}:${f.line} (${f.method}): ${f.expr}`);
-    check("AST static scan: zero unguarded recovery delete/rename calls in src/**", violations, []);
-    check("AST static scan: exact allowlist baseline count matches", { matchedCount, staleAllowlist }, { matchedCount: ALLOWLIST.length, staleAllowlist: [] });
+    check("AST static scan: zero unguarded or duplicated recovery delete/rename calls in src/**", violations, []);
+    check(
+      "AST static scan: exact allowlist occurrence count matches",
+      { totalFindings: allFindings.length, matchedCount, staleAllowlist },
+      { totalFindings: ALLOWLIST.length, matchedCount: ALLOWLIST.length, staleAllowlist: [] },
+    );
 
-    // Runtime sentinel: wrap adapter.remove and assert every annotation recovery deletion increments Store.recoveryDeleteGateApprovals.
+    // Runtime sentinel: wrap adapter.remove and assert every annotation recovery deletion
+    // is bound to an exact { path, contentDigest, proofTxId } proof record matching the file on disk.
     const env = memoryVault(Store);
     const isAnnotationRecovery = (file) =>
       /^_marginstudy-recovery\/(?:pending-annotations-|pending-merge-tx-)/.test(file);
-    let lastApprovals = Store.recoveryDeleteGateApprovals;
-    let guardedDeletions = 0;
-    const unguardedDeletions = [];
+    let lastProofIdx = Store.recoveryDeleteProofLog.length;
+    const verifiedProofs = [];
+    const bindingViolations = [];
     const origRemove = env.adapter.remove;
     env.adapter.remove = async (file) => {
       if (isAnnotationRecovery(file)) {
-        if (Store.recoveryDeleteGateApprovals > lastApprovals) {
-          guardedDeletions++;
-          lastApprovals = Store.recoveryDeleteGateApprovals;
+        const rawBefore = env.disk.get(file);
+        const actualDigest = typeof rawBefore === "string" ? sha256(rawBefore) : null;
+        let actualTxId = null;
+        if (typeof rawBefore === "string") {
+          try {
+            const parsed = JSON.parse(rawBefore);
+            actualTxId =
+              (typeof parsed?.txId === "string" && parsed.txId) ? parsed.txId :
+              (typeof parsed?.contentDigest === "string" && parsed.contentDigest) ? parsed.contentDigest :
+              actualDigest;
+          } catch { actualTxId = null; }
+        }
+        const newProofs = Store.recoveryDeleteProofLog.slice(lastProofIdx);
+        lastProofIdx = Store.recoveryDeleteProofLog.length;
+        if (newProofs.length !== 1) {
+          bindingViolations.push({ file, reason: "missing-or-ambiguous-proof", count: newProofs.length });
         } else {
-          unguardedDeletions.push(file);
+          const proof = newProofs[0];
+          const pathMatch = proof.path === file;
+          const digestMatch = actualDigest !== null && proof.contentDigest === actualDigest;
+          const txMatch = actualTxId !== null && typeof proof.proofTxId === "string" && proof.proofTxId.length > 0 && proof.proofTxId === actualTxId;
+          if (!pathMatch || !digestMatch || !txMatch) {
+            bindingViolations.push({ file, proof, actualDigest, actualTxId, pathMatch, digestMatch, txMatch });
+          } else {
+            verifiedProofs.push({ path: proof.path, contentDigest: proof.contentDigest, proofTxId: proof.proofTxId });
+          }
         }
       }
       return origRemove.call(env.adapter, file);
@@ -397,7 +549,7 @@ if (process.argv[1] && pathToFileURL(realpathSync(process.argv[1])).href === imp
     await env.open();
     await env.open();
 
-    check("runtime sentinel: every annotation recovery deletion passed through canDeleteRecovery", unguardedDeletions, []);
-    check("runtime sentinel: at least one proved deletion was observed", guardedDeletions >= 1, true);
+    check("runtime sentinel: every annotation recovery deletion has exact {path, contentDigest, proofTxId} proof binding", bindingViolations, []);
+    check("runtime sentinel: observed proved deletions across merge-tx and tombstone flows", verifiedProofs.length >= 2, true);
   });
 }
