@@ -1149,7 +1149,37 @@ export class Store {
       if (currentDisk !== disk) throw new Error("磁盘批注再次变化；请重新处理冲突");
       if (version !== this.annDirty.get(path) || !same(local, this.annCache.get(path) ?? [])) throw new Error("检查磁盘批注期间本地内容发生变化；请重新处理冲突");
       const merged = strategy === "local" ? local : strategy === "remote" ? remote : [...local];
-      if (strategy === "merge") for (const a of remote) { const existing = merged.find(x => x.id === a.id); if (!existing) merged.push(a); else if (!same(existing,a)) merged.push({ ...a, id: uid("ann-conflict"), cardId: undefined }); }
+      const unresolvedHostBindings: { penId: string; oldHostId: string }[] = [];
+      if (strategy === "merge") {
+        const remoteIdMap = new Map<string, string>();
+        const remoteNonPens = remote.filter(a => a.type !== "pen");
+        const remotePens = remote.filter(a => a.type === "pen");
+        for (const a of remoteNonPens) {
+          const existing = merged.find(x => x.id === a.id);
+          if (!existing) { merged.push(clone(a)); remoteIdMap.set(a.id, a.id); }
+          else if (!same(existing, a)) { const nextId = uid("ann-conflict"); merged.push({ ...clone(a), id: nextId, cardId: undefined }); remoteIdMap.set(a.id, nextId); }
+          else { remoteIdMap.set(a.id, existing.id); }
+        }
+        for (const a of remotePens) {
+          const candidate = clone(a);
+          let unresolvedOldHostId: string | undefined;
+          if (candidate.hostAnnotationId !== undefined) {
+            const mappedHostId = remoteIdMap.get(candidate.hostAnnotationId);
+            const resolvedHost = mappedHostId ? merged.find(item => item.id === mappedHostId && !!item.overlay) : undefined;
+            if (resolvedHost) {
+              candidate.hostAnnotationId = resolvedHost.id;
+            } else {
+              unresolvedOldHostId = candidate.hostAnnotationId;
+              delete candidate.hostAnnotationId;
+            }
+          }
+          const existing = merged.find(x => x.id === candidate.id);
+          let finalId = candidate.id;
+          if (!existing) { merged.push(candidate); }
+          else if (!same(existing, candidate)) { finalId = uid("ann-conflict"); merged.push({ ...candidate, id: finalId, cardId: undefined }); }
+          if (unresolvedOldHostId !== undefined) unresolvedHostBindings.push({ penId: finalId, oldHostId: unresolvedOldHostId });
+        }
+      }
       const cached = this.annCache.get(path), oldBase = this.annBase.get(path), wasBlocked = this.annBlocked.has(path);
       if (cached) cached.splice(0,cached.length,...merged); else this.annCache.set(path,merged);
       this.bumpAnnotationsRevision(path);
@@ -1165,7 +1195,17 @@ export class Store {
         this.annDirty.set(path, (this.annDirty.get(path) ?? 0) + 1);
         throw error;
       }
-      if (strategy === "merge") this.recordLocalEvent("conflict-merged", local.map(item => item.id), "已合并批注冲突；保护快照：" + protection.path);
+      if (strategy === "merge") {
+        this.recordLocalEvent("conflict-merged", local.map(item => item.id), "已合并批注冲突；保护快照：" + protection.path);
+        if (unresolvedHostBindings.length) {
+          this.recordLocalEvent(
+            "conflict-merged",
+            unresolvedHostBindings.map(item => item.penId),
+            `合并批注冲突时已清除 ${unresolvedHostBindings.length} 条无法解析的 hostAnnotationId：` +
+              unresolvedHostBindings.map(item => `${item.penId}(${item.oldHostId})`).join("、"),
+          );
+        }
+      }
       this.recordLocalEvent("external-applied", local.map(item => item.id), "已处理批注外部修改；保护快照：" + protection.path);
       this.save(); this.annotationsChanged(path); this.changed();
     });

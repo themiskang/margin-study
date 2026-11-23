@@ -52,7 +52,7 @@ export type AssistiveCandidate = {box:DOMRect;text:string;target:SelTarget;range
 /** Chronological reader edits; document commands can rebuild their paper asynchronously. */
 export interface ReaderEditHistoryState { canUndo: boolean; canRedo: boolean; undoLabel?: string; redoLabel?: string; }
 type ReaderPenChange = InkChange & { creation?: { annotation: Annotation; index: number; removed: boolean } };
-type BoundInkChange = { id: string; before: Stroke[][]; after: Stroke[][] };
+type BoundInkChange = { id: string; hostId: string; before: Stroke[][]; after: Stroke[][]; beforeWidth?: number; afterWidth?: number };
 type ReaderEditChange = { sequence: number; label: string } & (
   | { kind: "pen"; changes: ReaderPenChange[] }
   | { kind: "overlay"; before: Annotation; after: Annotation; boundInk?: BoundInkChange[] }
@@ -1190,7 +1190,8 @@ export abstract class BaseAnnotationController {
       const host = this.cache.find(item => item.id === hostId && !!item.overlay && !item.overlay.deleted && isInkLayerBound(item) && annotationNotebook(item) === annotationNotebook(pen));
       if (!host) return false;
       pen.hostAnnotationId = host.id;
-      if (host.inkLayerId !== undefined) pen.inkLayerId = host.inkLayerId;
+      // Normalize pen inkLayerId to the host's effective layer (defaulting to "default").
+      pen.inkLayerId = annotationInkLayer(host, this.getInkLayers());
     } else {
       delete pen.hostAnnotationId;
     }
@@ -1199,7 +1200,7 @@ export abstract class BaseAnnotationController {
   private getBoundPenAnnotations(hostId: string, notebookId = this.activeNotebookId): Annotation[] {
     return this.cache.filter(item => item.type === "pen" && item.hostAnnotationId === hostId && annotationNotebook(item) === notebookId);
   }
-  private transformBoundInk(pen: Annotation, beforeHost: Annotation, afterHost: Annotation): Stroke[][] | null {
+  private transformBoundInk(pen: Annotation, beforeHost: Annotation, afterHost: Annotation): { strokes: Stroke[][]; inkWidth?: number } | null {
     const beforeM = this.getOverlayBoxMetrics(beforeHost), afterM = this.getOverlayBoxMetrics(afterHost);
     if (!beforeM || !afterM || beforeM.width <= 0 || beforeM.height <= 0 || afterM.width <= 0 || afterM.height <= 0 ||
       beforeM.containerWidth <= 0 || beforeM.containerHeight <= 0 || afterM.containerWidth <= 0 || afterM.containerHeight <= 0) return null;
@@ -1208,6 +1209,7 @@ export abstract class BaseAnnotationController {
     const ax = afterM.left / afterM.containerWidth, ay = afterM.top / afterM.containerHeight, aw = afterM.width / afterM.containerWidth, ah = afterM.height / afterM.containerHeight;
     if (bx === ax && by === ay && bw === aw && bh === ah && beforeRot === afterRot) return null;
     const projected = this.projectInkForHost(pen, pen.strokes ?? []);
+    const sx = afterM.width / beforeM.width, sy = afterM.height / beforeM.height;
     let transformed: Stroke[][];
     if (beforeRot === 0 && afterRot === 0) {
       transformed = projected.map(stroke => stroke.map(point => ({
@@ -1218,7 +1220,6 @@ export abstract class BaseAnnotationController {
     } else {
       const bcx = beforeM.left + beforeM.width / 2, bcy = beforeM.top + beforeM.height / 2;
       const acx = afterM.left + afterM.width / 2, acy = afterM.top + afterM.height / 2;
-      const sx = afterM.width / beforeM.width, sy = afterM.height / beforeM.height;
       const bRad = -beforeRot * Math.PI / 180, bCos = Math.cos(bRad), bSin = Math.sin(bRad);
       const aRad = afterRot * Math.PI / 180, aCos = Math.cos(aRad), aSin = Math.sin(aRad);
       transformed = projected.map(stroke => stroke.map(point => {
@@ -1231,7 +1232,11 @@ export abstract class BaseAnnotationController {
         };
       }));
     }
-    return this.unprojectInkForHost(pen, transformed);
+    const widthScale = Math.sqrt(sx * sy);
+    const nextWidth = Math.abs(widthScale - 1) > 1e-9
+      ? (pen.inkWidth ?? (pen.inkBrush === "highlight" ? 16 : 3)) * widthScale
+      : pen.inkWidth;
+    return { strokes: this.unprojectInkForHost(pen, transformed), inkWidth: nextWidth };
   }
   private recordOverlayChange(before: Annotation, after: Annotation, boundInk?: BoundInkChange[]): void {
     this.recordEditChange({ kind: "overlay", sequence: ++this.editSequence, label: after.overlay?.kind === "image" ? "图片批注" : "自由文字批注", before: this.cloneAnnotation(before), after: this.cloneAnnotation(after), ...(boundInk?.length ? { boundInk } : {}) });
@@ -1247,16 +1252,17 @@ export abstract class BaseAnnotationController {
         if (!pen.strokes?.length) continue;
         const prev = cloneStrokes(pen.strokes);
         pen.strokes = [];
-        boundInk.push({ id: pen.id, before: prev, after: [] });
+        boundInk.push({ id: pen.id, hostId: ann.id, before: prev, after: [], beforeWidth: pen.inkWidth, afterWidth: pen.inkWidth });
       }
     } else if (!ann.overlay?.deleted && boundPens.length) {
       for (const pen of boundPens) {
         if (!pen.strokes?.length) continue;
-        const nextStrokes = this.transformBoundInk(pen, before, ann);
-        if (!nextStrokes) continue;
-        const prev = cloneStrokes(pen.strokes);
-        pen.strokes = nextStrokes;
-        boundInk.push({ id: pen.id, before: prev, after: cloneStrokes(nextStrokes) });
+        const next = this.transformBoundInk(pen, before, ann);
+        if (!next) continue;
+        const prev = cloneStrokes(pen.strokes), prevWidth = pen.inkWidth;
+        pen.strokes = next.strokes;
+        if (next.inkWidth !== undefined) pen.inkWidth = next.inkWidth;
+        boundInk.push({ id: pen.id, hostId: ann.id, before: prev, after: cloneStrokes(next.strokes), beforeWidth: prevWidth, afterWidth: pen.inkWidth });
       }
     }
     this.recordOverlayChange(before, ann, boundInk); this.persist(); this.onAnnotationsChanged();
@@ -1309,14 +1315,23 @@ export abstract class BaseAnnotationController {
   redoOverlayChange(): void { this.applyEditHistory(true,"overlay"); }
   private applyOverlayChange(change: Extract<ReaderEditChange,{kind:"overlay"}>, redo: boolean): boolean {
     const current = this.cache.find(ann => ann.id === change.after.id), expected = redo ? change.before : change.after, desired = redo ? change.after : change.before;
-    const boundPairs = (change.boundInk ?? []).map(item => ({ item, pen: this.cache.find(ann => ann.id === item.id) }));
-    const boundStale = boundPairs.some(({ item, pen }) => !pen || pen.type !== "pen" || !sameStrokes(pen.strokes ?? [], redo ? item.before : item.after));
+    // Only apply boundInk entries whose pen is still bound to the recorded hostId; rebound/unbound pens are skipped.
+    const applicableBound = (change.boundInk ?? [])
+      .map(item => ({ item, pen: this.cache.find(ann => ann.id === item.id) }))
+      .filter(({ item, pen }) => !!pen && pen.type === "pen" && pen.hostAnnotationId === item.hostId);
+    const boundStale = applicableBound.some(({ item, pen }) =>
+      !sameStrokes(pen!.strokes ?? [], redo ? item.before : item.after) ||
+      pen!.inkWidth !== (redo ? item.beforeWidth : item.afterWidth));
     if (!current || this.overlayFingerprint(current) !== this.overlayFingerprint(expected) || boundStale) { this.clearEditHistory(); new Notice("批注已在其他视图修改，已清除此视图的阅读编辑撤销记录"); return false; }
     const saved = this.cloneAnnotation(desired);
     for (const key of ["text","image","color","page","rects","pdfGeometry","pdfCoordinateSpace","overlay","inkLayerId","bindToInkLayer","pdfReferencePages"] as const) {
       if (key in saved) (current as any)[key] = saved[key]; else delete (current as any)[key];
     }
-    for (const { item, pen } of boundPairs) pen!.strokes = cloneStrokes(redo ? item.after : item.before);
+    for (const { item, pen } of applicableBound) {
+      pen!.strokes = cloneStrokes(redo ? item.after : item.before);
+      const targetWidth = redo ? item.afterWidth : item.beforeWidth;
+      if (targetWidth === undefined) delete pen!.inkWidth; else pen!.inkWidth = targetWidth;
+    }
     this.persist(); this.onAnnotationsChanged(); return true;
   }
   private syncOverlayButtons(): void { if (this.overlayUndoButton) this.overlayUndoButton.disabled = this.applyingEditHistory || !this.editUndo.some(change=>change.kind==="overlay"); if (this.overlayRedoButton) this.overlayRedoButton.disabled = this.applyingEditHistory || !this.editRedo.some(change=>change.kind==="overlay"); }
@@ -1858,18 +1873,9 @@ export abstract class BaseAnnotationController {
     const state = this.getInkLayers(); if (![source, target].every((id) => state.layers.some((layer) => layer.id === id))) return;
     if (this.penMode) this.teardownPen();
     this.closeOverlayEditor?.();
-    const migratedHosts = new Set<string>();
     for (const ann of this.cache) {
       if (annotationNotebook(ann) === this.activeNotebookId && isInkLayerBound(ann) && annotationInkLayer(ann, state) === source) {
         ann.inkLayerId = target;
-        if (ann.overlay) migratedHosts.add(ann.id);
-      }
-    }
-    if (migratedHosts.size) {
-      for (const ann of this.cache) {
-        if (annotationNotebook(ann) === this.activeNotebookId && ann.type === "pen" && ann.hostAnnotationId && migratedHosts.has(ann.hostAnnotationId)) {
-          ann.inkLayerId = target;
-        }
       }
     }
     this.persist();
