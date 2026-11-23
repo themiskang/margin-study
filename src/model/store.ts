@@ -1411,8 +1411,12 @@ export class Store {
         if (!context.expectedArtifactDigest || !context.expectedArtifactKind) return false;
         if (context.expectedArtifactKind === "pending-annotations") {
           if (!context.expectedWriterId || data.writerId !== context.expectedWriterId) return false;
+          if (context.expectedTxId && data.txId !== context.expectedTxId) return false;
           if (!Array.isArray(data.annotations)) return false;
-          if (this.pendingAnnotationsDigest(data.docPath, data.annotations) !== context.expectedArtifactDigest) return false;
+          const actualDigest = this.pendingAnnotationsDigest(data.docPath, data.annotations);
+          const isExactSelf = actualDigest === context.expectedArtifactDigest;
+          const isCorruptedSelf = data.contentDigest === context.expectedArtifactDigest && actualDigest !== data.contentDigest;
+          if (!isExactSelf && !isCorruptedSelf) return false;
         } else if (context.expectedArtifactKind === "merge-tx") {
           if (context.expectedTxId && data.txId !== context.expectedTxId) return false;
           if (typeof data.sidecarPath !== "string") return false;
@@ -3344,7 +3348,7 @@ export class Store {
     }
     const before = this.snapshot();
     let movedSidecar = false, originalSidecarText: string | null = null, preRewriteSidecarText: string | null = null, notifiedListeners = false;
-    let wroteNewPending = false, writtenNewPendingDigest: string | undefined, writtenNewPendingWriterId: string | undefined;
+    let wroteNewPending = false, writtenNewPendingDigest: string | undefined, writtenNewPendingWriterId: string | undefined, writtenNewPendingTxId: string | undefined;
     let supersededOldPending: string | null = null, wroteNewTx = false, writtenNewTxDigest: string | undefined, writtenNewTxId: string | undefined, supersededOldTx: string | null = null;
     let flushedNewAnns: Annotation[] | undefined;
     try {
@@ -3417,9 +3421,10 @@ export class Store {
       const expectedDigest = this.pendingAnnotationsDigest(newPath, migratedAnns);
       const migratedWriterId = typeof pendingAnnMigration.parsed.writerId === "string" && pendingAnnMigration.parsed.writerId
         ? pendingAnnMigration.parsed.writerId : "device-rolling-000001";
+      const migratedPendingTxId = typeof pendingAnnMigration.parsed.txId === "string" && pendingAnnMigration.parsed.txId ? pendingAnnMigration.parsed.txId : uid("pending");
       const migratedPending = {
         ...clone(pendingAnnMigration.parsed),
-        txId: typeof pendingAnnMigration.parsed.txId === "string" && pendingAnnMigration.parsed.txId ? pendingAnnMigration.parsed.txId : uid("pending"),
+        txId: migratedPendingTxId,
         docPath: newPath,
         writerId: migratedWriterId,
         annotations: migratedAnns,
@@ -3430,6 +3435,7 @@ export class Store {
       wroteNewPending = true;
       writtenNewPendingDigest = expectedDigest;
       writtenNewPendingWriterId = migratedWriterId;
+      writtenNewPendingTxId = migratedPendingTxId;
       const verified = JSON.parse(await adapter.read(newPendingPath));
       const actualDigest = verified && typeof verified.docPath === "string" && Array.isArray(verified.annotations)
         ? this.pendingAnnotationsDigest(verified.docPath, verified.annotations) : "";
@@ -3506,7 +3512,7 @@ export class Store {
         }
         if (newPendingPath !== oldPendingPath && (wroteNewPending || (!hadNewPendingBefore && !!writtenNewPendingDigest)) && await adapter.exists(newPendingPath)) {
           await this.deleteRecoveryIfProved("rollback-artifact", newPendingPath, {
-            expectedDocPath: newPath, expectedWriterId: writtenNewPendingWriterId,
+            expectedDocPath: newPath, expectedWriterId: writtenNewPendingWriterId, expectedTxId: writtenNewPendingTxId,
             expectedArtifactDigest: writtenNewPendingDigest, expectedArtifactKind: "pending-annotations",
             ...(pendingAnnMigration ? { expectedRestoredPath: oldPendingPath, expectedRestoredDigest: oldPendingDigest, restoredKind: "pending-annotations" as const } : {}),
           });
