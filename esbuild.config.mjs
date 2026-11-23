@@ -1,25 +1,33 @@
+/**
+ * [INPUT]: 依赖 esbuild、builtin-modules、src/main.ts、src/styles/*、src/pdf/cmaps.json 与 pdfjs-dist worker。
+ * [OUTPUT]: 构建确定性的 main.js、styles.css、pdf.worker.js 及 macOS 原生辅助产物。
+ * [POS]: 仓库根构建入口；通过 absWorkingDir + preserveSymlinks 消除符号链接 worktree 的路径泄露与哈希漂移。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import esbuild from "esbuild";
 import process from "process";
 import builtins from "builtin-modules";
 import { readFileSync, writeFileSync, watchFile } from "fs";
 import { createRequire } from "module";
 import { dirname, join } from "path";
+import { fileURLToPath } from "url";
 import { execFileSync } from "node:child_process";
 
+const rootDir = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const pkgDir = dirname(require.resolve("pdfjs-dist/package.json"));
 const styleSources = ["styles-base.css", "styles-reader.css", "styles-mindmap.css", "styles-review.css", "styles-import.css", "styles-organize.css", "styles-workspace.css", "styles-ai.css", "styles-research.css"];
-const styleDir = join("src", "styles");
+const styleDir = join(rootDir, "src", "styles");
 function emitStyles() {
   const css = "/* Generated from the named style sources; edit styles-base.css or a feature stylesheet. */\n"
     + styleSources.map(name => "/* Source: " + name + " */\n" + readFileSync(join(styleDir, name), "utf8")).join("\n\n") + "\n";
-  writeFileSync("styles.css", css, "utf8");
+  writeFileSync(join(rootDir, "styles.css"), css, "utf8");
 }
 
 // ---- 物理 worker 文件（Obsidian/Electron 不允许 blob: Worker，必须用 file:// 物理文件）----
 // cMap/字体数据注入 worker 顶部，离线渲染中文 CID 字体。
 const cmapJson = JSON.parse(
-  readFileSync(join(process.cwd(), "src", "pdf", "cmaps.json"), "utf8")
+  readFileSync(join(rootDir, "src", "pdf", "cmaps.json"), "utf8")
 );
 const CMAP_DATA = cmapJson.cmap;
 const FONT_DATA = cmapJson.font;
@@ -62,7 +70,7 @@ function emitWorkerFile() {
     "utf8"
   );
   const out = WORKER_INJECT + "\n" + workerContents;
-  writeFileSync(join(process.cwd(), "pdf.worker.js"), out, "utf8");
+  writeFileSync(join(rootDir, "pdf.worker.js"), out, "utf8");
   console.log(`Emitted pdf.worker.js (${(out.length / 1024 / 1024).toFixed(2)} MB)`);
 }
 
@@ -72,9 +80,9 @@ function copyOcrScript() {
 }
 
 const prod = process.argv[2] === "production";
-if (process.platform === "darwin") execFileSync(process.execPath, ["scripts/build/build-native-photos.mjs"], { stdio: "inherit" });
-if (process.platform === "darwin") execFileSync(process.execPath, ["scripts/build/build-native-camera.mjs"], { stdio: "inherit" });
-if (process.platform === "darwin") execFileSync(process.execPath, ["scripts/build/build-native-recall.mjs"], { stdio: "inherit" });
+if (process.platform === "darwin") execFileSync(process.execPath, [join(rootDir, "scripts/build/build-native-photos.mjs")], { cwd: rootDir, stdio: "inherit" });
+if (process.platform === "darwin") execFileSync(process.execPath, [join(rootDir, "scripts/build/build-native-camera.mjs")], { cwd: rootDir, stdio: "inherit" });
+if (process.platform === "darwin") execFileSync(process.execPath, [join(rootDir, "scripts/build/build-native-recall.mjs")], { cwd: rootDir, stdio: "inherit" });
 
 const context = await esbuild.context({
   plugins: [{ name: "package-styles", setup(build) { build.onEnd(result => { if (!result.errors.length) emitStyles(); }); } }],
@@ -88,6 +96,8 @@ const context = await esbuild.context({
   sourcemap: prod ? false : "inline",
   treeShaking: true,
   outfile: "main.js",
+  absWorkingDir: rootDir,
+  preserveSymlinks: true,
 });
 
 if (prod) {

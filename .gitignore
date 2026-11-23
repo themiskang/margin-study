@@ -17,6 +17,7 @@ styles.css
 pdf.worker.js
 
 .agent-artifacts/
+.tmp/
 
 # 兜底：换名的日志、bundle、增量缓存也不入库
 *.log

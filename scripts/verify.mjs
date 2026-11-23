@@ -21,6 +21,7 @@ console.log(`verify output: ${relative(root,outDir)}`);
 const automatedSuites=[
   ["typecheck","node_modules/typescript/bin/tsc","--noEmit"],
   ["build","esbuild.config.mjs","production"],
+  ["build-determinism","scripts/verify/build-determinism-acceptance.mjs"],
   ["pdf-save","scripts/verify/pdf-save-acceptance.mjs"],
   ["pdf-hw-eraser","src/pdf/hw-eraser-acceptance.mjs"],
   ["word-hw-eraser","src/word/hw-eraser-acceptance.mjs"],
