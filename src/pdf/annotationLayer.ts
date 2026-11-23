@@ -583,7 +583,7 @@ export class AnnotationController extends BaseAnnotationController {
   }
 
   // ===== 渲染（增量，带 elMap） =====
-  protected onReadingPreferencesChanged():void { for(const page of this.reader.getPageNumbers())this.renderMarginNotes(page); }
+  protected onReadingPreferencesChanged():void { for(const page of this.reader.getPageNumbers?.() ?? [])this.renderMarginNotes(page); }
   private renderMarginNotes(pageNum:number):void {
     const rec=this.reader.getPageRecord(pageNum);if(!rec)return;rec.wrapper.querySelector(':scope > .ms-margin-notes')?.remove();
     if(rec.renderedScale!==this.reader.getScale())return;

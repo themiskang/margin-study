@@ -2887,8 +2887,9 @@ export class Store {
   }
   async renameDocument(oldPath: string, newPath: string): Promise<void> {
     if (oldPath === newPath) return;
+    await this.recoverPendingAnnotationMerges(oldPath);
     await this.flush();
-    const before = this.snapshot(); let movedSidecar = false, originalSidecarText: string | null = null;
+    const before = this.snapshot(); let movedSidecar = false, originalSidecarText: string | null = null, notifiedListeners = false;
     try {
     await this.enqueue(async () => {
       // Disk operations share the save queue; no flush can recreate a sidecar while it moves.
@@ -2897,6 +2898,10 @@ export class Store {
       if (await adapter.exists(oldSidecar)) {
         if (await adapter.exists(newSidecar)) throw new Error("目标路径已有批注，已保留两份文件，需先处理");
         originalSidecarText = await adapter.read(oldSidecar);
+        const slash = newSidecar.lastIndexOf("/");
+        if (slash > 0 && typeof adapter.mkdir === "function") {
+          await this.ensureDir(newSidecar.slice(0, slash));
+        }
         await adapter.rename(oldSidecar, newSidecar);
         movedSidecar = true;
       }
@@ -2919,7 +2924,15 @@ export class Store {
             if (tab.state && typeof tab.state === "object") { tab.state.filePath = newPath; if (tab.state.file === oldPath) tab.state.file = newPath; }
           }
         }
-        if (this.docMeta[oldPath]) { this.docMeta[newPath] = this.docMeta[oldPath]; delete this.docMeta[oldPath]; }
+        if (this.docMeta[oldPath]) {
+          const movedMeta = this.docMeta[oldPath];
+          if (Array.isArray(movedMeta.unbindEventKeys)) {
+            const oldPrefix = `${oldPath}\u0000`, newPrefix = `${newPath}\u0000`;
+            movedMeta.unbindEventKeys = movedMeta.unbindEventKeys.map(key => key.startsWith(oldPrefix) ? newPrefix + key.slice(oldPrefix.length) : key);
+          }
+          this.docMeta[newPath] = movedMeta;
+          delete this.docMeta[oldPath];
+        }
       });
       if (anns) {
         this.annCache.delete(oldPath); this.annBase.delete(oldPath); this.annDirty.delete(oldPath);
@@ -2928,22 +2941,42 @@ export class Store {
         for (const annotation of anns) annotation.docPath = newPath;
         this.saveAnnotationsDebounced(newPath, anns);
       }
+      notifiedListeners = true;
       for (const listener of this.documentRenameListeners) {
         try { listener(oldPath, newPath); } catch (error) { console.error(error); }
       }
     });
     await this.flush();
+    try {
+      const adapter = this.host.app.vault.adapter;
+      if (typeof adapter.remove === "function") {
+        const oldPending = `_marginstudy-recovery/pending-annotations-${sha(oldPath).slice(0, 12)}-device-rolling-000001.json`;
+        if (await adapter.exists(oldPending)) await adapter.remove(oldPending);
+        const oldTx = this.pendingMergeTxPath(oldPath);
+        if (await adapter.exists(oldTx)) await adapter.remove(oldTx);
+      }
+    } catch { /* best-effort cleanup of old pending recovery files */ }
     } catch (error) {
       try { await this.writeRecovery("document-migration-failed", { oldPath, newPath, error: String(error), snapshot: before, oldSidecar: this.sidecarPath(oldPath), oldSidecarText: originalSidecarText, newSidecar: this.sidecarPath(newPath) }); } catch { /* retain the original error */ }
-      if (movedSidecar) try {
+      try {
         const adapter = this.host.app.vault.adapter, from = this.sidecarPath(newPath), to = this.sidecarPath(oldPath);
-        if (await adapter.exists(from) && !await adapter.exists(to)) await adapter.rename(from, to);
-        if (originalSidecarText !== null) await adapter.write(to, originalSidecarText);
-        this.annCache.delete(newPath); this.bumpAnnotationsRevision(newPath); this.annBase.delete(newPath); this.annDirty.delete(newPath);
-        this.annCache.delete(oldPath); this.bumpAnnotationsRevision(oldPath); this.annBase.delete(oldPath); this.annDirty.delete(oldPath);
+        if (movedSidecar) {
+          if (await adapter.exists(from)) {
+            if (!await adapter.exists(to)) await adapter.rename(from, to);
+            else if (typeof adapter.remove === "function") await adapter.remove(from);
+          }
+          if (originalSidecarText !== null) await adapter.write(to, originalSidecarText);
+        }
+        this.annCache.delete(newPath); this.bumpAnnotationsRevision(newPath); this.annBase.delete(newPath); this.annDirty.delete(newPath); this.annBlocked.delete(newPath);
+        this.annCache.delete(oldPath); this.bumpAnnotationsRevision(oldPath); this.annBase.delete(oldPath); this.annDirty.delete(oldPath); this.annBlocked.delete(oldPath);
         for (const [path, annotations] of before.annotations) { this.annCache.set(path, clone(annotations)); this.bumpAnnotationsRevision(path); this.annBase.set(path, await adapter.exists(this.sidecarPath(path)) ? await adapter.read(this.sidecarPath(path)) : null); }
       } catch { /* recovery record above describes the partial migration */ }
       this.restoreSnapshot(before);
+      if (notifiedListeners) {
+        for (const listener of this.documentRenameListeners) {
+          try { listener(newPath, oldPath); } catch (rollbackError) { console.error(rollbackError); }
+        }
+      }
       throw error;
     }
   }

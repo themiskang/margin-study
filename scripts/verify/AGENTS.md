@@ -19,5 +19,6 @@
 - `desktop-import-fixture.txt` 驱动桌面导入界面和 PDF 选区，调用隔离文件系统。
 - `build-determinism-acceptance.mjs` 无头校验构建产物零路径泄露与跨路径 symlink 构建哈希一致性。
 - `annotation-merge-d4/` 存放 GAP-07b-1 D4 批注冲突合并的 7 项复现回归夹具与共享支持。
+- `annotation-refs/` 存放 GAP-07b-2 B4 孤儿 `inkLayerId` 与 B5 文档改名/移动的 12 项复现回归夹具与共享支持。
 
 [PROTOCOL]: Update this header on change, then check AGENTS.md

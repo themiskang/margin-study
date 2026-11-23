@@ -35,6 +35,7 @@ export function positionOverlay(element: HTMLElement, box: OverlayBox): void {
 }
 export function createFreeOverlay(ann: Annotation, surface: OverlaySurface, options: {
   readonly: boolean;
+  orphan?: boolean;
   imageSource?: string;
   commit: (box: OverlayBox) => void;
   edit: () => void;
@@ -49,6 +50,7 @@ export function createFreeOverlay(ann: Annotation, surface: OverlaySurface, opti
   const element = el("div", { class: "ms-ann ms-free-overlay", tabindex: options.readonly ? "-1" : "0", role: "group", "aria-label": ann.overlay?.kind === "image" ? "图片批注" : "自由文字批注" });
   element.dataset.annId = ann.id; element.dataset.overlayKind = ann.overlay!.kind; element.dataset.inkLayerId = ann.inkLayerId ?? "default";
   element.dataset.bindToInkLayer = String(ann.bindToInkLayer !== false);
+  if (options.orphan) element.dataset.inkLayerOrphan = "true";
   positionOverlay(element, surface.box);
   if(ann.overlay?.rotation)element.style.transform=`rotate(${ann.overlay.rotation}deg)`;
   element.style.color = ann.color; element.style.background = ann.overlay?.background ?? "transparent";

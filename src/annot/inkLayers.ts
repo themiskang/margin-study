@@ -17,8 +17,14 @@ export function inkLayerState(meta: DocMeta): InkLayerState {
   const overlay = meta.overlayHandwritingLayerId !== active && layers.some((layer) => layer.id === meta.overlayHandwritingLayerId) ? meta.overlayHandwritingLayerId : undefined;
   return { layers, active, overlay };
 }
-export function annotationInkLayer(annotation: Annotation, state: InkLayerState): string {
-  return state.layers.some((layer) => layer.id === annotation.inkLayerId) ? annotation.inkLayerId! : "default";
+export function isOrphanInkLayer(annotation: Annotation, state: InkLayerState): boolean {
+  return typeof annotation.inkLayerId === "string" && annotation.inkLayerId.trim().length > 0 &&
+    !state.layers.some((layer) => layer.id === annotation.inkLayerId);
+}
+export function annotationInkLayer(annotation: Annotation, _state: InkLayerState): string {
+  return typeof annotation.inkLayerId === "string" && annotation.inkLayerId.trim().length > 0
+    ? annotation.inkLayerId
+    : "default";
 }
 export function isInkLayerBound(annotation: Annotation): boolean {
   return (annotation.type === "pen" || !!annotation.overlay) && annotation.bindToInkLayer !== false;
