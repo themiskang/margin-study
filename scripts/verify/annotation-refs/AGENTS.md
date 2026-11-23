@@ -15,5 +15,8 @@
 - `b5-04-target-conflict.mjs` 验证目标路径已存在批注时拒绝覆盖、保留双方并报错。
 - `b5-05-rollback.mjs` 验证目标侧车写入失败时完整回滚侧车、缓存、元数据且无残留。
 - `b5-06-two-moves.mjs` 验证连续两次排队重命名后计数一致且旧/中间路径键均清空。
+- `b5-07-draft-survives-rename.mjs` 验证重命名时唯一未决草稿按新路径哈希迁移（迁移内容不许删、校验通过才删精确旧文件）且重开可读。
+- `b5-08-merge-tx-survives-rename.mjs` 验证合并已写侧车但主数据未提交时重命名保留解绑事实（`1 → 1`），重开只作用于新路径。
+- `b5-09-prefix-collision.mjs` 验证真实 48 位前缀碰撞下清理只认精确文件名与归属 `docPath`，碰撞不得伤及他人恢复文件与同前缀邻居文件。
 
 [PROTOCOL]: Update this header on change, then check AGENTS.md

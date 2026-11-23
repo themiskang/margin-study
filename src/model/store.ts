@@ -1025,18 +1025,19 @@ export class Store {
     if (rolling) await this.waitForInputQuiet(automatic);
     await this.host.app.vault.adapter.write(path, text);
     if (rolling) {
-      await this.pruneRecoveries(path, label === "pending-main" ? "main" : "annotations").catch(error => console.warn("MarginStudy recovery cleanup failed", error));
+      await this.pruneRecoveries(path, label === "pending-main" ? "main" : "annotations", recoveryWriter).catch(error => console.warn("MarginStudy recovery cleanup failed", error));
     }
     return path;
   }
 
-  private async pruneRecoveries(currentPath: string, category: "main" | "annotations"): Promise<void> {
+  private async pruneRecoveries(currentPath: string, category: "main" | "annotations", writerId?: string): Promise<void> {
     const adapter = this.host.app.vault.adapter;
     if (!adapter.list || !adapter.stat || !adapter.remove) return;
     const candidates: { path: string; mtime: number; size: number }[] = [];
     for (const path of (await adapter.list("_marginstudy-recovery")).files) {
       const match = (category === "main" ? /^_marginstudy-recovery\/pending-main-(device-[a-z0-9]+-[a-z0-9]{1,6})\.json$/ : /^_marginstudy-recovery\/pending-annotations-[a-f0-9]{12}-(device-[a-z0-9]+-[a-z0-9]{1,6})\.json$/).exec(path);
       if (!match) continue;
+      if (category === "annotations" && writerId && match[1] !== writerId) continue;
       const stat = await adapter.stat(path);
       if (!stat || stat.type !== "file") continue;
       try {
@@ -1135,6 +1136,10 @@ export class Store {
 
   getAnnotationConflicts(): string[] { return [...this.annBlocked]; }
 
+  private pendingAnnotationsPath(path: string): string {
+    return `_marginstudy-recovery/pending-annotations-${sha(path).slice(0, 12)}-device-rolling-000001.json`;
+  }
+
   private pendingMergeTxPath(path: string): string {
     return `_marginstudy-recovery/pending-merge-tx-${sha(path).slice(0, 12)}.json`;
   }
@@ -1185,6 +1190,7 @@ export class Store {
       if (!tx || typeof tx.docPath !== "string" || typeof tx.sidecarPath !== "string") {
         await adapter.remove?.(txPath).catch(() => {}); continue;
       }
+      if (docPath && tx.docPath !== docPath) continue;
       const diskText = await adapter.exists(tx.sidecarPath) ? await adapter.read(tx.sidecarPath) : null;
       let diskValid = false;
       if (diskText !== null) {
@@ -2887,14 +2893,43 @@ export class Store {
   }
   async renameDocument(oldPath: string, newPath: string): Promise<void> {
     if (oldPath === newPath) return;
-    await this.recoverPendingAnnotationMerges(oldPath);
     await this.flush();
-    const before = this.snapshot(); let movedSidecar = false, originalSidecarText: string | null = null, notifiedListeners = false;
+    const adapter = this.host.app.vault.adapter;
+    const oldPendingPath = this.pendingAnnotationsPath(oldPath), newPendingPath = this.pendingAnnotationsPath(newPath);
+    const oldTxPath = this.pendingMergeTxPath(oldPath), newTxPath = this.pendingMergeTxPath(newPath);
+    const readJsonIfExists = async (filePath: string): Promise<{ raw: string; parsed: any } | null> => {
+      if (!await adapter.exists(filePath)) return null;
+      const raw = await adapter.read(filePath);
+      try { return { raw, parsed: JSON.parse(raw) }; } catch { return { raw, parsed: null }; }
+    };
+    const oldPendingEntry = await readJsonIfExists(oldPendingPath);
+    const pendingAnnMigration = oldPendingEntry?.parsed && oldPendingEntry.parsed.docPath === oldPath && Array.isArray(oldPendingEntry.parsed.annotations)
+      ? oldPendingEntry : null;
+    const oldTxEntry = await readJsonIfExists(oldTxPath);
+    const pendingTxMigration = oldTxEntry?.parsed && oldTxEntry.parsed.docPath === oldPath && typeof oldTxEntry.parsed.sidecarPath === "string"
+      ? oldTxEntry : null;
+    const hadNewPendingBefore = await adapter.exists(newPendingPath);
+    const hadNewTxBefore = await adapter.exists(newTxPath);
+    if (newPendingPath !== oldPendingPath && hadNewPendingBefore) {
+      const existing = await readJsonIfExists(newPendingPath);
+      if (existing?.parsed && typeof existing.parsed.docPath === "string" && existing.parsed.docPath !== oldPath && existing.parsed.docPath !== newPath) {
+        throw new Error("目标路径存在其他文档的待保存恢复文件（哈希冲突），已保留原文件");
+      }
+    }
+    if (pendingTxMigration && newTxPath !== oldTxPath && hadNewTxBefore) {
+      const existing = await readJsonIfExists(newTxPath);
+      if (existing?.parsed && typeof existing.parsed.docPath === "string" && existing.parsed.docPath !== oldPath && existing.parsed.docPath !== newPath) {
+        throw new Error("目标路径存在其他文档的待恢复合并事务（哈希冲突），已保留原文件");
+      }
+    }
+    const before = this.snapshot();
+    let movedSidecar = false, originalSidecarText: string | null = null, notifiedListeners = false;
+    let wroteNewPending = false, removedOldPending = false, wroteNewTx = false, removedOldTx = false;
     try {
     await this.enqueue(async () => {
       // Disk operations share the save queue; no flush can recreate a sidecar while it moves.
       await Promise.all([...this.annLoads.values()]);
-      const adapter = this.host.app.vault.adapter, oldSidecar = this.sidecarPath(oldPath), newSidecar = this.sidecarPath(newPath);
+      const oldSidecar = this.sidecarPath(oldPath), newSidecar = this.sidecarPath(newPath);
       if (await adapter.exists(oldSidecar)) {
         if (await adapter.exists(newSidecar)) throw new Error("目标路径已有批注，已保留两份文件，需先处理");
         originalSidecarText = await adapter.read(oldSidecar);
@@ -2947,25 +2982,83 @@ export class Store {
       }
     });
     await this.flush();
-    try {
-      const adapter = this.host.app.vault.adapter;
-      if (typeof adapter.remove === "function") {
-        const oldPending = `_marginstudy-recovery/pending-annotations-${sha(oldPath).slice(0, 12)}-device-rolling-000001.json`;
-        if (await adapter.exists(oldPending)) await adapter.remove(oldPending);
-        const oldTx = this.pendingMergeTxPath(oldPath);
-        if (await adapter.exists(oldTx)) await adapter.remove(oldTx);
+    if (pendingAnnMigration) {
+      const migratedPending = {
+        ...clone(pendingAnnMigration.parsed),
+        docPath: newPath,
+        annotations: (pendingAnnMigration.parsed.annotations as Annotation[]).map(ann =>
+          ann && typeof ann === "object" && ann.docPath === oldPath ? { ...ann, docPath: newPath } : ann
+        ),
+      };
+      await this.ensureDir("_marginstudy-recovery");
+      await adapter.write(newPendingPath, JSON.stringify(migratedPending));
+      wroteNewPending = true;
+      const verified = JSON.parse(await adapter.read(newPendingPath));
+      if (!verified || verified.docPath !== newPath || !Array.isArray(verified.annotations) || verified.annotations.length !== pendingAnnMigration.parsed.annotations.length) {
+        throw new Error("迁移待保存恢复文件校验失败，已保留原文件");
       }
-    } catch { /* best-effort cleanup of old pending recovery files */ }
+      if (newPendingPath !== oldPendingPath && typeof adapter.remove === "function" && await adapter.exists(oldPendingPath)) {
+        await adapter.remove(oldPendingPath);
+        removedOldPending = true;
+      }
+    }
+    if (pendingTxMigration) {
+      const oldPrefix = `${oldPath}\u0000`, newPrefix = `${newPath}\u0000`;
+      const oldSidecarStr = this.sidecarPath(oldPath), newSidecarStr = this.sidecarPath(newPath);
+      const currentNewSidecarText = await adapter.exists(newSidecarStr) ? await adapter.read(newSidecarStr) : null;
+      const expectedUnbindCount = Array.isArray(pendingTxMigration.parsed.unbindEvents) ? pendingTxMigration.parsed.unbindEvents.length : 0;
+      const migratedTx = {
+        ...clone(pendingTxMigration.parsed),
+        docPath: newPath,
+        sidecarPath: pendingTxMigration.parsed.sidecarPath === oldSidecarStr ? newSidecarStr : pendingTxMigration.parsed.sidecarPath,
+        expectedSidecarHash: originalSidecarText !== null && currentNewSidecarText !== null && pendingTxMigration.parsed.expectedSidecarHash === sha(originalSidecarText)
+          ? sha(currentNewSidecarText)
+          : pendingTxMigration.parsed.expectedSidecarHash,
+        unbindEvents: Array.isArray(pendingTxMigration.parsed.unbindEvents)
+          ? pendingTxMigration.parsed.unbindEvents.map((ev: any) =>
+              ev && typeof ev === "object" && typeof ev.dedupeKey === "string" && ev.dedupeKey.startsWith(oldPrefix)
+                ? { ...ev, dedupeKey: newPrefix + ev.dedupeKey.slice(oldPrefix.length) }
+                : ev
+            )
+          : pendingTxMigration.parsed.unbindEvents,
+      };
+      await this.ensureDir("_marginstudy-recovery");
+      await adapter.write(newTxPath, JSON.stringify(migratedTx));
+      wroteNewTx = true;
+      const verifiedTx = JSON.parse(await adapter.read(newTxPath));
+      const verifiedUnbindCount = Array.isArray(verifiedTx?.unbindEvents) ? verifiedTx.unbindEvents.length : 0;
+      if (!verifiedTx || verifiedTx.docPath !== newPath || verifiedTx.sidecarPath !== migratedTx.sidecarPath || verifiedUnbindCount !== expectedUnbindCount) {
+        throw new Error("迁移待恢复合并事务校验失败，已保留原文件");
+      }
+      if (newTxPath !== oldTxPath && typeof adapter.remove === "function" && await adapter.exists(oldTxPath)) {
+        await adapter.remove(oldTxPath);
+        removedOldTx = true;
+      }
+    }
     } catch (error) {
       try { await this.writeRecovery("document-migration-failed", { oldPath, newPath, error: String(error), snapshot: before, oldSidecar: this.sidecarPath(oldPath), oldSidecarText: originalSidecarText, newSidecar: this.sidecarPath(newPath) }); } catch { /* retain the original error */ }
       try {
-        const adapter = this.host.app.vault.adapter, from = this.sidecarPath(newPath), to = this.sidecarPath(oldPath);
+        const from = this.sidecarPath(newPath), to = this.sidecarPath(oldPath);
         if (movedSidecar) {
           if (await adapter.exists(from)) {
             if (!await adapter.exists(to)) await adapter.rename(from, to);
             else if (typeof adapter.remove === "function") await adapter.remove(from);
           }
           if (originalSidecarText !== null) await adapter.write(to, originalSidecarText);
+        }
+        if (pendingAnnMigration && (removedOldPending || newPendingPath === oldPendingPath)) {
+          await adapter.write(oldPendingPath, pendingAnnMigration.raw);
+        }
+        if (newPendingPath !== oldPendingPath && (wroteNewPending || !hadNewPendingBefore) && typeof adapter.remove === "function" && await adapter.exists(newPendingPath)) {
+          const currentNew = await readJsonIfExists(newPendingPath);
+          if (currentNew?.parsed?.docPath === newPath) await adapter.remove(newPendingPath);
+        }
+        if (pendingTxMigration && (removedOldTx || newTxPath === oldTxPath)) {
+          await adapter.write(oldTxPath, pendingTxMigration.raw);
+        }
+        if (newTxPath !== oldTxPath && wroteNewTx && typeof adapter.remove === "function" && await adapter.exists(newTxPath)) {
+          const currentNew = await readJsonIfExists(newTxPath);
+          if (currentNew?.parsed?.docPath === newPath) await adapter.remove(newTxPath);
         }
         this.annCache.delete(newPath); this.bumpAnnotationsRevision(newPath); this.annBase.delete(newPath); this.annDirty.delete(newPath); this.annBlocked.delete(newPath);
         this.annCache.delete(oldPath); this.bumpAnnotationsRevision(oldPath); this.annBase.delete(oldPath); this.annDirty.delete(oldPath); this.annBlocked.delete(oldPath);
