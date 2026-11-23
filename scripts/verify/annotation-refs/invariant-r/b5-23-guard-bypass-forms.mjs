@@ -1,16 +1,13 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspect } from "node:util";
 
 const project = resolve(process.argv[2] ?? process.cwd());
 const revision = process.argv[3];
-const here = dirname(fileURLToPath(import.meta.url));
-const evidence = process.env.MARGINSTUDY_EVIDENCE_DIR;
-const fixtureRoot = evidence ? resolve(evidence, "gap-07b/round14/fixtures") :
-  (basename(here) === "fixtures" && basename(dirname(here)) === "round14" ? here : null);
+const fixtureRoot = join(project, ".tmp", "guard-bypass");
 const guardPath = "scripts/verify/recovery-delete-guard.mjs";
 const uncoveredPath = "scripts/verify/recovery-delete-guard-uncovered.json";
 const probePath = "src/__guard_probe.ts";
@@ -172,5 +169,13 @@ try {
   console.error(`ERROR B5-23\n  actual:   ${error.stack ?? error}\n  expected: mirror and probes can run`);
   process.exitCode = 2;
 } finally {
-  if (mirror) await rm(mirror, { recursive: true, force: true });
+  if (mirror) {
+    await rm(mirror, { recursive: true, force: true });
+    let stillExists = true;
+    try { await access(mirror); } catch { stillExists = false; }
+    if (stillExists) {
+      console.error(`ERROR B5-23 mirror cleanup failed: ${mirror}`);
+      process.exitCode = 2;
+    }
+  }
 }

@@ -130,7 +130,7 @@ const suites=selected.length?allSuites.filter(suite=>selected.includes(suite[0])
 const mode=replay?(strict?"replay-strict":"replay"):strict?"strict":publicRun?"public":"default";
 const result={startedAt:new Date().toISOString(),scope:replay?"saved native evidence":"automated acceptance",mode,completeRun:!selected.length,suites:[]};
 const executable=replay?"python3":process.execPath;
-const env=replay?{...process.env,MARGINSTUDY_EVIDENCE_DIR:privateFixture(""),MARGINSTUDY_REPLAY_REPORT_DIR:outDir}:{...process.env,MARGINSTUDY_EVIDENCE_DIR:process.env.MARGINSTUDY_EVIDENCE_DIR||outDir};
+const env=replay?{...process.env,MARGINSTUDY_EVIDENCE_DIR:privateFixture(""),MARGINSTUDY_REPLAY_REPORT_DIR:outDir}:process.env;
 for(const [name,...suiteArgs] of suites) {
   const args=replay?["-B","scripts/verify/replay_support.py",...suiteArgs]:suiteArgs;
   const start=Date.now();let stdout="",stderr="";
