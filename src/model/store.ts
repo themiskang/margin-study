@@ -1260,27 +1260,55 @@ export class Store {
           }
         }
 
+        const effectiveInkLayer = (notebookId: string, inkLayerId?: string): string => {
+          const scoped = notebookId === "default" ? metaBefore : metaBefore.documentNotebookMeta?.[notebookId];
+          const validIds = new Set<string>(["default"]);
+          for (const item of scoped?.handwritingLayers ?? []) {
+            if (item && typeof item.id === "string" && item.id && typeof item.name === "string" && item.name.trim()) validIds.add(item.id);
+          }
+          return inkLayerId && validIds.has(inkLayerId) ? inkLayerId : "default";
+        };
+
         // Helper: validate/normalize a pen's hostAnnotationId against the complete merged host set.
-        const validatePenHost = (pen: Annotation, mapRemote: boolean): { oldHostId: string; reason: "missing" | "soft-deleted-host" | "cross-notebook-host" } | null => {
+        // Priority (Item 08 & 10): missing -> ineligible-host -> soft-deleted-host -> cross-notebook-host -> public-pen.
+        const validatePenHost = (
+          pen: Annotation,
+          mapRemote: boolean,
+        ): { oldHostId: string; reason: "missing" | "ineligible-host" | "soft-deleted-host" | "cross-notebook-host" | "public-pen" } | null => {
           if (pen.hostAnnotationId === undefined) return null;
           const oldHostId = pen.hostAnnotationId;
           const targetHostId = mapRemote ? (remoteIdMap.get(oldHostId) ?? oldHostId) : oldHostId;
-          const resolvedHost = candidate.find(item => item.id === targetHostId && !!item.overlay);
-          if (!resolvedHost) {
+          const resolvedTarget = candidate.find(item => item.id === targetHostId);
+          if (!resolvedTarget) {
             delete pen.hostAnnotationId;
             return { oldHostId, reason: "missing" };
           }
-          if (resolvedHost.overlay?.deleted === true) {
+          if (!resolvedTarget.overlay || resolvedTarget.bindToInkLayer === false || (!!resolvedTarget.docPath && resolvedTarget.docPath !== path)) {
+            delete pen.hostAnnotationId;
+            pen.bindToInkLayer = false;
+            return { oldHostId, reason: "ineligible-host" };
+          }
+          if (resolvedTarget.overlay.deleted === true) {
             delete pen.hostAnnotationId;
             pen.bindToInkLayer = false;
             return { oldHostId, reason: "soft-deleted-host" };
           }
-          if ((resolvedHost.documentNotebookId ?? "default") !== (pen.documentNotebookId ?? "default")) {
+          const hostNb = resolvedTarget.documentNotebookId ?? "default";
+          const penNb = pen.documentNotebookId ?? "default";
+          if (hostNb !== penNb) {
             delete pen.hostAnnotationId;
             pen.bindToInkLayer = false;
             return { oldHostId, reason: "cross-notebook-host" };
           }
-          pen.hostAnnotationId = resolvedHost.id;
+          if (pen.bindToInkLayer === false) {
+            delete pen.hostAnnotationId;
+            return { oldHostId, reason: "public-pen" };
+          }
+          pen.hostAnnotationId = resolvedTarget.id;
+          // Item 10: align pen's effective layer with host's effective layer in host's notebook without altering already-aligned fields.
+          const hostLayer = effectiveInkLayer(hostNb, resolvedTarget.inkLayerId);
+          const penLayer = effectiveInkLayer(hostNb, pen.inkLayerId);
+          if (penLayer !== hostLayer) pen.inkLayerId = hostLayer;
           return null;
         };
 
@@ -1322,7 +1350,13 @@ export class Store {
             const alreadyCommittedSameUnbind =
               localIssue === null && remoteIssue !== null &&
               existingUnbindKeys.has(makeUnbindDedupeKey(existingLocal, remoteIssue));
-            if (same(existingLocal, normRemote) && (same(localIssue, remoteIssue) || alreadyCommittedSameUnbind)) {
+            // Item 11: replaying an older remote version whose unbind was already committed must not overwrite a newer explicit rebind.
+            const staleAlreadyUnboundReplay =
+              remoteIssue !== null &&
+              existingUnbindKeys.has(makeUnbindDedupeKey(normRemote, remoteIssue)) &&
+              existingLocal.hostBindingId !== undefined &&
+              existingLocal.hostBindingId !== normRemote.hostBindingId;
+            if (staleAlreadyUnboundReplay || (same(existingLocal, normRemote) && (same(localIssue, remoteIssue) || alreadyCommittedSameUnbind))) {
               // Identical normalized pen & unbind fact (or replay of already-committed unbind): retain one object and at most one event.
               continue;
             }

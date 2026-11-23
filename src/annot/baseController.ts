@@ -1189,16 +1189,21 @@ export abstract class BaseAnnotationController {
     if (hostId !== undefined) {
       const host = this.cache.find(item => item.id === hostId && !!item.overlay && !item.overlay.deleted && isInkLayerBound(item) && annotationNotebook(item) === annotationNotebook(pen));
       if (!host) return false;
-      pen.hostAnnotationId = host.id;
       // Normalize pen inkLayerId to the host's effective layer within the host's own notebook context.
-      pen.inkLayerId = annotationInkLayer(host, this.getInkLayersForNotebook(annotationNotebook(host)));
+      const hostLayer = annotationInkLayer(host, this.getInkLayersForNotebook(annotationNotebook(host)));
+      if (pen.hostAnnotationId === host.id && pen.inkLayerId === hostLayer && pen.bindToInkLayer !== false) return true;
+      pen.hostAnnotationId = host.id;
+      pen.inkLayerId = hostLayer;
+      if (pen.bindToInkLayer === false) delete pen.bindToInkLayer;
+      pen.hostBindingId = uid("bind");
     } else {
+      if (pen.hostAnnotationId === undefined) return true;
       delete pen.hostAnnotationId;
     }
     this.persist(); this.onAnnotationsChanged(); return true;
   }
   private getBoundPenAnnotations(hostId: string, notebookId = this.activeNotebookId): Annotation[] {
-    return this.cache.filter(item => item.type === "pen" && item.hostAnnotationId === hostId && annotationNotebook(item) === notebookId);
+    return this.cache.filter(item => item.type === "pen" && item.bindToInkLayer !== false && item.hostAnnotationId === hostId && annotationNotebook(item) === notebookId);
   }
   private transformBoundInk(pen: Annotation, beforeHost: Annotation, afterHost: Annotation): { strokes: Stroke[][]; inkWidth?: number } | null {
     const beforeM = this.getOverlayBoxMetrics(beforeHost), afterM = this.getOverlayBoxMetrics(afterHost);
