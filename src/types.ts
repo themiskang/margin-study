@@ -582,6 +582,8 @@ export interface DocMeta {
   documentNotebookMeta?: Record<string, Omit<DocMeta, "documentNotebookMeta" | "documentNotebooks" | "activeDocumentNotebookId" | "overlayDocumentNotebookId" | "handwritingSyncEnabled">>;
   /** Stable remote->conflict annotation ID mapping persisted across annotation merge retries. */
   mergeConflictIdMap?: Record<string, string>;
+  /** Persisted record of already-processed remote pen versions keyed by canonical raw pen hash. */
+  mergeProcessedPens?: Record<string, { finalPenId: string; bindingId: string; oldHostId?: string; reason?: string }>;
   /** Committed D4 unbind event deduplication keys persisted independent of localEvents ring size. */
   unbindEventKeys?: string[];
 }

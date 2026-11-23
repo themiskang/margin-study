@@ -1139,6 +1139,22 @@ export class Store {
     return `_marginstudy-recovery/pending-merge-tx-${sha(path).slice(0, 12)}.json`;
   }
 
+  private canonicalJson(value: unknown): string {
+    const normalize = (v: unknown): unknown => {
+      if (Array.isArray(v)) return v.map(normalize);
+      if (v && typeof v === "object") {
+        const record = v as Record<string, unknown>;
+        const sorted: Record<string, unknown> = {};
+        for (const key of Object.keys(record).sort()) {
+          if (record[key] !== undefined) sorted[key] = normalize(record[key]);
+        }
+        return sorted;
+      }
+      return v;
+    };
+    return JSON.stringify(normalize(value));
+  }
+
   private async recoverPendingAnnotationMerges(docPath?: string): Promise<void> {
     const adapter = this.host.app.vault.adapter;
     const txPaths: string[] = [];
@@ -1161,6 +1177,7 @@ export class Store {
         protectionPath: string;
         localIds: string[];
         mergeConflictIdMap: Record<string, string>;
+        mergeProcessedPens?: Record<string, { finalPenId: string; bindingId: string; oldHostId?: string; reason?: string }>;
         unbindEvents: { dedupeKey: string; penId: string; oldHostId: string; reason: string; detail: string }[];
       };
       try { tx = JSON.parse(await adapter.read(txPath)); }
@@ -1169,18 +1186,21 @@ export class Store {
         await adapter.remove?.(txPath).catch(() => {}); continue;
       }
       const diskText = await adapter.exists(tx.sidecarPath) ? await adapter.read(tx.sidecarPath) : null;
-      let sidecarCommitted = false;
-      if (diskText !== null && sha(diskText) === tx.expectedSidecarHash) {
+      let diskValid = false;
+      if (diskText !== null) {
         try {
           const parsed = JSON.parse(diskText);
           validateAnnotationCollection(parsed?.annotations);
-          sidecarCommitted = true;
-        } catch { sidecarCommitted = false; }
+          diskValid = true;
+        } catch { diskValid = false; }
       }
+      const sidecarCommitted = diskValid && diskText !== null && sha(diskText) === tx.expectedSidecarHash;
       if (sidecarCommitted) {
-        // Roll forward: sidecar is valid and matches committed hash; ensure merge metadata & unbind events are persisted.
+        // Roll forward: sidecar is valid and matches committed hash; persist merge metadata & unbind events.
+        // Only remove txPath AFTER persistMain succeeds so consecutive main-data failures never lose the journal!
         const meta = this.docMeta[tx.docPath] ?? {};
         const nextMap = { ...(meta.mergeConflictIdMap ?? {}), ...(tx.mergeConflictIdMap ?? {}) };
+        const nextProcessed = { ...(meta.mergeProcessedPens ?? {}), ...(tx.mergeProcessedPens ?? {}) };
         const keySet = new Set<string>(meta.unbindEventKeys ?? []);
         let addedEvents = false;
         for (const ev of tx.unbindEvents ?? []) {
@@ -1189,23 +1209,34 @@ export class Store {
           this.recordLocalEvent("conflict-merged", [ev.penId], ev.detail);
           addedEvents = true;
         }
-        this.docMeta[tx.docPath] = { ...meta, mergeConflictIdMap: nextMap, unbindEventKeys: [...keySet] };
-        if (addedEvents || Object.keys(tx.mergeConflictIdMap ?? {}).length) {
+        this.docMeta[tx.docPath] = { ...meta, mergeConflictIdMap: nextMap, mergeProcessedPens: nextProcessed, unbindEventKeys: [...keySet] };
+        let mainPersisted = true;
+        if (addedEvents || Object.keys(tx.mergeConflictIdMap ?? {}).length || Object.keys(tx.mergeProcessedPens ?? {}).length) {
           this.mainDirty = true; this.mainVersion++;
-          if (!this.settings.diagnosticNoPersist) await this.persistMain(false).catch(() => {});
+          if (!this.settings.diagnosticNoPersist) {
+            try { await this.persistMain(false); }
+            catch { mainPersisted = false; }
+          }
         }
         this.annBase.set(tx.docPath, diskText);
         this.annBlocked.delete(tx.docPath);
+        if (mainPersisted) await adapter.remove?.(txPath).catch(() => {});
+      } else if (diskValid && diskText !== tx.previousDiskRaw) {
+        // A valid third-party sidecar exists on disk: NEVER overwrite it with an older snapshot!
+        this.annBlocked.add(tx.docPath);
         await adapter.remove?.(txPath).catch(() => {});
       } else {
         // Roll back: sidecar was partially written or corrupted; restore previous disk raw and keep conflict state.
-        if (tx.previousDiskRaw !== null) {
-          if (diskText !== tx.previousDiskRaw) await adapter.write(tx.sidecarPath, tx.previousDiskRaw);
-        } else if (diskText !== null) {
-          await adapter.remove?.(tx.sidecarPath).catch(() => {});
-        }
+        let diskClean = true;
+        try {
+          if (tx.previousDiskRaw !== null) {
+            if (diskText !== tx.previousDiskRaw) await adapter.write(tx.sidecarPath, tx.previousDiskRaw);
+          } else if (diskText !== null) {
+            await adapter.remove?.(tx.sidecarPath);
+          }
+        } catch { diskClean = false; }
         this.annBlocked.add(tx.docPath);
-        await adapter.remove?.(txPath).catch(() => {});
+        if (diskClean) await adapter.remove?.(txPath).catch(() => {});
       }
     }
   }
@@ -1229,6 +1260,7 @@ export class Store {
 
       const metaBefore = this.docMeta[path] ?? {};
       const conflictIdMap: Record<string, string> = { ...(metaBefore.mergeConflictIdMap ?? {}) };
+      const processedPens: Record<string, { finalPenId: string; bindingId: string; oldHostId?: string; reason?: string }> = { ...(metaBefore.mergeProcessedPens ?? {}) };
       const existingUnbindKeys = new Set<string>(metaBefore.unbindEventKeys ?? []);
       const candidate: Annotation[] = strategy === "local" ? clone(localSnapshot) : strategy === "remote" ? clone(remote) : clone(localSnapshot);
       const pendingUnbinds: { dedupeKey: string; penId: string; oldHostId: string; reason: string; detail: string }[] = [];
@@ -1238,22 +1270,27 @@ export class Store {
         const remoteNonPens = remote.filter(a => a.type !== "pen");
         const remotePens = remote.filter(a => a.type === "pen");
 
-        // Pass 1: merge non-pen annotations with stable conflict IDs across retries.
+        // Pass 1: merge non-pen annotations with canonical key-order-independent stable conflict IDs.
         for (const a of remoteNonPens) {
           const existing = candidate.find(x => x.id === a.id);
+          const canonicalKey = "host:" + a.id + ":" + sha(this.canonicalJson(a));
           if (!existing) {
-            candidate.push(clone(a));
-            remoteIdMap.set(a.id, a.id);
+            const knownId = conflictIdMap[canonicalKey];
+            if (knownId && candidate.some(x => x.id === knownId)) {
+              remoteIdMap.set(a.id, knownId);
+            } else {
+              candidate.push(clone(a));
+              remoteIdMap.set(a.id, a.id);
+            }
           } else if (same(existing, a)) {
             remoteIdMap.set(a.id, existing.id);
           } else {
-            const key = "host:" + a.id + ":" + sha(JSON.stringify(a));
-            const knownId = conflictIdMap[key];
+            const knownId = conflictIdMap[canonicalKey];
             if (knownId && candidate.some(x => x.id === knownId)) {
               remoteIdMap.set(a.id, knownId);
             } else {
               const nextId = knownId ?? uid("ann-conflict");
-              conflictIdMap[key] = nextId;
+              conflictIdMap[canonicalKey] = nextId;
               candidate.push({ ...clone(a), id: nextId, cardId: undefined });
               remoteIdMap.set(a.id, nextId);
             }
@@ -1337,40 +1374,44 @@ export class Store {
           if (issue) localPenUnbinds.set(localPen.id, issue);
         }
 
-        // Pass 3: normalize remote pens and reconcile shared same-ID pens before emitting unbinds.
+        // Pass 3: normalize remote pens and reconcile shared same-ID pens using persisted canonical raw-pen identity.
         for (const a of remotePens) {
+          const rawPenKey = "pen-raw:" + a.id + ":" + sha(this.canonicalJson(a));
+          const prior = processedPens[rawPenKey];
+          if (prior && (candidate.some(x => x.id === prior.finalPenId) || (prior.oldHostId !== undefined && prior.reason !== undefined && existingUnbindKeys.has(`${path}\u0000${prior.finalPenId}\u0000${prior.bindingId}\u0000${prior.oldHostId}\u0000${prior.reason}`)))) {
+            // Exact same historical remote pen version (key-order-independent) was already processed & committed:
+            // reuse its committed outcome without recomputing reasons, duplicating pens, or overwriting newer rebinds.
+            continue;
+          }
           const normRemote = clone(a);
           const remoteIssue = validatePenHost(normRemote, true);
           const existingLocal = candidate.find(x => x.id === normRemote.id);
           if (!existingLocal) {
             candidate.push(normRemote);
             if (remoteIssue) queueUnbind(normRemote, remoteIssue);
+            processedPens[rawPenKey] = { finalPenId: normRemote.id, bindingId: normRemote.hostBindingId ?? "initial", ...(remoteIssue ? { oldHostId: remoteIssue.oldHostId, reason: remoteIssue.reason } : {}) };
           } else {
             const localIssue = localPenUnbinds.get(existingLocal.id) ?? null;
             const alreadyCommittedSameUnbind =
               localIssue === null && remoteIssue !== null &&
               existingUnbindKeys.has(makeUnbindDedupeKey(existingLocal, remoteIssue));
-            // Item 11: replaying an older remote version whose unbind was already committed must not overwrite a newer explicit rebind.
-            const staleAlreadyUnboundReplay =
-              remoteIssue !== null &&
-              existingUnbindKeys.has(makeUnbindDedupeKey(normRemote, remoteIssue)) &&
-              existingLocal.hostBindingId !== undefined &&
-              existingLocal.hostBindingId !== normRemote.hostBindingId;
-            if (staleAlreadyUnboundReplay || (same(existingLocal, normRemote) && (same(localIssue, remoteIssue) || alreadyCommittedSameUnbind))) {
+            if (same(existingLocal, normRemote) && (same(localIssue, remoteIssue) || alreadyCommittedSameUnbind)) {
               // Identical normalized pen & unbind fact (or replay of already-committed unbind): retain one object and at most one event.
+              processedPens[rawPenKey] = { finalPenId: existingLocal.id, bindingId: existingLocal.hostBindingId ?? "initial", ...(remoteIssue ? { oldHostId: remoteIssue.oldHostId, reason: remoteIssue.reason } : {}) };
               continue;
             }
-            const penKey = "pen:" + a.id + ":" + sha(JSON.stringify({ ...normRemote, id: a.id }));
-            const knownId = conflictIdMap[penKey];
+            const knownId = conflictIdMap[rawPenKey];
             if (knownId && candidate.some(x => x.id === knownId)) {
               // Replay of an already-merged conflict pen: do not duplicate.
+              processedPens[rawPenKey] = { finalPenId: knownId, bindingId: normRemote.hostBindingId ?? "initial", ...(remoteIssue ? { oldHostId: remoteIssue.oldHostId, reason: remoteIssue.reason } : {}) };
               continue;
             }
             const finalId = knownId ?? uid("ann-conflict");
-            conflictIdMap[penKey] = finalId;
+            conflictIdMap[rawPenKey] = finalId;
             const forked: Annotation = { ...normRemote, id: finalId, cardId: undefined };
             candidate.push(forked);
             if (remoteIssue) queueUnbind(forked, remoteIssue);
+            processedPens[rawPenKey] = { finalPenId: finalId, bindingId: forked.hostBindingId ?? "initial", ...(remoteIssue ? { oldHostId: remoteIssue.oldHostId, reason: remoteIssue.reason } : {}) };
           }
         }
 
@@ -1404,8 +1445,22 @@ export class Store {
             protectionPath: protection.path,
             localIds: localSnapshot.map(item => item.id),
             mergeConflictIdMap: conflictIdMap,
+            mergeProcessedPens: processedPens,
             unbindEvents: pendingUnbinds,
           }));
+        }
+
+        // Tightened boundary check (Item 02): re-verify disk & local cache IMMEDIATELY after tx journal write
+        // so any external write or local edit landing between last check and journal write aborts cleanly.
+        const diskRightBeforeCommit = await adapter.exists(sidecar) ? await adapter.read(sidecar) : null;
+        if (diskRightBeforeCommit !== disk) {
+          if (strategy === "merge") await adapter.remove?.(txPath).catch(() => {});
+          this.annBlocked.add(path);
+          throw new LibrarySaveConflict("磁盘批注在写入事务日志后发生变化；已中止合并以保留最新磁盘版本");
+        }
+        if (version !== this.annDirty.get(path) || !same(localSnapshot, this.annCache.get(path) ?? [])) {
+          if (strategy === "merge") await adapter.remove?.(txPath).catch(() => {});
+          throw new Error("合并提交前本地批注发生变化；请重新处理冲突");
         }
 
         try {
@@ -1427,7 +1482,8 @@ export class Store {
         }
       });
 
-      // Sidecar is durably on disk! Publish candidate only if no concurrent edit mutated live cache during write.
+      // Sidecar is durably on disk! Publish candidate; if a concurrent local edit arrived during sidecar write,
+      // preserve BOTH the newer local edits AND newly merged remote annotations so the next flush() cannot drop h-remote.
       const concurrentLocalEdit = version !== this.annDirty.get(path) || !same(localSnapshot, this.annCache.get(path) ?? []);
       if (!concurrentLocalEdit) {
         const published = clone(toWrite);
@@ -1436,6 +1492,17 @@ export class Store {
         if (cached) cached.splice(0, cached.length, ...published); else this.annCache.set(path, published);
         this.bumpAnnotationsRevision(path);
         this.annDirty.delete(path);
+      } else {
+        const liveCache = this.annCache.get(path);
+        if (liveCache) {
+          const localIds = new Set(localSnapshot.map(item => item.id));
+          const liveIds = new Set(liveCache.map(item => item.id));
+          const newlyAddedFromMerge = clone(toWrite).filter(item => !localIds.has(item.id) && !liveIds.has(item.id));
+          if (newlyAddedFromMerge.length) {
+            liveCache.push(...newlyAddedFromMerge);
+            this.bumpAnnotationsRevision(path);
+          }
+        }
       }
       this.annBase.set(path, content);
       this.annBlocked.delete(path);
@@ -1448,7 +1515,7 @@ export class Store {
           nextKeys.add(item.dedupeKey);
           this.recordLocalEvent("conflict-merged", [item.penId], item.detail);
         }
-        this.docMeta[path] = { ...metaBefore, mergeConflictIdMap: conflictIdMap, unbindEventKeys: [...nextKeys] };
+        this.docMeta[path] = { ...metaBefore, mergeConflictIdMap: conflictIdMap, mergeProcessedPens: processedPens, unbindEventKeys: [...nextKeys] };
       }
       this.recordLocalEvent("saved", toWrite.map(annotation => annotation.id), "文档批注已落盘：" + path);
       this.recordLocalEvent("external-applied", localSnapshot.map(item => item.id), "已处理批注外部修改；保护快照：" + protection.path);
