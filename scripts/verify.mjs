@@ -72,6 +72,8 @@ const automatedSuites=[
   ["refs-b5-20-disk-proof-checks-local-events","scripts/verify/annotation-refs/invariant-r/b5-20-disk-proof-checks-local-events.mjs"],
   ["refs-b5-21-sidecar-rollback-silent-write-loss","scripts/verify/annotation-refs/invariant-r/b5-21-sidecar-rollback-silent-write-loss.mjs"],
   ["refs-b5-22-tombstone-cross-tx-proof","scripts/verify/annotation-refs/invariant-r/b5-22-tombstone-cross-tx-proof.mjs"],
+  ["refs-b5-23-guard-bypass-forms","scripts/verify/annotation-refs/invariant-r/b5-23-guard-bypass-forms.mjs"],
+  ["refs-b5-24-rollback-cross-writer","scripts/verify/annotation-refs/invariant-r/b5-24-rollback-cross-writer.mjs"],
   ["recovery-delete-guard","scripts/verify/recovery-delete-guard.mjs"],
   ["status-a28-ui","src/documents/a28-ui-acceptance.mjs"],
   ["mobile-sha256","src/model/sha256-acceptance.mjs"],
@@ -128,7 +130,7 @@ const suites=selected.length?allSuites.filter(suite=>selected.includes(suite[0])
 const mode=replay?(strict?"replay-strict":"replay"):strict?"strict":publicRun?"public":"default";
 const result={startedAt:new Date().toISOString(),scope:replay?"saved native evidence":"automated acceptance",mode,completeRun:!selected.length,suites:[]};
 const executable=replay?"python3":process.execPath;
-const env=replay?{...process.env,MARGINSTUDY_EVIDENCE_DIR:privateFixture(""),MARGINSTUDY_REPLAY_REPORT_DIR:outDir}:process.env;
+const env=replay?{...process.env,MARGINSTUDY_EVIDENCE_DIR:privateFixture(""),MARGINSTUDY_REPLAY_REPORT_DIR:outDir}:{...process.env,MARGINSTUDY_EVIDENCE_DIR:process.env.MARGINSTUDY_EVIDENCE_DIR||outDir};
 for(const [name,...suiteArgs] of suites) {
   const args=replay?["-B","scripts/verify/replay_support.py",...suiteArgs]:suiteArgs;
   const start=Date.now();let stdout="",stderr="";

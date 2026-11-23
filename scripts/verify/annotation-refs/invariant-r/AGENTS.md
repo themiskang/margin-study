@@ -18,5 +18,7 @@
 - `b5-20-disk-proof-checks-local-events.mjs` 验证磁盘证明除 `dedupeKey` 外必须核验实际 `localEvents` 对象，事件缺失时保留日志并在清障冷启后补回恰 1 条事件。
 - `b5-21-sidecar-rollback-silent-write-loss.mjs` 验证侧车回滚静默丢写时由 `merge-tx-rolled-back` 磁盘回读拦截删除，原日志原字节保留。
 - `b5-22-tombstone-cross-tx-proof.mjs` 验证墓碑后继被另一事务覆盖导致摘要失配时，GC 不得凭他事务磁盘证明删除旧墓碑，旧墓碑原字节保留。
+- `b5-23-guard-bypass-forms.mjs` 验证 AST 守卫捕获全部 11 种绕过形态（方括号、模板拼接、别名、解构、强转、Object.assign、fs/vault、本地封装函数与路径变量数据流）。
+- `b5-24-rollback-cross-writer.mjs` 验证改名回滚清理同时核验 `docPath`、`writerId` 与内容 digest，并发他 writer 草稿原字节保留。
 
 [PROTOCOL]: Update this header on change, then check AGENTS.md

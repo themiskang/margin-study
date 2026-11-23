@@ -1287,6 +1287,10 @@ export class Store {
     context?: {
       multiBranch?: boolean;
       expectedDocPath?: string;
+      expectedWriterId?: string;
+      expectedTxId?: string;
+      expectedArtifactDigest?: string;
+      expectedArtifactKind?: "pending-annotations" | "merge-tx";
       expectedRestoredPath?: string;
       expectedRestoredDigest?: string;
       restoredKind?: "pending-annotations" | "merge-tx";
@@ -1402,8 +1406,21 @@ export class Store {
       }
       if (kind === "rollback-artifact") {
         const data = JSON.parse(await adapter.read(file));
-        if (context?.expectedDocPath && data?.docPath !== context.expectedDocPath) return false;
-        if (context?.expectedRestoredPath && context?.expectedRestoredDigest) {
+        if (!data || typeof data.docPath !== "string") return false;
+        if (!context?.expectedDocPath || data.docPath !== context.expectedDocPath) return false;
+        if (!context.expectedArtifactDigest || !context.expectedArtifactKind) return false;
+        if (context.expectedArtifactKind === "pending-annotations") {
+          if (!context.expectedWriterId || data.writerId !== context.expectedWriterId) return false;
+          if (!Array.isArray(data.annotations)) return false;
+          if (this.pendingAnnotationsDigest(data.docPath, data.annotations) !== context.expectedArtifactDigest) return false;
+        } else if (context.expectedArtifactKind === "merge-tx") {
+          if (context.expectedTxId && data.txId !== context.expectedTxId) return false;
+          if (typeof data.sidecarPath !== "string") return false;
+          if (this.pendingTxDigest(data) !== context.expectedArtifactDigest) return false;
+        } else {
+          return false;
+        }
+        if (context.expectedRestoredPath && context.expectedRestoredDigest) {
           if (!await adapter.exists(context.expectedRestoredPath)) return false;
           const restored = JSON.parse(await adapter.read(context.expectedRestoredPath));
           if (context.restoredKind === "pending-annotations") {
@@ -1414,6 +1431,7 @@ export class Store {
             if (!restored || typeof restored.docPath !== "string" || typeof restored.sidecarPath !== "string") return false;
             return approve(this.pendingTxDigest(restored) === context.expectedRestoredDigest);
           }
+          return false;
         }
         return approve(true);
       }
@@ -3326,7 +3344,9 @@ export class Store {
     }
     const before = this.snapshot();
     let movedSidecar = false, originalSidecarText: string | null = null, preRewriteSidecarText: string | null = null, notifiedListeners = false;
-    let wroteNewPending = false, supersededOldPending: string | null = null, wroteNewTx = false, supersededOldTx: string | null = null;
+    let wroteNewPending = false, writtenNewPendingDigest: string | undefined, writtenNewPendingWriterId: string | undefined;
+    let supersededOldPending: string | null = null, wroteNewTx = false, writtenNewTxDigest: string | undefined, writtenNewTxId: string | undefined, supersededOldTx: string | null = null;
+    let flushedNewAnns: Annotation[] | undefined;
     try {
     await this.enqueue(async () => {
       // Disk operations share the save queue; no flush can recreate a sidecar while it moves.
@@ -3377,6 +3397,7 @@ export class Store {
         this.bumpAnnotationsRevision(oldPath);
         this.annCache.set(newPath, anns); this.annBase.set(newPath, text);
         for (const annotation of anns) annotation.docPath = newPath;
+        flushedNewAnns = clone(anns);
         this.saveAnnotationsDebounced(newPath, anns);
       }
       notifiedListeners = true;
@@ -3385,21 +3406,30 @@ export class Store {
       }
     });
     await this.flush();
+    if (flushedNewAnns) {
+      writtenNewPendingDigest = this.pendingAnnotationsDigest(newPath, flushedNewAnns);
+      writtenNewPendingWriterId = "device-rolling-000001";
+    }
     if (pendingAnnMigration) {
       const migratedAnns = (pendingAnnMigration.parsed.annotations as Annotation[]).map(ann =>
         ann && typeof ann === "object" && ann.docPath === oldPath ? { ...ann, docPath: newPath } : ann
       );
       const expectedDigest = this.pendingAnnotationsDigest(newPath, migratedAnns);
+      const migratedWriterId = typeof pendingAnnMigration.parsed.writerId === "string" && pendingAnnMigration.parsed.writerId
+        ? pendingAnnMigration.parsed.writerId : "device-rolling-000001";
       const migratedPending = {
         ...clone(pendingAnnMigration.parsed),
         txId: typeof pendingAnnMigration.parsed.txId === "string" && pendingAnnMigration.parsed.txId ? pendingAnnMigration.parsed.txId : uid("pending"),
         docPath: newPath,
+        writerId: migratedWriterId,
         annotations: migratedAnns,
         contentDigest: expectedDigest,
       };
       await this.ensureDir("_marginstudy-recovery");
       await adapter.write(newPendingPath, JSON.stringify(migratedPending));
       wroteNewPending = true;
+      writtenNewPendingDigest = expectedDigest;
+      writtenNewPendingWriterId = migratedWriterId;
       const verified = JSON.parse(await adapter.read(newPendingPath));
       const actualDigest = verified && typeof verified.docPath === "string" && Array.isArray(verified.annotations)
         ? this.pendingAnnotationsDigest(verified.docPath, verified.annotations) : "";
@@ -3434,6 +3464,8 @@ export class Store {
       await this.ensureDir("_marginstudy-recovery");
       await adapter.write(newTxPath, JSON.stringify(migratedTx));
       wroteNewTx = true;
+      writtenNewTxDigest = expectedTxDigest;
+      writtenNewTxId = typeof migratedTx.txId === "string" ? migratedTx.txId : undefined;
       const verifiedTx = JSON.parse(await adapter.read(newTxPath));
       const actualTxDigest = verifiedTx && typeof verifiedTx.docPath === "string" && typeof verifiedTx.sidecarPath === "string"
         ? this.pendingTxDigest(verifiedTx) : "";
@@ -3459,25 +3491,32 @@ export class Store {
           // Host (e.g. TFolder) had already moved the sidecar before renameDocument; restore its pre-rewrite bytes.
           await adapter.write(from, preRewriteSidecarText);
         }
+        const oldPendingWriterId = typeof pendingAnnMigration?.parsed?.writerId === "string" ? pendingAnnMigration.parsed.writerId : "device-rolling-000001";
+        const oldTxId = typeof pendingTxMigration?.parsed?.txId === "string" ? pendingTxMigration.parsed.txId : undefined;
         if (supersededOldPending && await adapter.exists(supersededOldPending)) {
           if (!await adapter.exists(oldPendingPath)) await adapter.rename(supersededOldPending, oldPendingPath);
           else await this.deleteRecoveryIfProved("rollback-artifact", supersededOldPending, {
-            expectedDocPath: oldPath, expectedRestoredPath: oldPendingPath, expectedRestoredDigest: oldPendingDigest, restoredKind: "pending-annotations",
+            expectedDocPath: oldPath, expectedWriterId: oldPendingWriterId,
+            expectedArtifactDigest: oldPendingDigest, expectedArtifactKind: "pending-annotations",
+            expectedRestoredPath: oldPendingPath, expectedRestoredDigest: oldPendingDigest, restoredKind: "pending-annotations",
           });
         }
         if (pendingAnnMigration && (supersededOldPending || newPendingPath === oldPendingPath)) {
           await adapter.write(oldPendingPath, pendingAnnMigration.raw);
         }
-        if (newPendingPath !== oldPendingPath && (wroteNewPending || !hadNewPendingBefore) && await adapter.exists(newPendingPath)) {
+        if (newPendingPath !== oldPendingPath && (wroteNewPending || (!hadNewPendingBefore && !!writtenNewPendingDigest)) && await adapter.exists(newPendingPath)) {
           await this.deleteRecoveryIfProved("rollback-artifact", newPendingPath, {
-            expectedDocPath: newPath,
+            expectedDocPath: newPath, expectedWriterId: writtenNewPendingWriterId,
+            expectedArtifactDigest: writtenNewPendingDigest, expectedArtifactKind: "pending-annotations",
             ...(pendingAnnMigration ? { expectedRestoredPath: oldPendingPath, expectedRestoredDigest: oldPendingDigest, restoredKind: "pending-annotations" as const } : {}),
           });
         }
         if (supersededOldTx && await adapter.exists(supersededOldTx)) {
           if (!await adapter.exists(oldTxPath)) await adapter.rename(supersededOldTx, oldTxPath);
           else await this.deleteRecoveryIfProved("rollback-artifact", supersededOldTx, {
-            expectedDocPath: oldPath, expectedRestoredPath: oldTxPath, expectedRestoredDigest: oldTxDigest, restoredKind: "merge-tx",
+            expectedDocPath: oldPath, expectedTxId: oldTxId,
+            expectedArtifactDigest: oldTxDigest, expectedArtifactKind: "merge-tx",
+            expectedRestoredPath: oldTxPath, expectedRestoredDigest: oldTxDigest, restoredKind: "merge-tx",
           });
         }
         if (pendingTxMigration && (supersededOldTx || newTxPath === oldTxPath)) {
@@ -3485,7 +3524,8 @@ export class Store {
         }
         if (newTxPath !== oldTxPath && wroteNewTx && await adapter.exists(newTxPath)) {
           await this.deleteRecoveryIfProved("rollback-artifact", newTxPath, {
-            expectedDocPath: newPath,
+            expectedDocPath: newPath, expectedTxId: writtenNewTxId,
+            expectedArtifactDigest: writtenNewTxDigest, expectedArtifactKind: "merge-tx",
             ...(pendingTxMigration ? { expectedRestoredPath: oldTxPath, expectedRestoredDigest: oldTxDigest, restoredKind: "merge-tx" as const } : {}),
           });
         }
