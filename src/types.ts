@@ -119,6 +119,8 @@ export interface Annotation {
   inkLayerId?: string;
   /** Free text/image overlays bind to the active ink layer unless explicitly false (public across all ink layers). */
   bindToInkLayer?: boolean;
+  /** Optional host free-overlay annotation ID for ink strokes bound to a text/image overlay. */
+  hostAnnotationId?: string;
   inkBrush?: "pen" | "highlight";
   inkWidth?: number;
   inkOpacity?: number;

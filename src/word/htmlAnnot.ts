@@ -81,6 +81,12 @@ export class HtmlAnnotationController extends BaseAnnotationController {
     const box = ann.overlay?.box, body = this.getBodyEl(); if (!box) return null;
     return this.overlaySurface({left:box.x*body.clientWidth,top:box.y*body.clientHeight,width:box.w*body.clientWidth,height:box.h*body.clientHeight});
   }
+  protected getOverlayBoxMetrics(ann: Annotation): { left: number; top: number; width: number; height: number; containerWidth: number; containerHeight: number } | null {
+    const box = ann.overlay?.box;
+    if (!box) return null;
+    const body = this.getBodyEl(), containerWidth = body.clientWidth || 1, containerHeight = body.clientHeight || 1;
+    return { left: box.x * containerWidth, top: box.y * containerHeight, width: box.w * containerWidth, height: box.h * containerHeight, containerWidth, containerHeight };
+  }
   private overlaySurface(box: OverlayBox): OverlaySurface | null {
     const body = this.getBodyEl(); if (body.clientWidth <= 0 || body.clientHeight <= 0) return null;
     return {parent:body,box,geometry:value=>({page:0,docKind:"html",rects:[],box:{x:value.left/body.clientWidth,y:value.top/body.clientHeight,w:value.width/body.clientWidth,h:value.height/body.clientHeight}})};
@@ -325,8 +331,9 @@ export class HtmlAnnotationController extends BaseAnnotationController {
     }
   }
 
-  private createPenAnnotation(strokes: Stroke[][], layerId = this.getInkLayers().active, documentNotebookId = this.getDocumentNotebookId(), inkBrush: "pen" | "highlight" = "pen", inkWidth?: number, inkOpacity?: number, inkPreset?: HandwritingPresetId): void {
+  private createPenAnnotation(strokes: Stroke[][], layerId = this.getInkLayers().active, documentNotebookId = this.getDocumentNotebookId(), inkBrush: "pen" | "highlight" = "pen", inkWidth?: number, inkOpacity?: number, inkPreset?: HandwritingPresetId, hostAnnotationId?: string): void {
     if (!this.docPath) return;
+    const resolvedHostId = hostAnnotationId ?? this.findHostOverlayForStrokes(0, strokes, layerId, documentNotebookId)?.id;
     const ann: Annotation = {
       id: uid("ann"),
       docPath: this.docPath,
@@ -343,6 +350,7 @@ export class HtmlAnnotationController extends BaseAnnotationController {
       inkOpacity: inkOpacity ?? this.getHandwritingPreset().opacity,
       inkPreset: inkPreset ?? this.getActiveHandwritingPreset(),
       inkLayerId: layerId,
+      ...(resolvedHostId ? { hostAnnotationId: resolvedHostId } : {}),
       documentNotebookId,
       createdAt: todayStr(),
     };

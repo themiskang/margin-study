@@ -365,6 +365,9 @@ export class ReaderView extends ItemView {
   placeExtendText(event: MouseEvent): boolean { return this.extendNotes.placeText(event); }
   insertImageAnnotation(file: File): Promise<void> { return this.annController.insertImageAnnotation(file); }
   setOverlayBindToInkLayer(id: string, bound: boolean): void { this.annController.setOverlayBindToInkLayer(id, bound); }
+  bindInkToHost(penId: string, hostId?: string): boolean { return this.annController.bindInkToHost(penId, hostId); }
+  reorderInkLayers(order: string[]): void { this.annController.reorderInkLayers(order); }
+  moveInkLayer(id: string, offset: number): void { this.annController.moveInkLayer(id, offset); }
   undoOverlayChange(): void { this.annController.undoOverlayChange(); }
   redoOverlayChange(): void { this.annController.redoOverlayChange(); }
   getEditHistoryState(): ReaderEditHistoryState { return this.annController.getEditHistoryState(); }

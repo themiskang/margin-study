@@ -165,6 +165,23 @@ export class AnnotationController extends BaseAnnotationController {
     const geometry = annotationGeometry(ann).find(part => part.page === ann.page), rect = geometry?.rects[0];
     const box = rect && this.reader.projectRect(ann.page,rect,ann.pdfCoordinateSpace); return box ? this.overlaySurface(ann.page,box) : null;
   }
+  protected getOverlayBoxMetrics(ann: Annotation): { left: number; top: number; width: number; height: number; containerWidth: number; containerHeight: number } | null {
+    const mapped = this.mapAnnotationForDisplay(ann);
+    const geometry = annotationGeometry(mapped).find(part => part.page === mapped.page), rect = geometry?.rects[0];
+    if (!rect) return null;
+    const box = this.reader.projectRect(mapped.page, rect, mapped.pdfCoordinateSpace);
+    const rec = this.reader.getPageRecord(mapped.page);
+    if (!box || !rec) return null;
+    const containerWidth = rec.annLayer.clientWidth || rec.viewport?.width || 0;
+    const containerHeight = rec.annLayer.clientHeight || rec.viewport?.height || 0;
+    return containerWidth > 0 && containerHeight > 0 ? { ...box, containerWidth, containerHeight } : null;
+  }
+  protected projectInkForHost(ann: Annotation, strokes: Stroke[][]): Stroke[][] {
+    return this.reader.projectAnnotationInk(ann.page, strokes, false);
+  }
+  protected unprojectInkForHost(ann: Annotation, strokes: Stroke[][]): Stroke[][] {
+    return this.reader.projectAnnotationInk(ann.page, strokes, true);
+  }
   private overlaySurface(page: number, box: OverlayBox): OverlaySurface | null {
     const rec = this.reader.getPageRecord(page); if (!rec?.viewport || rec.renderedScale !== this.reader.getScale()) return null;
     return { parent: rec.annLayer, handlesParent: rec.handlesLayer, box, fontScale: this.reader.getScale(), geometry: value => {
@@ -378,8 +395,9 @@ export class AnnotationController extends BaseAnnotationController {
     this.penControllers.clear();
   }
 
-  private createPenAnnotation(pageNum: number, strokes: Stroke[][], layerId = this.getInkLayers().active, documentNotebookId = this.getDocumentNotebookId(), inkBrush: "pen" | "highlight" = "pen", inkWidth?: number, inkOpacity?: number, inkPreset?: HandwritingPresetId, source = handwritingSource(this.plugin.store.documents ?? [], this.docPath, pageNum)): void {
+  private createPenAnnotation(pageNum: number, strokes: Stroke[][], layerId = this.getInkLayers().active, documentNotebookId = this.getDocumentNotebookId(), inkBrush: "pen" | "highlight" = "pen", inkWidth?: number, inkOpacity?: number, inkPreset?: HandwritingPresetId, source = handwritingSource(this.plugin.store.documents ?? [], this.docPath, pageNum), hostAnnotationId?: string): void {
     if (!this.docPath) return;
+    const resolvedHostId = hostAnnotationId ?? this.findHostOverlayForStrokes(pageNum, strokes, layerId, documentNotebookId)?.id;
     const ann: Annotation = {
       id: uid("ann"),
       docPath: this.docPath,
@@ -396,6 +414,7 @@ export class AnnotationController extends BaseAnnotationController {
       inkOpacity: inkOpacity ?? this.getHandwritingPreset().opacity,
       inkPreset: inkPreset ?? this.getActiveHandwritingPreset(),
       inkLayerId: layerId,
+      ...(resolvedHostId ? { hostAnnotationId: resolvedHostId } : {}),
       documentNotebookId,
       ...source,
       createdAt: todayStr(),
@@ -900,7 +919,7 @@ export class AnnotationController extends BaseAnnotationController {
   protected afterNoteEdited(ann: Annotation): void { this.renderOne(ann); }
 
   private annotationFingerprint(ann: Annotation): string {
-    return JSON.stringify([ann.type, ann.rects, ann.pdfGeometry, ann.pdfCoordinateSpace, ann.color, ann.text, ann.noteText, ann.audioPath, ann.pos, ann.cardId, ann.inkLayerId, ann.bindToInkLayer, ann.inkBrush, ann.inkWidth, ann.inkOpacity, ann.inkRecallPurpose, ann.overlay, (ann.type === "pen" || !!ann.overlay) && this.isInkReference(ann)]);
+    return JSON.stringify([ann.type, ann.rects, ann.pdfGeometry, ann.pdfCoordinateSpace, ann.color, ann.text, ann.noteText, ann.audioPath, ann.pos, ann.cardId, ann.inkLayerId, ann.bindToInkLayer, ann.hostAnnotationId, ann.inkBrush, ann.inkWidth, ann.inkOpacity, ann.inkRecallPurpose, ann.overlay, (ann.type === "pen" || !!ann.overlay) && this.isInkReference(ann)]);
   }
 
   refreshAll(): void {
