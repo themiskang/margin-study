@@ -1540,9 +1540,37 @@ export class Store {
                 liveById.set(mergedItem.id, liveCache.length - 1);
                 changed = true;
               }
-            } else if (liveIndex !== undefined && same(liveCache[liveIndex], snapItem) && !same(mergedItem, snapItem)) {
-              liveCache[liveIndex] = mergedItem;
-              changed = true;
+            } else if (liveIndex !== undefined && !same(mergedItem, snapItem)) {
+              const liveItem = liveCache[liveIndex];
+              if (same(liveItem, snapItem)) {
+                liveCache[liveIndex] = mergedItem;
+                changed = true;
+              } else {
+                // Concurrent edit touched the same annotation while merge committed binding/layer normalization:
+                // keep the concurrent content edit, and publish committed binding/layer updates that were not
+                // explicitly changed by the concurrent edit so a later flush cannot restore an invalid host.
+                const nextLive: Annotation = { ...liveItem };
+                let itemChanged = false;
+                if (snapItem.hostAnnotationId !== mergedItem.hostAnnotationId && liveItem.hostAnnotationId === snapItem.hostAnnotationId) {
+                  if (mergedItem.hostAnnotationId === undefined) delete nextLive.hostAnnotationId;
+                  else nextLive.hostAnnotationId = mergedItem.hostAnnotationId;
+                  itemChanged = true;
+                }
+                if (snapItem.bindToInkLayer !== mergedItem.bindToInkLayer && liveItem.bindToInkLayer === snapItem.bindToInkLayer) {
+                  if (mergedItem.bindToInkLayer === undefined) delete nextLive.bindToInkLayer;
+                  else nextLive.bindToInkLayer = mergedItem.bindToInkLayer;
+                  itemChanged = true;
+                }
+                if (snapItem.inkLayerId !== mergedItem.inkLayerId && liveItem.inkLayerId === snapItem.inkLayerId) {
+                  if (mergedItem.inkLayerId === undefined) delete nextLive.inkLayerId;
+                  else nextLive.inkLayerId = mergedItem.inkLayerId;
+                  itemChanged = true;
+                }
+                if (itemChanged) {
+                  liveCache[liveIndex] = nextLive;
+                  changed = true;
+                }
+              }
             }
           }
           if (changed) this.bumpAnnotationsRevision(path);

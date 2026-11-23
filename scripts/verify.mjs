@@ -37,6 +37,7 @@ const automatedSuites=[
   ["model-a28","src/model/a28-acceptance.mjs"],
   ["model-schema-migration","src/model/schema-migration-acceptance.mjs"],
   ["merge-d4-02-concurrent-writes","scripts/verify/annotation-merge-d4/02-concurrent-writes.mjs"],
+  ["merge-d4-02b-same-pen-concurrent-edit","scripts/verify/annotation-merge-d4/02b-same-pen-concurrent-edit.mjs"],
   ["merge-d4-03-recovery-same-store","scripts/verify/annotation-merge-d4/03-recovery-same-store.mjs"],
   ["merge-d4-04-shared-host-replay","scripts/verify/annotation-merge-d4/04-shared-host-replay.mjs"],
   ["merge-d4-05-shared-pen-single-unbind","scripts/verify/annotation-merge-d4/05-shared-pen-single-unbind.mjs"],
