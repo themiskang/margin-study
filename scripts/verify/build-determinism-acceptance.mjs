@@ -1,15 +1,27 @@
 /**
  * [INPUT]: 依赖 esbuild.config.mjs、仓库当前构建产物（main.js/styles.css/pdf.worker.js）与本地 node_modules。
- * [OUTPUT]: 无头校验构建产物零路径泄露与跨路径 symlink 构建字节级一致性。
+ * [OUTPUT]: 在仓库内隔离镜像中无头校验构建产物零路径泄露、realpath 边界、原生能力探测与跨路径 symlink 构建一致性。
  * [POS]: scripts/verify/ 下的构建确定性回归套件，由 scripts/verify.mjs 在 build 之后调用。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
-import { tmpdir, userInfo } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
+import {
+  copyFileSync,
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { userInfo } from "node:os";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -28,6 +40,58 @@ function escapeJsUnicode(text) {
     const cp = ch.codePointAt(0);
     return cp > 0x7f ? "\\u" + cp.toString(16).toUpperCase().padStart(4, "0") : ch;
   }).join("");
+}
+
+function snapshotGlobalBins() {
+  const dirs = ["/opt/homebrew/bin", "/usr/local/bin"];
+  const parts = [];
+  for (const dir of dirs) {
+    if (!existsSync(dir)) continue;
+    const entries = readdirSync(dir).sort();
+    const lines = entries.map(name => {
+      const full = join(dir, name);
+      try {
+        const st = lstatSync(full);
+        return `${name}:${st.isSymbolicLink() ? "L:" + realpathSync(full) : "F:" + st.size}`;
+      } catch {
+        return `${name}:broken`;
+      }
+    });
+    parts.push(`${dir}\n${lines.join("\n")}`);
+  }
+  return createHash("sha256").update(parts.join("\n---\n")).digest("hex");
+}
+
+function snapshotTmpBuildEntries() {
+  if (!existsSync("/tmp")) return [];
+  return readdirSync("/tmp")
+    .filter(name => /GAP-BUILD-01|marginstudy-build-repro/i.test(name))
+    .sort();
+}
+
+function probeNativeSwiftc(probeDir, isolatedEnv) {
+  if (process.platform !== "darwin") {
+    return { available: false, skipped: true, reason: `non-darwin platform (${process.platform})` };
+  }
+  mkdirSync(probeDir, { recursive: true });
+  const src = join(probeDir, "probe.swift");
+  const out = join(probeDir, "probe-bin");
+  writeFileSync(src, "print(1)\n", "utf8");
+  const res = spawnSync("/usr/bin/xcrun", ["swiftc", "-O", src, "-o", out], {
+    cwd: probeDir,
+    env: isolatedEnv,
+    encoding: "utf8",
+  });
+  if (res.status === 0 && !res.signal && existsSync(out)) {
+    return { available: true, skipped: false, reason: "ok" };
+  }
+  const detail = [
+    res.signal ? `signal=${res.signal}` : null,
+    res.status !== null ? `status=${res.status}` : null,
+    res.error ? `error=${res.error.message}` : null,
+    res.stderr ? `stderr=${res.stderr.trim().slice(0, 160)}` : null,
+  ].filter(Boolean).join(", ");
+  return { available: false, skipped: true, reason: `xcrun swiftc unavailable in isolated mirror (${detail || "unknown"})` };
 }
 
 let passed = 0;
@@ -76,32 +140,76 @@ await test("Static path leak scan & CJS module key normalization", () => {
   assert.deepEqual(badKeys, [], `Non-repo CJS module keys found: ${badKeys.slice(0, 5).join(", ")}`);
 });
 
-// 2. 跨路径 symlink 隔离复现比对断言（不跑 npm ci，不写仓库外全局路径，finally 清理）
-await test("Cross-path symlink production rebuild matches current artifacts", () => {
-  const tmpRoot = mkdtempSync(join(tmpdir(), "marginstudy-build-repro-"));
-  try {
-    const fakeHome = join(tmpRoot, "home");
-    const fakePrefix = join(tmpRoot, "npm-prefix");
-    const fakeBin = join(tmpRoot, "bin");
-    const workDir = join(tmpRoot, "nested", "depth", "repro-repo");
-    mkdirSync(fakeHome, { recursive: true });
-    mkdirSync(fakePrefix, { recursive: true });
-    mkdirSync(fakeBin, { recursive: true });
-    mkdirSync(workDir, { recursive: true });
+// 2. 仓库内隔离镜像 + 跨路径 symlink 复现比对断言（不写仓外路径、真实复制源码与脚本、realpath 越界防护、finally 清理）
+await test("In-repo isolated mirror cross-path symlink rebuild matches current artifacts", () => {
+  const globalBinBefore = snapshotGlobalBins();
+  const tmpBefore = snapshotTmpBuildEntries();
+  const runId = `${Date.now()}-${process.pid}-${randomBytes(4).toString("hex")}`;
+  const tmpParent = join(root, ".tmp", "build-determinism");
+  const runRoot = join(tmpParent, runId);
 
-    for (const file of ["esbuild.config.mjs", "package.json", "tsconfig.json", "manifest.json"]) {
-      copyFileSync(join(root, file), join(workDir, file));
+  try {
+    const fakeHome = join(runRoot, "home");
+    const fakePrefix = join(runRoot, "npm-prefix");
+    const fakeBin = join(runRoot, "bin");
+    const fakeTmp = join(runRoot, "tmp");
+    const probeDir = join(runRoot, "probe");
+    const workDir = join(runRoot, "nested", "depth", "repro-repo");
+    for (const dir of [fakeHome, fakePrefix, fakeBin, fakeTmp, workDir]) {
+      mkdirSync(dir, { recursive: true });
     }
-    symlinkSync(join(root, "src"), join(workDir, "src"));
-    symlinkSync(join(root, "scripts"), join(workDir, "scripts"));
-    symlinkSync(realpathSync(join(root, "node_modules")), join(workDir, "node_modules"));
 
     const isolatedEnv = {
       PATH: `${fakeBin}:${dirname(process.execPath)}:/usr/bin:/bin`,
       HOME: fakeHome,
+      TMPDIR: fakeTmp,
       npm_config_prefix: fakePrefix,
       LANG: process.env.LANG || "en_US.UTF-8",
     };
+
+    // 真实复制入口、源码与构建脚本（禁止符号链接 scripts/src，杜绝沿链接写回调用方工作树）
+    for (const file of ["esbuild.config.mjs", "package.json", "tsconfig.json", "manifest.json", "ocr.swift"]) {
+      copyFileSync(join(root, file), join(workDir, file));
+    }
+    cpSync(join(root, "src"), join(workDir, "src"), { recursive: true, dereference: false });
+    mkdirSync(join(workDir, "scripts"), { recursive: true });
+    cpSync(join(root, "scripts", "build"), join(workDir, "scripts", "build"), { recursive: true, dereference: false });
+
+    // macOS 原生编译能力探测：不可用时显式 SKIP 并写明原因，绝不静默通过
+    const nativeProbe = probeNativeSwiftc(probeDir, isolatedEnv);
+    if (nativeProbe.available) {
+      mkdirSync(join(workDir, "native"), { recursive: true });
+      cpSync(join(root, "native", "src"), join(workDir, "native", "src"), { recursive: true, dereference: false });
+      console.log("PASS Native cold-build capability probe (xcrun swiftc available)");
+    } else {
+      console.log(`SKIP native-cold-build: ${nativeProbe.reason}`);
+      // 在镜像内真实复制已构建的 native/（含 source-hash.txt），确保构建脚本仅校验镜像内产物而不写回主树
+      if (existsSync(join(root, "native"))) {
+        cpSync(join(root, "native"), join(workDir, "native"), { recursive: true, dereference: false });
+      }
+    }
+
+    // 仅 node_modules 使用符号链接（正是本卡要验证的 worktree 场景）
+    symlinkSync(realpathSync(join(root, "node_modules")), join(workDir, "node_modules"));
+    assert.equal(lstatSync(join(workDir, "node_modules")).isSymbolicLink(), true, "node_modules must be a symlink");
+
+    // 显式 realpath 边界防护：子进程启动前断言所有源码/脚本入口均落在镜像根内
+    const realWorkDir = realpathSync(workDir);
+    const guardEntries = [
+      "esbuild.config.mjs",
+      "src/main.ts",
+      "scripts/build/build-native-photos.mjs",
+      "scripts/build/build-native-camera.mjs",
+      "scripts/build/build-native-recall.mjs",
+      "native/src",
+    ];
+    for (const rel of guardEntries) {
+      const resolved = realpathSync(join(workDir, rel));
+      assert.ok(
+        resolved === realWorkDir || resolved.startsWith(realWorkDir + sep),
+        `Mirror boundary violation: ${rel} resolved outside mirror (${resolved})`
+      );
+    }
 
     execFileSync(process.execPath, ["esbuild.config.mjs", "production"], {
       cwd: workDir,
@@ -116,8 +224,20 @@ await test("Cross-path symlink production rebuild matches current artifacts", ()
       assert.equal(rebuilt.sha256, current.sha256, `${artifact} sha256 mismatch: ${rebuilt.sha256} vs ${current.sha256}`);
     }
   } finally {
-    rmSync(tmpRoot, { recursive: true, force: true });
+    rmSync(runRoot, { recursive: true, force: true });
+    if (existsSync(tmpParent) && readdirSync(tmpParent).length === 0) {
+      rmSync(tmpParent, { recursive: true, force: true });
+    }
+    const dotTmp = join(root, ".tmp");
+    if (existsSync(dotTmp) && readdirSync(dotTmp).length === 0) {
+      rmSync(dotTmp, { recursive: true, force: true });
+    }
   }
+
+  // 结束时断言：仓库内临时根已删、/tmp 无新增、全局 bin 快照不变
+  assert.equal(existsSync(runRoot), false, `In-repo temp root was not cleaned: ${runRoot}`);
+  assert.deepEqual(snapshotTmpBuildEntries(), tmpBefore, "/tmp gained unexpected GAP-BUILD-01 entries");
+  assert.equal(snapshotGlobalBins(), globalBinBefore, "Global bin directory changed during test");
 });
 
 console.log(`${passed}/${passed} build determinism checks passed`);
