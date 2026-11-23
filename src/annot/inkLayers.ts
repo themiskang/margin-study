@@ -21,7 +21,7 @@ export function annotationInkLayer(annotation: Annotation, state: InkLayerState)
   return state.layers.some((layer) => layer.id === annotation.inkLayerId) ? annotation.inkLayerId! : "default";
 }
 export function isInkLayerBound(annotation: Annotation): boolean {
-  return annotation.type === "pen" || (!!annotation.overlay && annotation.bindToInkLayer !== false);
+  return (annotation.type === "pen" || !!annotation.overlay) && annotation.bindToInkLayer !== false;
 }
 export interface InkLayerActions {
   state: () => InkLayerState;

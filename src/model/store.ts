@@ -1149,7 +1149,7 @@ export class Store {
       if (currentDisk !== disk) throw new Error("磁盘批注再次变化；请重新处理冲突");
       if (version !== this.annDirty.get(path) || !same(local, this.annCache.get(path) ?? [])) throw new Error("检查磁盘批注期间本地内容发生变化；请重新处理冲突");
       const merged = strategy === "local" ? local : strategy === "remote" ? remote : [...local];
-      const unresolvedHostBindings: { penId: string; oldHostId: string }[] = [];
+      const unresolvedHostBindings: { penId: string; oldHostId: string; reason: "missing" | "soft-deleted-host" | "cross-notebook-host" }[] = [];
       if (strategy === "merge") {
         const remoteIdMap = new Map<string, string>();
         const remoteNonPens = remote.filter(a => a.type !== "pen");
@@ -1160,25 +1160,41 @@ export class Store {
           else if (!same(existing, a)) { const nextId = uid("ann-conflict"); merged.push({ ...clone(a), id: nextId, cardId: undefined }); remoteIdMap.set(a.id, nextId); }
           else { remoteIdMap.set(a.id, existing.id); }
         }
+        const validatePenHost = (pen: Annotation, mapRemote: boolean): { oldHostId: string; reason: "missing" | "soft-deleted-host" | "cross-notebook-host" } | null => {
+          if (pen.hostAnnotationId === undefined) return null;
+          const oldHostId = pen.hostAnnotationId;
+          const targetHostId = mapRemote ? (remoteIdMap.get(oldHostId) ?? oldHostId) : oldHostId;
+          const resolvedHost = merged.find(item => item.id === targetHostId && !!item.overlay);
+          if (!resolvedHost) {
+            delete pen.hostAnnotationId;
+            return { oldHostId, reason: "missing" };
+          }
+          if (resolvedHost.overlay?.deleted === true) {
+            delete pen.hostAnnotationId;
+            pen.bindToInkLayer = false;
+            return { oldHostId, reason: "soft-deleted-host" };
+          }
+          if ((resolvedHost.documentNotebookId ?? "default") !== (pen.documentNotebookId ?? "default")) {
+            delete pen.hostAnnotationId;
+            pen.bindToInkLayer = false;
+            return { oldHostId, reason: "cross-notebook-host" };
+          }
+          pen.hostAnnotationId = resolvedHost.id;
+          return null;
+        };
+        for (const localPen of merged) {
+          if (localPen.type !== "pen" || localPen.hostAnnotationId === undefined) continue;
+          const issue = validatePenHost(localPen, false);
+          if (issue) unresolvedHostBindings.push({ penId: localPen.id, ...issue });
+        }
         for (const a of remotePens) {
           const candidate = clone(a);
-          let unresolvedOldHostId: string | undefined;
-          if (candidate.hostAnnotationId !== undefined) {
-            const oldHostId = candidate.hostAnnotationId;
-            const targetHostId = remoteIdMap.get(oldHostId) ?? oldHostId;
-            const resolvedHost = merged.find(item => item.id === targetHostId && !!item.overlay);
-            if (resolvedHost) {
-              candidate.hostAnnotationId = resolvedHost.id;
-            } else {
-              unresolvedOldHostId = oldHostId;
-              delete candidate.hostAnnotationId;
-            }
-          }
+          const issue = validatePenHost(candidate, true);
           const existing = merged.find(x => x.id === candidate.id);
           let finalId = candidate.id;
           if (!existing) { merged.push(candidate); }
           else if (!same(existing, candidate)) { finalId = uid("ann-conflict"); merged.push({ ...candidate, id: finalId, cardId: undefined }); }
-          if (unresolvedOldHostId !== undefined) unresolvedHostBindings.push({ penId: finalId, oldHostId: unresolvedOldHostId });
+          if (issue) unresolvedHostBindings.push({ penId: finalId, ...issue });
         }
       }
       const cached = this.annCache.get(path), oldBase = this.annBase.get(path), wasBlocked = this.annBlocked.has(path);
@@ -1198,12 +1214,11 @@ export class Store {
       }
       if (strategy === "merge") {
         this.recordLocalEvent("conflict-merged", local.map(item => item.id), "已合并批注冲突；保护快照：" + protection.path);
-        if (unresolvedHostBindings.length) {
+        for (const item of unresolvedHostBindings) {
           this.recordLocalEvent(
             "conflict-merged",
-            unresolvedHostBindings.map(item => item.penId),
-            `合并批注冲突时已清除 ${unresolvedHostBindings.length} 条无法解析的 hostAnnotationId：` +
-              unresolvedHostBindings.map(item => `${item.penId}(${item.oldHostId})`).join("、"),
+            [item.penId],
+            `合并批注冲突时已解绑无效 hostAnnotationId：${item.penId}(${item.oldHostId}，原因：${item.reason})`,
           );
         }
       }
