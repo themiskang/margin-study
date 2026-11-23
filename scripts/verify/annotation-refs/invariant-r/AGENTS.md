@@ -12,5 +12,9 @@
 - `b5-14-rename-rollback-durable.mjs` 验证目标草稿写失败与回读不符时回滚持久落盘，冷启零分裂态。
 - `b5-15-cold-start-two-branches.mjs` 验证新旧双分支并存（无清理证明）时按内容摘要选唯一稳定权威，双侧车与双日志均原字节保留。
 - `b5-16-proof-from-disk-not-memory.mjs` 验证主数据静默丢写（内存误判成功但磁盘未覆盖）时证明不成立、保留原日志，随后干净冷启磁盘证明成立后提交并清理。
+- `b5-17-merge-short-key-collision.mjs` 验证共享 48 位前缀的两文档在普通合并时由 64-hex 全长键完全隔离，不覆盖他文档日志，两次冷启各恰 1 条事实。
+- `b5-18-merge-silent-write-loss.mjs` 验证普通合并主数据静默丢写时统一删除闸门拒绝删除日志，清障后两次冷启各恰 1 条解绑事实。
+- `b5-19-tombstone-gc-requires-proof.mjs` 验证墓碑 GC 在侧车摘要失配与读异常时均保留原墓碑且事实保持 1。
+- `b5-20-disk-proof-checks-local-events.mjs` 验证磁盘证明除 `dedupeKey` 外必须核验实际 `localEvents` 对象，事件缺失时保留日志并在清障冷启后补回恰 1 条事件。
 
 [PROTOCOL]: Update this header on change, then check AGENTS.md

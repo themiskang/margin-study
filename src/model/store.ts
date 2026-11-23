@@ -1492,7 +1492,14 @@ export class Store {
     loadedTxs.sort((a, b) => Number(registeredPaths.has(b.tx.docPath)) - Number(registeredPaths.has(a.tx.docPath)) || a.tx.docPath.localeCompare(b.tx.docPath));
     for (const { txPath, tx } of loadedTxs) {
       const multiBranch = !!tx.txId && (txIdCounts.get(tx.txId) ?? 0) > 1;
-      if (tx.txId && seenCommittedTxIds.has(tx.txId)) {
+      const allEventsPresent = (tx.unbindEvents ?? []).every(ev =>
+        this.localEvents.some(item =>
+          item && item.kind === "conflict-merged" &&
+          Array.isArray(item.objectIds) && item.objectIds.includes(ev.penId) &&
+          item.detail === ev.detail
+        )
+      );
+      if (tx.txId && seenCommittedTxIds.has(tx.txId) && allEventsPresent) {
         continue;
       }
       const diskText = await adapter.exists(tx.sidecarPath) ? await adapter.read(tx.sidecarPath) : null;
@@ -1521,9 +1528,14 @@ export class Store {
         const keySet = new Set<string>(meta.unbindEventKeys ?? []);
         let addedEvents = false;
         for (const ev of tx.unbindEvents ?? []) {
-          if (keySet.has(ev.dedupeKey)) continue;
+          const hasEvent = this.localEvents.some(item =>
+            item && item.kind === "conflict-merged" &&
+            Array.isArray(item.objectIds) && item.objectIds.includes(ev.penId) &&
+            item.detail === ev.detail
+          );
+          if (keySet.has(ev.dedupeKey) && hasEvent) continue;
           keySet.add(ev.dedupeKey);
-          this.recordLocalEvent("conflict-merged", [ev.penId], ev.detail);
+          if (!hasEvent) this.recordLocalEvent("conflict-merged", [ev.penId], ev.detail);
           addedEvents = true;
         }
         const committedIds = new Set<string>((meta as DocMeta & { committedMergeTxIds?: string[] }).committedMergeTxIds ?? []);
