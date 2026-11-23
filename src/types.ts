@@ -119,6 +119,10 @@ export interface Annotation {
   inkLayerId?: string;
   /** Free text/image overlays bind to the active ink layer unless explicitly false (public across all ink layers). */
   bindToInkLayer?: boolean;
+  /** Optional host free-overlay annotation ID for ink strokes bound to a text/image overlay. */
+  hostAnnotationId?: string;
+  /** Optional binding-occurrence token used to deduplicate unbind events per binding lifetime. */
+  hostBindingId?: string;
   inkBrush?: "pen" | "highlight";
   inkWidth?: number;
   inkOpacity?: number;
@@ -576,6 +580,12 @@ export interface DocMeta {
   activeDocumentNotebookId?: string;
   overlayDocumentNotebookId?: string;
   documentNotebookMeta?: Record<string, Omit<DocMeta, "documentNotebookMeta" | "documentNotebooks" | "activeDocumentNotebookId" | "overlayDocumentNotebookId" | "handwritingSyncEnabled">>;
+  /** Stable remote->conflict annotation ID mapping persisted across annotation merge retries. */
+  mergeConflictIdMap?: Record<string, string>;
+  /** Persisted record of already-processed remote pen versions keyed by canonical raw pen hash. */
+  mergeProcessedPens?: Record<string, { finalPenId: string; bindingId: string; oldHostId?: string; reason?: string }>;
+  /** Committed D4 unbind event deduplication keys persisted independent of localEvents ring size. */
+  unbindEventKeys?: string[];
 }
 
 export const BRANCH_STYLES: { id: string; name: string }[] = [

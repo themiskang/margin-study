@@ -6,12 +6,13 @@ import { setIcon } from "obsidian";
 
 export interface InkLayerState { layers: { id: string; name: string }[]; active: string; overlay?: string; }
 export function inkLayerState(meta: DocMeta): InkLayerState {
-  const layers = [{ id: "default", name: "默认图层" }];
+  const layers: { id: string; name: string }[] = [];
   for (const item of meta.handwritingLayers ?? []) {
     if (!item || typeof item.id !== "string" || !item.id || typeof item.name !== "string" || !item.name.trim()) continue;
     const existing = layers.find((layer) => layer.id === item.id);
     if (existing) existing.name = item.name; else layers.push({ id: item.id, name: item.name });
   }
+  if (!layers.some((layer) => layer.id === "default")) layers.unshift({ id: "default", name: "默认图层" });
   const active = layers.some((layer) => layer.id === meta.activeHandwritingLayerId) ? meta.activeHandwritingLayerId! : "default";
   const overlay = meta.overlayHandwritingLayerId !== active && layers.some((layer) => layer.id === meta.overlayHandwritingLayerId) ? meta.overlayHandwritingLayerId : undefined;
   return { layers, active, overlay };
@@ -20,7 +21,7 @@ export function annotationInkLayer(annotation: Annotation, state: InkLayerState)
   return state.layers.some((layer) => layer.id === annotation.inkLayerId) ? annotation.inkLayerId! : "default";
 }
 export function isInkLayerBound(annotation: Annotation): boolean {
-  return annotation.type === "pen" || (!!annotation.overlay && annotation.bindToInkLayer !== false);
+  return (annotation.type === "pen" || !!annotation.overlay) && annotation.bindToInkLayer !== false;
 }
 export interface InkLayerActions {
   state: () => InkLayerState;
@@ -30,6 +31,8 @@ export interface InkLayerActions {
   rename: (id: string, name: string) => void;
   merge: (source: string, target: string) => void;
   remove: (id: string) => void;
+  reorder?: (order: string[]) => void;
+  move?: (id: string, offset: number) => void;
   presets: () => HandwritingPresetSpec[];
   activePreset: () => HandwritingPresetId;
   selectPreset: (id: HandwritingPresetId) => void;
@@ -130,6 +133,16 @@ export class InkLayerControls {
         if (this.actionLayer === layer.id) {
           const options = el("div", { class: "ms-ink-layer-options" });
           const rename = el("button", { text: "重命名或合并" }); rename.addEventListener("click", () => this.openNameEditor(layer)); options.append(rename);
+          if (this.actions.move) {
+            const index = state.layers.findIndex((item) => item.id === layer.id);
+            const up = el("button", { text: "上移", "aria-label": `上移图层 ${layer.name}` }) as HTMLButtonElement;
+            up.disabled = index <= 0;
+            up.addEventListener("click", () => { this.actions.move?.(layer.id, -1); this.renderPanel(); });
+            const down = el("button", { text: "下移", "aria-label": `下移图层 ${layer.name}` }) as HTMLButtonElement;
+            down.disabled = index >= state.layers.length - 1;
+            down.addEventListener("click", () => { this.actions.move?.(layer.id, 1); this.renderPanel(); });
+            options.append(up, down);
+          }
           if (layer.id !== "default") { const remove = el("button", { class: "ms-ink-layer-delete", text: "删除手写图层" }); remove.addEventListener("click", () => this.confirmDelete(layer)); options.append(remove); }
           row.append(options);
         }

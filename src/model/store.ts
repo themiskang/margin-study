@@ -260,6 +260,7 @@ export class Store {
     }
     this.recordLocalEvent("loaded", [], "已读取本地数据；云端状态无法由本插件确认。");
     for (const doc of this.documents) if (doc.missing && !this.localEvents.some(event => event.kind === "file-missing" && event.objectIds.includes(doc.id))) this.recordLocalEvent("file-missing", [doc.id], "已登记来源文件缺失：" + doc.path);
+    await this.recoverPendingAnnotationMerges();
     if (hasInlineMedia(this)) this.save();
   }
 
@@ -1063,6 +1064,7 @@ export class Store {
     if (this.annCache.has(path)) return this.annCache.get(path)!;
     if (this.annLoads.has(path)) return this.annLoads.get(path)!;
     const job = (async () => {
+      await this.recoverPendingAnnotationMerges(path);
       const adapter = this.host.app.vault.adapter;
       const sidecar = this.sidecarPath(path);
       const text = await adapter.exists(sidecar) ? await adapter.read(sidecar) : null;
@@ -1133,41 +1135,483 @@ export class Store {
 
   getAnnotationConflicts(): string[] { return [...this.annBlocked]; }
 
+  private pendingMergeTxPath(path: string): string {
+    return `_marginstudy-recovery/pending-merge-tx-${sha(path).slice(0, 12)}.json`;
+  }
+
+  private canonicalJson(value: unknown): string {
+    const normalize = (v: unknown): unknown => {
+      if (Array.isArray(v)) return v.map(normalize);
+      if (v && typeof v === "object") {
+        const record = v as Record<string, unknown>;
+        const sorted: Record<string, unknown> = {};
+        for (const key of Object.keys(record).sort()) {
+          if (record[key] !== undefined) sorted[key] = normalize(record[key]);
+        }
+        return sorted;
+      }
+      return v;
+    };
+    return JSON.stringify(normalize(value));
+  }
+
+  private async recoverPendingAnnotationMerges(docPath?: string): Promise<void> {
+    const adapter = this.host.app.vault.adapter;
+    const txPaths: string[] = [];
+    if (docPath) {
+      const single = this.pendingMergeTxPath(docPath);
+      if (await adapter.exists(single)) txPaths.push(single);
+    } else if (adapter.list && await adapter.exists("_marginstudy-recovery")) {
+      const listed = await adapter.list("_marginstudy-recovery");
+      for (const file of listed.files) {
+        if (/^_marginstudy-recovery\/pending-merge-tx-[a-f0-9]{12}\.json$/.test(file)) txPaths.push(file);
+      }
+    }
+    for (const txPath of txPaths) {
+      let tx: {
+        txId: string;
+        docPath: string;
+        sidecarPath: string;
+        expectedSidecarHash: string;
+        previousDiskRaw: string | null;
+        protectionPath: string;
+        localIds: string[];
+        mergeConflictIdMap: Record<string, string>;
+        mergeProcessedPens?: Record<string, { finalPenId: string; bindingId: string; oldHostId?: string; reason?: string }>;
+        unbindEvents: { dedupeKey: string; penId: string; oldHostId: string; reason: string; detail: string }[];
+      };
+      try { tx = JSON.parse(await adapter.read(txPath)); }
+      catch { await adapter.remove?.(txPath).catch(() => {}); continue; }
+      if (!tx || typeof tx.docPath !== "string" || typeof tx.sidecarPath !== "string") {
+        await adapter.remove?.(txPath).catch(() => {}); continue;
+      }
+      const diskText = await adapter.exists(tx.sidecarPath) ? await adapter.read(tx.sidecarPath) : null;
+      let diskValid = false;
+      if (diskText !== null) {
+        try {
+          const parsed = JSON.parse(diskText);
+          validateAnnotationCollection(parsed?.annotations);
+          diskValid = true;
+        } catch { diskValid = false; }
+      }
+      const sidecarCommitted = diskValid && diskText !== null && sha(diskText) === tx.expectedSidecarHash;
+      if (sidecarCommitted) {
+        // Roll forward: sidecar is valid and matches committed hash; persist merge metadata & unbind events.
+        // Only remove txPath AFTER persistMain succeeds; if persistMain fails, roll back in-memory docMeta/events
+        // so subsequent recovery attempts on the same Store still retry persistMain and preserve the journal.
+        const hadDocMeta = Object.prototype.hasOwnProperty.call(this.docMeta, tx.docPath);
+        const prevDocMeta = hadDocMeta ? clone(this.docMeta[tx.docPath]) : undefined;
+        const prevLocalEvents = clone(this.localEvents);
+        const prevMainDirty = this.mainDirty;
+        const prevMainVersion = this.mainVersion;
+
+        const meta = this.docMeta[tx.docPath] ?? {};
+        const nextMap = { ...(meta.mergeConflictIdMap ?? {}), ...(tx.mergeConflictIdMap ?? {}) };
+        const nextProcessed = { ...(meta.mergeProcessedPens ?? {}), ...(tx.mergeProcessedPens ?? {}) };
+        const keySet = new Set<string>(meta.unbindEventKeys ?? []);
+        let addedEvents = false;
+        for (const ev of tx.unbindEvents ?? []) {
+          if (keySet.has(ev.dedupeKey)) continue;
+          keySet.add(ev.dedupeKey);
+          this.recordLocalEvent("conflict-merged", [ev.penId], ev.detail);
+          addedEvents = true;
+        }
+        this.docMeta[tx.docPath] = { ...meta, mergeConflictIdMap: nextMap, mergeProcessedPens: nextProcessed, unbindEventKeys: [...keySet] };
+        let mainPersisted = true;
+        if (addedEvents || Object.keys(tx.mergeConflictIdMap ?? {}).length || Object.keys(tx.mergeProcessedPens ?? {}).length) {
+          this.mainDirty = true; this.mainVersion++;
+          if (!this.settings.diagnosticNoPersist) {
+            try { await this.persistMain(false); }
+            catch {
+              mainPersisted = false;
+              if (hadDocMeta) this.docMeta[tx.docPath] = prevDocMeta!;
+              else delete this.docMeta[tx.docPath];
+              this.localEvents = prevLocalEvents;
+              this.mainDirty = prevMainDirty;
+              this.mainVersion = prevMainVersion;
+            }
+          }
+        }
+        this.annBase.set(tx.docPath, diskText);
+        this.annBlocked.delete(tx.docPath);
+        if (mainPersisted) await adapter.remove?.(txPath).catch(() => {});
+      } else if (diskValid && diskText !== tx.previousDiskRaw) {
+        // A valid third-party sidecar exists on disk: NEVER overwrite it with an older snapshot!
+        this.annBlocked.add(tx.docPath);
+        await adapter.remove?.(txPath).catch(() => {});
+      } else {
+        // Roll back: sidecar was partially written or corrupted; restore previous disk raw and keep conflict state.
+        let diskClean = true;
+        try {
+          if (tx.previousDiskRaw !== null) {
+            if (diskText !== tx.previousDiskRaw) await adapter.write(tx.sidecarPath, tx.previousDiskRaw);
+          } else if (diskText !== null) {
+            await adapter.remove?.(tx.sidecarPath);
+          }
+        } catch { diskClean = false; }
+        this.annBlocked.add(tx.docPath);
+        if (diskClean) await adapter.remove?.(txPath).catch(() => {});
+      }
+    }
+  }
+
   async resolveAnnotationConflict(path: string, strategy: "local" | "remote" | "merge"): Promise<void> {
     await this.enqueue(async () => {
+      await this.recoverPendingAnnotationMerges(path);
       const adapter = this.host.app.vault.adapter, sidecar = this.sidecarPath(path);
       const disk = await adapter.exists(sidecar) ? await adapter.read(sidecar) : null;
-      const local = clone(this.annCache.get(path) ?? []);
+      const localSnapshot = clone(this.annCache.get(path) ?? []);
       const version = this.annDirty.get(path);
       let remote: Annotation[] = [];
       try { const obj = disk == null ? { annotations: [] } : JSON.parse(disk); validateAnnotationCollection(obj?.annotations); remote = obj.annotations; }
       catch (e) { if (strategy !== "local") throw new Error("磁盘标注无法解析。可先保留损坏文件，再采用当前窗口版本；或从完整备份恢复。"); }
-      const protection = await this.createProtectionSnapshot("处理文档批注外部修改：" + path, protectedAnnotations(path, local), undefined, { docPath: path, remoteRaw: disk });
-      await this.writeRecovery("resolved-annotation-conflict", { docPath: path, local, remoteRaw: disk });
-      if (version !== this.annDirty.get(path) || !same(local, this.annCache.get(path) ?? [])) throw new Error("生成保护快照期间批注发生变化；请重新处理冲突");
+      const protection = await this.createProtectionSnapshot("处理文档批注外部修改：" + path, protectedAnnotations(path, localSnapshot), undefined, { docPath: path, remoteRaw: disk });
+      await this.writeRecovery("resolved-annotation-conflict", { docPath: path, local: localSnapshot, remoteRaw: disk });
+      if (version !== this.annDirty.get(path) || !same(localSnapshot, this.annCache.get(path) ?? [])) throw new Error("生成保护快照期间批注发生变化；请重新处理冲突");
       const currentDisk = await adapter.exists(sidecar) ? await adapter.read(sidecar) : null;
       if (currentDisk !== disk) throw new Error("磁盘批注再次变化；请重新处理冲突");
-      if (version !== this.annDirty.get(path) || !same(local, this.annCache.get(path) ?? [])) throw new Error("检查磁盘批注期间本地内容发生变化；请重新处理冲突");
-      const merged = strategy === "local" ? local : strategy === "remote" ? remote : [...local];
-      if (strategy === "merge") for (const a of remote) { const existing = merged.find(x => x.id === a.id); if (!existing) merged.push(a); else if (!same(existing,a)) merged.push({ ...a, id: uid("ann-conflict"), cardId: undefined }); }
-      const cached = this.annCache.get(path), oldBase = this.annBase.get(path), wasBlocked = this.annBlocked.has(path);
-      if (cached) cached.splice(0,cached.length,...merged); else this.annCache.set(path,merged);
-      this.bumpAnnotationsRevision(path);
-      this.annBase.set(path,disk); this.annBlocked.delete(path); this.annDirty.set(path,(this.annDirty.get(path) ?? 0)+1);
-      try { await this.persistAnnotations(path); }
-      catch (error) {
-        if (same(this.annCache.get(path), merged)) {
-          const live = this.annCache.get(path)!; live.splice(0, live.length, ...local);
-          this.bumpAnnotationsRevision(path);
+      if (version !== this.annDirty.get(path) || !same(localSnapshot, this.annCache.get(path) ?? [])) throw new Error("检查磁盘批注期间本地内容发生变化；请重新处理冲突");
+
+      const metaBefore = this.docMeta[path] ?? {};
+      const conflictIdMap: Record<string, string> = { ...(metaBefore.mergeConflictIdMap ?? {}) };
+      const processedPens: Record<string, { finalPenId: string; bindingId: string; oldHostId?: string; reason?: string }> = { ...(metaBefore.mergeProcessedPens ?? {}) };
+      const existingUnbindKeys = new Set<string>(metaBefore.unbindEventKeys ?? []);
+      const candidate: Annotation[] = strategy === "local" ? clone(localSnapshot) : strategy === "remote" ? clone(remote) : clone(localSnapshot);
+      const pendingUnbinds: { dedupeKey: string; penId: string; oldHostId: string; reason: string; detail: string }[] = [];
+
+      if (strategy === "merge") {
+        const canonicalSame = (a: unknown, b: unknown): boolean => this.canonicalJson(a) === this.canonicalJson(b);
+        const remoteIdMap = new Map<string, string>();
+        const remoteNonPens = remote.filter(a => a.type !== "pen");
+        const remotePens = remote.filter(a => a.type === "pen");
+
+        // Pass 1: merge non-pen annotations with canonical key-order-independent equality and stable conflict IDs.
+        for (const a of remoteNonPens) {
+          const existing = candidate.find(x => x.id === a.id);
+          const canonicalKey = "host:" + a.id + ":" + sha(this.canonicalJson(a));
+          if (!existing) {
+            const knownId = conflictIdMap[canonicalKey];
+            if (knownId && candidate.some(x => x.id === knownId)) {
+              remoteIdMap.set(a.id, knownId);
+            } else {
+              candidate.push(clone(a));
+              remoteIdMap.set(a.id, a.id);
+            }
+          } else if (canonicalSame(existing, a)) {
+            remoteIdMap.set(a.id, existing.id);
+          } else {
+            const knownId = conflictIdMap[canonicalKey];
+            if (knownId && candidate.some(x => x.id === knownId)) {
+              remoteIdMap.set(a.id, knownId);
+            } else {
+              const nextId = knownId ?? uid("ann-conflict");
+              conflictIdMap[canonicalKey] = nextId;
+              candidate.push({ ...clone(a), id: nextId, cardId: undefined });
+              remoteIdMap.set(a.id, nextId);
+            }
+          }
         }
-        if (oldBase === undefined) this.annBase.delete(path); else this.annBase.set(path, oldBase);
-        if (wasBlocked) this.annBlocked.add(path);
-        this.annDirty.set(path, (this.annDirty.get(path) ?? 0) + 1);
-        throw error;
+
+        const effectiveInkLayer = (notebookId: string, inkLayerId?: string): string => {
+          const scoped = notebookId === "default" ? metaBefore : metaBefore.documentNotebookMeta?.[notebookId];
+          const validIds = new Set<string>(["default"]);
+          for (const item of scoped?.handwritingLayers ?? []) {
+            if (item && typeof item.id === "string" && item.id && typeof item.name === "string" && item.name.trim()) validIds.add(item.id);
+          }
+          return inkLayerId && validIds.has(inkLayerId) ? inkLayerId : "default";
+        };
+
+        // Helper: validate/normalize a pen's hostAnnotationId against the complete merged host set.
+        // Priority (Item 08 & 10): missing -> ineligible-host -> soft-deleted-host -> cross-notebook-host -> public-pen.
+        const validatePenHost = (
+          pen: Annotation,
+          mapRemote: boolean,
+        ): { oldHostId: string; reason: "missing" | "ineligible-host" | "soft-deleted-host" | "cross-notebook-host" | "public-pen" } | null => {
+          if (pen.hostAnnotationId === undefined) return null;
+          const oldHostId = pen.hostAnnotationId;
+          const targetHostId = mapRemote ? (remoteIdMap.get(oldHostId) ?? oldHostId) : oldHostId;
+          const resolvedTarget = candidate.find(item => item.id === targetHostId);
+          if (!resolvedTarget) {
+            delete pen.hostAnnotationId;
+            return { oldHostId, reason: "missing" };
+          }
+          if (!resolvedTarget.overlay || resolvedTarget.bindToInkLayer === false || (!!resolvedTarget.docPath && resolvedTarget.docPath !== path)) {
+            delete pen.hostAnnotationId;
+            pen.bindToInkLayer = false;
+            return { oldHostId, reason: "ineligible-host" };
+          }
+          if (resolvedTarget.overlay.deleted === true) {
+            delete pen.hostAnnotationId;
+            pen.bindToInkLayer = false;
+            return { oldHostId, reason: "soft-deleted-host" };
+          }
+          const hostNb = resolvedTarget.documentNotebookId ?? "default";
+          const penNb = pen.documentNotebookId ?? "default";
+          if (hostNb !== penNb) {
+            delete pen.hostAnnotationId;
+            pen.bindToInkLayer = false;
+            return { oldHostId, reason: "cross-notebook-host" };
+          }
+          if (pen.bindToInkLayer === false) {
+            delete pen.hostAnnotationId;
+            return { oldHostId, reason: "public-pen" };
+          }
+          pen.hostAnnotationId = resolvedTarget.id;
+          // Item 10: align pen's effective layer with host's effective layer in host's notebook without altering already-aligned fields.
+          const hostLayer = effectiveInkLayer(hostNb, resolvedTarget.inkLayerId);
+          const penLayer = effectiveInkLayer(hostNb, pen.inkLayerId);
+          if (penLayer !== hostLayer) pen.inkLayerId = hostLayer;
+          return null;
+        };
+
+        const makeUnbindDedupeKey = (pen: Annotation, issue: { oldHostId: string; reason: string }) => {
+          const bindingId = pen.hostBindingId ?? "initial";
+          return `${path}\u0000${pen.id}\u0000${bindingId}\u0000${issue.oldHostId}\u0000${issue.reason}`;
+        };
+
+        const queueUnbind = (finalPen: Annotation, issue: { oldHostId: string; reason: string }) => {
+          const dedupeKey = makeUnbindDedupeKey(finalPen, issue);
+          if (existingUnbindKeys.has(dedupeKey) || pendingUnbinds.some(u => u.dedupeKey === dedupeKey)) return;
+          pendingUnbinds.push({
+            dedupeKey,
+            penId: finalPen.id,
+            oldHostId: issue.oldHostId,
+            reason: issue.reason,
+            detail: `合并批注冲突时已解绑无效 hostAnnotationId：${finalPen.id}(${issue.oldHostId}，原因：${issue.reason})`,
+          });
+        };
+
+        // Pass 2: normalize local pens in candidate and track their unbind facts.
+        const localPenUnbinds = new Map<string, { oldHostId: string; reason: string }>();
+        for (const localPen of candidate) {
+          if (localPen.type !== "pen" || localPen.hostAnnotationId === undefined) continue;
+          const issue = validatePenHost(localPen, false);
+          if (issue) localPenUnbinds.set(localPen.id, issue);
+        }
+
+        // Pass 3: normalize remote pens and reconcile shared same-ID pens using persisted canonical raw-pen + resolved-host identity.
+        for (const a of remotePens) {
+          const mappedHostId = a.hostAnnotationId !== undefined ? (remoteIdMap.get(a.hostAnnotationId) ?? a.hostAnnotationId) : "";
+          const rawPenKey = "pen-raw:" + a.id + ":" + mappedHostId + ":" + sha(this.canonicalJson(a));
+          const prior = processedPens[rawPenKey];
+          if (prior && (candidate.some(x => x.id === prior.finalPenId) || (prior.oldHostId !== undefined && prior.reason !== undefined && existingUnbindKeys.has(`${path}\u0000${prior.finalPenId}\u0000${prior.bindingId}\u0000${prior.oldHostId}\u0000${prior.reason}`)))) {
+            // Exact same historical remote pen version for the same resolved host (key-order-independent) was already processed & committed:
+            // reuse its committed outcome without recomputing reasons, duplicating pens, or overwriting newer rebinds.
+            continue;
+          }
+          const normRemote = clone(a);
+          const remoteIssue = validatePenHost(normRemote, true);
+          const existingLocal = candidate.find(x => x.id === normRemote.id);
+          if (!existingLocal) {
+            candidate.push(normRemote);
+            if (remoteIssue) queueUnbind(normRemote, remoteIssue);
+            processedPens[rawPenKey] = { finalPenId: normRemote.id, bindingId: normRemote.hostBindingId ?? "initial", ...(remoteIssue ? { oldHostId: remoteIssue.oldHostId, reason: remoteIssue.reason } : {}) };
+          } else {
+            const localIssue = localPenUnbinds.get(existingLocal.id) ?? null;
+            const alreadyCommittedSameUnbind =
+              localIssue === null && remoteIssue !== null &&
+              existingUnbindKeys.has(makeUnbindDedupeKey(existingLocal, remoteIssue));
+            if (canonicalSame(existingLocal, normRemote) && (canonicalSame(localIssue, remoteIssue) || alreadyCommittedSameUnbind)) {
+              // Identical normalized pen & unbind fact (or replay of already-committed unbind): retain one object and at most one event.
+              processedPens[rawPenKey] = { finalPenId: existingLocal.id, bindingId: existingLocal.hostBindingId ?? "initial", ...(remoteIssue ? { oldHostId: remoteIssue.oldHostId, reason: remoteIssue.reason } : {}) };
+              continue;
+            }
+            const knownId = conflictIdMap[rawPenKey];
+            if (knownId && candidate.some(x => x.id === knownId)) {
+              // Replay of an already-merged conflict pen: do not duplicate.
+              processedPens[rawPenKey] = { finalPenId: knownId, bindingId: normRemote.hostBindingId ?? "initial", ...(remoteIssue ? { oldHostId: remoteIssue.oldHostId, reason: remoteIssue.reason } : {}) };
+              continue;
+            }
+            const finalId = knownId ?? uid("ann-conflict");
+            conflictIdMap[rawPenKey] = finalId;
+            const forked: Annotation = { ...normRemote, id: finalId, cardId: undefined };
+            candidate.push(forked);
+            if (remoteIssue) queueUnbind(forked, remoteIssue);
+            processedPens[rawPenKey] = { finalPenId: finalId, bindingId: forked.hostBindingId ?? "initial", ...(remoteIssue ? { oldHostId: remoteIssue.oldHostId, reason: remoteIssue.reason } : {}) };
+          }
+        }
+
+        for (const [localId, issue] of localPenUnbinds) {
+          const pen = candidate.find(x => x.id === localId);
+          if (pen) queueUnbind(pen, issue);
+        }
       }
-      if (strategy === "merge") this.recordLocalEvent("conflict-merged", local.map(item => item.id), "已合并批注冲突；保护快照：" + protection.path);
-      this.recordLocalEvent("external-applied", local.map(item => item.id), "已处理批注外部修改；保护快照：" + protection.path);
-      this.save(); this.annotationsChanged(path); this.changed();
+
+      // Commit phase: serialize candidate independently, re-check live disk & cache, write tx journal, then write sidecar.
+      const toWrite = JSON.parse(await serializeData(cloneSnapshot(candidate))) as Annotation[];
+      validateAnnotationCollection(toWrite);
+      const media = await externalizeMedia({ annotations: toWrite }, adapter);
+      const content = await serializeData({ schemaVersion: SIDECAR_SCHEMA_VERSION, annotations: toWrite });
+      const expectedSidecarHash = sha(content);
+      const txPath = this.pendingMergeTxPath(path);
+
+      await withSharedCommitLock(adapter, async () => {
+        const liveDiskBeforeWrite = await adapter.exists(sidecar) ? await adapter.read(sidecar) : null;
+        if (liveDiskBeforeWrite !== disk) throw new Error("磁盘批注在提交前发生变化；请重新处理冲突");
+        if (version !== this.annDirty.get(path) || !same(localSnapshot, this.annCache.get(path) ?? [])) throw new Error("合并提交前本地批注发生变化；请重新处理冲突");
+
+        if (strategy === "merge") {
+          await this.ensureDir("_marginstudy-recovery");
+          await adapter.write(txPath, JSON.stringify({
+            txId: uid("merge-tx"),
+            docPath: path,
+            sidecarPath: sidecar,
+            expectedSidecarHash,
+            previousDiskRaw: disk,
+            protectionPath: protection.path,
+            localIds: localSnapshot.map(item => item.id),
+            mergeConflictIdMap: conflictIdMap,
+            mergeProcessedPens: processedPens,
+            unbindEvents: pendingUnbinds,
+          }));
+        }
+
+        // Tightened boundary check (Item 02): re-verify disk & local cache IMMEDIATELY after tx journal write
+        // so any external write or local edit landing between last check and journal write aborts cleanly.
+        const diskRightBeforeCommit = await adapter.exists(sidecar) ? await adapter.read(sidecar) : null;
+        if (diskRightBeforeCommit !== disk) {
+          if (strategy === "merge") await adapter.remove?.(txPath).catch(() => {});
+          this.annBlocked.add(path);
+          throw new LibrarySaveConflict("磁盘批注在写入事务日志后发生变化；已中止合并以保留最新磁盘版本");
+        }
+        if (version !== this.annDirty.get(path) || !same(localSnapshot, this.annCache.get(path) ?? [])) {
+          if (strategy === "merge") await adapter.remove?.(txPath).catch(() => {});
+          throw new Error("合并提交前本地批注发生变化；请重新处理冲突");
+        }
+
+        try {
+          await adapter.write(sidecar, content);
+        } catch (writeError) {
+          // Roll back only partial/corrupted disk writes; NEVER overwrite a valid third-party sidecar update.
+          let diskClean = true;
+          const afterFailDisk = await adapter.exists(sidecar) ? await adapter.read(sidecar).catch(() => null) : null;
+          if (afterFailDisk !== disk) {
+            let afterFailValid = false;
+            if (afterFailDisk !== null) {
+              try {
+                const parsed = JSON.parse(afterFailDisk);
+                validateAnnotationCollection(parsed?.annotations);
+                afterFailValid = true;
+              } catch { afterFailValid = false; }
+            }
+            if (afterFailValid && afterFailDisk !== null && sha(afterFailDisk) === expectedSidecarHash) {
+              diskClean = false;
+            } else if (afterFailValid) {
+              this.annBlocked.add(path);
+              diskClean = true;
+            } else {
+              diskClean = false;
+              try {
+                if (disk !== null) await adapter.write(sidecar, disk);
+                else await adapter.remove?.(sidecar);
+                diskClean = true;
+              } catch {}
+            }
+          }
+          if (strategy === "merge" && diskClean) await adapter.remove?.(txPath).catch(() => {});
+          throw writeError;
+        }
+      });
+
+      // Sidecar is durably on disk! Publish candidate; if a concurrent local edit arrived during sidecar write,
+      // preserve BOTH the newer local edits AND merge mutations/additions so the next flush() cannot drop or revert them.
+      const concurrentLocalEdit = version !== this.annDirty.get(path) || !same(localSnapshot, this.annCache.get(path) ?? []);
+      if (!concurrentLocalEdit) {
+        const published = clone(toWrite);
+        if (media.replacements.size) applyMediaReplacements({ annotations: published }, media.replacements);
+        const cached = this.annCache.get(path);
+        if (cached) cached.splice(0, cached.length, ...published); else this.annCache.set(path, published);
+        this.bumpAnnotationsRevision(path);
+        this.annDirty.delete(path);
+      } else {
+        const liveCache = this.annCache.get(path);
+        if (liveCache) {
+          const published = clone(toWrite);
+          if (media.replacements.size) applyMediaReplacements({ annotations: published }, media.replacements);
+          const snapshotById = new Map(localSnapshot.map(item => [item.id, item]));
+          const liveById = new Map(liveCache.map((item, index) => [item.id, index]));
+          let changed = false;
+          for (const mergedItem of published) {
+            const snapItem = snapshotById.get(mergedItem.id);
+            const liveIndex = liveById.get(mergedItem.id);
+            if (snapItem === undefined) {
+              if (liveIndex === undefined) {
+                liveCache.push(mergedItem);
+                liveById.set(mergedItem.id, liveCache.length - 1);
+                changed = true;
+              }
+            } else if (liveIndex !== undefined && !same(mergedItem, snapItem)) {
+              const liveItem = liveCache[liveIndex];
+              if (same(liveItem, snapItem)) {
+                liveCache[liveIndex] = mergedItem;
+                changed = true;
+              } else {
+                // Concurrent edit touched the same annotation while merge committed binding/layer normalization:
+                // keep the concurrent content edit, and publish committed binding/layer updates that were not
+                // explicitly changed by the concurrent edit so a later flush cannot restore an invalid host.
+                const nextLive: Annotation = { ...liveItem };
+                let itemChanged = false;
+                if (snapItem.hostAnnotationId !== mergedItem.hostAnnotationId && liveItem.hostAnnotationId === snapItem.hostAnnotationId) {
+                  if (mergedItem.hostAnnotationId === undefined) delete nextLive.hostAnnotationId;
+                  else nextLive.hostAnnotationId = mergedItem.hostAnnotationId;
+                  itemChanged = true;
+                }
+                if (snapItem.bindToInkLayer !== mergedItem.bindToInkLayer && liveItem.bindToInkLayer === snapItem.bindToInkLayer) {
+                  if (mergedItem.bindToInkLayer === undefined) delete nextLive.bindToInkLayer;
+                  else nextLive.bindToInkLayer = mergedItem.bindToInkLayer;
+                  itemChanged = true;
+                }
+                if (snapItem.inkLayerId !== mergedItem.inkLayerId && liveItem.inkLayerId === snapItem.inkLayerId) {
+                  if (mergedItem.inkLayerId === undefined) delete nextLive.inkLayerId;
+                  else nextLive.inkLayerId = mergedItem.inkLayerId;
+                  itemChanged = true;
+                }
+                if (itemChanged) {
+                  liveCache[liveIndex] = nextLive;
+                  changed = true;
+                }
+              }
+            }
+          }
+          if (changed) this.bumpAnnotationsRevision(path);
+        }
+      }
+      this.annBase.set(path, content);
+      this.annBlocked.delete(path);
+
+      const hadDocMetaBefore = Object.prototype.hasOwnProperty.call(this.docMeta, path);
+      const prevDocMeta = hadDocMetaBefore ? clone(this.docMeta[path]) : undefined;
+      const prevLocalEvents = clone(this.localEvents);
+      const prevMainDirty = this.mainDirty;
+      const prevMainVersion = this.mainVersion;
+
+      if (strategy === "merge") {
+        const nextKeys = new Set<string>(existingUnbindKeys);
+        this.recordLocalEvent("conflict-merged", localSnapshot.map(item => item.id), "已合并批注冲突；保护快照：" + protection.path);
+        for (const item of pendingUnbinds) {
+          if (nextKeys.has(item.dedupeKey)) continue;
+          nextKeys.add(item.dedupeKey);
+          this.recordLocalEvent("conflict-merged", [item.penId], item.detail);
+        }
+        this.docMeta[path] = { ...metaBefore, mergeConflictIdMap: conflictIdMap, mergeProcessedPens: processedPens, unbindEventKeys: [...nextKeys] };
+      }
+      this.recordLocalEvent("saved", toWrite.map(annotation => annotation.id), "文档批注已落盘：" + path);
+      this.recordLocalEvent("external-applied", localSnapshot.map(item => item.id), "已处理批注外部修改；保护快照：" + protection.path);
+      this.mainDirty = true; this.mainVersion++;
+      if (!this.settings.diagnosticNoPersist) {
+        try {
+          await this.persistMain(false);
+        } catch (mainError) {
+          if (hadDocMetaBefore) this.docMeta[path] = prevDocMeta!;
+          else delete this.docMeta[path];
+          this.localEvents = prevLocalEvents;
+          this.mainDirty = prevMainDirty;
+          this.mainVersion = prevMainVersion;
+          throw mainError;
+        }
+      }
+      if (strategy === "merge") await adapter.remove?.(txPath).catch(() => {});
+      this.annotationsChanged(path); this.changed();
     });
   }
 

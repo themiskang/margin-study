@@ -76,4 +76,14 @@ export async function runLayerAcceptance({test,assert,plugin,add,app,htmlControl
    v.setWorkspaceChrome(false);assert(getComputedStyle(toolbar).display!=='none','standalone toolbar did not restore');await v.onClose();assert(!document.querySelector('.ms-ink-layer-modal'),'reader close leaked settings');
   }
  });
+ await test('Reordering and merging ink layers preserve public overlays at opacity 1 and migrate bound annotations (GAP-07b-1 B3)',async()=>{
+  add('layer-reorder-merge.pdf',{name:'Layer Reorder Merge',pages:1});const p=plugin(),v:any=new ReaderView({app} as any,p);await v.onOpen();try{await v.loadFileByPath('layer-reorder-merge.pdf');const c=v.annController,host=v.getPageRecord(1).wrapper,anns=await p.store.loadAnnotations('layer-reorder-merge.pdf');
+   const placeText=(text:string,x:number,y:number)=>{c.beginTextAnnotation();const r=host.getBoundingClientRect();host.dispatchEvent(new MouseEvent('click',{clientX:r.left+x,clientY:r.top+y,bubbles:true,cancelable:true}));const editor=document.querySelector('.ms-overlay-text-editor')!,input=editor.querySelector('[aria-label="自由文字内容"]')!;input.textContent=text;input.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText'}));(editor.querySelector('[aria-label="完成文字编辑"]') as HTMLElement).click();return anns[anns.length-1];};
+   const b1=placeText('B1',40,60),pub1=placeText('P1',40,160),pub2=placeText('P2',40,260);c.setOverlayBindToInkLayer(pub1.id,false);c.setOverlayBindToInkLayer(pub2.id,false);
+   c.createInkLayer('L2');const l2=c.getInkLayers().active,b2=placeText('B2',260,60);c.createInkLayer('L3');const l3=c.getInkLayers().active,b3=placeText('B3',260,160);
+   c.reorderInkLayers([l3,l2,'default']);assert(c.getInkLayers().layers.map((item:any)=>item.id).join(',')===`${l3},${l2},default`,'layer reorder failed');
+   c.mergeInkLayers(l2,'default');assert(c.getInkLayers().layers.map((item:any)=>item.id).join(',')===`${l3},default`&&b2.inkLayerId==='default'&&b1.inkLayerId==='default'&&b3.inkLayerId===l3,'merge migration failed');
+   const pubs=[pub1,pub2];assert(pubs.every((item:any)=>{const el=host.querySelector(`[data-ann-id="${item.id}"].ms-free-overlay`) as HTMLElement|null;return item.bindToInkLayer===false&&el&&getComputedStyle(el).opacity==='1'&&!el.classList.contains('ms-ink-reference');}),'public overlays degraded after reorder/merge');
+  }finally{await v.onClose();}
+ });
 }

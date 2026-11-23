@@ -209,6 +209,28 @@ export async function runOverlayAcceptance({test,assert,wait,plugin,add,app,html
   for(const [View,path] of [[ReaderView,'card-color.pdf'],[WordReaderView,'card-color.docx'],[DocumentReaderView,'card-color.html']] as const){const p=plugin(),v:any=new View({app} as any,p);await v.onOpen();try{await v.loadFileByPath(path);const c=v instanceof ReaderView?v.annController:v.ann,target=v instanceof ReaderView?{kind:'pdf',pageNum:1,rects:[{x:80,y:500,w:120,h:20}],pdfCoordinateSpace:'pdf'}:c.resolveSelection(selection(v.getBodyEl(),'target'));c.commitAnnotation(target,'highlight','#e5bb4a','target');const ann=(await p.store.loadAnnotations(path))[0];assert(p.store.cards.length===1&&p.store.cards[0].color==='#e5bb4a','automatic excerpt dropped selected color');for(const [type,color] of [['comment','#38b085'],['flashcard','#cf6578']] as const){ann.color=color;c.makeCard(ann,type,true);const card=p.store.cards[p.store.cards.length-1];assert(card.color===color&&card.anchorAnnId===ann.id&&card.docPath===path&&card.type===type,'manual source card lost annotation color or identity');}}
    finally{await v.onClose();}}
  });
+ await test('Host overlay move/resize transforms bound ink atomically and host delete cascades without affecting public or other-layer overlays (GAP-07b-1 B1/B2)',async()=>{
+  add('host-bound-ink.pdf',{pages:1});const p=plugin(),v:any=new ReaderView({app} as any,p);await v.onOpen();try{await v.loadFileByPath('host-bound-ink.pdf');v.setScale(1);await v.renderPage(1);
+   const rec=v.getPageRecord(1),host=rec.wrapper,W=rec.annLayer.clientWidth,H=rec.annLayer.clientHeight,c=v.annController;
+   textAt(c,host,'Host box',80,100);const anns=await p.store.loadAnnotations('host-bound-ink.pdf'),hostAnn=anns[0],el=overlay(host,hostAnn.id);
+   const box=(node:HTMLElement)=>({left:parseFloat(node.style.left),top:parseFloat(node.style.top),width:parseFloat(node.style.width),height:parseFloat(node.style.height)});
+   const h0=box(el);c.createPenAnnotation(1,[[{x:(h0.left+20)/W,y:(h0.top+20)/H},{x:(h0.left+h0.width-20)/W,y:(h0.top+h0.height-20)/H}]]);
+   const pen=anns.find((a:any)=>a.type==='pen');assert(pen?.hostAnnotationId===hostAnn.id,'pen inside bound host did not bind');
+   const initStrokes=JSON.stringify(pen.strokes),center=(s:any)=>({x:(s[0][0].x+s[0][1].x)*W/2,y:(s[0][0].y+s[0][1].y)*H/2,w:Math.abs(s[0][1].x-s[0][0].x)*W,h:Math.abs(s[0][1].y-s[0][0].y)*H}),c0=center(pen.strokes);
+   drag(el,40,30,false);const h1=box(overlay(host,hostAnn.id)),c1=center(pen.strokes);
+   near(c1.x-c0.x,(h1.left+h1.width/2)-(h0.left+h0.width/2),'bound ink move X',1);near(c1.y-c0.y,(h1.top+h1.height/2)-(h0.top+h0.height/2),'bound ink move Y',1);
+   drag(overlay(host,hostAnn.id),h1.width*.5,h1.height*.5,true);const h2=box(overlay(host,hostAnn.id)),c2=center(pen.strokes);
+   near(c2.w/c1.w,h2.width/h1.width,'bound ink scale X',.015);near(c2.h/c1.h,h2.height/h1.height,'bound ink scale Y',.015);
+   v.undoLastEdit();v.undoLastEdit();assert(JSON.stringify(pen.strokes)===initStrokes,'atomic undo did not restore exact initial ink coordinates');
+   textAt(c,host,'Pub 1',80,220);v.setOverlayBindToInkLayer(anns[anns.length-1].id,false);
+   textAt(c,host,'Pub 2',80,330);v.setOverlayBindToInkLayer(anns[anns.length-1].id,false);
+   c.createInkLayer('Other L2');const l2=c.getInkLayers().active;textAt(c,host,'Other',300,80);const otherId=anns[anns.length-1].id;c.selectInkLayer('default');
+   control(overlayControls(overlay(host,hostAnn.id)),'删除自由批注').click();
+   assert(hostAnn.overlay.deleted&&pen.strokes.length===0&&anns.filter((a:any)=>a.overlay&&!a.overlay.deleted&&a.bindToInkLayer===false).length===2&&!anns.find((a:any)=>a.id===otherId).overlay.deleted,'host delete cascade or isolation failed');
+   v.undoLastEdit();assert(!hostAnn.overlay.deleted&&pen.strokes.length===1,'host delete undo did not restore bound ink');
+   v.redoLastEdit();assert(hostAnn.overlay.deleted&&pen.strokes.length===0,'host delete redo did not re-delete bound ink');
+  }finally{await v.onClose();}
+ });
 }
 
 export async function overlayShowcase({plugin,add,app,wait}:any){
