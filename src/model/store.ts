@@ -1275,12 +1275,14 @@ export class Store {
     }
   }
 
+  static recoveryDeleteGateApprovals = 0;
+
   /**
    * Single gate for deleting ANY annotation recovery file (Invariant R).
    * All recovery deletions MUST pass disk-level field-by-field proof through this gate.
    */
   private async canDeleteRecovery(
-    kind: "merge-tx" | "pending-annotations" | "tombstone" | "rollback-artifact",
+    kind: "merge-tx" | "merge-tx-rolled-back" | "pending-annotations" | "tombstone" | "rollback-artifact",
     file: string,
     context?: {
       multiBranch?: boolean;
@@ -1291,41 +1293,110 @@ export class Store {
     },
   ): Promise<boolean> {
     const adapter = this.host.app.vault.adapter;
+    const approve = (ok: boolean): boolean => {
+      if (ok) Store.recoveryDeleteGateApprovals++;
+      return ok;
+    };
     try {
       if (!await adapter.exists(file)) return false;
       if (kind === "merge-tx") {
         if (context?.multiBranch) return false;
         const tx = JSON.parse(await adapter.read(file));
         if (!tx || typeof tx.docPath !== "string" || typeof tx.sidecarPath !== "string") return false;
-        return await this.diskCoversTx(tx);
+        return approve(await this.diskCoversTx(tx));
+      }
+      if (kind === "merge-tx-rolled-back") {
+        const tx = JSON.parse(await adapter.read(file));
+        if (!tx || typeof tx.docPath !== "string" || typeof tx.sidecarPath !== "string") return false;
+        const diskSidecar = await adapter.exists(tx.sidecarPath) ? await adapter.read(tx.sidecarPath) : null;
+        if (tx.previousDiskRaw === null) {
+          if (diskSidecar === null) return approve(true);
+        } else if (diskSidecar !== null && sha(diskSidecar) === sha(tx.previousDiskRaw)) {
+          return approve(true);
+        }
+        // Also allow if a valid third-party sidecar update superseded the uncommitted merge (not corrupted, not our expectedSidecarHash).
+        if (diskSidecar !== null && sha(diskSidecar) !== tx.expectedSidecarHash) {
+          try {
+            const parsed = JSON.parse(diskSidecar);
+            validateAnnotationCollection(parsed?.annotations);
+            return approve(true);
+          } catch {
+            return false;
+          }
+        }
+        return false;
       }
       if (kind === "pending-annotations") {
         const data = JSON.parse(await adapter.read(file));
         if (!data || typeof data.docPath !== "string" || !Array.isArray(data.annotations)) return false;
-        return await this.sidecarCoversAnnotations(data.docPath, data.annotations);
+        return approve(await this.sidecarCoversAnnotations(data.docPath, data.annotations));
       }
       if (kind === "tombstone") {
         const data = JSON.parse(await adapter.read(file));
         if (!data || typeof data.docPath !== "string") return false;
-        if (typeof data.supersededBy === "string" && typeof data.supersededDigest === "string") {
-          if (!await adapter.exists(data.supersededBy)) return false;
-          const successor = JSON.parse(await adapter.read(data.supersededBy));
-          if (!successor || typeof successor.docPath !== "string") return false;
-          if (file.includes("/pending-annotations-")) {
-            return Array.isArray(successor.annotations) &&
-              this.pendingAnnotationsDigest(successor.docPath, successor.annotations) === data.supersededDigest;
+        const txSuccessorCoversTombstone = (tomb: any, succ: any): boolean => {
+          if (typeof tomb.txId === "string" && tomb.txId && succ.txId !== tomb.txId) return false;
+          const oldPrefix = `${tomb.docPath}\u0000`, newPrefix = `${succ.docPath}\u0000`;
+          const succEvents = Array.isArray(succ.unbindEvents) ? succ.unbindEvents : [];
+          for (const ev of Array.isArray(tomb.unbindEvents) ? tomb.unbindEvents : []) {
+            const expectedKey = typeof ev.dedupeKey === "string" && ev.dedupeKey.startsWith(oldPrefix)
+              ? newPrefix + ev.dedupeKey.slice(oldPrefix.length) : ev.dedupeKey;
+            const matched = succEvents.some((item: any) =>
+              item && item.penId === ev.penId && item.oldHostId === ev.oldHostId &&
+              item.reason === ev.reason && item.detail === ev.detail && item.dedupeKey === expectedKey
+            );
+            if (!matched) return false;
           }
-          if (file.includes("/pending-merge-tx-")) {
-            return typeof successor.sidecarPath === "string" &&
-              (this.pendingTxDigest(successor) === data.supersededDigest || await this.diskCoversTx(successor));
+          const succMap = succ.mergeConflictIdMap ?? {};
+          for (const [k, v] of Object.entries(tomb.mergeConflictIdMap ?? {})) if (succMap[k] !== v) return false;
+          const succProcessed = succ.mergeProcessedPens ?? {};
+          for (const [k, v] of Object.entries(tomb.mergeProcessedPens ?? {})) {
+            if (this.canonicalJson(succProcessed[k]) !== this.canonicalJson(v)) return false;
+          }
+          return true;
+        };
+        const annSuccessorCoversTombstone = (tomb: any, succ: any): boolean => {
+          if (!Array.isArray(tomb.annotations) || !Array.isArray(succ.annotations)) return false;
+          const byId = new Map<string, any>();
+          for (const item of succ.annotations) if (item && typeof item.id === "string") byId.set(item.id, item);
+          for (const ann of tomb.annotations) {
+            if (!ann || typeof ann.id !== "string") return false;
+            const expected = ann.docPath === tomb.docPath ? { ...ann, docPath: succ.docPath } : ann;
+            const candidate = byId.get(ann.id);
+            if (!candidate || this.canonicalJson(candidate) !== this.canonicalJson(expected)) return false;
+          }
+          return true;
+        };
+        if (typeof data.supersededBy === "string" && typeof data.supersededDigest === "string") {
+          if (await adapter.exists(data.supersededBy)) {
+            const successor = JSON.parse(await adapter.read(data.supersededBy));
+            if (successor && typeof successor.docPath === "string") {
+              if (file.includes("/pending-annotations-") && Array.isArray(successor.annotations) &&
+                this.pendingAnnotationsDigest(successor.docPath, successor.annotations) === data.supersededDigest &&
+                annSuccessorCoversTombstone(data, successor)) {
+                return approve(true);
+              }
+              if (file.includes("/pending-merge-tx-") && typeof successor.sidecarPath === "string" &&
+                this.pendingTxDigest(successor) === data.supersededDigest &&
+                txSuccessorCoversTombstone(data, successor)) {
+                return approve(true);
+              }
+            }
+          }
+          // Successor missing, digest mismatch, or does not cover tombstone's own facts: ONLY allow if disk independently covers THIS tombstone's own facts.
+          if (file.includes("/pending-annotations-") && Array.isArray(data.annotations)) {
+            return approve(await this.sidecarCoversAnnotations(data.docPath, data.annotations));
+          }
+          if (file.includes("/pending-merge-tx-") && typeof data.sidecarPath === "string") {
+            return approve(await this.diskCoversTx(data));
           }
           return false;
         }
         if (file.includes("/pending-annotations-") && Array.isArray(data.annotations)) {
-          return await this.sidecarCoversAnnotations(data.docPath, data.annotations);
+          return approve(await this.sidecarCoversAnnotations(data.docPath, data.annotations));
         }
         if (file.includes("/pending-merge-tx-") && typeof data.sidecarPath === "string") {
-          return await this.diskCoversTx(data);
+          return approve(await this.diskCoversTx(data));
         }
         return false;
       }
@@ -1337,14 +1408,14 @@ export class Store {
           const restored = JSON.parse(await adapter.read(context.expectedRestoredPath));
           if (context.restoredKind === "pending-annotations") {
             if (!restored || typeof restored.docPath !== "string" || !Array.isArray(restored.annotations)) return false;
-            return this.pendingAnnotationsDigest(restored.docPath, restored.annotations) === context.expectedRestoredDigest;
+            return approve(this.pendingAnnotationsDigest(restored.docPath, restored.annotations) === context.expectedRestoredDigest);
           }
           if (context.restoredKind === "merge-tx") {
             if (!restored || typeof restored.docPath !== "string" || typeof restored.sidecarPath !== "string") return false;
-            return this.pendingTxDigest(restored) === context.expectedRestoredDigest;
+            return approve(this.pendingTxDigest(restored) === context.expectedRestoredDigest);
           }
         }
-        return true;
+        return approve(true);
       }
       return false;
     } catch {
@@ -1353,7 +1424,7 @@ export class Store {
   }
 
   private async deleteRecoveryIfProved(
-    kind: "merge-tx" | "pending-annotations" | "tombstone" | "rollback-artifact",
+    kind: "merge-tx" | "merge-tx-rolled-back" | "pending-annotations" | "tombstone" | "rollback-artifact",
     file: string,
     context?: Parameters<Store["canDeleteRecovery"]>[2],
   ): Promise<boolean> {
@@ -1577,7 +1648,7 @@ export class Store {
           }
         } catch { diskClean = false; }
         this.annBlocked.add(tx.docPath);
-        if (diskClean) await adapter.remove?.(txPath).catch(() => {});
+        if (diskClean) await this.deleteRecoveryIfProved("merge-tx-rolled-back", txPath);
       }
     }
   }
@@ -1836,7 +1907,7 @@ export class Store {
               } catch {}
             }
           }
-          if (strategy === "merge" && diskClean) await adapter.remove?.(txPath).catch(() => {});
+          if (strategy === "merge" && diskClean) await this.deleteRecoveryIfProved("merge-tx-rolled-back", txPath);
           throw writeError;
         }
       });
