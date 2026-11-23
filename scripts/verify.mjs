@@ -74,6 +74,8 @@ const automatedSuites=[
   ["refs-b5-22-tombstone-cross-tx-proof","scripts/verify/annotation-refs/invariant-r/b5-22-tombstone-cross-tx-proof.mjs"],
   ["refs-b5-23-guard-bypass-forms","scripts/verify/annotation-refs/invariant-r/b5-23-guard-bypass-forms.mjs"],
   ["refs-b5-24-rollback-cross-writer","scripts/verify/annotation-refs/invariant-r/b5-24-rollback-cross-writer.mjs"],
+  ["refs-b5-25-guard-controls","scripts/verify/annotation-refs/invariant-r/b5-25-guard-controls.mjs"],
+  ["refs-b5-26-sidecar-scope","scripts/verify/annotation-refs/invariant-r/b5-26-sidecar-scope.mjs"],
   ["recovery-delete-guard","scripts/verify/recovery-delete-guard.mjs"],
   ["status-a28-ui","src/documents/a28-ui-acceptance.mjs"],
   ["mobile-sha256","src/model/sha256-acceptance.mjs"],

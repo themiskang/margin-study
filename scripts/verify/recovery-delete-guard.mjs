@@ -458,9 +458,9 @@ export async function scanProject(projectRoot = defaultRoot) {
     if (limit > 0 && next <= limit) {
       matchedCount++;
     } else if (limit > 0) {
-      violations.push(`DUPLICATE ALLOWLIST (${next}/${limit}): ${f.file}:${f.line} (${f.method}): ${f.expr}`);
+      violations.push(`${f.file}:${f.line} (${f.method}) DUPLICATE ALLOWLIST (${next}/${limit}): ${f.expr}`);
     } else {
-      violations.push(`${f.file}:${f.line} (${f.method}): ${f.expr}`);
+      violations.push(`${f.file}:${f.line} (${f.method}) UNGUARDED DELETE: ${f.expr}`);
     }
   }
   const staleAllowlist = [];

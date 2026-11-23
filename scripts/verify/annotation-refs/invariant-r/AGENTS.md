@@ -20,5 +20,7 @@
 - `b5-22-tombstone-cross-tx-proof.mjs` 验证墓碑后继被另一事务覆盖导致摘要失配时，GC 不得凭他事务磁盘证明删除旧墓碑，旧墓碑原字节保留。
 - `b5-23-guard-bypass-forms.mjs` 验证 AST 守卫捕获全部 11 种绕过形态（方括号、模板拼接、别名、解构、强转、Object.assign、fs/vault、本地封装函数与路径变量数据流）。
 - `b5-24-rollback-cross-writer.mjs` 验证改名回滚清理同时核验 `docPath`、`writerId` 与内容 digest，并发他 writer 草稿原字节保留。
+- `b5-25-guard-controls.mjs` 验证 AST 守卫捕获 5 种间接调用/动态导入绕过形态（`Reflect.apply`、可选链、逗号表达式、`call.bind`、动态 `import("node:fs")`）并按出现次数拒绝重复白名单调用点。
+- `b5-26-sidecar-scope.mjs` 验证畸形 `sidecarPath` 指向他文档未决日志时，重算侧车路径与安全断言确保他文档日志原字节保留、零删除且清障冷启后完整恢复。
 
 [PROTOCOL]: Update this header on change, then check AGENTS.md
