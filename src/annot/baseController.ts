@@ -1190,8 +1190,8 @@ export abstract class BaseAnnotationController {
       const host = this.cache.find(item => item.id === hostId && !!item.overlay && !item.overlay.deleted && isInkLayerBound(item) && annotationNotebook(item) === annotationNotebook(pen));
       if (!host) return false;
       pen.hostAnnotationId = host.id;
-      // Normalize pen inkLayerId to the host's effective layer (defaulting to "default").
-      pen.inkLayerId = annotationInkLayer(host, this.getInkLayers());
+      // Normalize pen inkLayerId to the host's effective layer within the host's own notebook context.
+      pen.inkLayerId = annotationInkLayer(host, this.getInkLayersForNotebook(annotationNotebook(host)));
     } else {
       delete pen.hostAnnotationId;
     }
@@ -1778,6 +1778,10 @@ export abstract class BaseAnnotationController {
   }
   protected revealAnnotationNotebook(ann: Annotation): void { if (annotationNotebook(ann) !== this.activeNotebookId) this.selectDocumentNotebook(annotationNotebook(ann)); }
   protected getInkLayers(): InkLayerState { return inkLayerState(this.getCurrentNotebookMeta()); }
+  protected getInkLayersForNotebook(notebookId: string): InkLayerState {
+    if (notebookId === this.activeNotebookId) return this.getInkLayers();
+    return inkLayerState(notebookMeta(this.docPath ? this.plugin.store.getDocMeta(this.docPath) : {}, notebookId));
+  }
   openHandwritingSettings(anchor?: HTMLElement): void { this.inkLayers?.show(anchor ?? this.penBtn ?? undefined); }
   openHandwritingPresets(anchor?: HTMLElement): void { this.inkLayers?.showPresets(anchor ?? this.penBtn ?? undefined); }
   /** Document preference; the workspace supplies the live reader/map mode connection. */
@@ -1800,7 +1804,7 @@ export abstract class BaseAnnotationController {
   protected isInkVisible(ann: Annotation): boolean {
     if (!this.isAnnotationVisible(ann)) return false;
     if (!isInkLayerBound(ann)) return true;
-    const state = this.isNotebookReference(ann) ? inkLayerState(notebookMeta(this.docPath ? this.plugin.store.getDocMeta(this.docPath) : {}, annotationNotebook(ann))) : this.getInkLayers();
+    const state = this.getInkLayersForNotebook(annotationNotebook(ann));
     const layer = annotationInkLayer(ann, state); return layer === state.active || layer === state.overlay;
   }
   protected isInkReference(ann: Annotation): boolean {

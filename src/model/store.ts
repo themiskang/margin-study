@@ -1164,12 +1164,13 @@ export class Store {
           const candidate = clone(a);
           let unresolvedOldHostId: string | undefined;
           if (candidate.hostAnnotationId !== undefined) {
-            const mappedHostId = remoteIdMap.get(candidate.hostAnnotationId);
-            const resolvedHost = mappedHostId ? merged.find(item => item.id === mappedHostId && !!item.overlay) : undefined;
+            const oldHostId = candidate.hostAnnotationId;
+            const targetHostId = remoteIdMap.get(oldHostId) ?? oldHostId;
+            const resolvedHost = merged.find(item => item.id === targetHostId && !!item.overlay);
             if (resolvedHost) {
               candidate.hostAnnotationId = resolvedHost.id;
             } else {
-              unresolvedOldHostId = candidate.hostAnnotationId;
+              unresolvedOldHostId = oldHostId;
               delete candidate.hostAnnotationId;
             }
           }
