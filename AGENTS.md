@@ -75,6 +75,16 @@ Codex 是本项目的执行席。用户已授权的任务中，发现问题后�
 实测证据：复核席 `ctx_d48d00e8d4e6` 释放后，`send` 重开为 `ctx_beb1fa209c2c`，其回话准确复述上一轮判定（7 PASS / 1 PARTIAL，A3 因旧库系脚本构造判 PARTIAL）。
 因此**判定席不需要常留标签**，「常驻」指上下文常驻，不是标签常驻。收口后照常 release，需要时再 send。
 
+**终端席位必须自带汇报命令**：用 `orca terminal create` 起的席位没有 `worker_done` 回调，派单里**必须**写明收尾动作，否则结果只留在终端、统筹席收不到：
+
+```
+orca orchestration send --to run:<统筹席 run id> --subject "<卡号> 第 N 项完成" --body "<数值 + 证据路径>"
+```
+
+- 每完成一项发一次（不要攒到全部做完）；遇到硬停点也先发一条再停。
+- `run id` 用 `orca orchestration run-current` 取，不要凭记忆写。
+- 派包模板里应固定带上这段，与「证据路径」「门禁判据」并列。
+
 **席位台账**：`.agent-artifacts/seats.md`（已 gitignore）。每派一次包，立刻更新对应席位行：`席位 | dispatch id | 引擎/模型 | 最近任务 | 可续/勿续`。
 下次派包先查台账，不要翻 `worker-list` 历史去猜哪个 id 是谁——翻错过一次。
 
