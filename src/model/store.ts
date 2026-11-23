@@ -261,6 +261,7 @@ export class Store {
     this.recordLocalEvent("loaded", [], "已读取本地数据；云端状态无法由本插件确认。");
     for (const doc of this.documents) if (doc.missing && !this.localEvents.some(event => event.kind === "file-missing" && event.objectIds.includes(doc.id))) this.recordLocalEvent("file-missing", [doc.id], "已登记来源文件缺失：" + doc.path);
     await this.recoverPendingAnnotationMerges();
+    await this.gcSupersededRecoveries();
     if (hasInlineMedia(this)) this.save();
   }
 
@@ -1020,28 +1021,38 @@ export class Store {
     await this.ensureDir(dir);
     const recoveryWriter = "device-rolling-000001";
     const path = `${dir}/${label}-${rolling ? recoveryWriter : uid("snapshot")}.json`;
-    const content = rolling ? { ...(payload as object), writerId: recoveryWriter } : payload;
+    const isPendingAnn = rolling && label !== "pending-main" && payload && typeof (payload as { docPath?: unknown }).docPath === "string" && Array.isArray((payload as { annotations?: unknown }).annotations);
+    const content = rolling
+      ? {
+          ...(payload as object),
+          writerId: recoveryWriter,
+          ...(isPendingAnn ? { txId: uid("pending"), contentDigest: this.pendingAnnotationsDigest((payload as { docPath: string }).docPath, (payload as { annotations: Annotation[] }).annotations) } : {}),
+        }
+      : payload;
     const text = rolling ? await serializeData(content, () => this.waitForInputQuiet(automatic)) : JSON.stringify(content, null, 2);
     if (rolling) await this.waitForInputQuiet(automatic);
     await this.host.app.vault.adapter.write(path, text);
     if (rolling) {
-      await this.pruneRecoveries(path, label === "pending-main" ? "main" : "annotations").catch(error => console.warn("MarginStudy recovery cleanup failed", error));
+      await this.pruneRecoveries(path, label === "pending-main" ? "main" : "annotations", recoveryWriter).catch(error => console.warn("MarginStudy recovery cleanup failed", error));
     }
     return path;
   }
 
-  private async pruneRecoveries(currentPath: string, category: "main" | "annotations"): Promise<void> {
+  private async pruneRecoveries(currentPath: string, category: "main" | "annotations", writerId?: string): Promise<void> {
     const adapter = this.host.app.vault.adapter;
     if (!adapter.list || !adapter.stat || !adapter.remove) return;
     const candidates: { path: string; mtime: number; size: number }[] = [];
     for (const path of (await adapter.list("_marginstudy-recovery")).files) {
-      const match = (category === "main" ? /^_marginstudy-recovery\/pending-main-(device-[a-z0-9]+-[a-z0-9]{1,6})\.json$/ : /^_marginstudy-recovery\/pending-annotations-[a-f0-9]{12}-(device-[a-z0-9]+-[a-z0-9]{1,6})\.json$/).exec(path);
+      const match = (category === "main" ? /^_marginstudy-recovery\/pending-main-(device-[a-z0-9]+-[a-z0-9]{1,6})\.json$/ : /^_marginstudy-recovery\/pending-annotations-(?:[a-f0-9]{12}|[a-f0-9]{64})-(device-[a-z0-9]+-[a-z0-9]{1,6})\.json$/).exec(path);
       if (!match) continue;
+      if (category === "annotations" && writerId && match[1] !== writerId) continue;
       const stat = await adapter.stat(path);
       if (!stat || stat.type !== "file") continue;
       try {
         const data = JSON.parse(await adapter.read(path));
         if (data?.writerId !== match[1] || (category === "main" ? ![2, MAIN_SCHEMA_VERSION].includes(data?.schemaVersion) : typeof data?.docPath !== "string" || !Array.isArray(data?.annotations))) continue;
+        // Invariant R: never prune a pending annotations snapshot unless its own document's authoritative sidecar covers all its facts.
+        if (category === "annotations" && path !== currentPath && !await this.canDeleteRecovery("pending-annotations", path)) continue;
       } catch { continue; }
       candidates.push({ path, mtime: stat.mtime, size: stat.size });
     }
@@ -1050,6 +1061,10 @@ export class Store {
     for (const file of candidates) {
       if (file.path === currentPath || (count < 3 && size + file.size < 2 * 1024 * 1024)) {
         count++; size += file.size;
+      } else if (category === "annotations") {
+        if (await this.deleteRecoveryIfProved("pending-annotations", file.path)) {
+          console.info("MarginStudy recovery removed", file.path, file.size);
+        }
       } else {
         await adapter.remove(file.path);
         console.info("MarginStudy recovery removed", file.path, file.size);
@@ -1120,7 +1135,7 @@ export class Store {
     const media = await externalizeMedia({ annotations: anns }, adapter);
     const content = await serializeData({ schemaVersion: SIDECAR_SCHEMA_VERSION, annotations: anns }, () => this.waitForInputQuiet(automatic));
     // A rolling recovery copy also covers a partial host write or forced process exit.
-    await this.writeRecovery("pending-annotations-" + sha(path).slice(0, 12), { docPath: path, annotations: anns }, true, automatic);
+    await this.writeRecovery("pending-annotations-" + sha(path), { docPath: path, annotations: anns }, true, automatic);
     await this.waitForInputQuiet(automatic);
     await adapter.write(sidecar, content);
     this.recordLocalEvent("saved", anns.map(annotation => annotation.id), "文档批注已落盘：" + path);
@@ -1135,8 +1150,392 @@ export class Store {
 
   getAnnotationConflicts(): string[] { return [...this.annBlocked]; }
 
+  private pendingAnnotationsPath(path: string): string {
+    return `_marginstudy-recovery/pending-annotations-${sha(path)}-device-rolling-000001.json`;
+  }
+
+  private legacyPendingAnnotationsPath(path: string): string {
+    return `_marginstudy-recovery/pending-annotations-${sha(path).slice(0, 12)}-device-rolling-000001.json`;
+  }
+
   private pendingMergeTxPath(path: string): string {
+    return `_marginstudy-recovery/pending-merge-tx-${sha(path)}.json`;
+  }
+
+  private legacyPendingMergeTxPath(path: string): string {
     return `_marginstudy-recovery/pending-merge-tx-${sha(path).slice(0, 12)}.json`;
+  }
+
+  private pendingAnnotationsDigest(docPath: string, annotations: Annotation[]): string {
+    return sha(this.canonicalJson({ docPath, annotations }));
+  }
+
+  private pendingTxDigest(tx: {
+    txId?: string;
+    docPath: string;
+    sidecarPath: string;
+    expectedSidecarHash?: string;
+    previousDiskRaw?: string | null;
+    protectionPath?: string;
+    localIds?: string[];
+    mergeConflictIdMap?: Record<string, string>;
+    mergeProcessedPens?: Record<string, unknown>;
+    unbindEvents?: { dedupeKey: string; penId: string; oldHostId: string; reason: string; detail: string }[];
+  }): string {
+    return sha(this.canonicalJson({
+      txId: tx.txId ?? "",
+      docPath: tx.docPath,
+      sidecarPath: tx.sidecarPath,
+      expectedSidecarHash: tx.expectedSidecarHash ?? "",
+      previousDiskRaw: tx.previousDiskRaw ?? null,
+      protectionPath: tx.protectionPath ?? "",
+      localIds: tx.localIds ?? [],
+      mergeConflictIdMap: tx.mergeConflictIdMap ?? {},
+      mergeProcessedPens: tx.mergeProcessedPens ?? {},
+      unbindEvents: tx.unbindEvents ?? [],
+    }));
+  }
+
+  private async sidecarCoversAnnotations(docPath: string, pendingAnns: Annotation[]): Promise<boolean> {
+    const adapter = this.host.app.vault.adapter;
+    const sidecar = this.sidecarPath(docPath);
+    if (!await adapter.exists(sidecar)) return false;
+    try {
+      const parsed = JSON.parse(await adapter.read(sidecar));
+      if (!Array.isArray(parsed?.annotations)) return false;
+      const byId = new Map<string, Annotation>();
+      for (const item of parsed.annotations as Annotation[]) if (item && typeof item.id === "string") byId.set(item.id, item);
+      for (const ann of pendingAnns) {
+        if (!ann || typeof ann.id !== "string") return false;
+        const authoritative = byId.get(ann.id);
+        if (!authoritative || this.canonicalJson(authoritative) !== this.canonicalJson(ann)) return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private docMetaCoversTx(docPath: string, tx: {
+    mergeConflictIdMap?: Record<string, string>;
+    mergeProcessedPens?: Record<string, unknown>;
+    unbindEvents?: { dedupeKey: string }[];
+  }): boolean {
+    const meta = this.docMeta[docPath];
+    if (!meta) return false;
+    const keySet = new Set<string>(meta.unbindEventKeys ?? []);
+    for (const ev of tx.unbindEvents ?? []) if (!keySet.has(ev.dedupeKey)) return false;
+    const map = meta.mergeConflictIdMap ?? {};
+    for (const [k, v] of Object.entries(tx.mergeConflictIdMap ?? {})) if (map[k] !== v) return false;
+    const processed = meta.mergeProcessedPens ?? {};
+    for (const [k, v] of Object.entries(tx.mergeProcessedPens ?? {})) {
+      if (this.canonicalJson(processed[k]) !== this.canonicalJson(v)) return false;
+    }
+    return true;
+  }
+
+  private isRecoveryFilePath(path: string): boolean {
+    return path.startsWith("_marginstudy-recovery/") ||
+      /(?:^|\/)(?:pending-annotations-|pending-merge-tx-|pending-main-|resolved-annotation-conflict|document-migration-failed|document-content-change)/.test(path) ||
+      /\.(?:superseded|quarantine)-\d+$/.test(path);
+  }
+
+  private async diskCoversTx(tx: {
+    docPath: string;
+    sidecarPath: string;
+    expectedSidecarHash: string;
+    mergeConflictIdMap?: Record<string, string>;
+    mergeProcessedPens?: Record<string, unknown>;
+    unbindEvents?: { dedupeKey: string; penId: string; oldHostId: string; reason: string; detail: string }[];
+  }): Promise<boolean> {
+    const adapter = this.host.app.vault.adapter;
+    try {
+      const expectedSidecar = this.sidecarPath(tx.docPath);
+      if (tx.sidecarPath !== expectedSidecar || this.isRecoveryFilePath(expectedSidecar)) return false;
+      if (!await adapter.exists(expectedSidecar)) return false;
+      const diskSidecar = await adapter.read(expectedSidecar);
+      if (sha(diskSidecar) !== tx.expectedSidecarHash) return false;
+      const parsedSidecar = JSON.parse(diskSidecar);
+      validateAnnotationCollection(parsedSidecar?.annotations);
+      const diskMain = await this.host.loadData() as Partial<PluginData> | null | undefined;
+      const diskMeta = diskMain?.docMeta?.[tx.docPath];
+      if (!diskMeta) return false;
+      const keySet = new Set<string>(diskMeta.unbindEventKeys ?? []);
+      const diskEvents = Array.isArray(diskMain?.localEvents) ? diskMain.localEvents : [];
+      for (const ev of tx.unbindEvents ?? []) {
+        if (!keySet.has(ev.dedupeKey)) return false;
+        const matchedEvent = diskEvents.some(item =>
+          item && item.kind === "conflict-merged" &&
+          Array.isArray(item.objectIds) && item.objectIds.includes(ev.penId) &&
+          item.detail === ev.detail
+        );
+        if (!matchedEvent) return false;
+      }
+      const map = diskMeta.mergeConflictIdMap ?? {};
+      for (const [k, v] of Object.entries(tx.mergeConflictIdMap ?? {})) if (map[k] !== v) return false;
+      const processed = diskMeta.mergeProcessedPens ?? {};
+      for (const [k, v] of Object.entries(tx.mergeProcessedPens ?? {})) {
+        if (this.canonicalJson(processed[k]) !== this.canonicalJson(v)) return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  static recoveryDeleteGateApprovals = 0;
+  static recoveryDeleteProofLog: {
+    path: string;
+    kind: "merge-tx" | "merge-tx-rolled-back" | "pending-annotations" | "tombstone" | "rollback-artifact";
+    contentDigest: string;
+    proofTxId: string;
+  }[] = [];
+
+  /**
+   * Single gate for deleting ANY annotation recovery file (Invariant R).
+   * All recovery deletions MUST pass disk-level field-by-field proof through this gate.
+   */
+  private async canDeleteRecovery(
+    kind: "merge-tx" | "merge-tx-rolled-back" | "pending-annotations" | "tombstone" | "rollback-artifact",
+    file: string,
+    context?: {
+      multiBranch?: boolean;
+      recordProof?: boolean;
+      expectedDocPath?: string;
+      expectedWriterId?: string;
+      expectedTxId?: string;
+      expectedArtifactDigest?: string;
+      expectedArtifactKind?: "pending-annotations" | "merge-tx";
+      expectedRestoredPath?: string;
+      expectedRestoredDigest?: string;
+      restoredKind?: "pending-annotations" | "merge-tx";
+    },
+  ): Promise<boolean> {
+    const adapter = this.host.app.vault.adapter;
+    try {
+      if (!await adapter.exists(file)) return false;
+      const raw = await adapter.read(file);
+      const rawDigest = sha(raw);
+      const parsed = JSON.parse(raw);
+      const proofTxId =
+        (typeof parsed?.txId === "string" && parsed.txId) ? parsed.txId :
+        (typeof context?.expectedTxId === "string" && context.expectedTxId) ? context.expectedTxId :
+        (typeof parsed?.contentDigest === "string" && parsed.contentDigest) ? parsed.contentDigest :
+        rawDigest;
+      const approve = (ok: boolean): boolean => {
+        if (ok) {
+          Store.recoveryDeleteGateApprovals++;
+          if (context?.recordProof) {
+            Store.recoveryDeleteProofLog.push({ path: file, kind, contentDigest: rawDigest, proofTxId });
+          }
+        }
+        return ok;
+      };
+      if (kind === "merge-tx") {
+        if (context?.multiBranch) return false;
+        const tx = parsed;
+        if (!tx || typeof tx.docPath !== "string" || typeof tx.sidecarPath !== "string") return false;
+        return approve(await this.diskCoversTx(tx));
+      }
+      if (kind === "merge-tx-rolled-back") {
+        const tx = parsed;
+        if (!tx || typeof tx.docPath !== "string" || typeof tx.sidecarPath !== "string") return false;
+        const expectedSidecar = this.sidecarPath(tx.docPath);
+        if (tx.sidecarPath !== expectedSidecar || this.isRecoveryFilePath(expectedSidecar)) return false;
+        const diskSidecar = await adapter.exists(expectedSidecar) ? await adapter.read(expectedSidecar) : null;
+        if (tx.previousDiskRaw === null) {
+          if (diskSidecar === null) return approve(true);
+        } else if (diskSidecar !== null && sha(diskSidecar) === sha(tx.previousDiskRaw)) {
+          return approve(true);
+        }
+        // Also allow if a valid third-party sidecar update superseded the uncommitted merge (not corrupted, not our expectedSidecarHash).
+        if (diskSidecar !== null && sha(diskSidecar) !== tx.expectedSidecarHash) {
+          try {
+            const parsedSidecar = JSON.parse(diskSidecar);
+            validateAnnotationCollection(parsedSidecar?.annotations);
+            return approve(true);
+          } catch {
+            return false;
+          }
+        }
+        return false;
+      }
+      if (kind === "pending-annotations") {
+        const data = parsed;
+        if (!data || typeof data.docPath !== "string" || !Array.isArray(data.annotations)) return false;
+        return approve(await this.sidecarCoversAnnotations(data.docPath, data.annotations));
+      }
+      if (kind === "tombstone") {
+        const data = parsed;
+        if (!data || typeof data.docPath !== "string") return false;
+        const txSuccessorCoversTombstone = (tomb: any, succ: any): boolean => {
+          if (typeof tomb.txId === "string" && tomb.txId && succ.txId !== tomb.txId) return false;
+          const oldPrefix = `${tomb.docPath}\u0000`, newPrefix = `${succ.docPath}\u0000`;
+          const succEvents = Array.isArray(succ.unbindEvents) ? succ.unbindEvents : [];
+          for (const ev of Array.isArray(tomb.unbindEvents) ? tomb.unbindEvents : []) {
+            const expectedKey = typeof ev.dedupeKey === "string" && ev.dedupeKey.startsWith(oldPrefix)
+              ? newPrefix + ev.dedupeKey.slice(oldPrefix.length) : ev.dedupeKey;
+            const matched = succEvents.some((item: any) =>
+              item && item.penId === ev.penId && item.oldHostId === ev.oldHostId &&
+              item.reason === ev.reason && item.detail === ev.detail && item.dedupeKey === expectedKey
+            );
+            if (!matched) return false;
+          }
+          const succMap = succ.mergeConflictIdMap ?? {};
+          for (const [k, v] of Object.entries(tomb.mergeConflictIdMap ?? {})) if (succMap[k] !== v) return false;
+          const succProcessed = succ.mergeProcessedPens ?? {};
+          for (const [k, v] of Object.entries(tomb.mergeProcessedPens ?? {})) {
+            if (this.canonicalJson(succProcessed[k]) !== this.canonicalJson(v)) return false;
+          }
+          return true;
+        };
+        const annSuccessorCoversTombstone = (tomb: any, succ: any): boolean => {
+          if (!Array.isArray(tomb.annotations) || !Array.isArray(succ.annotations)) return false;
+          const byId = new Map<string, any>();
+          for (const item of succ.annotations) if (item && typeof item.id === "string") byId.set(item.id, item);
+          for (const ann of tomb.annotations) {
+            if (!ann || typeof ann.id !== "string") return false;
+            const expected = ann.docPath === tomb.docPath ? { ...ann, docPath: succ.docPath } : ann;
+            const candidate = byId.get(ann.id);
+            if (!candidate || this.canonicalJson(candidate) !== this.canonicalJson(expected)) return false;
+          }
+          return true;
+        };
+        if (typeof data.supersededBy === "string" && typeof data.supersededDigest === "string") {
+          if (await adapter.exists(data.supersededBy)) {
+            const successor = JSON.parse(await adapter.read(data.supersededBy));
+            if (successor && typeof successor.docPath === "string") {
+              if (file.includes("/pending-annotations-") && Array.isArray(successor.annotations) &&
+                this.pendingAnnotationsDigest(successor.docPath, successor.annotations) === data.supersededDigest &&
+                annSuccessorCoversTombstone(data, successor)) {
+                return approve(true);
+              }
+              if (file.includes("/pending-merge-tx-") && typeof successor.sidecarPath === "string" &&
+                this.pendingTxDigest(successor) === data.supersededDigest &&
+                txSuccessorCoversTombstone(data, successor)) {
+                return approve(true);
+              }
+            }
+          }
+          // Successor missing, digest mismatch, or does not cover tombstone's own facts: ONLY allow if disk independently covers THIS tombstone's own facts.
+          if (file.includes("/pending-annotations-") && Array.isArray(data.annotations)) {
+            return approve(await this.sidecarCoversAnnotations(data.docPath, data.annotations));
+          }
+          if (file.includes("/pending-merge-tx-") && typeof data.sidecarPath === "string") {
+            return approve(await this.diskCoversTx(data));
+          }
+          return false;
+        }
+        if (file.includes("/pending-annotations-") && Array.isArray(data.annotations)) {
+          return approve(await this.sidecarCoversAnnotations(data.docPath, data.annotations));
+        }
+        if (file.includes("/pending-merge-tx-") && typeof data.sidecarPath === "string") {
+          return approve(await this.diskCoversTx(data));
+        }
+        return false;
+      }
+      if (kind === "rollback-artifact") {
+        const data = parsed;
+        if (!data || typeof data.docPath !== "string") return false;
+        if (!context?.expectedDocPath || data.docPath !== context.expectedDocPath) return false;
+        if (!context.expectedArtifactDigest || !context.expectedArtifactKind) return false;
+        if (context.expectedArtifactKind === "pending-annotations") {
+          if (!context.expectedWriterId || data.writerId !== context.expectedWriterId) return false;
+          if (context.expectedTxId && data.txId !== context.expectedTxId) return false;
+          if (!Array.isArray(data.annotations)) return false;
+          const actualDigest = this.pendingAnnotationsDigest(data.docPath, data.annotations);
+          const isExactSelf = actualDigest === context.expectedArtifactDigest;
+          const isCorruptedSelf = data.contentDigest === context.expectedArtifactDigest && actualDigest !== data.contentDigest;
+          if (!isExactSelf && !isCorruptedSelf) return false;
+        } else if (context.expectedArtifactKind === "merge-tx") {
+          if (context.expectedTxId && data.txId !== context.expectedTxId) return false;
+          if (typeof data.sidecarPath !== "string") return false;
+          if (this.pendingTxDigest(data) !== context.expectedArtifactDigest) return false;
+        } else {
+          return false;
+        }
+        if (context.expectedRestoredPath && context.expectedRestoredDigest) {
+          if (!await adapter.exists(context.expectedRestoredPath)) return false;
+          const restored = JSON.parse(await adapter.read(context.expectedRestoredPath));
+          if (context.restoredKind === "pending-annotations") {
+            if (!restored || typeof restored.docPath !== "string" || !Array.isArray(restored.annotations)) return false;
+            return approve(this.pendingAnnotationsDigest(restored.docPath, restored.annotations) === context.expectedRestoredDigest);
+          }
+          if (context.restoredKind === "merge-tx") {
+            if (!restored || typeof restored.docPath !== "string" || typeof restored.sidecarPath !== "string") return false;
+            return approve(this.pendingTxDigest(restored) === context.expectedRestoredDigest);
+          }
+          return false;
+        }
+        return approve(true);
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  private async deleteRecoveryIfProved(
+    kind: "merge-tx" | "merge-tx-rolled-back" | "pending-annotations" | "tombstone" | "rollback-artifact",
+    file: string,
+    context?: Parameters<Store["canDeleteRecovery"]>[2],
+  ): Promise<boolean> {
+    if (!await this.canDeleteRecovery(kind, file, { ...context, recordProof: true })) return false;
+    await this.host.app.vault.adapter.remove?.(file).catch(() => {});
+    return true;
+  }
+
+  private async supersedeRecoveryFile(exactPath: string, supersededBy?: string, supersededDigest?: string): Promise<string | null> {
+    const adapter = this.host.app.vault.adapter;
+    if (!await adapter.exists(exactPath)) return null;
+    const tombstone = `${exactPath}.superseded-${Date.now()}`;
+    await adapter.rename(exactPath, tombstone);
+    if (supersededBy && supersededDigest) {
+      try {
+        const parsed = JSON.parse(await adapter.read(tombstone));
+        await adapter.write(tombstone, JSON.stringify({ ...parsed, supersededBy, supersededDigest }));
+      } catch { /* retain renamed tombstone as-is */ }
+    }
+    return tombstone;
+  }
+
+  private async gcSupersededRecoveries(): Promise<void> {
+    const adapter = this.host.app.vault.adapter;
+    if (!adapter.list || !adapter.remove || !await adapter.exists("_marginstudy-recovery")) return;
+    const statePath = "_marginstudy-recovery/superseded-gc-state.json";
+    let counts: Record<string, number> = {};
+    if (await adapter.exists(statePath)) {
+      try {
+        const parsed = JSON.parse(await adapter.read(statePath));
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) counts = parsed;
+      } catch { counts = {}; }
+    }
+    const tombstones = (await adapter.list("_marginstudy-recovery")).files.filter(file =>
+      /^_marginstudy-recovery\/(?:pending-annotations-(?:[a-f0-9]{12}|[a-f0-9]{64})-device-[a-z0-9]+-[a-z0-9]{1,6}\.json|pending-merge-tx-(?:[a-f0-9]{12}|[a-f0-9]{64})\.json)\.superseded-\d+$/.test(file)
+    );
+    if (!tombstones.length) return;
+    let changed = false;
+    for (const file of tombstones) {
+      const proved = await this.canDeleteRecovery("tombstone", file);
+      if (proved) {
+        const next = (counts[file] ?? 0) + 1;
+        if (next >= 2) {
+          if (await this.deleteRecoveryIfProved("tombstone", file)) delete counts[file];
+        } else {
+          counts[file] = next;
+        }
+        changed = true;
+      } else if (counts[file]) {
+        counts[file] = 0;
+        changed = true;
+      }
+    }
+    for (const key of Object.keys(counts)) {
+      if (!tombstones.includes(key)) { delete counts[key]; changed = true; }
+    }
+    if (changed) {
+      try { await adapter.write(statePath, JSON.stringify(counts)); } catch { /* non-fatal */ }
+    }
   }
 
   private canonicalJson(value: unknown): string {
@@ -1159,33 +1558,80 @@ export class Store {
     const adapter = this.host.app.vault.adapter;
     const txPaths: string[] = [];
     if (docPath) {
-      const single = this.pendingMergeTxPath(docPath);
-      if (await adapter.exists(single)) txPaths.push(single);
+      for (const candidate of [this.pendingMergeTxPath(docPath), this.legacyPendingMergeTxPath(docPath)]) {
+        if (!txPaths.includes(candidate) && await adapter.exists(candidate)) txPaths.push(candidate);
+      }
     } else if (adapter.list && await adapter.exists("_marginstudy-recovery")) {
       const listed = await adapter.list("_marginstudy-recovery");
       for (const file of listed.files) {
-        if (/^_marginstudy-recovery\/pending-merge-tx-[a-f0-9]{12}\.json$/.test(file)) txPaths.push(file);
+        if (/^_marginstudy-recovery\/pending-merge-tx-(?:[a-f0-9]{12}|[a-f0-9]{64})\.json$/.test(file)) txPaths.push(file);
       }
     }
+    const seenCommittedTxIds = new Set<string>();
+    for (const meta of Object.values(this.docMeta)) {
+      const committed = (meta as DocMeta & { committedMergeTxIds?: string[] }).committedMergeTxIds;
+      if (Array.isArray(committed)) for (const id of committed) seenCommittedTxIds.add(id);
+    }
+    const loadedTxs: { txPath: string; rawTx: string; tx: {
+      txId: string;
+      docPath: string;
+      sidecarPath: string;
+      expectedSidecarHash: string;
+      previousDiskRaw: string | null;
+      protectionPath: string;
+      localIds: string[];
+      mergeConflictIdMap: Record<string, string>;
+      mergeProcessedPens?: Record<string, { finalPenId: string; bindingId: string; oldHostId?: string; reason?: string }>;
+      unbindEvents: { dedupeKey: string; penId: string; oldHostId: string; reason: string; detail: string }[];
+    } }[] = [];
     for (const txPath of txPaths) {
-      let tx: {
-        txId: string;
-        docPath: string;
-        sidecarPath: string;
-        expectedSidecarHash: string;
-        previousDiskRaw: string | null;
-        protectionPath: string;
-        localIds: string[];
-        mergeConflictIdMap: Record<string, string>;
-        mergeProcessedPens?: Record<string, { finalPenId: string; bindingId: string; oldHostId?: string; reason?: string }>;
-        unbindEvents: { dedupeKey: string; penId: string; oldHostId: string; reason: string; detail: string }[];
-      };
-      try { tx = JSON.parse(await adapter.read(txPath)); }
-      catch { await adapter.remove?.(txPath).catch(() => {}); continue; }
-      if (!tx || typeof tx.docPath !== "string" || typeof tx.sidecarPath !== "string") {
-        await adapter.remove?.(txPath).catch(() => {}); continue;
+      let rawTx: string;
+      try { rawTx = await adapter.read(txPath); }
+      catch (readError) {
+        this.report("读取待恢复合并事务失败，已保留原文件：" + txPath, readError);
+        continue;
       }
-      const diskText = await adapter.exists(tx.sidecarPath) ? await adapter.read(tx.sidecarPath) : null;
+      let tx: (typeof loadedTxs)[number]["tx"];
+      try { tx = JSON.parse(rawTx); }
+      catch (parseError) {
+        const quarantinePath = `${txPath}.quarantine-${Date.now()}`;
+        try { await adapter.write(quarantinePath, rawTx); } catch { /* retain original */ }
+        this.report("待恢复合并事务解析失败，已保留原文件并隔离副本：" + quarantinePath, parseError);
+        continue;
+      }
+      if (!tx || typeof tx.docPath !== "string" || typeof tx.sidecarPath !== "string") {
+        const quarantinePath = `${txPath}.quarantine-${Date.now()}`;
+        try { await adapter.write(quarantinePath, rawTx); } catch { /* retain original */ }
+        this.report("待恢复合并事务结构无效，已保留原文件并隔离副本：" + quarantinePath, new Error("invalid pending merge tx shape"));
+        continue;
+      }
+      if (docPath && tx.docPath !== docPath) continue;
+      loadedTxs.push({ txPath, rawTx, tx });
+    }
+    // Prefer branches whose docPath is currently registered in this.documents so two-branch recovery is deterministic.
+    const registeredPaths = new Set(this.documents.map(doc => doc.path));
+    const txIdCounts = new Map<string, number>();
+    for (const entry of loadedTxs) if (entry.tx.txId) txIdCounts.set(entry.tx.txId, (txIdCounts.get(entry.tx.txId) ?? 0) + 1);
+    loadedTxs.sort((a, b) => Number(registeredPaths.has(b.tx.docPath)) - Number(registeredPaths.has(a.tx.docPath)) || a.tx.docPath.localeCompare(b.tx.docPath));
+    for (const { txPath, tx } of loadedTxs) {
+      const targetSidecar = this.sidecarPath(tx.docPath);
+      if (tx.sidecarPath !== targetSidecar || this.isRecoveryFilePath(targetSidecar)) {
+        this.annBlocked.add(tx.docPath);
+        this.report("待恢复合并事务侧车路径与文档不匹配或指向恢复类文件，已保留原文件：" + txPath, new Error("pending merge tx sidecarPath mismatch"));
+        continue;
+      }
+      const multiBranch = !!tx.txId && (txIdCounts.get(tx.txId) ?? 0) > 1;
+      const allEventsPresent = (tx.unbindEvents ?? []).every(ev =>
+        this.localEvents.some(item =>
+          item && item.kind === "conflict-merged" &&
+          Array.isArray(item.objectIds) && item.objectIds.includes(ev.penId) &&
+          item.detail === ev.detail
+        )
+      );
+      if (tx.txId && seenCommittedTxIds.has(tx.txId) && allEventsPresent) {
+        continue;
+      }
+      const diskText = await adapter.exists(targetSidecar) ? await adapter.read(targetSidecar) : null;
       let diskValid = false;
       if (diskText !== null) {
         try {
@@ -1211,14 +1657,21 @@ export class Store {
         const keySet = new Set<string>(meta.unbindEventKeys ?? []);
         let addedEvents = false;
         for (const ev of tx.unbindEvents ?? []) {
-          if (keySet.has(ev.dedupeKey)) continue;
+          const hasEvent = this.localEvents.some(item =>
+            item && item.kind === "conflict-merged" &&
+            Array.isArray(item.objectIds) && item.objectIds.includes(ev.penId) &&
+            item.detail === ev.detail
+          );
+          if (keySet.has(ev.dedupeKey) && hasEvent) continue;
           keySet.add(ev.dedupeKey);
-          this.recordLocalEvent("conflict-merged", [ev.penId], ev.detail);
+          if (!hasEvent) this.recordLocalEvent("conflict-merged", [ev.penId], ev.detail);
           addedEvents = true;
         }
-        this.docMeta[tx.docPath] = { ...meta, mergeConflictIdMap: nextMap, mergeProcessedPens: nextProcessed, unbindEventKeys: [...keySet] };
+        const committedIds = new Set<string>((meta as DocMeta & { committedMergeTxIds?: string[] }).committedMergeTxIds ?? []);
+        if (tx.txId) committedIds.add(tx.txId);
+        this.docMeta[tx.docPath] = { ...meta, mergeConflictIdMap: nextMap, mergeProcessedPens: nextProcessed, unbindEventKeys: [...keySet], ...(committedIds.size ? { committedMergeTxIds: [...committedIds] } : {}) } as DocMeta;
         let mainPersisted = true;
-        if (addedEvents || Object.keys(tx.mergeConflictIdMap ?? {}).length || Object.keys(tx.mergeProcessedPens ?? {}).length) {
+        if (addedEvents || Object.keys(tx.mergeConflictIdMap ?? {}).length || Object.keys(tx.mergeProcessedPens ?? {}).length || !!tx.txId) {
           this.mainDirty = true; this.mainVersion++;
           if (!this.settings.diagnosticNoPersist) {
             try { await this.persistMain(false); }
@@ -1232,25 +1685,38 @@ export class Store {
             }
           }
         }
+        if (mainPersisted && tx.txId) seenCommittedTxIds.add(tx.txId);
         this.annBase.set(tx.docPath, diskText);
         this.annBlocked.delete(tx.docPath);
-        if (mainPersisted) await adapter.remove?.(txPath).catch(() => {});
+        if (mainPersisted) await this.deleteRecoveryIfProved("merge-tx", txPath, { multiBranch });
       } else if (diskValid && diskText !== tx.previousDiskRaw) {
-        // A valid third-party sidecar exists on disk: NEVER overwrite it with an older snapshot!
-        this.annBlocked.add(tx.docPath);
-        await adapter.remove?.(txPath).catch(() => {});
+        // A valid third-party or externally moved sidecar exists on disk: NEVER overwrite it AND NEVER drop uncommitted journal facts!
+        if (!await this.deleteRecoveryIfProved("merge-tx", txPath, { multiBranch })) {
+          this.annBlocked.add(tx.docPath);
+          this.report("待恢复合并事务与当前侧车摘要不一致，已保留事务日志等待处理：" + txPath, new Error("pending merge tx sidecar hash mismatch"));
+        }
       } else {
         // Roll back: sidecar was partially written or corrupted; restore previous disk raw and keep conflict state.
         let diskClean = true;
         try {
           if (tx.previousDiskRaw !== null) {
-            if (diskText !== tx.previousDiskRaw) await adapter.write(tx.sidecarPath, tx.previousDiskRaw);
+            if (diskText !== tx.previousDiskRaw) await adapter.write(targetSidecar, tx.previousDiskRaw);
           } else if (diskText !== null) {
-            await adapter.remove?.(tx.sidecarPath);
+            const safeSidecarTarget =
+              targetSidecar === this.sidecarPath(tx.docPath) &&
+              targetSidecar.endsWith(".mstudy.json") &&
+              !this.isRecoveryFilePath(targetSidecar) &&
+              !diskValid;
+            if (safeSidecarTarget) {
+              await adapter.remove?.(targetSidecar);
+            } else {
+              diskClean = false;
+              this.report("回滚目标侧车未通过安全断言，已保留文件：" + targetSidecar, new Error("unsafe sidecar rollback target"));
+            }
           }
         } catch { diskClean = false; }
         this.annBlocked.add(tx.docPath);
-        if (diskClean) await adapter.remove?.(txPath).catch(() => {});
+        if (diskClean) await this.deleteRecoveryIfProved("merge-tx-rolled-back", txPath);
       }
     }
   }
@@ -1452,7 +1918,7 @@ export class Store {
 
         if (strategy === "merge") {
           await this.ensureDir("_marginstudy-recovery");
-          await adapter.write(txPath, JSON.stringify({
+          const txPayload = {
             txId: uid("merge-tx"),
             docPath: path,
             sidecarPath: sidecar,
@@ -1463,19 +1929,20 @@ export class Store {
             mergeConflictIdMap: conflictIdMap,
             mergeProcessedPens: processedPens,
             unbindEvents: pendingUnbinds,
-          }));
+          };
+          await adapter.write(txPath, JSON.stringify({ ...txPayload, contentDigest: this.pendingTxDigest(txPayload) }));
         }
 
         // Tightened boundary check (Item 02): re-verify disk & local cache IMMEDIATELY after tx journal write
         // so any external write or local edit landing between last check and journal write aborts cleanly.
         const diskRightBeforeCommit = await adapter.exists(sidecar) ? await adapter.read(sidecar) : null;
         if (diskRightBeforeCommit !== disk) {
-          if (strategy === "merge") await adapter.remove?.(txPath).catch(() => {});
+          if (strategy === "merge") await this.deleteRecoveryIfProved("merge-tx", txPath);
           this.annBlocked.add(path);
           throw new LibrarySaveConflict("磁盘批注在写入事务日志后发生变化；已中止合并以保留最新磁盘版本");
         }
         if (version !== this.annDirty.get(path) || !same(localSnapshot, this.annCache.get(path) ?? [])) {
-          if (strategy === "merge") await adapter.remove?.(txPath).catch(() => {});
+          if (strategy === "merge") await this.deleteRecoveryIfProved("merge-tx", txPath);
           throw new Error("合并提交前本地批注发生变化；请重新处理冲突");
         }
 
@@ -1508,7 +1975,7 @@ export class Store {
               } catch {}
             }
           }
-          if (strategy === "merge" && diskClean) await adapter.remove?.(txPath).catch(() => {});
+          if (strategy === "merge" && diskClean) await this.deleteRecoveryIfProved("merge-tx-rolled-back", txPath);
           throw writeError;
         }
       });
@@ -1610,7 +2077,7 @@ export class Store {
           throw mainError;
         }
       }
-      if (strategy === "merge") await adapter.remove?.(txPath).catch(() => {});
+      if (strategy === "merge") await this.deleteRecoveryIfProved("merge-tx", txPath);
       this.annotationsChanged(path); this.changed();
     });
   }
@@ -2888,19 +3355,65 @@ export class Store {
   async renameDocument(oldPath: string, newPath: string): Promise<void> {
     if (oldPath === newPath) return;
     await this.flush();
-    const before = this.snapshot(); let movedSidecar = false, originalSidecarText: string | null = null;
+    const adapter = this.host.app.vault.adapter;
+    const newPendingPath = this.pendingAnnotationsPath(newPath);
+    const newTxPath = this.pendingMergeTxPath(newPath);
+    const readJsonIfExists = async (filePath: string): Promise<{ path: string; raw: string; parsed: any } | null> => {
+      if (!await adapter.exists(filePath)) return null;
+      const raw = await adapter.read(filePath);
+      try { return { path: filePath, raw, parsed: JSON.parse(raw) }; } catch { return { path: filePath, raw, parsed: null }; }
+    };
+    const findOwnedRecovery = async (candidates: string[], kind: "pending-annotations" | "merge-tx") => {
+      for (const candidate of candidates) {
+        const entry = await readJsonIfExists(candidate);
+        if (!entry?.parsed || entry.parsed.docPath !== oldPath) continue;
+        if (kind === "pending-annotations" && Array.isArray(entry.parsed.annotations)) return entry;
+        if (kind === "merge-tx" && typeof entry.parsed.sidecarPath === "string") return entry;
+      }
+      return null;
+    };
+    const pendingAnnMigration = await findOwnedRecovery([this.pendingAnnotationsPath(oldPath), this.legacyPendingAnnotationsPath(oldPath)], "pending-annotations");
+    const oldPendingPath = pendingAnnMigration?.path ?? this.pendingAnnotationsPath(oldPath);
+    const pendingTxMigration = await findOwnedRecovery([this.pendingMergeTxPath(oldPath), this.legacyPendingMergeTxPath(oldPath)], "merge-tx");
+    const oldTxPath = pendingTxMigration?.path ?? this.pendingMergeTxPath(oldPath);
+    const oldPendingDigest = pendingAnnMigration ? this.pendingAnnotationsDigest(oldPath, pendingAnnMigration.parsed.annotations) : undefined;
+    const oldTxDigest = pendingTxMigration ? this.pendingTxDigest(pendingTxMigration.parsed) : undefined;
+    const hadNewPendingBefore = await adapter.exists(newPendingPath);
+    const hadNewTxBefore = await adapter.exists(newTxPath);
+    if (newPendingPath !== oldPendingPath && hadNewPendingBefore) {
+      const existing = await readJsonIfExists(newPendingPath);
+      if (existing?.parsed && typeof existing.parsed.docPath === "string" && existing.parsed.docPath !== oldPath && existing.parsed.docPath !== newPath) {
+        throw new Error("目标路径存在其他文档的待保存恢复文件（哈希冲突），已保留原文件");
+      }
+    }
+    if (pendingTxMigration && newTxPath !== oldTxPath && hadNewTxBefore) {
+      const existing = await readJsonIfExists(newTxPath);
+      if (existing?.parsed && typeof existing.parsed.docPath === "string" && existing.parsed.docPath !== oldPath && existing.parsed.docPath !== newPath) {
+        throw new Error("目标路径存在其他文档的待恢复合并事务（哈希冲突），已保留原文件");
+      }
+    }
+    const before = this.snapshot();
+    let movedSidecar = false, originalSidecarText: string | null = null, preRewriteSidecarText: string | null = null, notifiedListeners = false;
+    let wroteNewPending = false, writtenNewPendingDigest: string | undefined, writtenNewPendingWriterId: string | undefined, writtenNewPendingTxId: string | undefined;
+    let supersededOldPending: string | null = null, wroteNewTx = false, writtenNewTxDigest: string | undefined, writtenNewTxId: string | undefined, supersededOldTx: string | null = null;
+    let flushedNewAnns: Annotation[] | undefined;
     try {
     await this.enqueue(async () => {
       // Disk operations share the save queue; no flush can recreate a sidecar while it moves.
       await Promise.all([...this.annLoads.values()]);
-      const adapter = this.host.app.vault.adapter, oldSidecar = this.sidecarPath(oldPath), newSidecar = this.sidecarPath(newPath);
+      const oldSidecar = this.sidecarPath(oldPath), newSidecar = this.sidecarPath(newPath);
       if (await adapter.exists(oldSidecar)) {
         if (await adapter.exists(newSidecar)) throw new Error("目标路径已有批注，已保留两份文件，需先处理");
         originalSidecarText = await adapter.read(oldSidecar);
+        const slash = newSidecar.lastIndexOf("/");
+        if (slash > 0 && typeof adapter.mkdir === "function") {
+          await this.ensureDir(newSidecar.slice(0, slash));
+        }
         await adapter.rename(oldSidecar, newSidecar);
         movedSidecar = true;
       }
       const text = await adapter.exists(newSidecar) ? await adapter.read(newSidecar) : null;
+      preRewriteSidecarText = originalSidecarText ?? text;
       const anns = this.annCache.get(oldPath) ?? (text !== null ? await this.loadAnnotations(newPath) : undefined);
       // Finish all I/O first. Cache, references and live readers then change in one synchronous step.
       this.mutate("移动文档", () => {
@@ -2919,31 +3432,170 @@ export class Store {
             if (tab.state && typeof tab.state === "object") { tab.state.filePath = newPath; if (tab.state.file === oldPath) tab.state.file = newPath; }
           }
         }
-        if (this.docMeta[oldPath]) { this.docMeta[newPath] = this.docMeta[oldPath]; delete this.docMeta[oldPath]; }
+        if (this.docMeta[oldPath]) {
+          const movedMeta = this.docMeta[oldPath];
+          if (Array.isArray(movedMeta.unbindEventKeys)) {
+            const oldPrefix = `${oldPath}\u0000`, newPrefix = `${newPath}\u0000`;
+            movedMeta.unbindEventKeys = movedMeta.unbindEventKeys.map(key => key.startsWith(oldPrefix) ? newPrefix + key.slice(oldPrefix.length) : key);
+          }
+          this.docMeta[newPath] = movedMeta;
+          delete this.docMeta[oldPath];
+        }
       });
       if (anns) {
         this.annCache.delete(oldPath); this.annBase.delete(oldPath); this.annDirty.delete(oldPath);
         this.bumpAnnotationsRevision(oldPath);
         this.annCache.set(newPath, anns); this.annBase.set(newPath, text);
         for (const annotation of anns) annotation.docPath = newPath;
+        flushedNewAnns = clone(anns);
         this.saveAnnotationsDebounced(newPath, anns);
       }
+      notifiedListeners = true;
       for (const listener of this.documentRenameListeners) {
         try { listener(oldPath, newPath); } catch (error) { console.error(error); }
       }
     });
     await this.flush();
+    if (flushedNewAnns) {
+      writtenNewPendingDigest = this.pendingAnnotationsDigest(newPath, flushedNewAnns);
+      writtenNewPendingWriterId = "device-rolling-000001";
+    }
+    if (pendingAnnMigration) {
+      const migratedAnns = (pendingAnnMigration.parsed.annotations as Annotation[]).map(ann =>
+        ann && typeof ann === "object" && ann.docPath === oldPath ? { ...ann, docPath: newPath } : ann
+      );
+      const expectedDigest = this.pendingAnnotationsDigest(newPath, migratedAnns);
+      const migratedWriterId = typeof pendingAnnMigration.parsed.writerId === "string" && pendingAnnMigration.parsed.writerId
+        ? pendingAnnMigration.parsed.writerId : "device-rolling-000001";
+      const migratedPendingTxId = typeof pendingAnnMigration.parsed.txId === "string" && pendingAnnMigration.parsed.txId ? pendingAnnMigration.parsed.txId : uid("pending");
+      const migratedPending = {
+        ...clone(pendingAnnMigration.parsed),
+        txId: migratedPendingTxId,
+        docPath: newPath,
+        writerId: migratedWriterId,
+        annotations: migratedAnns,
+        contentDigest: expectedDigest,
+      };
+      await this.ensureDir("_marginstudy-recovery");
+      await adapter.write(newPendingPath, JSON.stringify(migratedPending));
+      wroteNewPending = true;
+      writtenNewPendingDigest = expectedDigest;
+      writtenNewPendingWriterId = migratedWriterId;
+      writtenNewPendingTxId = migratedPendingTxId;
+      const verified = JSON.parse(await adapter.read(newPendingPath));
+      const actualDigest = verified && typeof verified.docPath === "string" && Array.isArray(verified.annotations)
+        ? this.pendingAnnotationsDigest(verified.docPath, verified.annotations) : "";
+      if (!verified || verified.docPath !== newPath || verified.contentDigest !== expectedDigest || actualDigest !== expectedDigest) {
+        throw new Error("迁移待保存恢复文件摘要校验失败，已保留原文件");
+      }
+      if (newPendingPath !== oldPendingPath && await adapter.exists(oldPendingPath)) {
+        supersededOldPending = await this.supersedeRecoveryFile(oldPendingPath, newPendingPath, expectedDigest);
+      }
+    }
+    if (pendingTxMigration) {
+      const oldPrefix = `${oldPath}\u0000`, newPrefix = `${newPath}\u0000`;
+      const oldSidecarStr = this.sidecarPath(oldPath), newSidecarStr = this.sidecarPath(newPath);
+      const currentNewSidecarText = await adapter.exists(newSidecarStr) ? await adapter.read(newSidecarStr) : null;
+      const migratedTxBase = {
+        ...clone(pendingTxMigration.parsed),
+        docPath: newPath,
+        sidecarPath: pendingTxMigration.parsed.sidecarPath === oldSidecarStr ? newSidecarStr : pendingTxMigration.parsed.sidecarPath,
+        expectedSidecarHash: preRewriteSidecarText !== null && currentNewSidecarText !== null && pendingTxMigration.parsed.expectedSidecarHash === sha(preRewriteSidecarText)
+          ? sha(currentNewSidecarText)
+          : pendingTxMigration.parsed.expectedSidecarHash,
+        unbindEvents: Array.isArray(pendingTxMigration.parsed.unbindEvents)
+          ? pendingTxMigration.parsed.unbindEvents.map((ev: any) =>
+              ev && typeof ev === "object" && typeof ev.dedupeKey === "string" && ev.dedupeKey.startsWith(oldPrefix)
+                ? { ...ev, dedupeKey: newPrefix + ev.dedupeKey.slice(oldPrefix.length) }
+                : ev
+            )
+          : pendingTxMigration.parsed.unbindEvents,
+      };
+      const expectedTxDigest = this.pendingTxDigest(migratedTxBase);
+      const migratedTx = { ...migratedTxBase, contentDigest: expectedTxDigest };
+      await this.ensureDir("_marginstudy-recovery");
+      await adapter.write(newTxPath, JSON.stringify(migratedTx));
+      wroteNewTx = true;
+      writtenNewTxDigest = expectedTxDigest;
+      writtenNewTxId = typeof migratedTx.txId === "string" ? migratedTx.txId : undefined;
+      const verifiedTx = JSON.parse(await adapter.read(newTxPath));
+      const actualTxDigest = verifiedTx && typeof verifiedTx.docPath === "string" && typeof verifiedTx.sidecarPath === "string"
+        ? this.pendingTxDigest(verifiedTx) : "";
+      if (!verifiedTx || verifiedTx.docPath !== newPath || verifiedTx.sidecarPath !== migratedTx.sidecarPath ||
+        verifiedTx.contentDigest !== expectedTxDigest || actualTxDigest !== expectedTxDigest) {
+        throw new Error("迁移待恢复合并事务摘要校验失败，已保留原文件");
+      }
+      if (newTxPath !== oldTxPath && await adapter.exists(oldTxPath)) {
+        supersededOldTx = await this.supersedeRecoveryFile(oldTxPath, newTxPath, expectedTxDigest);
+      }
+    }
     } catch (error) {
       try { await this.writeRecovery("document-migration-failed", { oldPath, newPath, error: String(error), snapshot: before, oldSidecar: this.sidecarPath(oldPath), oldSidecarText: originalSidecarText, newSidecar: this.sidecarPath(newPath) }); } catch { /* retain the original error */ }
-      if (movedSidecar) try {
-        const adapter = this.host.app.vault.adapter, from = this.sidecarPath(newPath), to = this.sidecarPath(oldPath);
-        if (await adapter.exists(from) && !await adapter.exists(to)) await adapter.rename(from, to);
-        if (originalSidecarText !== null) await adapter.write(to, originalSidecarText);
-        this.annCache.delete(newPath); this.bumpAnnotationsRevision(newPath); this.annBase.delete(newPath); this.annDirty.delete(newPath);
-        this.annCache.delete(oldPath); this.bumpAnnotationsRevision(oldPath); this.annBase.delete(oldPath); this.annDirty.delete(oldPath);
+      try {
+        const from = this.sidecarPath(newPath), to = this.sidecarPath(oldPath);
+        if (movedSidecar) {
+          if (await adapter.exists(from)) {
+            if (!await adapter.exists(to)) await adapter.rename(from, to);
+            else if (typeof adapter.remove === "function") await adapter.remove(from);
+          }
+          if (originalSidecarText !== null) await adapter.write(to, originalSidecarText);
+        } else if (preRewriteSidecarText !== null && await adapter.exists(from)) {
+          // Host (e.g. TFolder) had already moved the sidecar before renameDocument; restore its pre-rewrite bytes.
+          await adapter.write(from, preRewriteSidecarText);
+        }
+        const oldPendingWriterId = typeof pendingAnnMigration?.parsed?.writerId === "string" ? pendingAnnMigration.parsed.writerId : "device-rolling-000001";
+        const oldTxId = typeof pendingTxMigration?.parsed?.txId === "string" ? pendingTxMigration.parsed.txId : undefined;
+        if (supersededOldPending && await adapter.exists(supersededOldPending)) {
+          if (!await adapter.exists(oldPendingPath)) await adapter.rename(supersededOldPending, oldPendingPath);
+          else await this.deleteRecoveryIfProved("rollback-artifact", supersededOldPending, {
+            expectedDocPath: oldPath, expectedWriterId: oldPendingWriterId,
+            expectedArtifactDigest: oldPendingDigest, expectedArtifactKind: "pending-annotations",
+            expectedRestoredPath: oldPendingPath, expectedRestoredDigest: oldPendingDigest, restoredKind: "pending-annotations",
+          });
+        }
+        if (pendingAnnMigration && (supersededOldPending || newPendingPath === oldPendingPath)) {
+          await adapter.write(oldPendingPath, pendingAnnMigration.raw);
+        }
+        if (newPendingPath !== oldPendingPath && (wroteNewPending || (!hadNewPendingBefore && !!writtenNewPendingDigest)) && await adapter.exists(newPendingPath)) {
+          await this.deleteRecoveryIfProved("rollback-artifact", newPendingPath, {
+            expectedDocPath: newPath, expectedWriterId: writtenNewPendingWriterId, expectedTxId: writtenNewPendingTxId,
+            expectedArtifactDigest: writtenNewPendingDigest, expectedArtifactKind: "pending-annotations",
+            ...(pendingAnnMigration ? { expectedRestoredPath: oldPendingPath, expectedRestoredDigest: oldPendingDigest, restoredKind: "pending-annotations" as const } : {}),
+          });
+        }
+        if (supersededOldTx && await adapter.exists(supersededOldTx)) {
+          if (!await adapter.exists(oldTxPath)) await adapter.rename(supersededOldTx, oldTxPath);
+          else await this.deleteRecoveryIfProved("rollback-artifact", supersededOldTx, {
+            expectedDocPath: oldPath, expectedTxId: oldTxId,
+            expectedArtifactDigest: oldTxDigest, expectedArtifactKind: "merge-tx",
+            expectedRestoredPath: oldTxPath, expectedRestoredDigest: oldTxDigest, restoredKind: "merge-tx",
+          });
+        }
+        if (pendingTxMigration && (supersededOldTx || newTxPath === oldTxPath)) {
+          await adapter.write(oldTxPath, pendingTxMigration.raw);
+        }
+        if (newTxPath !== oldTxPath && wroteNewTx && await adapter.exists(newTxPath)) {
+          await this.deleteRecoveryIfProved("rollback-artifact", newTxPath, {
+            expectedDocPath: newPath, expectedTxId: writtenNewTxId,
+            expectedArtifactDigest: writtenNewTxDigest, expectedArtifactKind: "merge-tx",
+            ...(pendingTxMigration ? { expectedRestoredPath: oldTxPath, expectedRestoredDigest: oldTxDigest, restoredKind: "merge-tx" as const } : {}),
+          });
+        }
+        this.annCache.delete(newPath); this.bumpAnnotationsRevision(newPath); this.annBase.delete(newPath); this.annDirty.delete(newPath); this.annBlocked.delete(newPath);
+        this.annCache.delete(oldPath); this.bumpAnnotationsRevision(oldPath); this.annBase.delete(oldPath); this.annDirty.delete(oldPath); this.annBlocked.delete(oldPath);
         for (const [path, annotations] of before.annotations) { this.annCache.set(path, clone(annotations)); this.bumpAnnotationsRevision(path); this.annBase.set(path, await adapter.exists(this.sidecarPath(path)) ? await adapter.read(this.sidecarPath(path)) : null); }
       } catch { /* recovery record above describes the partial migration */ }
       this.restoreSnapshot(before);
+      // Avoid redundant sidecar rewrites during rollback flush; persist rolled-back main data durably so cold restart has no split-brain.
+      for (const [path] of before.annotations) this.annDirty.delete(path);
+      this.annDirty.delete(newPath);
+      this.mainDirty = true; this.mainVersion++;
+      try { await this.flush(); } catch { /* retain original migration error */ }
+      if (notifiedListeners) {
+        for (const listener of this.documentRenameListeners) {
+          try { listener(newPath, oldPath); } catch (rollbackError) { console.error(rollbackError); }
+        }
+      }
       throw error;
     }
   }

@@ -19,5 +19,7 @@
 - `desktop-import-fixture.txt` 驱动桌面导入界面和 PDF 选区，调用隔离文件系统。
 - `build-determinism-acceptance.mjs` 无头校验构建产物零路径泄露与跨路径 symlink 构建哈希一致性。
 - `annotation-merge-d4/` 存放 GAP-07b-1 D4 批注冲突合并的 7 项复现回归夹具与共享支持。
+- `annotation-refs/` 存放 GAP-07b-2 B4 孤儿 `inkLayerId` 与 B5 文档改名/移动（含 `invariant-r/` 不变量 R 磁盘级证明：证明不成立时必须保留原件，证明成立时允许删除且冷启事实恒为 1 无重复；不得把判据简化为「保留 N 次冷启」）的 30 项复现回归夹具与共享支持。
+- `recovery-delete-guard.mjs` 基于 TypeScript AST 扫描 `src/**`（精确调用点三元组白名单，禁止方法级豁免）与运行时哨兵，强制所有批注恢复文件删除均经 `canDeleteRecovery` / `deleteRecoveryIfProved` 单一闸门。
 
 [PROTOCOL]: Update this header on change, then check AGENTS.md
