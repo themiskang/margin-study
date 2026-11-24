@@ -852,13 +852,80 @@ export async function checkReferenceOpacityRuntime(baseDir = root, expectedKinds
         };
       }
 
+      const describeEl = (el: Element) => {
+        const cls = [...el.classList].map(c => "." + c).join("");
+        const kind = el.getAttribute("data-overlay-kind");
+        const ref = el.getAttribute("data-ms-reference");
+        return el.tagName.toLowerCase() + cls + (kind ? \`[data-overlay-kind="\${kind}"]\` : "") + (ref ? \`[data-ms-reference="\${ref}"]\` : "");
+      };
+
+      const computeFullChain = (leaf: Element) => {
+        let effectiveAlpha = 1;
+        const chainNodes: { selector: string; opacity: number }[] = [];
+        for (let cur: Element | null = leaf; cur; cur = cur.parentElement) {
+          const st = getComputedStyle(cur);
+          const rawOp = parseFloat(st.opacity);
+          let nodeOp = Number.isFinite(rawOp) ? rawOp : 1;
+          if (cur instanceof SVGElement) {
+            const sop = parseFloat(st.strokeOpacity);
+            if (Number.isFinite(sop) && sop < 1) nodeOp *= sop;
+            const fop = parseFloat(st.fillOpacity);
+            if (Number.isFinite(fop) && fop < 1) nodeOp *= fop;
+          }
+          effectiveAlpha *= nodeOp;
+          chainNodes.unshift({ selector: describeEl(cur), opacity: nodeOp });
+        }
+        return {
+          effectiveAlpha,
+          chainNodes,
+          chain: chainNodes.map(n => \`\${n.selector}(\${n.opacity})\`).join(" > "),
+        };
+      };
+
+      // Real production PDF & Word ancestor chains (so ancestor CSS opacity rules are exercised in Chromium)
+      const pdfRoot = document.createElement("div");
+      pdfRoot.className = "ms-reader-root ms-reader-pdf";
+      const pdfScroll = document.createElement("div");
+      pdfScroll.className = "ms-scroll";
+      const pdfPage = document.createElement("div");
+      pdfPage.className = "ms-page";
+      pdfPage.style.cssText = "position:relative;width:500px;height:700px;";
+      const host = document.createElement("div");
+      host.className = "ms-ann-layer";
+      host.style.cssText = "position:relative;width:500px;height:700px;";
+      pdfPage.appendChild(host);
+      pdfScroll.appendChild(pdfPage);
+      pdfRoot.appendChild(pdfScroll);
+      document.body.appendChild(pdfRoot);
+
+      const wordRoot = document.createElement("div");
+      wordRoot.className = "ms-reader-root";
+      const wordScroll = document.createElement("div");
+      wordScroll.className = "ms-scroll ms-word-scroll";
+      const wordBody = document.createElement("div");
+      wordBody.className = "ms-word-body markdown-rendered";
+      wordBody.style.cssText = "position:relative;width:500px;height:400px;";
+      wordScroll.appendChild(wordBody);
+      wordRoot.appendChild(wordScroll);
+      document.body.appendChild(wordRoot);
+
+      // Non-reference sibling element (must never affect reference effectiveAlpha)
+      const otherEl = document.createElement("div");
+      otherEl.className = "ms-other";
+      otherEl.style.cssText = "width:40px;height:20px;";
+      otherEl.textContent = "other";
+      wordBody.appendChild(otherEl);
+
       const runCanvasPass = (reference: boolean, mode = "clean") => {
         drawLog.length = 0;
         const width = 200, height = 100, strokeWidth = 12;
         const canvas = document.createElement("canvas");
+        canvas.className = "ms-ink-raster";
         canvas.width = width;
         canvas.height = height;
+        canvas.style.cssText = "width:200px;height:100px;";
         canvas.dataset.msCanvasProbe = "1";
+        host.appendChild(canvas);
         const ctx = canvas.getContext("2d")!;
         const x0 = 20, x1 = 180, cy = 50;
         const strokes = [[{ x: x0 / width, y: cy / height }, { x: x1 / width, y: cy / height }]];
@@ -908,6 +975,7 @@ export async function checkReferenceOpacityRuntime(baseDir = root, expectedKinds
         let excludedEdgePixels = 0;
         let interiorMin = 255;
         let interiorMax = 0;
+        let interiorSum = 0;
         const badInterior: { x: number; y: number; alpha: number }[] = [];
         for (let y = 0; y < height; y++) {
           for (let x = 0; x < width; x++) {
@@ -916,6 +984,7 @@ export async function checkReferenceOpacityRuntime(baseDir = root, expectedKinds
             const dist = Math.hypot(x - clampedX, y - cy);
             if (dist < coreDist) {
               interiorTotal++;
+              interiorSum += a;
               if (a < interiorMin) interiorMin = a;
               if (a > interiorMax) interiorMax = a;
               if (a >= minA && a <= maxA) {
@@ -928,7 +997,11 @@ export async function checkReferenceOpacityRuntime(baseDir = root, expectedKinds
             }
           }
         }
+        const domChain = computeFullChain(canvas);
         const interiorRatio = interiorTotal > 0 ? interiorInRange / interiorTotal : 0;
+        const pixelMeanAlpha = interiorTotal > 0 ? (interiorSum / interiorTotal) / 255 : 0;
+        const combinedEffectiveAlpha = domChain.effectiveAlpha * pixelMeanAlpha;
+        canvas.remove();
         return {
           log: [...drawLog],
           samples,
@@ -938,15 +1011,16 @@ export async function checkReferenceOpacityRuntime(baseDir = root, expectedKinds
           interiorRange: [interiorMin, interiorMax],
           excludedEdgePixels,
           badInterior,
+          domAncestorAlpha: domChain.effectiveAlpha,
+          domChain: domChain.chain,
+          domChainNodes: domChain.chainNodes,
+          pixelMeanAlpha,
+          combinedEffectiveAlpha,
         };
       };
 
       const canvasRef = runCanvasPass(true, ${JSON.stringify(options?.canvasRefMode ?? "clean")});
       const canvasActive = runCanvasPass(false, "clean");
-
-      const host = document.createElement("div");
-      host.style.cssText = "position:relative;width:500px;height:700px;";
-      document.body.appendChild(host);
 
       const proto = BaseAnnotationController.prototype as any;
       const fakeCtrl = {
@@ -1035,17 +1109,30 @@ export async function checkReferenceOpacityRuntime(baseDir = root, expectedKinds
       mark(maskEl, maskAnn);
       host.appendChild(maskEl);
 
-      // 7. html-range (HTML reference range with visible .ms-html-reference-segment child)
+      // 7. html-range (HTML reference range inside real Word ancestor chain .ms-reader-root > .ms-word-scroll > .ms-word-body)
       const htmlAnn = { id: "ref-html", type: "highlight", documentNotebookId: "nb-ref" };
       const htmlRefEl = document.createElement("div");
       htmlRefEl.className = "ms-ann ms-html-reference-range ms-document-notebook-reference";
-      htmlRefEl.style.cssText = "position:absolute;left:20px;top:300px;width:120px;height:24px;";
+      htmlRefEl.style.cssText = "position:absolute;left:20px;top:30px;width:120px;height:24px;";
       const htmlSeg = document.createElement("span");
       htmlSeg.className = "ms-html-reference-segment";
       htmlSeg.style.cssText = "left:0;top:0;width:100px;height:18px;background:#ffd54f;";
       htmlRefEl.appendChild(htmlSeg);
       mark(htmlRefEl, htmlAnn);
-      host.appendChild(htmlRefEl);
+      wordBody.appendChild(htmlRefEl);
+
+      // 7b. Word reference ink pen inside real Word ancestor chain
+      const wordInkAnn = { id: "ref-word-ink", type: "pen", inkLayerId: "layer-ref", documentNotebookId: "default" };
+      const wordInkEl = document.createElement("div");
+      wordInkEl.className = "ms-ann ms-ann-pen ms-ink-reference";
+      wordInkEl.style.cssText = "position:absolute;left:20px;top:80px;width:100px;height:40px;";
+      const wordInkSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      wordInkSvg.setAttribute("class", "ms-pen-render");
+      wordInkSvg.setAttribute("width", "100");
+      wordInkSvg.setAttribute("height", "40");
+      wordInkEl.appendChild(wordInkSvg);
+      mark(wordInkEl, wordInkAnn);
+      wordBody.appendChild(wordInkEl);
 
       // 8. region-excerpt (reference notebook region excerpt .ms-ann.ms-ann-region)
       const regionAnn = { id: "ref-region", type: "region", documentNotebookId: "nb-ref" };
@@ -1055,13 +1142,6 @@ export async function checkReferenceOpacityRuntime(baseDir = root, expectedKinds
       mark(regionEl, regionAnn);
       host.appendChild(regionEl);
 
-      const describeEl = (el: Element) => {
-        const cls = [...el.classList].map(c => "." + c).join("");
-        const kind = el.getAttribute("data-overlay-kind");
-        const ref = el.getAttribute("data-ms-reference");
-        return el.tagName.toLowerCase() + cls + (kind ? \`[data-overlay-kind="\${kind}"]\` : "") + (ref ? \`[data-ms-reference="\${ref}"]\` : "");
-      };
-
       const isVisiblePainted = (el: Element) => {
         const st = getComputedStyle(el);
         if (st.display === "none" || st.visibility === "hidden") return false;
@@ -1069,7 +1149,7 @@ export async function checkReferenceOpacityRuntime(baseDir = root, expectedKinds
         return rect.width > 0 && rect.height > 0;
       };
 
-      /** Collect painted leaf nodes under a marked reference root and compute effectiveAlpha = Π(opacity) from root->leaf. */
+      /** Collect painted leaf nodes under a marked reference root and compute effectiveAlpha = Π(opacity) from documentElement->leaf. */
       const collectLeaves = (rootEl: Element) => {
         const leaves: Element[] = [];
         const visit = (el: Element) => {
@@ -1081,25 +1161,13 @@ export async function checkReferenceOpacityRuntime(baseDir = root, expectedKinds
         visit(rootEl);
         if (!leaves.length) leaves.push(rootEl);
         return leaves.map(leaf => {
-          let effectiveAlpha = 1;
-          const chain: string[] = [];
-          for (let cur: Element | null = leaf; cur; cur = cur === rootEl ? null : cur.parentElement) {
-            const st = getComputedStyle(cur);
-            const op = parseFloat(st.opacity);
-            effectiveAlpha *= Number.isFinite(op) ? op : 1;
-            if (cur instanceof SVGElement) {
-              const sop = parseFloat(st.strokeOpacity);
-              if (Number.isFinite(sop) && sop < 1) effectiveAlpha *= sop;
-              const fop = parseFloat(st.fillOpacity);
-              if (Number.isFinite(fop) && fop < 1) effectiveAlpha *= fop;
-            }
-            chain.unshift(describeEl(cur));
-          }
+          const full = computeFullChain(leaf);
           return {
             kind: rootEl.getAttribute("data-ms-reference") || "",
-            chain: chain.join(" > "),
+            chain: full.chain,
+            chainNodes: full.chainNodes,
             leafOpacity: parseFloat(getComputedStyle(leaf).opacity),
-            effectiveAlpha,
+            effectiveAlpha: full.effectiveAlpha,
           };
         });
       };
@@ -1201,15 +1269,15 @@ export async function checkReferenceOpacityRuntime(baseDir = root, expectedKinds
       const ALPHA_TOL = 1e-6;
       for (const leaf of probe.liveLeaves) {
         if (Math.abs(leaf.effectiveAlpha - TARGET_OPACITY) > ALPHA_TOL) {
-          errors.push(`live [${leaf.kind}] ${leaf.chain} effectiveAlpha=${leaf.effectiveAlpha} !== ${TARGET_OPACITY_STR}`);
+          errors.push(`live [${leaf.kind}] effectiveAlpha=${leaf.effectiveAlpha} !== ${TARGET_OPACITY_STR} | fullChain(${leaf.chainNodes?.length ?? 0}): ${leaf.chain}`);
         }
       }
       for (const leaf of probe.fallbackLeaves) {
         if (Math.abs(leaf.effectiveAlpha - TARGET_OPACITY) > ALPHA_TOL) {
-          errors.push(`fallback [${leaf.kind}] ${leaf.chain} effectiveAlpha=${leaf.effectiveAlpha} !== ${TARGET_OPACITY_STR}`);
+          errors.push(`fallback [${leaf.kind}] effectiveAlpha=${leaf.effectiveAlpha} !== ${TARGET_OPACITY_STR} | fullChain(${leaf.chainNodes?.length ?? 0}): ${leaf.chain}`);
         }
       }
-      // Canvas draw-call interception + full interior pixel sampling (no maxPixelAlpha!)
+      // Canvas draw-call interception + full interior pixel sampling + DOM-vs-pixel cross-layer consistency
       const refLog = probe.canvasRef?.log ?? [];
       const activeLog = probe.canvasActive?.log ?? [];
       if (!refLog.length) errors.push("canvas reference pass recorded 0 draw calls");
@@ -1231,6 +1299,15 @@ export async function checkReferenceOpacityRuntime(baseDir = root, expectedKinds
         const detail = (probe.canvasRef?.badInterior ?? []).slice(0, 5).map(p => `(${p.x},${p.y})=${p.alpha}`).join(", ");
         errors.push(`canvas reference interior pixel ratio=${probe.canvasRef?.interiorRatio} !== 1.0 (inRange=${probe.canvasRef?.interiorInRange}/${probe.canvasRef?.interiorTotal}, failRatio=${failPct}, expected=[87,91], sampleBad=[${detail}])`);
       }
+      const refDomOk = Math.abs((probe.canvasRef?.domAncestorAlpha ?? 0) - 1) <= ALPHA_TOL;
+      const refPixelOk = refSamples.length >= 9 && badRefSamples.length === 0 && (probe.canvasRef?.interiorRatio ?? 0) === 1;
+      const refCombined = probe.canvasRef?.combinedEffectiveAlpha ?? 0;
+      if (!refDomOk) {
+        errors.push(`canvas reference DOM ancestor alpha=${probe.canvasRef?.domAncestorAlpha} !== 1 (combinedEffectiveAlpha=${refCombined.toFixed(6)}, expected≈${TARGET_OPACITY_STR}) | fullChain(${probe.canvasRef?.domChainNodes?.length ?? 0}): ${probe.canvasRef?.domChain}`);
+      }
+      if (refDomOk !== refPixelOk || Math.abs(refCombined - TARGET_OPACITY) > (2.5 / 255)) {
+        errors.push(`canvas reference 层间合成不一致: domAncestorOk=${refDomOk} (domAlpha=${probe.canvasRef?.domAncestorAlpha}) vs pixelLayerOk=${refPixelOk} (pixelMeanAlpha=${(probe.canvasRef?.pixelMeanAlpha ?? 0).toFixed(6)}), combinedEffectiveAlpha=${refCombined.toFixed(6)} !== ${TARGET_OPACITY_STR} | fullChain(${probe.canvasRef?.domChainNodes?.length ?? 0}): ${probe.canvasRef?.domChain}`);
+      }
 
       if (!activeLog.length) errors.push("canvas active pass recorded 0 draw calls");
       for (const rec of activeLog) {
@@ -1249,6 +1326,12 @@ export async function checkReferenceOpacityRuntime(baseDir = root, expectedKinds
       if ((probe.canvasActive?.interiorRatio ?? 0) < 1) {
         const failPct = (1 - (probe.canvasActive?.interiorRatio ?? 0)).toFixed(4);
         errors.push(`canvas active interior pixel ratio=${probe.canvasActive?.interiorRatio} !== 1.0 (inRange=${probe.canvasActive?.interiorInRange}/${probe.canvasActive?.interiorTotal}, failRatio=${failPct}, expected=[253,255])`);
+      }
+      const actDomOk = Math.abs((probe.canvasActive?.domAncestorAlpha ?? 0) - 1) <= ALPHA_TOL;
+      const actPixelOk = actSamples.length >= 9 && badActSamples.length === 0 && (probe.canvasActive?.interiorRatio ?? 0) === 1;
+      const actCombined = probe.canvasActive?.combinedEffectiveAlpha ?? 0;
+      if (!actDomOk || actDomOk !== actPixelOk || Math.abs(actCombined - 1) > (2.5 / 255)) {
+        errors.push(`canvas active 层间合成不一致: domAncestorOk=${actDomOk} (domAlpha=${probe.canvasActive?.domAncestorAlpha}) vs pixelLayerOk=${actPixelOk} (pixelMeanAlpha=${(probe.canvasActive?.pixelMeanAlpha ?? 0).toFixed(6)}), combinedEffectiveAlpha=${actCombined.toFixed(6)} !== 1 | fullChain(${probe.canvasActive?.domChainNodes?.length ?? 0}): ${probe.canvasActive?.domChain}`);
       }
     }
     return { passed: errors.length === 0, probe, errors };
