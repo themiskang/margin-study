@@ -328,6 +328,9 @@ export class HtmlAnnotationController extends BaseAnnotationController {
   protected flushPen(commitDrawing = true): void { this.pen?.flush(commitDrawing); }
   protected onPenToolChanged(): void { this.pen?.setTool(this.penTool); }
 
+  protected clearPenSelections(): void {
+    this.pen?.clearSelection();
+  }
   protected teardownPen(): void {
     if (this.pen) {
       this.pen.setActive(false);

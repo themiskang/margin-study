@@ -399,6 +399,9 @@ export class AnnotationController extends BaseAnnotationController {
     this.penControllers.set(num, pc);
   }
 
+  protected clearPenSelections(): void {
+    for (const pc of this.penControllers.values()) pc.clearSelection();
+  }
   protected teardownPen(): void {
     for (const pc of this.penControllers.values()) {
       pc.setActive(false);

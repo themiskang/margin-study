@@ -10,7 +10,9 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { build } from "esbuild";
+import * as pdfLib from "pdf-lib";
 import { runBrowser } from "./ego-harness.mjs";
+import { readPagePaint } from "./annotation-refs/export-roundtrip/pdf-content.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const project = await realpath(resolve(here, "../.."));
@@ -25,6 +27,7 @@ import { HtmlAnnotationController } from "${project}/src/word/htmlAnnot";
 import { StudyWorkspaceView } from "${project}/src/workspace/studyWorkspace";
 import { PenController } from "${project}/src/annot/pen";
 import { recognizeInk } from "${project}/src/annot/recognizeInk";
+import { buildEditedPdf } from "${project}/src/pdf/editedPdfExport";
 
 (HTMLElement.prototype as any).empty = function () { this.replaceChildren(); };
 Element.prototype.setPointerCapture = function () {};
@@ -55,11 +58,12 @@ function drag(target: Element, host: Element, pts: number[][], extra: any = {}) 
   pointer(target, host, "pointerup", last[0], last[1], extra);
 }
 
-function makePluginEnv(filesMap: Record<string, string | object>) {
-  const sources = new Map<string, { file: TFile; content: string }>();
+function makePluginEnv(filesMap: Record<string, string | object | Uint8Array>) {
+  const sources = new Map<string, { file: TFile; content: string | Uint8Array }>();
   for (const [path, val] of Object.entries(filesMap)) {
-    const content = typeof val === "string" ? val : JSON.stringify(val);
-    sources.set(path, { file: new TFile(path, content.length), content });
+    const content = val instanceof Uint8Array ? val : typeof val === "string" ? val : JSON.stringify(val);
+    const size = val instanceof Uint8Array ? val.byteLength : content.length;
+    sources.set(path, { file: new TFile(path, size), content });
   }
   const adapterFiles = new Map<string, string>();
   const folders = new Set<string>();
@@ -71,8 +75,8 @@ function makePluginEnv(filesMap: Record<string, string | object>) {
       configDir: ".obsidian",
       getFiles: () => [...sources.values()].map(v => v.file),
       getAbstractFileByPath: (p: string) => sources.get(p)?.file ?? null,
-      async read(file: TFile) { return sources.get(file.path)!.content; },
-      async readBinary(file: TFile) { return new TextEncoder().encode(sources.get(file.path)!.content).buffer; },
+      async read(file: TFile) { const c = sources.get(file.path)!.content; return c instanceof Uint8Array ? new TextDecoder().decode(c) : c; },
+      async readBinary(file: TFile) { const c = sources.get(file.path)!.content; return c instanceof Uint8Array ? c.slice().buffer : new TextEncoder().encode(c).buffer; },
       getResourcePath: (file: TFile) => "/synthetic/" + encodeURIComponent(file.path),
       on(name: string, cb: any) { const s = vaultEvents.get(name) ?? new Set(); s.add(cb); vaultEvents.set(name, s); return { off: () => s.delete(cb) }; },
       adapter: {
@@ -566,45 +570,34 @@ function centerHit(el: HTMLElement): boolean {
   }
 };
 
-// ===== G8-04(UI) + G8-06(UI): 扩展条解绑禁用/启用、onAnnClick 解绑、冷重载与像素 diff===0 =====
-(window as any).runG804AndG806UI = async () => {
+// ===== G8-04(UI): 扩展条解绑禁用/启用、点击解绑、onAnnClick 弹窗解绑 =====
+(window as any).runG804UI = async () => {
   fixturesHost.replaceChildren();
-  const env = makePluginEnv({ "g806.pdf": { name: "g806", pages: 1 } });
+  const env = makePluginEnv({ "g804.pdf": { name: "g804", pages: 1 } });
   const store = await env.makeStore();
   const plugin = createPlugin(env.app, store);
-  const view = await openPdfReader(plugin, env.sources.get("g806.pdf")!.file, 640, 720);
+  const view = await openPdfReader(plugin, env.sources.get("g804.pdf")!.file, 640, 720);
   const ctrl = (view as any).annController;
   try {
     const hostAnn = {
-      id: "host-ui", docPath: "g806.pdf", docKind: "pdf", page: 1, type: "note",
+      id: "host-ui", docPath: "g804.pdf", docKind: "pdf", page: 1, type: "note",
       rects: [{ x: 60, y: 500, w: 200, h: 120 }], pdfCoordinateSpace: "pdf",
       text: "Host", color: "#3478f6", overlay: { kind: "text" }, createdAt: stamp,
     };
     const unboundPen = {
-      id: "pen-unbound", docPath: "g806.pdf", docKind: "pdf", page: 1, type: "pen", rects: [], text: "",
+      id: "pen-unbound", docPath: "g804.pdf", docKind: "pdf", page: 1, type: "pen", rects: [], text: "",
       color: "#000000", strokes: [[{ x: 0.65, y: 0.7 }, { x: 0.85, y: 0.7 }]], createdAt: stamp,
     };
     const boundPen = {
-      id: "pen-bound", docPath: "g806.pdf", docKind: "pdf", page: 1, type: "pen", rects: [], text: "",
+      id: "pen-bound", docPath: "g804.pdf", docKind: "pdf", page: 1, type: "pen", rects: [], text: "",
       color: "#1e88e5", hostAnnotationId: "host-ui", strokes: [[{ x: 0.15, y: 0.25 }, { x: 0.35, y: 0.25 }]], createdAt: stamp,
     };
-    await store.saveAnnotationsNow("g806.pdf", [hostAnn, unboundPen, boundPen]);
-    await ctrl.loadForDoc("g806.pdf");
+    await store.saveAnnotationsNow("g804.pdf", [hostAnn, unboundPen, boundPen]);
+    await ctrl.loadForDoc("g804.pdf");
     view.redrawPage(1);
     await frame();
 
     const p1 = view.getPageRecord(1)!;
-    const pixelHash = () => {
-      const c = p1.wrapper.querySelector<HTMLCanvasElement>(".ms-ink-raster");
-      if (!c) return "empty";
-      const data = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
-      let h = 2166136261;
-      for (let i = 0; i < data.length; i += 4) h = Math.imul(h ^ (data[i] + data[i + 1] * 3 + data[i + 2] * 5 + data[i + 3] * 7), 16777619);
-      return String(h >>> 0);
-    };
-
-    const initialHash = pixelHash();
-    assert(initialHash !== "empty", "initial ink raster missing");
     ctrl.setHandwritingMode("lasso");
     await frame();
     const ov = p1.wrapper.querySelector<SVGSVGElement>(".ms-pen-overlay")!;
@@ -620,58 +613,302 @@ function centerHit(el: HTMLElement): boolean {
     assert(unbindBtn.disabled === false, "unbind button should be enabled for bound pen");
     unbindBtn.click();
     await wait(20);
-    assert(!(await store.loadAnnotations("g806.pdf")).find((a: any) => a.id === "pen-bound").hostAnnotationId, "extra toolbar unbind cleared hostAnnotationId");
+    assert(!(await store.loadAnnotations("g804.pdf")).find((a: any) => a.id === "pen-bound").hostAnnotationId, "extra toolbar unbind cleared hostAnnotationId");
 
     // Undo 恢复绑定，然后测试 onAnnClick 弹窗解绑
     ctrl.undoPenChange();
     await wait(20);
-    assert((await store.loadAnnotations("g806.pdf")).find((a: any) => a.id === "pen-bound").hostAnnotationId === "host-ui", "undo restored hostAnnotationId");
+    assert((await store.loadAnnotations("g804.pdf")).find((a: any) => a.id === "pen-bound").hostAnnotationId === "host-ui", "undo restored hostAnnotationId");
     ctrl.setHandwritingMode("off");
     const boundObj = ctrl.getCache().find((a: any) => a.id === "pen-bound");
     ctrl.onAnnClick(boundObj, new MouseEvent("click", { clientX: 100, clientY: 100 }));
-    const popUnbind = document.querySelector<HTMLButtonElement>('.ms-ann-pop button');
-    const popButtons = [...document.querySelectorAll<HTMLButtonElement>('.ms-ann-pop button')];
+    const popButtons = [...document.querySelectorAll<HTMLButtonElement>(".ms-ann-pop button")];
     const unbindPopBtn = popButtons.find(b => b.textContent === "解除绑定");
-    assert(!!popUnbind && !!unbindPopBtn, "onAnnClick popup missing 解除绑定 button");
+    assert(!!unbindPopBtn, "onAnnClick popup missing 解除绑定 button");
     unbindPopBtn!.click();
     await wait(20);
-    assert(!(await store.loadAnnotations("g806.pdf")).find((a: any) => a.id === "pen-bound").hostAnnotationId, "onAnnClick unbind cleared hostAnnotationId");
+    assert(!(await store.loadAnnotations("g804.pdf")).find((a: any) => a.id === "pen-bound").hostAnnotationId, "onAnnClick unbind cleared hostAnnotationId");
+    return { passed: true, extraUnbindDisabledForUnbound: true, extraUnbindWorks: true, onAnnClickUnbindWorks: true };
+  } finally {
+    if (view.containerEl.isConnected) { await view.onClose(); view.containerEl.remove(); }
+  }
+};
 
-    // 改色 -> 记录终态像素 -> 逐步 Undo 回初始态验证像素 diff === 0 -> Redo 回终态验证像素 diff === 0
-    ctrl.setHandwritingMode("lasso");
+// ===== G8-05(UI): HTML 双控制器同文档，旧选区拒绝即清选区且连续两次不重圈均拒，重圈后可写 =====
+(window as any).runG805UI = async () => {
+  fixturesHost.replaceChildren();
+  const env = makePluginEnv({ "g805.html": "<p>Dual view concurrency check</p>" });
+  const store = await env.makeStore();
+  const plugin = createPlugin(env.app, store);
+  await store.saveAnnotationsNow("g805.html", [{
+    id: "pen-shared", docPath: "g805.html", docKind: "html", page: 0, type: "pen", rects: [], text: "",
+    color: "#000000", strokes: [[{ x: 0.15, y: 0.25 }, { x: 0.55, y: 0.25 }]], createdAt: stamp,
+  }]);
+  const a = createHtmlController(plugin, "g805.html");
+  const b = createHtmlController(plugin, "g805.html");
+  await a.load();
+  await b.load();
+  try {
+    a.ann.setHandwritingMode("lasso");
+    b.ann.setHandwritingMode("lasso");
     await frame();
-    const ov2 = p1.wrapper.querySelector<SVGSVGElement>(".ms-pen-overlay")!;
-    drag(ov2, p1.wrapper, [[0.1, 0.2], [0.4, 0.2], [0.4, 0.3], [0.1, 0.3], [0.1, 0.2]]);
-    p1.wrapper.querySelector<HTMLButtonElement>('.ms-pen-selection-toolbar [aria-label="颜色"]')!.click();
-    p1.wrapper.querySelector<HTMLButtonElement>('.ms-pen-color-palette [data-color="#e53935"]')!.click();
+    const ovA = a.body.querySelector<SVGSVGElement>(".ms-pen-overlay")!;
+    const ovB = b.body.querySelector<SVGSVGElement>(".ms-pen-overlay")!;
+    const poly = [[0.1, 0.15], [0.6, 0.15], [0.6, 0.35], [0.1, 0.35], [0.1, 0.15]];
+
+    // A 圈选改红 #e53935
+    drag(ovA, a.body, poly);
+    a.body.querySelector<HTMLButtonElement>('.ms-pen-selection-toolbar [aria-label="颜色"]')!.click();
+    a.body.querySelector<HTMLButtonElement>('.ms-pen-color-palette [data-color="#e53935"]')!.click();
     await wait(20);
-    const finalHash = pixelHash();
-    assert(finalHash !== initialHash, "color change should change canvas pixels");
+    assert((await store.loadAnnotations("g805.html")).find((x: any) => x.id === "pen-shared").color === "#e53935", "A red failed");
 
-    ctrl.undoPenChange(); // undo color
-    ctrl.undoPenChange(); // undo unbind
+    // B 同步并圈选改绿 #43a047 + 另写唯一笔迹 only-B
+    await b.load();
+    b.ann.setHandwritingMode("off"); b.ann.setHandwritingMode("lasso");
     await frame();
-    assert(pixelHash() === initialHash, "canvas pixels after full undo must equal initialHash");
-    ctrl.redoPenChange(); // redo unbind
-    ctrl.redoPenChange(); // redo color
-    await frame();
-    assert(pixelHash() === finalHash, "canvas pixels after full redo must equal finalHash");
+    const ovB2 = b.body.querySelector<SVGSVGElement>(".ms-pen-overlay")!;
+    drag(ovB2, b.body, poly);
+    b.body.querySelector<HTMLButtonElement>('.ms-pen-selection-toolbar [aria-label="颜色"]')!.click();
+    b.body.querySelector<HTMLButtonElement>('.ms-pen-color-palette [data-color="#43a047"]')!.click();
+    (b.ann as any).beginPenGesture();
+    (b.ann as any).pushAnnotation({
+      id: "only-B", docPath: "g805.html", docKind: "html", page: 0, type: "pen", rects: [], text: "",
+      color: "#43a047", strokes: [[{ x: 0.15, y: 0.7 }, { x: 0.45, y: 0.7 }]], createdAt: stamp,
+    });
+    await store.flush();
 
-    // 冷重载 onClose -> reloadStore -> reopen
-    const beforeReload = structuredClone(await store.loadAnnotations("g806.pdf"));
+    let saveCalls = 0;
+    const origSave = store.saveAnnotationsDebounced.bind(store);
+    (store as any).saveAnnotationsDebounced = (...args: any[]) => { saveCalls++; return origSave(...args); };
+
+    // A 不重新圈选，第一次从旧选区调色盘改蓝 #1e88e5 -> 被拒、writes===0、canUndo===false、选区和工具条已清空
+    const w0 = saveCalls;
+    a.body.querySelector<HTMLButtonElement>('.ms-pen-selection-toolbar [aria-label="颜色"]')!.click();
+    a.body.querySelector<HTMLButtonElement>('.ms-pen-color-palette [data-color="#1e88e5"]')!.click();
+    await store.flush();
+    const firstWrites = saveCalls - w0;
+    const tbA = a.body.querySelector<HTMLElement>(".ms-pen-selection-toolbar")!;
+    const palA = a.body.querySelector<HTMLElement>(".ms-pen-color-palette")!;
+    const selRectAfterFirst = a.body.querySelector(".ms-pen-selection");
+    assert(firstWrites === 0, "1st stale color must have 0 writes");
+    assert(a.ann.getEditHistoryState().canUndo === false, "1st stale color must set canUndo=false");
+    assert(!selRectAfterFirst && tbA.hidden && palA.hidden, "1st stale color must clear old selection and hide toolbar/palette");
+
+    // 第二次（未重圈，直接点隐藏的黄色 swatch 或触发改色）-> 仍被拒、writes===0、canUndo===false
+    const w1 = saveCalls;
+    a.body.querySelector<HTMLButtonElement>('.ms-pen-color-palette [data-color="#ffd54f"]')!.click();
+    await store.flush();
+    const retryWrites = saveCalls - w1;
+    const afterRetry = await store.loadAnnotations("g805.html");
+    assert(retryWrites === 0, "2nd stale retry must have 0 writes, got " + retryWrites);
+    assert(afterRetry.find((x: any) => x.id === "pen-shared").color === "#43a047" && afterRetry.some((x: any) => x.id === "only-B"), "B data lost on retry");
+    assert(a.ann.getEditHistoryState().canUndo === false, "2nd stale retry must keep canUndo=false");
+
+    // 重新圈选后改黄 -> 成功且写入 1 次
+    await a.load();
+    a.ann.setHandwritingMode("off"); a.ann.setHandwritingMode("lasso");
+    await frame();
+    const ovA2 = a.body.querySelector<SVGSVGElement>(".ms-pen-overlay")!;
+    const w2 = saveCalls;
+    drag(ovA2, a.body, poly);
+    a.body.querySelector<HTMLButtonElement>('.ms-pen-selection-toolbar [aria-label="颜色"]')!.click();
+    a.body.querySelector<HTMLButtonElement>('.ms-pen-color-palette [data-color="#ffd54f"]')!.click();
+    await store.flush();
+    const relassoWrites = saveCalls - w2;
+    const afterRelasso = await store.loadAnnotations("g805.html");
+    assert(relassoWrites === 1 && afterRelasso.find((x: any) => x.id === "pen-shared").color === "#ffd54f" && afterRelasso.some((x: any) => x.id === "only-B"), "relasso write failed");
+    (store as any).saveAnnotationsDebounced = origSave;
+
+    return { passed: true, firstWrites, retryWrites, selectionClearedOnReject: !selRectAfterFirst && tbA.hidden && palA.hidden, relassoWrites };
+  } finally {
+    await a.close();
+    await b.close();
+  }
+};
+
+// ===== G8-06 同一条 8 步链：逐步模型快照 + 逐步 Canvas 像素哈希 + 卡片冷启全等 + 导出 PDF Bytes =====
+(window as any).runG806Unified8Step = async (realPdfBase64: string) => {
+  fixturesHost.replaceChildren();
+  const rawBin = Uint8Array.from(atob(realPdfBase64), c => c.charCodeAt(0));
+  const env = makePluginEnv({ "g806-chain.pdf": rawBin });
+  const store = await env.makeStore();
+  const plugin = createPlugin(env.app, store);
+  const view = await openPdfReader(plugin, env.sources.get("g806-chain.pdf")!.file, 640, 860);
+  const ctrl = (view as any).annController;
+  try {
+    const hostAnn = {
+      id: "host-8step", docPath: "g806-chain.pdf", docKind: "pdf", page: 1, type: "note",
+      rects: [{ x: 60, y: 500, w: 220, h: 140 }], pdfCoordinateSpace: "pdf",
+      text: "Host 8-Step", color: "#3478f6", overlay: { kind: "text" }, createdAt: stamp,
+    };
+    await store.saveAnnotationsNow("g806-chain.pdf", [hostAnn]);
+    await ctrl.loadForDoc("g806-chain.pdf");
+    view.redrawPage(1);
+    await frame();
+
+    const p1 = view.getPageRecord(1)!;
+    const pixelHash = () => {
+      const c = p1.wrapper.querySelector<HTMLCanvasElement>(".ms-ink-raster");
+      if (!c || c.width === 0 || c.height === 0) return "empty";
+      const data = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
+      let h = 2166136261;
+      for (let i = 0; i < data.length; i += 4) h = Math.imul(h ^ (data[i] + data[i + 1] * 3 + data[i + 2] * 5 + data[i + 3] * 7), 16777619);
+      return String(h >>> 0);
+    };
+    const stableJson = (v: any): string => {
+      if (Array.isArray(v)) return "[" + v.map(stableJson).join(",") + "]";
+      if (v && typeof v === "object") return "{" + Object.keys(v).sort().filter(k => v[k] !== undefined).map(k => JSON.stringify(k) + ":" + stableJson(v[k])).join(",") + "}";
+      return JSON.stringify(v);
+    };
+    const modelSnap = async () => {
+      const anns = structuredClone(await store.loadAnnotations("g806-chain.pdf")).map(({ createdAt, ...r }: any) => r);
+      const cards = structuredClone(store.cards).map(({ createdAt, ...r }: any) => r);
+      return stableJson({ anns, cards });
+    };
+
+    const stepNames = ["0-initial", "1-draw", "2-move", "3-color", "4-copy-paste", "5-unbind", "6-excerpt", "7-cut", "8-delete"];
+    const snaps: string[] = [];
+    const hashes: string[] = [];
+    const recordStep = async () => {
+      await frame();
+      snaps.push(await modelSnap());
+      hashes.push(pixelHash());
+    };
+
+    // Step 0: initial
+    await recordStep();
+
+    // Step 1: 画笔（落在宿主框 x:[60..280]/600=[0.10..0.467], y:[160..300]/800=[0.20..0.375] 内，自动绑定）
+    view.setHandwritingMode("pen");
+    await frame();
+    let ov = p1.wrapper.querySelector<SVGSVGElement>(".ms-pen-overlay")!;
+    drag(ov, p1.wrapper, [[0.14, 0.25], [0.24, 0.25], [0.34, 0.25]]);
+    await wait(20);
+    const drawnAnn = (await store.loadAnnotations("g806-chain.pdf")).find((a: any) => a.type === "pen");
+    assert(drawnAnn && drawnAnn.hostAnnotationId === "host-8step", "step 1 drawn pen should auto-bind host-8step");
+    await recordStep();
+
+    // Step 2: 套索框内平移 (+0.03, +0.03)
+    view.setHandwritingMode("lasso");
+    await frame();
+    ov = p1.wrapper.querySelector<SVGSVGElement>(".ms-pen-overlay")!;
+    drag(ov, p1.wrapper, [[0.11, 0.21], [0.38, 0.21], [0.38, 0.29], [0.11, 0.29], [0.11, 0.21]]);
+    drag(ov, p1.wrapper, [[0.24, 0.25], [0.27, 0.28]]);
+    await wait(20);
+    await recordStep();
+
+    // Step 3: 改色 #1e88e5
+    p1.wrapper.querySelector<HTMLButtonElement>('.ms-pen-selection-toolbar [aria-label="颜色"]')!.click();
+    p1.wrapper.querySelector<HTMLButtonElement>('.ms-pen-color-palette [data-color="#1e88e5"]')!.click();
+    await wait(20);
+    await recordStep();
+
+    // Step 4: 复制粘贴（保留样式 + 偏移，1 次 Undo）
+    p1.wrapper.querySelector<HTMLButtonElement>('.ms-pen-selection-toolbar [aria-label="复制"]')!.click();
+    ((document.activeElement as HTMLElement) || document.body).dispatchEvent(new KeyboardEvent("keydown", { key: "v", ctrlKey: true, bubbles: true, cancelable: true }));
+    await wait(20);
+    const afterPastePens = (await store.loadAnnotations("g806-chain.pdf")).filter((a: any) => a.type === "pen");
+    assert(afterPastePens.length === 2, "step 4 should produce 2 pens");
+    await recordStep();
+
+    // Step 5: 显式解绑原笔迹
+    drag(ov, p1.wrapper, [[0.14, 0.25], [0.40, 0.25], [0.40, 0.295], [0.14, 0.295], [0.14, 0.25]]);
+    p1.wrapper.querySelector<HTMLButtonElement>('.ms-pen-selection-extra [aria-label="解除绑定"]')!.click();
+    await wait(20);
+    assert(!(await store.loadAnnotations("g806-chain.pdf")).find((a: any) => a.id === drawnAnn.id).hostAnnotationId, "step 5 unbind failed");
+    await recordStep();
+
+    // Step 6: 转摘录（生成 region + 摘录卡）
+    p1.wrapper.querySelector<HTMLButtonElement>('.ms-pen-selection-extra [aria-label="转摘录"]')!.click();
+    await wait(30);
+    assert(store.cards.length === 1, "step 6 excerpt should create 1 card");
+    await recordStep();
+
+    // Step 7: 剪切粘贴出来的第 2 笔（y≈0.30）
+    drag(ov, p1.wrapper, [[0.16, 0.292], [0.44, 0.292], [0.44, 0.33], [0.16, 0.33], [0.16, 0.292]]);
+    p1.wrapper.querySelector<HTMLButtonElement>('.ms-pen-selection-toolbar [aria-label="剪切"]')!.click();
+    await wait(20);
+    await recordStep();
+
+    // Step 8: 删除第 1 笔（y≈0.28）
+    drag(ov, p1.wrapper, [[0.14, 0.25], [0.40, 0.25], [0.40, 0.295], [0.14, 0.295], [0.14, 0.25]]);
+    p1.wrapper.querySelector<HTMLButtonElement>('.ms-pen-selection-toolbar [aria-label="删除"]')!.click();
+    await wait(20);
+    await recordStep();
+
+    // ① + ② 逐次全 Undo (8 -> 0) 验证模型快照 + Canvas 像素哈希
+    const undoAudit: any[] = [];
+    for (let i = 7; i >= 0; i--) {
+      await ctrl.undoLastEdit();
+      await frame();
+      const m = await modelSnap();
+      const h = pixelHash();
+      assert(m === snaps[i], \`undo step \${i} (\${stepNames[i]}) model mismatch\`);
+      assert(h === hashes[i], \`undo step \${i} (\${stepNames[i]}) pixelHash mismatch: \${h} vs \${hashes[i]}\`);
+      undoAudit.push({ step: stepNames[i], modelExact: true, pixelHash: h });
+    }
+    assert(ctrl.getEditHistoryState().canUndo === false, "canUndo should be false at step 0");
+    assert(!p1.wrapper.querySelector(".ms-pen-selection") && p1.wrapper.querySelectorAll(".ms-pen-selection-toolbar:not([hidden])").length === 0, "no stale selection after full undo");
+
+    // ① + ② 逐次全 Redo (0 -> 8) 验证模型快照 + Canvas 像素哈希
+    const redoAudit: any[] = [];
+    for (let i = 1; i <= 8; i++) {
+      await ctrl.redoLastEdit();
+      await frame();
+      const m = await modelSnap();
+      const h = pixelHash();
+      assert(m === snaps[i], \`redo step \${i} (\${stepNames[i]}) model mismatch\`);
+      assert(h === hashes[i], \`redo step \${i} (\${stepNames[i]}) pixelHash mismatch: \${h} vs \${hashes[i]}\`);
+      redoAudit.push({ step: stepNames[i], modelExact: true, pixelHash: h });
+    }
+    assert(ctrl.getEditHistoryState().canRedo === false, "canRedo should be false at step 8");
+
+    // 退回 Step 6（同时含：解绑改色平移后的第 1 笔 + 粘贴第 2 笔 + 转摘录 region + 卡片），执行 ③ 冷重载 & ④ 导出 PDF
+    await ctrl.undoLastEdit(); // undo delete
+    await ctrl.undoLastEdit(); // undo cut
+    await frame();
+    assert(await modelSnap() === snaps[6] && pixelHash() === hashes[6], "step 6 state mismatch before cold reload");
+
+    const beforeReloadAnns = structuredClone(await store.loadAnnotations("g806-chain.pdf"));
+    const beforeReloadCards = structuredClone(store.cards);
     await store.flush();
     await view.onClose();
     view.containerEl.remove();
 
     const store2 = await env.makeStore();
     const plugin2 = createPlugin(env.app, store2);
-    const view2 = await openPdfReader(plugin2, env.sources.get("g806.pdf")!.file, 640, 720);
-    const afterReload = structuredClone(await store2.loadAnnotations("g806.pdf"));
-    assert(JSON.stringify(afterReload) === JSON.stringify(beforeReload), "cold reload annotations mismatch");
+    const view2 = await openPdfReader(plugin2, env.sources.get("g806-chain.pdf")!.file, 640, 860);
+    const afterReloadAnns = structuredClone(await store2.loadAnnotations("g806-chain.pdf"));
+    const afterReloadCards = structuredClone(store2.cards);
+    assert(JSON.stringify(afterReloadAnns) === JSON.stringify(beforeReloadAnns), "cold reload annotations mismatch");
+    assert(JSON.stringify(afterReloadCards) === JSON.stringify(beforeReloadCards), "cold reload cards mismatch");
+
+    // ④ 导出真实 PDF（含 2 笔渲染笔迹）供 Node 侧 pdf-lib 解包逐笔比对坐标（<=1pt）
+    const exportedBytes = await buildEditedPdf(view2 as any, { pages: [{ id: "p1", sourcePage: 1 }] } as any, { includeAnnotations: true }, () => {});
+    let binStr = "";
+    for (let i = 0; i < exportedBytes.length; i++) binStr += String.fromCharCode(exportedBytes[i]);
+    const exportedPdfBase64 = btoa(binStr);
+    const expectedPens = afterReloadAnns.filter((a: any) => a.type === "pen" && a.strokes?.length).map((a: any) => ({
+      id: a.id, color: a.color, strokes: a.strokes,
+    }));
+
     await view2.onClose();
     view2.containerEl.remove();
 
-    return { passed: true, extraUnbindDisabledForUnbound: true, extraUnbindWorks: true, onAnnClickUnbindWorks: true, pixelUndoRedoZeroDiff: true, coldReloadExactMatch: true };
+    return {
+      passed: true,
+      stepCount: 8,
+      stepNames,
+      stepPixelHashes: hashes,
+      undoAudit,
+      redoAudit,
+      coldReloadAnnotationsExact: true,
+      coldReloadCardsExact: true,
+      coldReloadCardCount: afterReloadCards.length,
+      expectedPens,
+      exportedPdfBase64,
+    };
   } finally {
     if (view.containerEl.isConnected) { await view.onClose(); view.containerEl.remove(); }
   }
@@ -712,7 +949,9 @@ try {
           const t = (x: number, y: number) => [a * x + c * y + e, b * x + d * y + f];
           return [...t(rect[0], rect[1]), ...t(rect[2], rect[3])];
         }
-      }\n` + src.replace(/getViewport\(\{scale\}:\{scale:number\}\)\{[\s\S]*?return \{[\s\S]*?\};\s*\}/, `getViewport({scale}:{scale:number}){ const viewBox=config.crop||[0,0,600,800]; const rotation=config.rotations?.[num-1]??config.rotation??0; return new FakeViewport({viewBox,scale,rotation}); }`);
+      }\n` + src
+        .replace("const config = JSON.parse(new TextDecoder().decode(data));", "const decoded = new TextDecoder().decode(data); const config = decoded.startsWith('%PDF-') ? { name: 'real-pdf', pages: 1 } : JSON.parse(decoded);")
+        .replace(/getViewport\(\{scale\}:\{scale:number\}\)\{[\s\S]*?return \{[\s\S]*?\};\s*\}/, `getViewport({scale}:{scale:number}){ const viewBox=config.crop||[0,0,600,800]; const rotation=config.rotations?.[num-1]??config.rotation??0; return new FakeViewport({viewBox,scale,rotation}); }`);
     }
     await writeFile(join(temporary, name + ".ts"), src);
   }
@@ -792,13 +1031,42 @@ try {
     await writeEvidence("g8-02-toolbar-clipboard-extend.json", g802);
     const g803 = await evalJson("window.runG803()");
     await writeEvidence("g8-03-excerpt-and-region-undo.json", g803);
-    const g8046 = await evalJson("window.runG804AndG806UI()");
-    await writeEvidence("g8-04-unbind-preservation.json", g8046, "ui");
-    await writeEvidence("g8-06-compound-undo-reload-export.json", g8046, "ui");
+    const g804 = await evalJson("window.runG804UI()");
+    await writeEvidence("g8-04-unbind-preservation.json", g804, "ui");
+    const g805 = await evalJson("window.runG805UI()");
+    await writeEvidence("g8-05-isolation-and-concurrency.json", g805, "ui");
+
+    // 生成真实 1 页 600x800 PDF 传给浏览器跑 G8-06 同一条 8 步链，并回传导出 PDF 流在 Node 侧逐笔解包比对
+    const blankDoc = await pdfLib.PDFDocument.create();
+    blankDoc.addPage([600, 800]);
+    const blankPdfB64 = Buffer.from(await blankDoc.save()).toString("base64");
+    const g806Raw = await evalJson(`window.runG806Unified8Step(${JSON.stringify(blankPdfB64)})`);
+    const exportedBytes = Buffer.from(g806Raw.exportedPdfBase64, "base64");
+    const paints = await readPagePaint(pdfLib, exportedBytes);
+    const strokePaints = paints.filter(p => p.kind === "stroke");
+    if (strokePaints.length < g806Raw.expectedPens.length) {
+      throw new Error(`G8-06 exported PDF stroke count ${strokePaints.length} < expected ${g806Raw.expectedPens.length}`);
+    }
+    const perStrokeExport = g806Raw.expectedPens.map(pen => {
+      const expectedPts = pen.strokes[0].map(pt => [pt.x * 600, 800 - pt.y * 800]);
+      const sameColor = strokePaints.filter(p => p.color.toLowerCase() === pen.color.toLowerCase());
+      const minErrPt = Math.min(...sameColor.map(p => {
+        if (p.points.length < 2) return Infinity;
+        const first = p.points[0], last = p.points[p.points.length - 1];
+        return Math.max(
+          Math.hypot(first[0] - expectedPts[0][0], first[1] - expectedPts[0][1]),
+          Math.hypot(last[0] - expectedPts[expectedPts.length - 1][0], last[1] - expectedPts[expectedPts.length - 1][1]),
+        );
+      }));
+      if (!(minErrPt <= 1)) throw new Error(`G8-06 exported stroke ${pen.id} error ${minErrPt}pt > 1pt`);
+      return { id: pen.id, color: pen.color, maxErrorPt: Number(minErrPt.toFixed(4)) };
+    });
+    const { exportedPdfBase64: _drop, expectedPens: _drop2, ...g806Evidence } = g806Raw;
+    await writeEvidence("g8-06-compound-undo-reload-export.json", { ...g806Evidence, perStrokeExport }, "unified8Step");
 
     const errs = await evalJson("window.getErrors()");
     if (errs.length) throw new Error("Unhandled browser errors: " + JSON.stringify(errs));
-    console.log("PASS lasso-ui-workflow: G8-01, G8-02, G8-03, G8-04(UI), G8-06(UI) all passed");
+    console.log("PASS lasso-ui-workflow: G8-01, G8-02, G8-03, G8-04(UI), G8-05(UI), G8-06(unified 8-step) all passed");
   } finally {
     await browser("close").catch(() => {});
     await new Promise(done => server.close(done));

@@ -1011,7 +1011,7 @@ export abstract class BaseAnnotationController {
   protected pushAnnotation(ann: Annotation): void {
     if (ann.type === "pen") {
       const current = this.penRevisionIsCurrent();
-      if (!current) { this.penRevision = null; return; }
+      if (!current) return;
     }
     ann.documentNotebookId ??= this.activeNotebookId;
     this.prepareAnnotation(ann);
@@ -1252,7 +1252,7 @@ export abstract class BaseAnnotationController {
   protected unbindInkAnnotations(penIds: string[]): void {
     if (!this.docPath || this.disposed || this.releasing || !penIds.length) return;
     const current = this.penRevisionIsCurrent();
-    if (!current) { this.penRevision = null; return; }
+    if (!current) return;
     const changes: ReaderPenChange[] = [];
     for (const id of penIds) {
       const pen = this.cache.find(item => item.id === id && item.type === "pen" && item.hostAnnotationId !== undefined);
@@ -1269,7 +1269,7 @@ export abstract class BaseAnnotationController {
       else this.penRevision = null;
       return;
     }
-    if (!this.applyPenChanges(changes, false, true)) { this.penRevision = null; return; }
+    if (!this.applyPenChanges(changes, false, true)) return;
     this.recordPenChange(changes);
     if (this.penMode && this.penTool === "select") this.beginPenGesture();
     else this.penRevision = null;
@@ -1277,7 +1277,7 @@ export abstract class BaseAnnotationController {
   protected pushPastedPenAnnotations(annotations: Annotation[]): void {
     if (!this.docPath || this.disposed || this.releasing || !annotations.length) return;
     const current = this.penRevisionIsCurrent();
-    if (!current) { this.penRevision = null; return; }
+    if (!current) return;
     for (const ann of annotations) {
       ann.documentNotebookId ??= this.activeNotebookId;
       this.prepareAnnotation(ann);
@@ -1289,10 +1289,7 @@ export abstract class BaseAnnotationController {
     }
     this.recordPenChange(changes, annotations);
     this.persist();
-    for (const ann of annotations) {
-      if (this.isAnnotationVisible(ann)) this.renderOne(ann);
-    }
-    this.syncOcclusionElements();
+    this.onAnnotationsChanged();
     if (this.penMode && this.penTool === "select") this.beginPenGesture();
     else this.penRevision = null;
   }
@@ -1757,10 +1754,10 @@ export abstract class BaseAnnotationController {
       return;
     }
     const current = this.penRevisionIsCurrent();
-    if (!current) { this.penRevision = null; return; }
+    if (!current) return;
     const originals = changes.map(change => this.cache.find(ann => ann.id === change.id));
     if (coordinates && originals.some(ann => !ann || ann.type !== "pen")) {
-      this.penRevision = null; this.rejectStalePenChange(); return;
+      this.rejectStalePenChange(); return;
     }
     const normalized: ReaderPenChange[] = changes.map((change, index) => {
       const original = originals[index];
@@ -1809,8 +1806,10 @@ export abstract class BaseAnnotationController {
       };
     })) });
   }
+  protected clearPenSelections(): void {}
   private rejectStalePenChange(): void {
     this.clearEditHistory();
+    this.clearPenSelections();
     new Notice("笔画已在其他视图修改，已清除此视图的阅读编辑撤销记录");
   }
   private applyPenChanges(changes: ReaderPenChange[], reverse: boolean, currentGesture = false): boolean {

@@ -163,48 +163,100 @@ await run("GAP-08-MODEL", async (api, check) => {
     const protectedAfter = snapshotProtected();
     check("G8-05 reference layer, reference notebook, orphan layer byte-identical", isDeepStrictEqual(protectedAfter, protectedBefore), true);
 
-    // 并发冲突：viewA 改色 (R0 -> R1，保持选区 penRevision = R1) -> viewB 写入 (R1 -> R2) -> viewA 同选区再操作被 100% 拒绝
+    // 并发冲突：viewA 改色 (R0 -> R1，保持选区) -> viewB 写入绿 #43a047 + only-B (R1 -> R2)
+    // -> viewA 不重新圈选，同一旧选区连续两次动作（第一次改蓝、第二次改黄）均必须被拒且旧选区已清空
+    // -> 重新圈选后改色成功且写入 1 次
+    let selectionClearedCount = 0;
+    let fakeHasSelection = true;
+    const origClearSel = ctrlA.clearPenSelections?.bind(ctrlA);
+    ctrlA.clearPenSelections = () => { selectionClearedCount++; fakeHasSelection = false; origClearSel?.(); };
+
     const r1 = vault.store.getAnnotationsRevision(docPath);
     await viewB.controller.loadForDoc(docPath);
     ctrlB.beginPenGesture();
     const bStroke = structuredClone(viewB.model().find(a => a.id === "pen-active").strokes);
     ctrlB.commitPenChanges([{ id: "pen-active", before: bStroke, after: bStroke, color: { before: "#e53935", after: "#43a047" } }]);
+    ctrlB.beginPenGesture();
+    ctrlB.pushAnnotation(pen("only-B", "#43a047", [[20, 20], [50, 20]], { inkLayerId: "default", documentNotebookId: "default" }));
+    await vault.store.flush();
     const r2 = vault.store.getAnnotationsRevision(docPath);
     check("G8-05 viewB advanced revision", r2 > r1, true);
 
-    // viewA 同选区二次改色（模拟点击工具条颜色）
+    // 统计写入次数（主数据/侧车 saveAnnotationsDebounced 调用计数）
+    let writeCount = 0;
+    const origSave = vault.store.saveAnnotationsDebounced.bind(vault.store);
+    vault.store.saveAnnotationsDebounced = (...args) => { writeCount++; return origSave(...args); };
+
+    // 第一次（不重圈，改蓝 #1e88e5）-> 被拒、零写入、canUndo===false、选区被清空
+    const writesBeforeFirst = writeCount;
     ctrlA.ensurePenRevision();
     ctrlA.commitPenChanges([{ id: "pen-active", before: s1, after: s1, color: { before: "#e53935", after: "#1e88e5" } }]);
     await vault.store.flush();
-    const afterStaleColor = (await vault.store.loadAnnotations(docPath)).find(a => a.id === "pen-active");
-    check("G8-05 stale toolbar color rejected, viewB data preserved", afterStaleColor.color, "#43a047");
-    check("G8-05 stale toolbar color clears viewA edit history (canUndo===false)", ctrlA.getEditHistoryState().canUndo, false);
+    const firstWrites = writeCount - writesBeforeFirst;
+    const afterFirst = await vault.store.loadAnnotations(docPath);
+    check("G8-05 1st stale color rejected (writes===0, color=#43a047, only-B intact)",
+      firstWrites === 0 && afterFirst.find(a => a.id === "pen-active")?.color === "#43a047" && afterFirst.some(a => a.id === "only-B"), true);
+    check("G8-05 1st stale color clears viewA edit history (canUndo===false)", ctrlA.getEditHistoryState().canUndo, false);
+    check("G8-05 1st stale color invalidates old selection (selectionCleared)", fakeHasSelection === false && selectionClearedCount >= 1, true);
 
-    // 同理验证同选区再点删除/粘贴也被拒绝
+    // 第二次（未重圈，同一旧选区再改黄 #ffd54f）-> 仍被拒、零写入、canUndo===false、选区仍为空
+    const writesBeforeRetry = writeCount;
+    ctrlA.ensurePenRevision();
+    ctrlA.commitPenChanges([{ id: "pen-active", before: s1, after: s1, color: { before: "#e53935", after: "#ffd54f" } }]);
+    await vault.store.flush();
+    const retryWrites = writeCount - writesBeforeRetry;
+    const afterRetry = await vault.store.loadAnnotations(docPath);
+    console.log(`G8-05 retry check: retry.writes=${retryWrites} rev=${vault.store.getAnnotationsRevision(docPath)} color=${afterRetry.find(a => a.id === "pen-active")?.color} canUndo=${ctrlA.getEditHistoryState().canUndo} selectionCleared=${!fakeHasSelection}`);
+    check("G8-05 2nd stale retry (no relasso) still rejected (retry.writes===0)",
+      retryWrites === 0 && afterRetry.find(a => a.id === "pen-active")?.color === "#43a047" && afterRetry.some(a => a.id === "only-B"), true);
+    check("G8-05 2nd stale retry keeps canUndo===false", ctrlA.getEditHistoryState().canUndo, false);
+
+    // 重新圈选后动作成功且写入 1 次（证明只清选区、不封死功能）
+    await ctrlA.loadForDoc(docPath);
+    ctrlA.penMode = true; ctrlA.penTool = "select";
+    fakeHasSelection = true;
+    const writesBeforeRelasso = writeCount;
+    ctrlA.beginPenGesture(); // 模拟重新 pointerdown 圈选
+    const freshS = structuredClone(viewA.model().find(a => a.id === "pen-active").strokes);
+    ctrlA.commitPenChanges([{ id: "pen-active", before: freshS, after: freshS, color: { before: "#43a047", after: "#ffd54f" } }]);
+    await vault.store.flush();
+    const relassoWrites = writeCount - writesBeforeRelasso;
+    const afterRelasso = await vault.store.loadAnnotations(docPath);
+    check("G8-05 after relasso action succeeds with writes===1",
+      relassoWrites === 1 && afterRelasso.find(a => a.id === "pen-active")?.color === "#ffd54f" && afterRelasso.some(a => a.id === "only-B"), true);
+    vault.store.saveAnnotationsDebounced = origSave;
+
+    // 同理验证同选区再点粘贴也被拒绝（连续两次不重圈均拒）
     await ctrlA.loadForDoc(docPath);
     ctrlA.penMode = true; ctrlA.penTool = "select";
     ctrlA.beginPenGesture();
     const curS = structuredClone(viewA.model().find(a => a.id === "pen-active").strokes);
-    ctrlA.commitPenChanges([{ id: "pen-active", before: curS, after: curS, color: { before: "#43a047", after: "#000000" } }]);
+    ctrlA.commitPenChanges([{ id: "pen-active", before: curS, after: curS, color: { before: "#ffd54f", after: "#000000" } }]);
     // viewB 再次写入
     await ctrlB.loadForDoc(docPath);
     ctrlB.beginPenGesture();
     ctrlB.commitPenChanges([{ id: "pen-active", before: curS, after: curS, color: { before: "#000000", after: "#ffd54f" } }]);
-    // viewA 尝试粘贴（模拟直接 Ctrl/Cmd+V）
+    // viewA 尝试粘贴两次（未重圈）
     ctrlA.ensurePenRevision();
-    ctrlA.pushPastedPenAnnotations([pen("pen-stale-paste", "#000000", [[10, 10], [20, 20]])]);
+    ctrlA.pushPastedPenAnnotations([pen("pen-stale-paste-1", "#000000", [[10, 10], [20, 20]])]);
+    ctrlA.ensurePenRevision();
+    ctrlA.pushPastedPenAnnotations([pen("pen-stale-paste-2", "#000000", [[10, 10], [20, 20]])]);
     await vault.store.flush();
     const afterStalePaste = await vault.store.loadAnnotations(docPath);
-    check("G8-05 stale paste rejected, no new pen written", afterStalePaste.some(a => a.id === "pen-stale-paste"), false);
-    check("G8-05 viewB yellow color intact after stale paste", afterStalePaste.find(a => a.id === "pen-active").color, "#ffd54f");
-    check("G8-05 viewA canUndo===false after stale paste", ctrlA.getEditHistoryState().canUndo, false);
+    check("G8-05 stale paste x2 rejected, no new pen written",
+      !afterStalePaste.some(a => a.id === "pen-stale-paste-1" || a.id === "pen-stale-paste-2"), true);
+    check("G8-05 viewB yellow color intact after stale paste x2", afterStalePaste.find(a => a.id === "pen-active").color, "#ffd54f");
+    check("G8-05 viewA canUndo===false after stale paste x2", ctrlA.getEditHistoryState().canUndo, false);
 
     await mergeEvidence("g8-05-isolation-and-concurrency.json", "headless", {
       passed: true,
       isolatedActiveIds: recordsA.map(r => r.id),
       protectedThreeClassesZeroDiff: true,
-      staleColorRejected: true,
-      stalePasteRejected: true,
+      firstStaleWrites: firstWrites,
+      retryStaleWrites: retryWrites,
+      selectionClearedOnReject: !fakeHasSelection,
+      relassoWrites,
+      stalePasteRejectedX2: true,
       viewBPreserved: true,
       viewACanUndoFalse: true,
     });
