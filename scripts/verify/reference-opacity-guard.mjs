@@ -1,21 +1,28 @@
 /**
- * [INPUT]: 扫描 src/** 的 TypeScript AST 与 src/styles/** 的 CSS 规则。
- * [OUTPUT]: 双轨校验（递归 calc 规范化数值 0.35 + 精确形态白名单 + 生产者侧 token 定义点常量引用校验）与基线计数（1 TS 常量 + 2 CSS 回退 + 1 定义点 = 4），违规则报文件:行号并退出 1。
- * [POS]: GAP-07b-3 参考层透明度单源、CSS 回退与 token 生产者静态守卫。
+ * [INPUT]: 扫描 src/** 的 TypeScript AST/符号表、src/styles/** 的 CSS 规则，并在真实 Chromium DOM 中执行生产者与计算样式运行时断言。
+ * [OUTPUT]: 双轨静态校验（递归 calc 规范化数值 0.35 + 精确形态白名单 + 生产者侧 TypeChecker 规范来源解析）与运行时计算样式断言，违规则报文件:行号并退出 1。
+ * [POS]: GAP-07b-3 参考层透明度单源、CSS 回退、token 生产者与运行时计算值守卫。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
-import { readFile, readdir } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { runBrowser } from "./ego-harness.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const req = createRequire(join(root, "package.json"));
 const ts = req("typescript");
+const { build } = req("esbuild");
 
 const TARGET_OPACITY = 0.35;
+const TARGET_OPACITY_STR = "0.35";
 const EPS = 1e-9;
 const TOKEN_NAME = "--ms-ink-reference-opacity";
+const CANONICAL_SOURCE_FILE = "src/annot/penGeometry.ts";
+const CANONICAL_CONST_NAME = "INK_REFERENCE_OPACITY";
 const EXPECTED_TS_COUNT = 1;
 const EXPECTED_CSS_FALLBACK_COUNT = 2;
 const EXPECTED_PRODUCER_COUNT = 1;
@@ -83,7 +90,6 @@ function evalCalcExpr(expr) {
   let pos = 0;
   while (pos < expr.length) {
     if (/\s/.test(expr[pos])) { pos++; continue; }
-    // Nested calc( treated as grouping (
     if (expr.slice(pos, pos + 5).toLowerCase() === "calc(") {
       tokens.push({ type: "op", value: "(" });
       pos += 5;
@@ -150,13 +156,8 @@ function evalCalcExpr(expr) {
   return idx === tokens.length && Number.isFinite(result) ? result : NaN;
 }
 
-/**
- * Inspect a CSS value for opacity 0.35 or unevaluable calc().
- * Returns { kind: "none" | "target035" | "unevaluable" }.
- */
 function inspectCssOpacityValue(rawVal) {
   const cleaned = rawVal.replace(/\/\*[\s\S]*?\*\//g, "").replace(/!important\s*$/i, "").trim();
-  // 1. Check all calc(...) expressions (recursive, supports nested parens and nested calc())
   const calcs = extractCalcInnerExpressions(cleaned);
   for (const item of calcs) {
     if (item.unbalanced) return { kind: "unevaluable" };
@@ -164,7 +165,6 @@ function inspectCssOpacityValue(rawVal) {
     if (!Number.isFinite(evaluated)) return { kind: "unevaluable" };
     if (isTarget035(evaluated)) return { kind: "target035" };
   }
-  // 2. Check standalone numeric / percentage tokens outside calc()
   let withoutCalcs = cleaned;
   for (const item of calcs) withoutCalcs = withoutCalcs.replace(`calc(${item.inner})`, " ");
   for (const m of withoutCalcs.matchAll(/(?<![\w.])([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)(%?)(?![\w.%])/g)) {
@@ -182,21 +182,6 @@ function unwrapExpr(node) {
   return node;
 }
 
-/** Valid producer value: INK_REFERENCE_OPACITY or String(INK_REFERENCE_OPACITY). */
-function isValidConstantProducerArg(node) {
-  const expr = unwrapExpr(node);
-  if (!expr) return false;
-  if (ts.isIdentifier(expr) && expr.text === "INK_REFERENCE_OPACITY") return true;
-  if (ts.isCallExpression(expr) &&
-      ts.isIdentifier(expr.expression) &&
-      expr.expression.text === "String" &&
-      expr.arguments.length === 1) {
-    const arg = unwrapExpr(expr.arguments[0]);
-    return !!arg && ts.isIdentifier(arg) && arg.text === "INK_REFERENCE_OPACITY";
-  }
-  return false;
-}
-
 function stringLiteralValue(node) {
   const expr = unwrapExpr(node);
   if (!expr) return null;
@@ -204,20 +189,91 @@ function stringLiteralValue(node) {
   return null;
 }
 
-export async function checkReferenceOpacity(baseDir = root) {
+/**
+ * Resolve producer argument via TypeScript TypeChecker to guarantee:
+ * 1. Argument is `INK_REFERENCE_OPACITY` or `String(INK_REFERENCE_OPACITY)` (with unshadowed global String).
+ * 2. Identifier resolves via import alias chain to the canonical declaration
+ *    `export const INK_REFERENCE_OPACITY = 0.35` in `src/annot/penGeometry.ts`
+ *    (rejects local const/let/var shadowing, parameter shadowing, catch/block shadowing, or other modules).
+ */
+function verifyCanonicalProducerArg(node, checker, baseDir) {
+  const expr = unwrapExpr(node);
+  if (!expr) return { ok: false, reason: "缺少参数表达式" };
+  let ident = null;
+  if (ts.isIdentifier(expr)) {
+    ident = expr;
+  } else if (
+    ts.isCallExpression(expr) &&
+    ts.isIdentifier(expr.expression) &&
+    expr.expression.text === "String" &&
+    expr.arguments.length === 1
+  ) {
+    // Reject locally shadowed `String`
+    const strSym = checker.getSymbolAtLocation(expr.expression);
+    if (strSym) {
+      const strDecls = strSym.getDeclarations() ?? [];
+      if (strDecls.some(d => !d.getSourceFile().isDeclarationFile && resolve(d.getSourceFile().fileName).startsWith(resolve(baseDir, "src")))) {
+        return { ok: false, reason: "String 标识符被局部遮蔽" };
+      }
+    }
+    const arg = unwrapExpr(expr.arguments[0]);
+    if (arg && ts.isIdentifier(arg)) ident = arg;
+  }
+  if (!ident) {
+    return { ok: false, reason: `定义点写入 ${TOKEN_NAME} 禁止字面量/非常量表达式，必须引用规范常量 ${CANONICAL_CONST_NAME}` };
+  }
+
+  let sym = checker.getSymbolAtLocation(ident);
+  if (!sym) return { ok: false, reason: `标识符 ${ident.text} 无法解析符号` };
+
+  // Must be an imported alias (not a local const/let/var, parameter, catch binding, or block-scoped var)
+  const localDecls = sym.getDeclarations() ?? [];
+  const isAlias = Boolean(sym.flags & ts.SymbolFlags.Alias);
+  if (!isAlias) {
+    const decl = localDecls[0];
+    const declLoc = decl ? `${relative(baseDir, decl.getSourceFile().fileName).replace(/\\/g, "/")}:${decl.getSourceFile().getLineAndCharacterOfPosition(decl.getStart()).line + 1}` : "unknown";
+    return { ok: false, reason: `标识符 ${ident.text} 被局部/参数声明遮蔽（声明于 ${declLoc}），非规范导入来源 ${CANONICAL_SOURCE_FILE}` };
+  }
+
+  const targetSym = checker.getAliasedSymbol(sym);
+  if (!targetSym) return { ok: false, reason: `导入别名 ${ident.text} 无法解析目标符号` };
+  const targetDecls = targetSym.getDeclarations() ?? [];
+  const canonicalDecl = targetDecls.find(d => {
+    if (!ts.isVariableDeclaration(d) || !ts.isIdentifier(d.name) || d.name.text !== CANONICAL_CONST_NAME) return false;
+    const rel = relative(baseDir, d.getSourceFile().fileName).replace(/\\/g, "/");
+    return rel === CANONICAL_SOURCE_FILE;
+  });
+  if (!canonicalDecl) {
+    const actualDecl = targetDecls[0];
+    const actualLoc = actualDecl ? `${relative(baseDir, actualDecl.getSourceFile().fileName).replace(/\\/g, "/")}:${actualDecl.getSourceFile().getLineAndCharacterOfPosition(actualDecl.getStart()).line + 1}` : "unknown";
+    return { ok: false, reason: `标识符 ${ident.text} 解析来源为 ${actualLoc}，非规范来源 ${CANONICAL_SOURCE_FILE}:${CANONICAL_CONST_NAME}` };
+  }
+  return { ok: true };
+}
+
+export async function checkReferenceOpacityStatic(baseDir = root) {
   const allowedTs = [];
   const allowedCssFallback = [];
   const allowedProducers = [];
   const violations = [];
 
-  // 1. Scan TypeScript AST:
-  //    a) Numeric literals normalizing to 0.35
-  //    b) All writes / mentions of --ms-ink-reference-opacity (producer-side validation)
+  // 1. Create TypeScript Program over src/**/*.ts for real symbol + import-chain resolution
   const tsFiles = await collectFiles(join(baseDir, "src"), ".ts");
+  const program = ts.createProgram(tsFiles, {
+    target: ts.ScriptTarget.ESNext,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Node10,
+    noEmit: true,
+    skipLibCheck: true,
+    types: [],
+    allowJs: false,
+  });
+  const checker = program.getTypeChecker();
+
   for (const absPath of tsFiles) {
     const rel = relative(baseDir, absPath).replace(/\\/g, "/");
-    const content = await readFile(absPath, "utf8");
-    const sf = ts.createSourceFile(rel, content, ts.ScriptTarget.Latest, true);
+    const sf = program.getSourceFile(absPath);
+    if (!sf) continue;
     const handledTokenNodes = new Set();
 
     walk(sf, node => {
@@ -226,19 +282,19 @@ export async function checkReferenceOpacity(baseDir = root) {
         const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
         const raw = node.getText(sf);
         const isAllowedConst =
-          rel === "src/annot/penGeometry.ts" &&
+          rel === CANONICAL_SOURCE_FILE &&
           raw === "0.35" &&
           ts.isVariableDeclaration(node.parent) &&
           ts.isIdentifier(node.parent.name) &&
-          node.parent.name.text === "INK_REFERENCE_OPACITY";
+          node.parent.name.text === CANONICAL_CONST_NAME;
         if (isAllowedConst) {
-          allowedTs.push({ file: rel, line, form: "INK_REFERENCE_OPACITY = 0.35" });
+          allowedTs.push({ file: rel, line, form: `${CANONICAL_CONST_NAME} = 0.35` });
         } else {
           violations.push({ file: rel, line, text: raw, normalized: TARGET_OPACITY, reason: "归一值 0.35，非允许 TS 常量形态" });
         }
       }
 
-      // (b) setProperty("--ms-ink-reference-opacity", X) producer calls
+      // (b) setProperty("--ms-ink-reference-opacity", X) producer calls with TypeChecker canonical resolution
       if (ts.isCallExpression(node) &&
           ts.isPropertyAccessExpression(node.expression) &&
           node.expression.name.text === "setProperty" &&
@@ -247,22 +303,22 @@ export async function checkReferenceOpacity(baseDir = root) {
         if (keyVal === TOKEN_NAME) {
           handledTokenNodes.add(unwrapExpr(node.arguments[0]));
           const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
-          const valArg = node.arguments[1];
-          if (isValidConstantProducerArg(valArg)) {
+          const resolved = verifyCanonicalProducerArg(node.arguments[1], checker, baseDir);
+          if (resolved.ok) {
             allowedProducers.push({ file: rel, line, form: node.getText(sf) });
           } else {
             violations.push({
               file: rel,
               line,
               text: node.getText(sf),
-              reason: `定义点写入 ${TOKEN_NAME} 禁止字面量/非常量表达式，必须引用常量 INK_REFERENCE_OPACITY`,
+              reason: resolved.reason,
             });
           }
         }
       }
     });
 
-    // (c) Any other string/template literal containing --ms-ink-reference-opacity (cssText, <style>, insertRule, etc.)
+    // (c) Any other string/template literal containing --ms-ink-reference-opacity
     walk(sf, node => {
       if (handledTokenNodes.has(node)) return;
       let text = null;
@@ -299,7 +355,6 @@ export async function checkReferenceOpacity(baseDir = root) {
         const valStart = declStart + declMatch[0].indexOf(declMatch[2]);
         const line = content.slice(0, valStart).split("\n").length;
 
-        // Disallow defining --ms-ink-reference-opacity directly in CSS (must be defined only by TS producer)
         if (prop === TOKEN_NAME) {
           violations.push({
             file: rel,
@@ -310,7 +365,6 @@ export async function checkReferenceOpacity(baseDir = root) {
           continue;
         }
 
-        // Disallow any other reference/ink CSS custom property resolving to 0.35 or unevaluable calc()
         if (prop.startsWith("--") && /reference|ink/i.test(prop)) {
           const check = inspectCssOpacityValue(val);
           if (check.kind === "target035" || check.kind === "unevaluable") {
@@ -378,21 +432,158 @@ export async function checkReferenceOpacity(baseDir = root) {
   };
 }
 
-if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
-  const targetDir = process.argv[2] ? resolve(process.argv[2]) : root;
-  const result = await checkReferenceOpacity(targetDir);
-  console.log("reference-opacity-guard:", JSON.stringify(result));
-  if (!result.passed) {
-    for (const v of result.violations) {
-      console.error(`FAIL reference-opacity-guard ${v.file}:${v.line} (${v.reason}): ${v.text}`);
+/**
+ * Runtime real-DOM assertion in Chromium:
+ * Bundles BaseAnnotationController + INK_REFERENCE_OPACITY from baseDir, runs the real
+ * syncReferenceOpacityToken() producer, and verifies computed opacity on both reference classes
+ * and --ms-ink-reference-opacity on documentElement match both "0.35" (independent truth) and String(INK_REFERENCE_OPACITY).
+ */
+export async function checkReferenceOpacityRuntime(baseDir = root) {
+  const temp = await mkdtemp(join(tmpdir(), "marginstudy-ref-opacity-rt-"));
+  const obsidianStub = join(temp, "obsidian.ts");
+  const entryTs = join(temp, "probe.ts");
+  const bundleJs = join(temp, "probe.js");
+  const htmlFile = join(temp, "index.html");
+  await writeFile(obsidianStub, `
+    export class App {}
+    export class TFile {}
+    export class TFolder {}
+    export class Notice {}
+    export class Menu { addItem() { return this; } showAtMouseEvent() {} }
+    export class Component {}
+    export class ItemView {}
+    export class WorkspaceLeaf {}
+    export class Modal {}
+    export class Plugin {}
+    export class PluginSettingTab {}
+    export class Setting {}
+    export const Platform = { isMobile: false, isDesktop: true, isMacOS: true };
+    export function setIcon() {}
+    export function sanitizeHTMLToDom(s: string) { const d = document.createElement("div"); d.innerHTML = s; return d; }
+    export const MarkdownRenderer = { render: async () => {} };
+  `);
+  await writeFile(entryTs, `
+    import { BaseAnnotationController } from ${JSON.stringify(join(baseDir, "src/annot/baseController.ts"))};
+    import { INK_REFERENCE_OPACITY } from ${JSON.stringify(join(baseDir, "src/annot/penGeometry.ts"))};
+    try {
+      const inkEl = document.createElement("div");
+      inkEl.className = "ms-ink-reference";
+      const nbEl = document.createElement("div");
+      nbEl.className = "ms-document-notebook-reference";
+      document.body.append(inkEl, nbEl);
+
+      // 1. Before producer runs (token absent): CSS fallback must compute 0.35
+      const fallbackInk = getComputedStyle(inkEl).opacity;
+      const fallbackNb = getComputedStyle(nbEl).opacity;
+
+      // 2. Run the real BaseAnnotationController producer method
+      (BaseAnnotationController.prototype as any).syncReferenceOpacityToken.call({});
+      const tokenVal = getComputedStyle(document.documentElement).getPropertyValue("${TOKEN_NAME}").trim();
+      const liveInk = getComputedStyle(inkEl).opacity;
+      const liveNb = getComputedStyle(nbEl).opacity;
+
+      (window as any).__probe = {
+        constVal: String(INK_REFERENCE_OPACITY),
+        tokenVal,
+        liveInk,
+        liveNb,
+        fallbackInk,
+        fallbackNb,
+      };
+    } catch (e) {
+      (window as any).__probe = { error: String(e) };
     }
-    if (result.actual.total !== result.expected.total ||
-        result.actual.ts !== result.expected.ts ||
-        result.actual.cssFallback !== result.expected.cssFallback ||
-        result.actual.producer !== result.expected.producer) {
-      console.error(`FAIL reference-opacity-guard baseline mismatch: actual=${JSON.stringify(result.actual)} expected=${JSON.stringify(result.expected)}`);
+    (window as any).__done = true;
+  `);
+  await writeFile(htmlFile, '<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/reader.css"></head><body><script type="module" src="/probe.js"></script></body></html>');
+
+  let server;
+  const session = `marginstudy-ref-op-${process.pid}-${Date.now()}`;
+  try {
+    await build({
+      entryPoints: [entryTs],
+      bundle: true,
+      platform: "browser",
+      format: "esm",
+      target: "chrome120",
+      nodePaths: [join(root, "node_modules")],
+      outfile: bundleJs,
+      plugins: [{
+        name: "synthetic-host",
+        setup(b) {
+          b.onResolve({ filter: /^obsidian$/ }, () => ({ path: obsidianStub }));
+          b.onResolve({ filter: /^(?:node:)?(?:http|https|fs|path|crypto|child_process|os|url|stream|zlib)$/ }, args => ({ path: args.path, namespace: "empty-node" }));
+          b.onLoad({ filter: /.*/, namespace: "empty-node" }, () => ({ contents: "export default {}; export const request = () => {}; export const createServer = () => {}; export const randomBytes = () => ({ toString: () => '' });" }));
+        },
+      }],
+    });
+    const cssText = await readFile(join(baseDir, "src/styles/styles-reader.css"), "utf8");
+    const jsText = await readFile(bundleJs, "utf8");
+    const htmlText = await readFile(htmlFile, "utf8");
+    server = createServer((req, res) => {
+      const path = new URL(req.url, "http://127.0.0.1").pathname;
+      if (path === "/probe.js") { res.setHeader("Content-Type", "text/javascript"); res.end(jsText); return; }
+      if (path === "/reader.css") { res.setHeader("Content-Type", "text/css"); res.end(cssText); return; }
+      res.setHeader("Content-Type", "text/html; charset=utf-8"); res.end(htmlText);
+    });
+    await new Promise(done => server.listen(0, "127.0.0.1", done));
+    const port = server.address().port;
+    await runBrowser(session, "open", `http://127.0.0.1:${port}/`);
+    await runBrowser(session, "wait", "--fn", "window.__done === true");
+    const probe = JSON.parse((await runBrowser(session, "eval", "window.__probe")).stdout);
+    const errors = [];
+    if (probe.error) errors.push(`runtime probe threw: ${probe.error}`);
+    else {
+      if (probe.constVal !== TARGET_OPACITY_STR) errors.push(`INK_REFERENCE_OPACITY=${probe.constVal} !== ${TARGET_OPACITY_STR}`);
+      if (probe.tokenVal !== TARGET_OPACITY_STR || probe.tokenVal !== probe.constVal) errors.push(`documentElement ${TOKEN_NAME}=${JSON.stringify(probe.tokenVal)} !== ${TARGET_OPACITY_STR} / const=${probe.constVal}`);
+      if (probe.liveInk !== TARGET_OPACITY_STR || probe.liveInk !== probe.constVal) errors.push(`.ms-ink-reference computed opacity=${probe.liveInk} !== ${TARGET_OPACITY_STR} / const=${probe.constVal}`);
+      if (probe.liveNb !== TARGET_OPACITY_STR || probe.liveNb !== probe.constVal) errors.push(`.ms-document-notebook-reference computed opacity=${probe.liveNb} !== ${TARGET_OPACITY_STR} / const=${probe.constVal}`);
+      if (probe.fallbackInk !== TARGET_OPACITY_STR) errors.push(`.ms-ink-reference fallback opacity=${probe.fallbackInk} !== ${TARGET_OPACITY_STR}`);
+      if (probe.fallbackNb !== TARGET_OPACITY_STR) errors.push(`.ms-document-notebook-reference fallback opacity=${probe.fallbackNb} !== ${TARGET_OPACITY_STR}`);
     }
-    process.exit(1);
+    return { passed: errors.length === 0, probe, errors };
+  } finally {
+    await runBrowser(session, "close").catch(() => {});
+    if (server) await new Promise(done => server.close(done));
+    await rm(temp, { recursive: true, force: true }).catch(() => {});
   }
-  console.log(`PASS reference-opacity-guard (${result.actual.ts} TS + ${result.actual.cssFallback} CSS fallback + ${result.actual.producer} producer = ${result.actual.total}, 0 violations)`);
+}
+
+if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
+  const args = process.argv.slice(2);
+  const staticOnly = args.includes("--static-only");
+  const runtimeOnly = args.includes("--runtime-only");
+  const dirArg = args.find(a => !a.startsWith("--"));
+  const targetDir = dirArg ? resolve(dirArg) : root;
+
+  let failed = false;
+  if (!runtimeOnly) {
+    const result = await checkReferenceOpacityStatic(targetDir);
+    console.log("reference-opacity-guard(static):", JSON.stringify(result));
+    if (!result.passed) {
+      failed = true;
+      for (const v of result.violations) {
+        console.error(`FAIL reference-opacity-guard ${v.file}:${v.line} (${v.reason}): ${v.text}`);
+      }
+      if (result.actual.total !== result.expected.total ||
+          result.actual.ts !== result.expected.ts ||
+          result.actual.cssFallback !== result.expected.cssFallback ||
+          result.actual.producer !== result.expected.producer) {
+        console.error(`FAIL reference-opacity-guard baseline mismatch: actual=${JSON.stringify(result.actual)} expected=${JSON.stringify(result.expected)}`);
+      }
+    } else {
+      console.log(`PASS reference-opacity-guard(static) (${result.actual.ts} TS + ${result.actual.cssFallback} CSS fallback + ${result.actual.producer} producer = ${result.actual.total}, 0 violations)`);
+    }
+  }
+  if (!staticOnly) {
+    const rt = await checkReferenceOpacityRuntime(targetDir);
+    console.log("reference-opacity-guard(runtime):", JSON.stringify(rt));
+    if (!rt.passed) {
+      failed = true;
+      for (const e of rt.errors) console.error(`FAIL reference-opacity-guard(runtime): ${e}`);
+    } else {
+      console.log(`PASS reference-opacity-guard(runtime) (token=${rt.probe.tokenVal}, ink=${rt.probe.liveInk}, notebook=${rt.probe.liveNb}, fallback=${rt.probe.fallbackInk}/${rt.probe.fallbackNb})`);
+    }
+  }
+  if (failed) process.exit(1);
 }
