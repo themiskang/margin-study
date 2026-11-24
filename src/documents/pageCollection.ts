@@ -1,7 +1,8 @@
 import { Notice, TFile } from "obsidian";
 import type MarginStudyPlugin from "../main";
-import type { Annotation, PdfPageGeometry } from "../types";
+import type { Annotation, DocMeta, PdfPageGeometry } from "../types";
 import { uid } from "../utils/id";
+import { sha256Hex } from "../utils/sha256";
 import { loadPdf } from "../pdf/pdfjs";
 import { annotationGeometry } from "../anchors/pdfGeometry";
 import { annotationNotebook, notebookMeta, updateNotebookMeta } from "../annot/documentNotebooks";
@@ -336,6 +337,92 @@ export async function recreatePageCollection(plugin: MarginStudyPlugin, path: st
   if (set && !set.docPaths.includes(path)) set.docPaths = [...set.docPaths, path];
   plugin.store.registerDocument(path); plugin.store.save(); await plugin.store.flush(); plugin.refreshSidebar();
   return file;
+}
+export interface CreatedCollectionGuardSnapshot {
+  path: string;
+  fileDigest: string;
+  collection: PageCollection;
+  annotations: Annotation[];
+  diskSidecar: string | null;
+  meta: DocMeta;
+}
+export async function captureCreatedCollectionGuard(plugin: MarginStudyPlugin, file: TFile): Promise<CreatedCollectionGuardSnapshot> {
+  const bytes = await plugin.app.vault.readBinary(file);
+  const sidecar = plugin.store.sidecarPath(file.path);
+  const diskSidecar = await plugin.app.vault.adapter.exists(sidecar) ? await plugin.app.vault.adapter.read(sidecar) : null;
+  return {
+    path: file.path,
+    fileDigest: sha256Hex(bytes),
+    collection: parsePageCollection(bytes),
+    annotations: structuredClone(await plugin.store.loadAnnotations(file.path)),
+    diskSidecar,
+    meta: structuredClone(plugin.store.getDocMeta(file.path)),
+  };
+}
+export async function verifyCreatedCollectionUnchanged(plugin: MarginStudyPlugin, expected: CreatedCollectionGuardSnapshot): Promise<TFile> {
+  const currentFile = plugin.app.vault.getAbstractFileByPath(expected.path);
+  if (!(currentFile instanceof TFile)) throw new Error("新建合并文档已不存在，撤销已取消");
+  const currentBytes = await plugin.app.vault.readBinary(currentFile);
+  if (sha256Hex(currentBytes) !== expected.fileDigest) {
+    throw new Error("新建合并文档内容已被修改，已取消删除以保护您的数据");
+  }
+  const currentCollection = parsePageCollection(currentBytes);
+  if (JSON.stringify(currentCollection) !== JSON.stringify(expected.collection)) {
+    throw new Error("新建合并文档页面已被修改，已取消删除以保护您的数据");
+  }
+  const sidecar = plugin.store.sidecarPath(expected.path);
+  const currentDiskSidecar = await plugin.app.vault.adapter.exists(sidecar) ? await plugin.app.vault.adapter.read(sidecar) : null;
+  if (currentDiskSidecar !== expected.diskSidecar) {
+    throw new Error("新建合并文档磁盘批注已被修改，已取消删除以保护您的数据");
+  }
+  const currentAnnotations = await plugin.store.loadAnnotations(expected.path);
+  if (JSON.stringify(currentAnnotations) !== JSON.stringify(expected.annotations)) {
+    throw new Error("新建合并文档批注已被修改，已取消删除以保护您的数据");
+  }
+  const currentMeta = plugin.store.getDocMeta(expected.path);
+  if (JSON.stringify(currentMeta) !== JSON.stringify(expected.meta)) {
+    throw new Error("新建合并文档书签、折页或图层元数据已被修改，已取消删除以保护您的数据");
+  }
+  return currentFile;
+}
+/** Single two-stage guarded deletion entry: verify -> close views (onClose) -> re-verify from disk -> trash + guarded Store purge. */
+export async function cleanupCreatedPageCollection(
+  plugin: MarginStudyPlugin,
+  expected: CreatedCollectionGuardSnapshot,
+  options: {
+    beforeVerify?: () => Promise<void>;
+    onConflictAfterClose?: (file: TFile) => Promise<void>;
+    studySetId?: string | null;
+    previousLastDocPath?: string;
+  } = {},
+): Promise<void> {
+  if (locks.has(expected.path)) throw new Error("此重组文档正在更新");
+  locks.add(expected.path);
+  try {
+    await verifyCreatedCollectionUnchanged(plugin, expected);
+    if (options.beforeVerify) await options.beforeVerify();
+    let currentFile: TFile;
+    try {
+      currentFile = await verifyCreatedCollectionUnchanged(plugin, expected);
+    } catch (error) {
+      const existing = plugin.app.vault.getAbstractFileByPath(expected.path);
+      if (existing instanceof TFile && options.onConflictAfterClose) {
+        await options.onConflictAfterClose(existing);
+      }
+      throw error;
+    }
+    await plugin.app.vault.trash(currentFile, true);
+    await plugin.store.purgeCreatedCollection(expected.path, {
+      diskSidecar: expected.diskSidecar,
+      annotations: expected.annotations,
+      meta: expected.meta,
+      studySetId: options.studySetId,
+      previousLastDocPath: options.previousLastDocPath,
+    });
+    plugin.refreshSidebar();
+  } finally {
+    locks.delete(expected.path);
+  }
 }
 export async function appendPageReferences(plugin: MarginStudyPlugin, file: TFile, inputs: PageReferenceInput[], notebookId?: string): Promise<PageCollection> {
   if (locks.has(file.path)) throw new Error("此重组文档正在更新"); locks.add(file.path);

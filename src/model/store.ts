@@ -3241,10 +3241,38 @@ export class Store {
 
   getDocMeta(path: string): DocMeta { return this.docMeta[path] ?? {}; }
   updateDocMeta(path: string, patch: Partial<DocMeta>): void { this.docMeta[path] = { ...this.getDocMeta(path), ...patch }; this.save(); }
-  clearDocMeta(path: string): void { if (path in this.docMeta) { delete this.docMeta[path]; this.save(); } }
+  /** Single guarded Store cleanup entry for undo of a newly created .msref collection. */
+  async purgeCreatedCollection(
+    path: string,
+    expected: { diskSidecar: string | null; annotations: Annotation[]; meta: DocMeta; studySetId?: string | null; previousLastDocPath?: string },
+  ): Promise<void> {
+    const adapter = this.host.app.vault.adapter;
+    const sidecar = this.sidecarPath(path);
+    const currentDisk = await adapter.exists(sidecar) ? await adapter.read(sidecar) : null;
+    if (currentDisk !== expected.diskSidecar) {
+      throw new Error("新建合并文档磁盘批注已被修改，已取消清理以保护您的数据");
+    }
+    const currentAnnotations = await this.loadAnnotations(path);
+    if (JSON.stringify(currentAnnotations) !== JSON.stringify(expected.annotations)) {
+      throw new Error("新建合并文档批注已被修改，已取消清理以保护您的数据");
+    }
+    const currentMeta = this.getDocMeta(path);
+    if (JSON.stringify(currentMeta) !== JSON.stringify(expected.meta)) {
+      throw new Error("新建合并文档元数据已被修改，已取消清理以保护您的数据");
+    }
+    this.saveAnnotationsDebounced(path, []);
+    if (path in this.docMeta) delete this.docMeta[path];
+    const docIndex = this.documents.findIndex(d => d.path === path);
+    if (docIndex >= 0) this.documents.splice(docIndex, 1);
+    const set = this.studySets.find(item => item.id === expected.studySetId);
+    if (set) set.docPaths = set.docPaths.filter(p => p !== path);
+    const canvas = this.canvases.find(c => c.id === this.activeCanvasId);
+    if (canvas && canvas.lastDocumentPath === path) canvas.lastDocumentPath = expected.previousLastDocPath;
+    this.save();
+    await this.flush();
+  }
   toggleFoldPage(path: string, page: number): void { const values = new Set(this.getDocMeta(path).foldedPages ?? []); values.has(page) ? values.delete(page) : values.add(page); this.updateDocMeta(path, { foldedPages: [...values].sort((a,b) => a-b) }); }
   toggleBookmark(path: string, page: number): void { const values = new Set(this.getDocMeta(path).bookmarks ?? []); values.has(page) ? values.delete(page) : values.add(page); this.updateDocMeta(path, { bookmarks: [...values].sort((a,b) => a-b) }); }
-  unregisterDocument(path: string): void { const index = this.documents.findIndex(d => d.path === path); if (index >= 0) { this.documents.splice(index, 1); this.save(); } }
   registerDocument(path: string, sourceUrl?: string, bytes?: Uint8Array): DocumentRecord | undefined {
     if (!path) return undefined;
     let doc = this.documents.find(d => d.path === path);

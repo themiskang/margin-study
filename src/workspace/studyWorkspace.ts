@@ -12,10 +12,9 @@ import { openVocabularyLookup } from "../vocabulary/view";
 import { clearOcrBuffer } from "../ocr/ocr";
 import { useStudySidebarSpace } from "./hostSidebars";
 import { DocumentNavigation, documentNavigationTabs } from "./documentNavigation";
-import { appendPageReferences, createPageCollection, parsePageCollection, parsePageRange, readPageCollection, recreatePageCollection, restorePageCollectionSnapshot } from "../documents/pageCollection";
+import { appendPageReferences, captureCreatedCollectionGuard, cleanupCreatedPageCollection, createPageCollection, parsePageRange, readPageCollection, recreatePageCollection, restorePageCollectionSnapshot } from "../documents/pageCollection";
 import type { PageReferenceInput } from "../documents/pageCollection";
 import { documentNotebookState } from "../annot/documentNotebooks";
-import { sha256Hex } from "../utils/sha256";
 import type { DocumentNavigationTab } from "./documentNavigation";
 import type MarginStudyPlugin from "../main";
 import { handwritingPresets } from "../annot/handwritingPresets";
@@ -2512,13 +2511,8 @@ export class StudyWorkspaceView extends ItemView {
             recordLibraryHistory: false,
           });
           const createdPath = created.path;
-          const createdCollection = await readPageCollection(this.plugin, created);
-          const createdMeta = structuredClone(this.plugin.store.getDocMeta(createdPath));
-          const createdAnnotations = structuredClone(await this.plugin.store.loadAnnotations(createdPath));
           const createdSetId = this.plugin.store.activeStudySetId;
-          const sidecar = this.plugin.store.sidecarPath(createdPath);
-          let createdFileDigest = sha256Hex(await this.app.vault.readBinary(created));
-          let createdDiskSidecar = await this.app.vault.adapter.exists(sidecar) ? await this.app.vault.adapter.read(sidecar) : null;
+          let guardSnapshot = await captureCreatedCollectionGuard(this.plugin, created);
           status.textContent = `已新建合并文档「${created.basename}」`;
           new Notice(`已新建合并文档「${created.basename}」`);
           this.refresh(true);
@@ -2529,46 +2523,25 @@ export class StudyWorkspaceView extends ItemView {
           }
           this.recordWorkspaceEdit("合并新建文档", async (redo) => {
             if (!redo) {
-              const currentFile = this.app.vault.getAbstractFileByPath(createdPath);
-              if (!(currentFile instanceof TFile)) throw new Error("新建合并文档已不存在，撤销已取消");
-              const currentBytes = await this.app.vault.readBinary(currentFile);
-              if (sha256Hex(currentBytes) !== createdFileDigest) {
-                throw new Error("新建合并文档内容已被修改，已取消删除以保护您的数据");
-              }
-              const currentCollection = parsePageCollection(currentBytes);
-              if (JSON.stringify(currentCollection) !== JSON.stringify(createdCollection)) {
-                throw new Error("新建合并文档页面已被修改，已取消删除以保护您的数据");
-              }
-              const currentAnnotations = await this.plugin.store.loadAnnotations(createdPath);
-              if (JSON.stringify(currentAnnotations) !== JSON.stringify(createdAnnotations)) {
-                throw new Error("新建合并文档批注已被修改，已取消删除以保护您的数据");
-              }
-              const currentDiskSidecar = await this.app.vault.adapter.exists(sidecar) ? await this.app.vault.adapter.read(sidecar) : null;
-              if (currentDiskSidecar !== createdDiskSidecar) {
-                throw new Error("新建合并文档磁盘批注已被修改，已取消删除以保护您的数据");
-              }
-              const currentMeta = this.plugin.store.getDocMeta(createdPath);
-              if (JSON.stringify(currentMeta) !== JSON.stringify(createdMeta)) {
-                throw new Error("新建合并文档书签、折页或图层元数据已被修改，已取消删除以保护您的数据");
-              }
-              if (this.comparisons.some((item) => item.reader.getFilePath() === createdPath)) await this.closeComparison();
+              await cleanupCreatedPageCollection(this.plugin, guardSnapshot, {
+                studySetId: createdSetId,
+                previousLastDocPath,
+                beforeVerify: async () => {
+                  if (this.comparisons.some((item) => item.reader.getFilePath() === createdPath)) await this.closeComparison();
+                  if (this.reader?.getFilePath() === createdPath) {
+                    await this.releaseReader();
+                    this.state.activePath = undefined;
+                  }
+                },
+                onConflictAfterClose: async (existing) => {
+                  await this.openFile(existing);
+                  this.drawTabs();
+                  this.drawLibrary();
+                  this.refresh(true);
+                },
+              });
               const tabIndex = this.state.tabs.findIndex((tab) => tab.path === createdPath);
               if (tabIndex >= 0) this.state.tabs.splice(tabIndex, 1);
-              if (this.reader?.getFilePath() === createdPath) {
-                await this.releaseReader();
-                this.state.activePath = undefined;
-              }
-              await this.app.vault.trash(currentFile, true);
-              this.plugin.store.saveAnnotationsDebounced(createdPath, []);
-              this.plugin.store.clearDocMeta(createdPath);
-              this.plugin.store.unregisterDocument(createdPath);
-              const set = this.plugin.store.studySets.find((item) => item.id === createdSetId);
-              if (set) set.docPaths = set.docPaths.filter((p) => p !== createdPath);
-              const canvas = this.plugin.store.canvases.find((c) => c.id === this.plugin.store.activeCanvasId);
-              if (canvas && canvas.lastDocumentPath === createdPath) canvas.lastDocumentPath = previousLastDocPath;
-              this.plugin.store.save();
-              await this.plugin.store.flush();
-              this.plugin.refreshSidebar();
               const prevFile = this.app.vault.getAbstractFileByPath(sourcePath);
               if (prevFile instanceof TFile) await this.openFile(prevFile);
               else this.showEmptyReader();
@@ -2580,13 +2553,12 @@ export class StudyWorkspaceView extends ItemView {
               const recreated = await recreatePageCollection(
                 this.plugin,
                 createdPath,
-                createdCollection,
-                createdMeta,
-                createdAnnotations,
+                guardSnapshot.collection,
+                guardSnapshot.meta,
+                guardSnapshot.annotations,
                 createdSetId,
               );
-              createdFileDigest = sha256Hex(await this.app.vault.readBinary(recreated));
-              createdDiskSidecar = await this.app.vault.adapter.exists(sidecar) ? await this.app.vault.adapter.read(sidecar) : null;
+              guardSnapshot = await captureCreatedCollectionGuard(this.plugin, recreated);
               await this.openFile(recreated);
               this.drawTabs();
               this.drawLibrary();

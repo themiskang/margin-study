@@ -383,6 +383,7 @@ async function runAll() {
     assert(afterMerge.manifest.pages.every((p: any) => p.annotations === "include"), "PDF merge pages missing annotations=include");
     assert(afterMerge.anns.length === 2, "PDF merge did not snapshot both dst and src non-excerpt notes");
 
+    const docRecordBeforeUndo = h.plugin.store.documents.find((d: any) => d.path === createdPath)?.id;
     // 1st Undo
     await (h.view as any).applyHistory(false);
     assert(h.app.vault.getAbstractFileByPath(createdPath) === null, "1st undo did not trash created.msref");
@@ -394,6 +395,7 @@ async function runAll() {
     await (h.view as any).applyHistory(true);
     const recreatedFile = h.app.vault.getAbstractFileByPath(createdPath) as TFile;
     assert(!!recreatedFile, "redo did not recreate file at original path");
+    const docRecordAfterRedo = h.plugin.store.documents.find((d: any) => d.path === createdPath)?.id;
     const afterRedo = {
       ws: snapWorkspace(),
       manifest: await readPageCollection(h.plugin, recreatedFile),
@@ -475,6 +477,65 @@ async function runAll() {
     assert(afterDisk4.annotations.some((a: any) => a.id === "disk-after-close-note"), "guard #4 lost disk annotation written after onClose!");
     assert(notices.length > noticesBeforeGuard4, "guard #4 did not emit notice");
 
+    // TOCTOU race guard #5: write new annotation to disk DURING reader.onClose() await inside Undo -> trash MUST be 0!
+    await h.view.openFile(h.srcPdf);
+    await h.runMergeModal("page", h.dstPdf.path);
+    const createdPath5 = h.view.getReader()?.getFilePath()!;
+    const reader5 = h.view.getReader() as ReaderView;
+    const sidecar5 = h.plugin.store.sidecarPath(createdPath5);
+    const origOnClose5 = reader5.onClose.bind(reader5);
+    reader5.onClose = async () => {
+      await origOnClose5();
+      const disk = JSON.parse(await h.app.vault.adapter.read(sidecar5));
+      disk.annotations.push({
+        id: "toctou-during-onclose-note",
+        docPath: createdPath5,
+        docKind: "pdf",
+        page: 1,
+        type: "note",
+        rects: [{ x: 35, y: 140, w: 70, h: 20 }],
+        pdfCoordinateSpace: "pdf",
+        text: "written during onClose",
+        color: "#000",
+        createdAt: stamp,
+      });
+      await h.app.vault.adapter.write(sidecar5, JSON.stringify(disk));
+    };
+    let trashCount5 = 0;
+    const origTrash = h.app.vault.trash.bind(h.app.vault);
+    h.app.vault.trash = async (f: TFile, system?: boolean) => {
+      if (f.path === createdPath5) trashCount5++;
+      return origTrash(f, system);
+    };
+    try {
+      const noticesBeforeGuard5 = notices.length;
+      await (h.view as any).applyHistory(false);
+      assert(trashCount5 === 0, "TOCTOU race #5 trashed file during onClose! trashCount=" + trashCount5);
+      assert(h.app.vault.getAbstractFileByPath(createdPath5) !== null, "TOCTOU race #5 removed file from vault!");
+      const afterDisk5 = JSON.parse(await h.app.vault.adapter.read(sidecar5));
+      assert(afterDisk5.annotations.some((a: any) => a.id === "toctou-during-onclose-note"), "TOCTOU race #5 lost disk annotation written during onClose!");
+      assert(notices.length > noticesBeforeGuard5, "TOCTOU race #5 did not emit notice");
+    } finally {
+      h.app.vault.trash = origTrash;
+    }
+
+    // Store bypass guard #6: Store cleanup path must NOT expose unguarded clearDocMeta/unregisterDocument and purgeCreatedCollection must reject disk change
+    assert(typeof (h.plugin.store as any).clearDocMeta === "undefined", "unguarded Store.clearDocMeta bypass still exists!");
+    assert(typeof (h.plugin.store as any).unregisterDocument === "undefined", "unguarded Store.unregisterDocument bypass still exists!");
+    let bypassRejected = false;
+    try {
+      await (h.plugin.store as any).purgeCreatedCollection(createdPath5, {
+        diskSidecar: JSON.stringify({ annotations: [] }),
+        annotations: [],
+        meta: {},
+      });
+    } catch {
+      bypassRejected = true;
+    }
+    assert(bypassRejected, "Store.purgeCreatedCollection did not reject stale snapshot!");
+    const afterBypassDisk5 = JSON.parse(await h.app.vault.adapter.read(sidecar5));
+    assert(afterBypassDisk5.annotations.some((a: any) => a.id === "toctou-during-onclose-note"), "Store bypass cleared disk annotation!");
+
     // Source & target original PDFs SHA-256 & annotations untouched
     assert(bytesSig(h.sources.get(h.srcPdf.path)!.binary) === srcSigBefore, "src PDF bytes changed");
     assert(bytesSig(h.sources.get(h.dstPdf.path)!.binary) === dstSigBefore, "dst PDF bytes changed");
@@ -486,10 +547,14 @@ async function runAll() {
       passed: true,
       undoRedoUndoDiffZero: true,
       preservedCollectionAndPageIds: true,
+      docRecordIdBeforeUndo: docRecordBeforeUndo,
+      docRecordIdAfterRedo: docRecordAfterRedo,
       refusedDeleteAfterAnnotationEdit: true,
       refusedDeleteAfterPageReorder: true,
       refusedDeleteAfterBookmark: true,
       refusedDeleteAfterCloseDiskWrite: true,
+      refusedDeleteDuringOnCloseToctouRace: true,
+      storeBypassClosedAndGuarded: true,
       originalPdfsUnchanged: true,
     };
   }
