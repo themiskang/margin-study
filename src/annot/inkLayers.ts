@@ -1,8 +1,11 @@
 import type { Annotation, DocMeta, HandwritingPresetId, HandwritingPresetSpec } from "../types";
 import { handwritingPresetWidth } from "./handwritingPresets";
+import { INK_ACTIVE_OPACITY, INK_REFERENCE_OPACITY, inkLayerOpacity } from "./penGeometry";
 import { el, clear } from "../utils/dom";
 import { createModal } from "../utils/modal";
 import { setIcon } from "obsidian";
+
+export { INK_ACTIVE_OPACITY, INK_REFERENCE_OPACITY, inkLayerOpacity };
 
 export interface InkLayerState { layers: { id: string; name: string }[]; active: string; overlay?: string; }
 export function inkLayerState(meta: DocMeta): InkLayerState {

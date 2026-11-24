@@ -5,7 +5,7 @@
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 import type { Stroke } from "../types";
-import { cloneStrokes, eraseInk, selectInk, transformSelectedInk } from "./penGeometry";
+import { cloneStrokes, eraseInk, inkLayerOpacity, selectInk, transformSelectedInk } from "./penGeometry";
 import type { InkChange, InkRecord, InkSelection, PenTool } from "./penGeometry";
 import { inkEndpoint, inkPoint, inkSamples, PalmGuard, predictInkPoint } from "./penInput";
 import type { TimedInkPoint } from "./penInput";
@@ -139,7 +139,7 @@ export function paintInkStrokes(context: CanvasRenderingContext2D, strokes: Stro
   context.save();
   context.strokeStyle = color ?? INK_DEFAULT_COLOR; context.lineCap = "round"; context.lineJoin = "round";
   const alpha = Math.max(0, Math.min(1, opacity ?? 1));
-  context.globalAlpha = alpha * (brush === "highlight" && opacity === undefined ? .32 : 1) * (reference ? .35 : 1);
+  context.globalAlpha = alpha * (brush === "highlight" && opacity === undefined ? .32 : 1) * inkLayerOpacity(reference);
   for (const stroke of strokes) {
     if (!stroke.length) continue;
     const pressure = brush !== "highlight" && stroke.some(point => point.pressure !== undefined);

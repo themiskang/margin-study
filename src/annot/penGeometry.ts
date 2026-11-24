@@ -12,6 +12,11 @@ export interface InkRecord { id: string; strokes: Stroke[][]; color?: string; }
 export interface InkChange { id: string; before: Stroke[][]; after: Stroke[][]; color?: { before?: string; after: string }; }
 export interface InkSelection { id: string; indexes: number[]; }
 export const cloneStrokes = (strokes: Stroke[][]): Stroke[][] => strokes.map((stroke) => stroke.map((point) => ({ ...point })));
+export const INK_ACTIVE_OPACITY = 1;
+export const INK_REFERENCE_OPACITY = 0.35;
+export function inkLayerOpacity(reference: boolean): number {
+  return reference ? INK_REFERENCE_OPACITY : INK_ACTIVE_OPACITY;
+}
 
 export interface InkFrame { x: number; y: number; width: number; height: number; }
 export function projectBoundInk<T extends Stroke>(points: T[], original?: InkFrame, current?: InkFrame): T[] {

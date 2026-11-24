@@ -204,7 +204,7 @@ body.ms-theme-dark .ms-modal.ms-ink-layer-modal { color: #111; background: #fff;
 .ms-ink-layer-sync small { display: block; margin-top: 7px; color: #8b8e96; font-size: 10px; line-height: 1.4; }
 .ms-ink-layer-name-modal, .ms-ink-layer-delete-modal { width: min(350px, 94vw); }
 .ms-ink-layer-name-modal input { width: 100%; }
-.ms-ink-reference { opacity: .35; }
+.ms-ink-reference { opacity: var(--ms-ink-reference-opacity); }
 .ms-ink-reference, .ms-ink-reference * { pointer-events: none !important; }
 .ms-recall .ms-ink-reference { display: none; }
 .ms-reader-native-chrome { position: relative; }
@@ -220,7 +220,7 @@ body.ms-theme-dark .ms-modal.ms-ink-layer-modal { color: #111; background: #fff;
 .ms-document-notebook-row { display: flex; align-items: center; gap: 6px; min-height: 44px; border-bottom: 1px solid var(--background-modifier-border); }
 .ms-document-notebook-name-modal, .ms-document-notebook-delete-modal { width: min(370px, 94vw); }
 .ms-document-notebook-name-modal input { width: 100%; }
-.ms-document-notebook-reference { opacity: .35; pointer-events: none !important; }
+.ms-document-notebook-reference { opacity: var(--ms-ink-reference-opacity); pointer-events: none !important; }
 .ms-document-notebook-reference * { pointer-events: none !important; }
 .ms-recall .ms-document-notebook-reference { display: none; }
 .ms-html-reference-range { inset: 0; pointer-events: none; }

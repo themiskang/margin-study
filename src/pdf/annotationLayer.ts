@@ -13,6 +13,7 @@ import { todayStr } from "../srs";
 import { Notice, Platform, TFile } from "obsidian";
 import { saveVoiceBlob } from "../audio/voice";
 import { PenController, inkHitTest, measurePenCommit, paintInkStrokes } from "../annot/pen";
+import { inkLayerOpacity } from "../annot/inkLayers";
 import { handwritingPresetWidth } from "../annot/handwritingPresets";
 import { BaseAnnotationController, SelTarget, VoiceTarget } from "../annot/baseController";
 import { recognizeImage, mergeOcrWords } from "../ocr/ocr";
@@ -101,7 +102,7 @@ export class AnnotationController extends BaseAnnotationController {
   }
   getPdfExportAnnotations(): import("./exportAnnotations").PdfExportAnnotation[] {
     return this.getAnnotationsForDisplay().filter(ann => ann.type !== "pen" || this.isInkVisible(ann)).map(annotation => ({
-      annotation: structuredClone(annotation), opacity: this.isNotebookReference(annotation) || (annotation.type === "pen" || annotation.overlay) && this.isInkReference(annotation) ? .35 : 1,
+      annotation: structuredClone(annotation), opacity: inkLayerOpacity(this.isNotebookReference(annotation) || (annotation.type === "pen" || !!annotation.overlay) && this.isInkReference(annotation)),
     }));
   }
   protected onAnnClick(ann: Annotation, ev: MouseEvent): void {
