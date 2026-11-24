@@ -852,28 +852,97 @@ export async function checkReferenceOpacityRuntime(baseDir = root, expectedKinds
         };
       }
 
-      const runCanvasPass = (reference: boolean, extraDrawImageNoAlpha = false) => {
+      const runCanvasPass = (reference: boolean, mode = "clean") => {
         drawLog.length = 0;
+        const width = 200, height = 100, strokeWidth = 12;
         const canvas = document.createElement("canvas");
-        canvas.width = 200;
-        canvas.height = 100;
+        canvas.width = width;
+        canvas.height = height;
         canvas.dataset.msCanvasProbe = "1";
         const ctx = canvas.getContext("2d")!;
-        const strokes = [[{ x: 0.1, y: 0.5 }, { x: 0.9, y: 0.5 }]];
-        paintInkStrokes(ctx, strokes, 200, 100, "#000000", "pen", 10, 1, reference);
-        if (extraDrawImageNoAlpha) {
+        const x0 = 20, x1 = 180, cy = 50;
+        const strokes = [[{ x: x0 / width, y: cy / height }, { x: x1 / width, y: cy / height }]];
+        paintInkStrokes(ctx, strokes, width, height, "#000000", "pen", strokeWidth, 1, reference);
+        if (reference && mode === "drawimage-no-alpha") {
           const src = document.createElement("canvas");
           src.width = 10; src.height = 10;
           ctx.drawImage(src, 0, 0);
+        } else if (reference && mode === "dest-out-center") {
+          ctx.save();
+          ctx.globalCompositeOperation = "destination-out";
+          ctx.globalAlpha = 0.5;
+          ctx.fillRect(85, 40, 30, 20);
+          ctx.restore();
+        } else if (reference && mode === "half-fade") {
+          ctx.save();
+          ctx.globalCompositeOperation = "destination-out";
+          ctx.globalAlpha = 0.35;
+          ctx.fillRect(100, 40, 90, 20);
+          ctx.restore();
+        } else if (reference && mode === "dest-out-035") {
+          ctx.save();
+          ctx.globalCompositeOperation = "destination-out";
+          ctx.globalAlpha = 0.35;
+          ctx.fillRect(70, 40, 60, 20);
+          ctx.restore();
         }
-        const data = ctx.getImageData(0, 0, 200, 100).data;
-        let maxPixelAlpha = 0;
-        for (let i = 3; i < data.length; i += 4) if (data[i] > maxPixelAlpha) maxPixelAlpha = data[i];
-        return { log: [...drawLog], maxPixelAlpha };
+
+        const data = ctx.getImageData(0, 0, width, height).data;
+        const alphaAt = (x: number, y: number) => data[(y * width + x) * 4 + 3];
+        const minA = reference ? 87 : 253;
+        const maxA = reference ? 91 : 255;
+
+        // 1. Sample 11 evenly-spaced interior points along centerline (endpoints + center + intermediate, dist=0 < strokeWidth/4)
+        const sampleCount = 11;
+        const samples: { x: number; y: number; alpha: number; ok: boolean }[] = [];
+        for (let i = 0; i < sampleCount; i++) {
+          const sx = Math.round((x0 + 4) + ((x1 - 4) - (x0 + 4)) * (i / (sampleCount - 1)));
+          const alpha = alphaAt(sx, cy);
+          samples.push({ x: sx, y: cy, alpha, ok: alpha >= minA && alpha <= maxA });
+        }
+
+        // 2. Full interior pixel sweep (distance to centerline segment < strokeWidth / 4)
+        const coreDist = strokeWidth / 4;
+        let interiorTotal = 0;
+        let interiorInRange = 0;
+        let excludedEdgePixels = 0;
+        let interiorMin = 255;
+        let interiorMax = 0;
+        const badInterior: { x: number; y: number; alpha: number }[] = [];
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const a = alphaAt(x, y);
+            const clampedX = Math.max(x0, Math.min(x1, x));
+            const dist = Math.hypot(x - clampedX, y - cy);
+            if (dist < coreDist) {
+              interiorTotal++;
+              if (a < interiorMin) interiorMin = a;
+              if (a > interiorMax) interiorMax = a;
+              if (a >= minA && a <= maxA) {
+                interiorInRange++;
+              } else if (badInterior.length < 10) {
+                badInterior.push({ x, y, alpha: a });
+              }
+            } else if (a > 0 && a < 51) {
+              excludedEdgePixels++;
+            }
+          }
+        }
+        const interiorRatio = interiorTotal > 0 ? interiorInRange / interiorTotal : 0;
+        return {
+          log: [...drawLog],
+          samples,
+          interiorTotal,
+          interiorInRange,
+          interiorRatio,
+          interiorRange: [interiorMin, interiorMax],
+          excludedEdgePixels,
+          badInterior,
+        };
       };
 
-      const canvasRef = runCanvasPass(true, Boolean(${JSON.stringify(Boolean(options?.injectRefDrawImageNoAlpha))}));
-      const canvasActive = runCanvasPass(false, false);
+      const canvasRef = runCanvasPass(true, ${JSON.stringify(options?.canvasRefMode ?? "clean")});
+      const canvasActive = runCanvasPass(false, "clean");
 
       const host = document.createElement("div");
       host.style.cssText = "position:relative;width:500px;height:700px;";
@@ -1140,7 +1209,7 @@ export async function checkReferenceOpacityRuntime(baseDir = root, expectedKinds
           errors.push(`fallback [${leaf.kind}] ${leaf.chain} effectiveAlpha=${leaf.effectiveAlpha} !== ${TARGET_OPACITY_STR}`);
         }
       }
-      // Canvas draw-call interception + pixel alpha cross-check
+      // Canvas draw-call interception + full interior pixel sampling (no maxPixelAlpha!)
       const refLog = probe.canvasRef?.log ?? [];
       const activeLog = probe.canvasActive?.log ?? [];
       if (!refLog.length) errors.push("canvas reference pass recorded 0 draw calls");
@@ -1149,18 +1218,37 @@ export async function checkReferenceOpacityRuntime(baseDir = root, expectedKinds
           errors.push(`canvas reference op=${rec.op} alpha=${rec.alpha} !== ${TARGET_OPACITY_STR} (totalOps=${refLog.length})`);
         }
       }
-      const expectedRefPixel = Math.round(TARGET_OPACITY * 255);
-      if (Math.abs((probe.canvasRef?.maxPixelAlpha ?? 0) - expectedRefPixel) > 2) {
-        errors.push(`canvas reference pixelAlpha=${probe.canvasRef?.maxPixelAlpha} !== ${expectedRefPixel}±2`);
+      const refSamples = probe.canvasRef?.samples ?? [];
+      if (refSamples.length < 9) errors.push(`canvas reference sampleCount=${refSamples.length} < 9`);
+      const badRefSamples = refSamples.filter(s => !s.ok);
+      if (badRefSamples.length) {
+        const failRatio = (badRefSamples.length / refSamples.length).toFixed(3);
+        const detail = badRefSamples.map(s => `(${s.x},${s.y})=${s.alpha}`).join(", ");
+        errors.push(`canvas reference interior samples out of [87,91] (89±2): ${badRefSamples.length}/${refSamples.length} (failRatio=${failRatio}) [${detail}]`);
       }
+      if ((probe.canvasRef?.interiorRatio ?? 0) < 1) {
+        const failPct = (1 - (probe.canvasRef?.interiorRatio ?? 0)).toFixed(4);
+        const detail = (probe.canvasRef?.badInterior ?? []).slice(0, 5).map(p => `(${p.x},${p.y})=${p.alpha}`).join(", ");
+        errors.push(`canvas reference interior pixel ratio=${probe.canvasRef?.interiorRatio} !== 1.0 (inRange=${probe.canvasRef?.interiorInRange}/${probe.canvasRef?.interiorTotal}, failRatio=${failPct}, expected=[87,91], sampleBad=[${detail}])`);
+      }
+
       if (!activeLog.length) errors.push("canvas active pass recorded 0 draw calls");
       for (const rec of activeLog) {
         if (Math.abs(rec.alpha - 1) > ALPHA_TOL) {
           errors.push(`canvas active op=${rec.op} alpha=${rec.alpha} !== 1 (totalOps=${activeLog.length})`);
         }
       }
-      if (Math.abs((probe.canvasActive?.maxPixelAlpha ?? 0) - 255) > 2) {
-        errors.push(`canvas active pixelAlpha=${probe.canvasActive?.maxPixelAlpha} !== 255±2`);
+      const actSamples = probe.canvasActive?.samples ?? [];
+      if (actSamples.length < 9) errors.push(`canvas active sampleCount=${actSamples.length} < 9`);
+      const badActSamples = actSamples.filter(s => !s.ok);
+      if (badActSamples.length) {
+        const failRatio = (badActSamples.length / actSamples.length).toFixed(3);
+        const detail = badActSamples.map(s => `(${s.x},${s.y})=${s.alpha}`).join(", ");
+        errors.push(`canvas active interior samples out of [253,255]: ${badActSamples.length}/${actSamples.length} (failRatio=${failRatio}) [${detail}]`);
+      }
+      if ((probe.canvasActive?.interiorRatio ?? 0) < 1) {
+        const failPct = (1 - (probe.canvasActive?.interiorRatio ?? 0)).toFixed(4);
+        errors.push(`canvas active interior pixel ratio=${probe.canvasActive?.interiorRatio} !== 1.0 (inRange=${probe.canvasActive?.interiorInRange}/${probe.canvasActive?.interiorTotal}, failRatio=${failPct}, expected=[253,255])`);
       }
     }
     return { passed: errors.length === 0, probe, errors };
@@ -1177,7 +1265,10 @@ if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
   const runtimeOnly = args.includes("--runtime-only");
   const extraKindArg = args.find(a => a.startsWith("--extra-kind="));
   const extraKinds = extraKindArg ? [extraKindArg.slice("--extra-kind=".length)] : [];
-  const injectRefDrawImageNoAlpha = args.includes("--inject-ref-drawimage-no-alpha");
+  const canvasRefModeArg = args.find(a => a.startsWith("--canvas-ref-mode="));
+  const canvasRefMode = canvasRefModeArg
+    ? canvasRefModeArg.slice("--canvas-ref-mode=".length)
+    : args.includes("--inject-ref-drawimage-no-alpha") ? "drawimage-no-alpha" : "clean";
   const dirArg = args.find(a => !a.startsWith("--"));
   const targetDir = dirArg ? resolve(dirArg) : root;
 
@@ -1202,13 +1293,14 @@ if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
     }
   }
   if (!staticOnly) {
-    const rt = await checkReferenceOpacityRuntime(targetDir, [...EXPECTED_REFERENCE_KINDS, ...extraKinds], { injectRefDrawImageNoAlpha });
+    const rt = await checkReferenceOpacityRuntime(targetDir, [...EXPECTED_REFERENCE_KINDS, ...extraKinds], { canvasRefMode });
     console.log("reference-opacity-guard(runtime):", JSON.stringify(rt));
     if (!rt.passed) {
       failed = true;
       for (const e of rt.errors) console.error(`FAIL reference-opacity-guard(runtime): ${e}`);
     } else {
-      console.log(`PASS reference-opacity-guard(runtime) (token=${rt.probe.tokenVal}, kinds=${rt.probe.kinds.length} [${rt.probe.kinds.join(",")}], elementsChecked=${rt.probe.elementsChecked}, leavesChecked=${rt.probe.leavesChecked}, canvasRefOps=${rt.probe.canvasRef.log.length}/pixelAlpha=${rt.probe.canvasRef.maxPixelAlpha}, canvasActiveOps=${rt.probe.canvasActive.log.length}/pixelAlpha=${rt.probe.canvasActive.maxPixelAlpha}, allEffectiveAlpha=${TARGET_OPACITY_STR})`);
+      const cr = rt.probe.canvasRef, ca = rt.probe.canvasActive;
+      console.log(`PASS reference-opacity-guard(runtime) (token=${rt.probe.tokenVal}, kinds=${rt.probe.kinds.length}, elementsChecked=${rt.probe.elementsChecked}, leavesChecked=${rt.probe.leavesChecked}, canvasRef: ops=${cr.log.length} samples=${cr.samples.length} interior=${cr.interiorInRange}/${cr.interiorTotal}(${cr.interiorRatio}) range=[${cr.interiorRange}] excludedEdge=${cr.excludedEdgePixels}, canvasActive: ops=${ca.log.length} samples=${ca.samples.length} interior=${ca.interiorInRange}/${ca.interiorTotal}(${ca.interiorRatio}) range=[${ca.interiorRange}] excludedEdge=${ca.excludedEdgePixels}, allEffectiveAlpha=${TARGET_OPACITY_STR})`);
     }
   }
   if (failed) process.exit(1);
