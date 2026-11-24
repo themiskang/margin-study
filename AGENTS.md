@@ -130,6 +130,24 @@ orca orchestration send --to run:<统筹席 run id> --subject "<卡号> 第 N �
 - 闲置超过 7 天的非判定席会话，release。
 - 禁止把已完成会话的标签长期堆在侧栏：侧栏只应出现「正在做」与「当前轮需回看」的会话。
 
+### 席位驻留：判定席常驻、产出席临时（Orca 原语）
+
+| 席位 | 驻留 | Orca 原语 | 生命周期 |
+|---|---|---|---|
+| 规划席 | **常驻** | `worker-start --keep-open`（结构化，自动 `worker_done`） | 一个 dispatch 长期复用；卡收口 `worker-release` 休眠保上下文，下张卡 `send --to dispatch:` 唤醒 |
+| 复核席 | **常驻** | 同上 | 同上；同一条上下文承接 9+ 轮复判，避免换会话后重复判已修项 |
+| 执行席 | **临时（每卡）** | `worker-start --worktree new-child`（结构化，不带 `--keep-open`） | 卡收口自动关闭；失败先 `worker-show` 判断「重试 / 换人」，连续 3 次失败触发 `circuit_broken` |
+| 取证席 | **临时（每任务）** | `worker-start`（pi / hermes），每次干净室 | 出结果即收，输出进证据目录 |
+| 批量杂活 | 一次性 | `worktree create --no-parent --agent … --prompt` 或网页端 4 号池 | 不保留会话 |
+
+**禁止的做法（都实测踩过）**
+- 用 `orca terminal create` 起席位：没有 dispatch、没有 `worker_done`、没有生命周期，只能靠人盯。
+- 用 `orca agent launch --surface chat` 起需要回报的席位：那是业主手动聊天的表面，**不会自动回报**。
+- **轮询 worker**：手册明确 "Never poll or run watch scripts"，Orca 会唤醒统筹席；`sleep` 等待只会拖慢业主。
+- 并行起超过约 4 个 worker（其余等回包再发）。
+
+**每个 Run 一个目标**：新卡用 `run-create --objective "<卡号 + 目标>"` 另开 Run，避免旧 Run 的 objective 误导；跨 Run 用 `--run <id>` 指定。
+
 ## 旧卡与旧会话的删除
 
 **完成的卡**：收口（断言全过、证据齐、已提交）后立刻做三件事，不许留着等下轮：
