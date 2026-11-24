@@ -51,7 +51,10 @@ export type AssistiveCandidate = {box:DOMRect;text:string;target:SelTarget;range
 
 /** Chronological reader edits; document commands can rebuild their paper asynchronously. */
 export interface ReaderEditHistoryState { canUndo: boolean; canRedo: boolean; undoLabel?: string; redoLabel?: string; }
-type ReaderPenChange = InkChange & { creation?: { annotation: Annotation; index: number; removed: boolean } };
+type ReaderPenChange = InkChange & {
+  creation?: { annotation: Annotation; index: number; removed: boolean };
+  hostMeta?: { beforeLayer?: string; afterLayer?: string; beforeBind?: boolean; afterBind?: boolean };
+};
 type BoundInkChange = { id: string; hostId: string; before: Stroke[][]; after: Stroke[][]; beforeWidth?: number; afterWidth?: number };
 type ReaderEditChange = { sequence: number; label: string } & (
   | { kind: "pen"; changes: ReaderPenChange[] }
@@ -1007,8 +1010,8 @@ export abstract class BaseAnnotationController {
   /** 构造标注 + 推入缓存 + 持久化 + 增量渲染 + 提示（子类 commitAnnotation 复用） */
   protected pushAnnotation(ann: Annotation): void {
     if (ann.type === "pen") {
-      const current = this.penRevisionIsCurrent(); this.penRevision = null;
-      if (!current) return;
+      const current = this.penRevisionIsCurrent();
+      if (!current) { this.penRevision = null; return; }
     }
     ann.documentNotebookId ??= this.activeNotebookId;
     this.prepareAnnotation(ann);
@@ -1041,8 +1044,12 @@ export abstract class BaseAnnotationController {
     }
     measurePenCommit("applyMs", () => {
       this.cache.push(ann);
-      if (ann.type === "pen" && ann.strokes?.length) this.recordPenChange([{ id: ann.id, before: [], after: ann.strokes }], ann);
+      if (ann.type === "pen" && ann.strokes?.length) this.recordPenChange([{ id: ann.id, before: [], after: ann.strokes }], [ann]);
       this.persist();
+      if (ann.type === "pen") {
+        if (this.penMode && this.penTool === "select") this.beginPenGesture();
+        else this.penRevision = null;
+      }
     });
     measurePenCommit("renderMs", () => {
       if (this.isAnnotationVisible(ann)) {
@@ -1189,6 +1196,23 @@ export abstract class BaseAnnotationController {
     }
     return undefined;
   }
+  protected isStrokesInsideHost(ann: Annotation, projectedStrokes: Stroke[][]): boolean {
+    if (!ann.hostAnnotationId) return false;
+    const host = this.cache.find(item => item.id === ann.hostAnnotationId && !!item.overlay && !item.overlay.deleted && annotationNotebook(item) === annotationNotebook(ann));
+    if (!host) return false;
+    const metrics = this.getOverlayBoxMetrics(host);
+    if (!metrics || metrics.containerWidth <= 0 || metrics.containerHeight <= 0) return true;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const stroke of projectedStrokes) for (const point of stroke) {
+      minX = Math.min(minX, point.x); minY = Math.min(minY, point.y);
+      maxX = Math.max(maxX, point.x); maxY = Math.max(maxY, point.y);
+    }
+    if (!Number.isFinite(minX)) return true;
+    const padX = 2 / metrics.containerWidth, padY = 2 / metrics.containerHeight;
+    const left = metrics.left / metrics.containerWidth - padX, top = metrics.top / metrics.containerHeight - padY;
+    const right = (metrics.left + metrics.width) / metrics.containerWidth + padX, bottom = (metrics.top + metrics.height) / metrics.containerHeight + padY;
+    return minX >= left && maxX <= right && minY >= top && maxY <= bottom;
+  }
   bindInkToHost(penId: string, hostId?: string): boolean {
     if (!this.docPath || this.disposed || this.releasing) return false;
     const pen = this.cache.find(item => item.id === penId && item.type === "pen");
@@ -1201,15 +1225,76 @@ export abstract class BaseAnnotationController {
       if (isOrphanInkLayer(host, hostState)) return false;
       const hostLayer = annotationInkLayer(host, hostState);
       if (pen.hostAnnotationId === host.id && pen.inkLayerId === hostLayer && pen.bindToInkLayer !== false) return true;
-      pen.hostAnnotationId = host.id;
-      pen.inkLayerId = hostLayer;
-      if (pen.bindToInkLayer === false) delete pen.bindToInkLayer;
+      const change: ReaderPenChange = {
+        id: pen.id,
+        before: cloneStrokes(pen.strokes ?? []),
+        after: cloneStrokes(pen.strokes ?? []),
+        hostBinding: { before: pen.hostAnnotationId, after: host.id },
+        hostMeta: { beforeLayer: pen.inkLayerId, afterLayer: hostLayer, beforeBind: pen.bindToInkLayer, afterBind: pen.bindToInkLayer === false ? undefined : pen.bindToInkLayer },
+      };
       pen.hostBindingId = uid("bind");
+      if (!this.applyPenChanges([change], false, true)) return false;
+      this.recordPenChange([change]);
+      return true;
     } else {
       if (pen.hostAnnotationId === undefined) return true;
-      delete pen.hostAnnotationId;
+      const change: ReaderPenChange = {
+        id: pen.id,
+        before: cloneStrokes(pen.strokes ?? []),
+        after: cloneStrokes(pen.strokes ?? []),
+        hostBinding: { before: pen.hostAnnotationId, after: undefined },
+      };
+      if (!this.applyPenChanges([change], false, true)) return false;
+      this.recordPenChange([change]);
+      return true;
     }
-    this.persist(); this.onAnnotationsChanged(); return true;
+  }
+  protected unbindInkAnnotations(penIds: string[]): void {
+    if (!this.docPath || this.disposed || this.releasing || !penIds.length) return;
+    const current = this.penRevisionIsCurrent();
+    if (!current) { this.penRevision = null; return; }
+    const changes: ReaderPenChange[] = [];
+    for (const id of penIds) {
+      const pen = this.cache.find(item => item.id === id && item.type === "pen" && item.hostAnnotationId !== undefined);
+      if (!pen) continue;
+      changes.push({
+        id: pen.id,
+        before: cloneStrokes(pen.strokes ?? []),
+        after: cloneStrokes(pen.strokes ?? []),
+        hostBinding: { before: pen.hostAnnotationId, after: undefined },
+      });
+    }
+    if (!changes.length) {
+      if (this.penMode && this.penTool === "select") this.beginPenGesture();
+      else this.penRevision = null;
+      return;
+    }
+    if (!this.applyPenChanges(changes, false, true)) { this.penRevision = null; return; }
+    this.recordPenChange(changes);
+    if (this.penMode && this.penTool === "select") this.beginPenGesture();
+    else this.penRevision = null;
+  }
+  protected pushPastedPenAnnotations(annotations: Annotation[]): void {
+    if (!this.docPath || this.disposed || this.releasing || !annotations.length) return;
+    const current = this.penRevisionIsCurrent();
+    if (!current) { this.penRevision = null; return; }
+    for (const ann of annotations) {
+      ann.documentNotebookId ??= this.activeNotebookId;
+      this.prepareAnnotation(ann);
+    }
+    const changes: ReaderPenChange[] = [];
+    for (const ann of annotations) {
+      this.cache.push(ann);
+      changes.push({ id: ann.id, before: [], after: ann.strokes ?? [] });
+    }
+    this.recordPenChange(changes, annotations);
+    this.persist();
+    for (const ann of annotations) {
+      if (this.isAnnotationVisible(ann)) this.renderOne(ann);
+    }
+    this.syncOcclusionElements();
+    if (this.penMode && this.penTool === "select") this.beginPenGesture();
+    else this.penRevision = null;
   }
   private getBoundPenAnnotations(hostId: string, notebookId = this.activeNotebookId): Annotation[] {
     return this.cache.filter(item => item.type === "pen" && item.bindToInkLayer !== false && item.hostAnnotationId === hostId && annotationNotebook(item) === notebookId);
@@ -1623,10 +1708,21 @@ export abstract class BaseAnnotationController {
   protected getPenRecords(page?: number, layer = this.getInkLayers().active): InkRecord[] {
     const state = this.getInkLayers();
     return this.cache.map((ann) => this.mapAnnotationForDisplay(ann)).filter((ann) => annotationNotebook(ann) === this.activeNotebookId && ann.type === "pen" && !isOrphanInkLayer(ann, state) && annotationInkLayer(ann, state) === layer && (page === undefined || ann.page === page) && ann.strokes?.length)
-      .map((ann) => ({ id: ann.id, strokes: ann.strokes!, color: ann.color }));
+      .map((ann) => ({
+        id: ann.id,
+        strokes: ann.strokes!,
+        color: ann.color,
+        brush: ann.inkBrush,
+        width: ann.inkWidth,
+        opacity: ann.inkOpacity,
+        hostAnnotationId: ann.hostAnnotationId,
+      }));
   }
   protected beginPenGesture(): void {
     this.penRevision = this.docPath ? { path: this.docPath, revision: this.plugin.store.getAnnotationsRevision(this.docPath) } : null;
+  }
+  protected ensurePenRevision(): void {
+    if (!this.penRevision) this.beginPenGesture();
   }
   protected watchPenGestures(overlay: SVGSVGElement): void {
     let pointer: number | null = null;
@@ -1639,7 +1735,7 @@ export abstract class BaseAnnotationController {
     overlay.addEventListener("pointercancel", finish, true);
     overlay.addEventListener("lostpointercapture", finish, true);
     overlay.addEventListener("keydown", event => {
-      if (["Delete", "Backspace"].includes(event.key)) this.beginPenGesture();
+      if (["Delete", "Backspace"].includes(event.key)) this.ensurePenRevision();
     }, true);
   }
   private penRevisionIsCurrent(): boolean {
@@ -1656,29 +1752,62 @@ export abstract class BaseAnnotationController {
     return measurePenCommit(section, action);
   }
   protected commitPenChanges(changes: InkChange[], coordinates?: { project: (strokes: Stroke[][]) => Stroke[][]; unproject: (strokes: Stroke[][]) => Stroke[][] }): void {
-    if (!changes.length) { this.penRevision = null; return; }
-    const current = this.penRevisionIsCurrent(); this.penRevision = null;
-    if (!current) return;
-    if (coordinates) {
-      const originals = changes.map(change => this.cache.find(ann => ann.id === change.id));
-      if (originals.some(ann => !ann || ann.type !== "pen")) {
-        this.rejectStalePenChange(); return;
+    if (!changes.length) {
+      if (!(this.penMode && this.penTool === "select")) this.penRevision = null;
+      return;
+    }
+    const current = this.penRevisionIsCurrent();
+    if (!current) { this.penRevision = null; return; }
+    const originals = changes.map(change => this.cache.find(ann => ann.id === change.id));
+    if (coordinates && originals.some(ann => !ann || ann.type !== "pen")) {
+      this.penRevision = null; this.rejectStalePenChange(); return;
+    }
+    const normalized: ReaderPenChange[] = changes.map((change, index) => {
+      const original = originals[index];
+      let hostBinding = change.hostBinding;
+      const moved = !sameStrokeShape(change.before, change.after) && change.after.length > 0;
+      if (!hostBinding && moved && original?.hostAnnotationId) {
+        if (!this.isStrokesInsideHost(original, change.after)) {
+          hostBinding = { before: original.hostAnnotationId, after: undefined };
+        }
       }
-      changes = changes.map((change, index) => ({ id: change.id, color: change.color, before: originals[index]!.strokes ?? [],
+      if (!coordinates) return { ...change, hostBinding };
+      return {
+        id: change.id,
+        color: change.color,
+        hostBinding,
+        before: original!.strokes ?? [],
         after: change.after.map(stroke => {
           const unchanged = change.before.findIndex(before => sameStrokePoints(before, stroke));
-          return unchanged < 0 ? coordinates.unproject([stroke])[0] : originals[index]!.strokes![unchanged];
-        }) }));
+          return unchanged < 0 ? coordinates.unproject([stroke])[0] : original!.strokes![unchanged];
+        }),
+      };
+    });
+    const changed = normalized.filter(change =>
+      !sameStrokeShape(change.before, change.after)
+      || (!!change.color && change.color.before !== change.color.after)
+      || (!!change.hostBinding && change.hostBinding.before !== change.hostBinding.after)
+    );
+    if (!changed.length || !this.applyPenChanges(changed, false, true)) {
+      if (!(this.penMode && this.penTool === "select")) this.penRevision = null;
+      return;
     }
-    const changed = changes.filter(change => !sameStrokeShape(change.before, change.after) || !!change.color && change.color.before !== change.color.after);
-    if (!changed.length || !this.applyPenChanges(changed, false, true)) return;
     this.recordPenChange(changed);
+    if (this.penMode && this.penTool === "select") this.beginPenGesture();
+    else this.penRevision = null;
   }
-  private recordPenChange(changes: InkChange[], created?: Annotation): void {
-    this.recordEditChange({ kind:"pen", sequence:++this.editSequence, label:"手写", changes:this.measurePenClone(() => changes.map((change) => ({
-      id: change.id, before: cloneStrokes(change.before), after: cloneStrokes(change.after), color: change.color && { ...change.color },
-      ...(created?.id === change.id ? { creation: { annotation: structuredClone(created), index: this.cache.indexOf(created), removed: false } } : {})
-    }))) });
+  private recordPenChange(changes: ReaderPenChange[], created?: Annotation[]): void {
+    const createdById = new Map((created ?? []).map(ann => [ann.id, ann]));
+    this.recordEditChange({ kind:"pen", sequence:++this.editSequence, label:"手写", changes:this.measurePenClone(() => changes.map((change) => {
+      const createdAnn = createdById.get(change.id);
+      return {
+        id: change.id, before: cloneStrokes(change.before), after: cloneStrokes(change.after),
+        color: change.color && { ...change.color },
+        hostBinding: change.hostBinding && { ...change.hostBinding },
+        hostMeta: change.hostMeta && { ...change.hostMeta },
+        ...(createdAnn ? { creation: { annotation: structuredClone(createdAnn), index: this.cache.indexOf(createdAnn), removed: false } } : {}),
+      };
+    })) });
   }
   private rejectStalePenChange(): void {
     this.clearEditHistory();
@@ -1688,8 +1817,11 @@ export abstract class BaseAnnotationController {
     const annotations = changes.map((change) => this.cache.find((ann) => ann.id === change.id));
     if (annotations.some((ann, index) => changes[index].creation?.removed
       ? reverse || !!ann
-      : !ann || ann.type !== "pen" || !currentGesture && (!sameStrokes(ann.strokes ?? [], reverse ? changes[index].after : changes[index].before)
-        || !!changes[index].color && ann.color !== (reverse ? changes[index].color!.after : changes[index].color!.before)))) {
+      : !ann || ann.type !== "pen" || !currentGesture && (
+        !sameStrokes(ann.strokes ?? [], reverse ? changes[index].after : changes[index].before)
+        || !!changes[index].color && ann.color !== (reverse ? changes[index].color!.after : changes[index].color!.before)
+        || !!changes[index].hostBinding && ann.hostAnnotationId !== (reverse ? changes[index].hostBinding!.after : changes[index].hostBinding!.before)
+      ))) {
       this.rejectStalePenChange(); return false;
     }
     annotations.forEach((ann, index) => {
@@ -1706,14 +1838,28 @@ export abstract class BaseAnnotationController {
           if (color === undefined) delete (ann as Partial<Annotation>).color;
           else ann!.color = color;
         }
+        if (change.hostBinding) {
+          const hostId = reverse ? change.hostBinding.before : change.hostBinding.after;
+          if (hostId === undefined) delete ann!.hostAnnotationId;
+          else ann!.hostAnnotationId = hostId;
+        }
+        if (change.hostMeta) {
+          const layer = reverse ? change.hostMeta.beforeLayer : change.hostMeta.afterLayer;
+          if (layer === undefined) delete ann!.inkLayerId; else ann!.inkLayerId = layer;
+          const bind = reverse ? change.hostMeta.beforeBind : change.hostMeta.afterBind;
+          if (bind === undefined) delete ann!.bindToInkLayer; else ann!.bindToInkLayer = bind;
+        }
       }
     });
     // Erasing existing ink and linked source records still retains their annotation IDs.
-    this.persist(); this.onAnnotationsChanged(); return true;
+    this.persist(); this.onAnnotationsChanged();
+    if (!currentGesture && this.penMode && this.penTool === "select") this.beginPenGesture();
+    return true;
   }
   private canRemoveCreatedPen(current: Annotation, original: Annotation): boolean {
     const { strokes: currentStrokes, ...currentMetadata } = current, { strokes: originalStrokes, ...originalMetadata } = original;
-    if (!sameStrokes(currentStrokes ?? [], originalStrokes ?? []) || JSON.stringify(currentMetadata) !== JSON.stringify({ ...originalMetadata, docPath: current.docPath }) || current.cardId) return false;
+    const stable = (obj: Record<string, unknown>) => JSON.stringify(Object.keys(obj).sort().map(k => [k, obj[k]]));
+    if (!sameStrokes(currentStrokes ?? [], originalStrokes ?? []) || stable(currentMetadata) !== stable({ ...originalMetadata, docPath: current.docPath }) || current.cardId) return false;
     return !this.plugin.store.cards.some(card => (card.docPath === current.docPath && card.anchorAnnId === current.id)
       || card.sources?.some(source => source.docPath === current.docPath && source.anchorAnnId === current.id));
   }
@@ -1972,9 +2118,9 @@ export abstract class BaseAnnotationController {
     this.lassoBtn?.classList.toggle("is-active", this.lassoMode);
     if (this.lassoMode) {
       window.getSelection()?.removeAllRanges();
-      new Notice("套索模式：在页面上拖拽框选区域，松开后生成摘录");
+      new Notice("区域摘录模式：在页面上拖拽框选区域，松开后生成摘录");
     } else {
-      new Notice("已退出套索模式");
+      new Notice("已退出区域摘录模式");
     }
   }
 
@@ -2007,10 +2153,56 @@ export abstract class BaseAnnotationController {
       image,
       createdAt: todayStr(),
     };
+    const countBefore = this.cache.length;
     this.pushAnnotation(ann);
+    const added = this.cache.length > countBefore && this.cache.some(item => item.id === ann.id);
     this.showExcerptMenu(ann);
     // 区域摘录后默认直接生成摘录卡（可被「区域摘录自动成卡」开关关闭），方便拖到脑图
     if (!this.continuousExcerpt && this.plugin.store.settings.autoCardOnRegion) this.makeCard(ann, "excerpt");
+    if (added) {
+      const savedAnn = structuredClone(ann);
+      const savedCard = ann.cardId ? this.plugin.store.getCard(ann.cardId) : undefined;
+      const savedCardClone = savedCard ? structuredClone(savedCard) : undefined;
+      const savedNodes = savedCard ? structuredClone(this.plugin.store.nodes.filter(n => n.cardId === savedCard.id)) : [];
+      this.recordRegionLifecycleEdit("添加区域摘录", savedAnn, this.cache.indexOf(ann), true, savedCardClone, savedNodes);
+    }
+    if (this.penMode && this.penTool === "select") this.beginPenGesture();
+  }
+  private recordRegionLifecycleEdit(label: string, savedAnn: Annotation, savedIndex: number, created: boolean, savedCard?: Card, savedNodes: MindNode[] = []): void {
+    const path = this.docPath, revision = this.documentRevision;
+    this.recordDocumentEdit(label, async redo => {
+      if (path !== this.docPath || revision !== this.documentRevision) throw new Error("文档已切换，区域摘录撤销已取消");
+      const shouldExist = created ? redo : !redo;
+      if (shouldExist) {
+        if (!this.cache.some(item => item.id === savedAnn.id)) {
+          const restored = structuredClone(savedAnn);
+          restored.docPath = this.docPath!;
+          this.cache.splice(Math.min(Math.max(0, savedIndex), this.cache.length), 0, restored);
+        }
+        if (savedCard && !this.plugin.store.getCard(savedCard.id)) {
+          this.plugin.store.addCard(structuredClone(savedCard));
+        }
+        for (const node of savedNodes) {
+          if (!this.plugin.store.nodes.some(existing => existing.id === node.id)) {
+            this.plugin.store.addNode(structuredClone(node));
+          }
+        }
+      } else {
+        const idx = this.cache.findIndex(item => item.id === savedAnn.id);
+        if (idx >= 0) this.cache.splice(idx, 1);
+        this.plugin.store.removeAnnotationLinks(savedAnn.docPath, savedAnn.id);
+        if (savedCard) {
+          for (const node of [...this.plugin.store.nodes].filter(n => n.cardId === savedCard.id)) {
+            this.plugin.store.removeExcerptFromMindmap(node.id);
+          }
+          if (this.plugin.store.getCard(savedCard.id)) this.plugin.store.removeCard(savedCard.id);
+        }
+      }
+      this.persist();
+      this.onAnnotationsChanged();
+      this.plugin.refreshSidebar();
+      this.plugin.refreshMindmap();
+    });
   }
 
   protected handleRecallClick(ann: Annotation, ev: MouseEvent): boolean {
@@ -2150,6 +2342,9 @@ export abstract class BaseAnnotationController {
       if(mapped)pop.append(mk("撤出脑图",()=>{if(this.plugin.store.removeExcerptFromMindmap(mapped.id)){this.plugin.refreshMindmap();new Notice("已撤出脑图，文档标注保留");}}));
     } else if (ann.type === "pen") {
       pop.append(mk("变成卡片", () => this.makeCard(ann, "excerpt")));
+      if (ann.hostAnnotationId) {
+        pop.append(mk("解除绑定", () => { this.bindInkToHost(ann.id, undefined); }));
+      }
       if (ann.sourceDocPath && ann.sourceDocId && ann.sourcePage) pop.append(mk("笔迹回源", () => {
         const workspace = this.plugin.studyWorkspace;
         if (!workspace) { new Notice("请在学习工作区中打开笔迹来源"); return; }
@@ -2275,6 +2470,13 @@ export abstract class BaseAnnotationController {
 
   protected deleteAnn(ann: Annotation): void {
     if(ann.mediaKind || ann.type === "voice" && ann.audioPath){ann.mediaDeleted=true;this.recordMediaEdit(ann,false);this.persist();this.removeAnnotationEl(ann);return;}
+    const regionUndo = ann.type === "region" ? (() => {
+      const idx = this.cache.findIndex(candidate => candidate.id === ann.id);
+      if (idx < 0) return null;
+      const syncCard = this.plugin.store.settings.syncDeleteCardOnSourceRemoval && ann.cardId ? this.plugin.store.getCard(ann.cardId) : undefined;
+      const savedNodes = syncCard ? structuredClone(this.plugin.store.nodes.filter(n => n.cardId === syncCard.id)) : [];
+      return { savedAnn: structuredClone(ann), idx, savedCard: syncCard ? structuredClone(syncCard) : undefined, savedNodes };
+    })() : null;
     const removed: Annotation[] = [ann];
     if (ann.overlay) {
       for (const pen of this.getBoundPenAnnotations(ann.id, annotationNotebook(ann))) removed.push(pen);
@@ -2287,6 +2489,9 @@ export abstract class BaseAnnotationController {
     if (this.plugin.store.settings.syncDeleteCardOnSourceRemoval) this.removeCardsForAnnotations(removed);
     this.persist();
     for (const item of removed) this.removeAnnotationEl(item);
+    if (regionUndo) {
+      this.recordRegionLifecycleEdit("删除区域摘录", regionUndo.savedAnn, regionUndo.idx, false, regionUndo.savedCard, regionUndo.savedNodes);
+    }
   }
 
   /** 学习集「同步删除卡片」：源标注删除时移除其卡片与被引用的脑图节点。 */

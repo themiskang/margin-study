@@ -6,7 +6,7 @@
  */
 import type { Stroke } from "../types";
 import { cloneStrokes, eraseInk, inkLayerOpacity, selectInk, transformSelectedInk } from "./penGeometry";
-import type { InkChange, InkRecord, InkSelection, PenTool } from "./penGeometry";
+import type { InkChange, InkClipboardEntry, InkRecord, InkSelection, PenTool } from "./penGeometry";
 import { inkEndpoint, inkPoint, inkSamples, PalmGuard, predictInkPoint } from "./penInput";
 import type { TimedInkPoint } from "./penInput";
 
@@ -14,7 +14,8 @@ let inkPredictionReader: (() => boolean) | null = null;
 // 仅兜底 pen 墨迹；非 pen 分支裸传 ann.color，当前无色状态不可达（删色仅用于笔迹墨色变更）。
 export const INK_DEFAULT_COLOR = "#000000";
 // Lasso cut/copy must survive the controller being rebuilt by an annotation render.
-let lassoClipboard: Stroke[][] = [];
+let lassoClipboard: { entries: InkClipboardEntry[]; fromCut: boolean; pasteCount: number } = { entries: [], fromCut: false, pasteCount: 0 };
+let lastActiveLassoController: PenController | null = null;
 export function setInkPredictionReader(reader: () => boolean): void { inkPredictionReader = reader; }
 
 interface PerfStroke {
@@ -189,12 +190,17 @@ interface PenOptions {
   getWidth?: () => number;
   getOpacity?: () => number;
   onCommit: (strokes: Stroke[][], brush: "pen" | "highlight", width?: number, opacity?: number) => void;
+  onPaste?: (entries: InkClipboardEntry[]) => void;
   onBegin?: () => void;
+  onActionBegin?: () => void;
   onInputActivity?: (activeChange: number) => void;
   isVanishPen?: () => boolean;
   vanishDelayMs?: number;
   getInk?: () => InkRecord[];
   onChange?: (changes: InkChange[]) => void;
+  onSelectionChange?: (hasSelection: boolean) => void;
+  onExcerpt?: (selection: InkSelection[], bounds: { x: number; y: number; width: number; height: number }, image: string) => void;
+  onUnbind?: (ids: string[]) => void;
   onUndo?: () => void;
   onRedo?: () => void;
 }
@@ -231,11 +237,14 @@ export class PenController {
   private selection: InkSelection[] = [];
   private selectionRect: SVGRectElement | null = null;
   private toolbar: HTMLDivElement;
+  private extraToolbar: HTMLDivElement | null = null;
+  private unbindButton: HTMLButtonElement | null = null;
   private colorPalette: HTMLDivElement;
   private recognitionButton: HTMLButtonElement;
   private delta: Stroke = { x: 0, y: 0 };
   private temporary = new Map<SVGGElement, number>();
   private perfStroke: PerfStroke | null = null;
+  private docKeydownHandler: ((event: KeyboardEvent) => void) | null = null;
   color = "#e53935";
 
   constructor(private container: HTMLElement, private opts: PenOptions) {
@@ -268,24 +277,56 @@ export class PenController {
       this.toolbar.append(button); return button;
     };
     action("颜色", () => this.toggleColorPalette());
-    action("剪切", () => { this.copySelection(); this.deleteSelection(); });
-    action("复制", () => this.copySelection());
+    action("剪切", () => { this.copySelection(true); this.deleteSelection(); });
+    action("复制", () => this.copySelection(false));
     this.recognitionButton = action("AI 转文本", () => this.recognizeSelection());
     action("删除", () => this.deleteSelection());
-    this.container.append(this.toolbar, this.colorPalette);
+    if (this.opts.onExcerpt || this.opts.onUnbind) {
+      this.extraToolbar = document.createElement("div");
+      this.extraToolbar.className = "ms-pen-selection-extra";
+      this.extraToolbar.setAttribute("role", "toolbar");
+      this.extraToolbar.setAttribute("aria-label", "套索扩展操作");
+      this.extraToolbar.style.position = "absolute";
+      this.extraToolbar.style.zIndex = "20";
+      this.extraToolbar.hidden = true;
+      const extraAction = (label: string, run: () => void): HTMLButtonElement => {
+        const button = document.createElement("button");
+        button.type = "button"; button.textContent = label; button.setAttribute("aria-label", label);
+        button.addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); run(); });
+        this.extraToolbar!.append(button); return button;
+      };
+      if (this.opts.onExcerpt) extraAction("转摘录", () => this.excerptSelection());
+      if (this.opts.onUnbind) this.unbindButton = extraAction("解除绑定", () => this.unbindSelection());
+      this.container.append(this.toolbar, this.extraToolbar, this.colorPalette);
+    } else {
+      this.container.append(this.toolbar, this.colorPalette);
+    }
   }
   setTool(tool: PenTool): void {
     if (this.tool === tool) return;
     this.flush(tool !== "erase"); this.tool = tool; this.clearSelection(); this.overlay.dataset.tool = tool;
+    if (this.active && tool === "select") lastActiveLassoController = this;
   }
   setActive(active: boolean): void {
     if (this.active === active) return;
-    if (!active) { this.flush(); this.clearSelection(); this.clearTemporary(); }
+    if (!active) {
+      this.flush(); this.clearSelection(); this.clearTemporary();
+      if (lastActiveLassoController === this) lastActiveLassoController = null;
+    } else if (this.tool === "select") {
+      lastActiveLassoController = this;
+    }
     this.active = active; this.overlay.style.pointerEvents = active ? "auto" : "none";
     this.container.classList.toggle("ms-pen-mode", active);
   }
   get isActive(): boolean { return this.active; }
-  destroy(): void { this.setActive(false); this.flush(); this.clearTemporary(); this.overlay.remove(); this.toolbar.remove(); this.colorPalette.remove(); }
+  destroy(): void {
+    this.setActive(false); this.flush(); this.clearTemporary();
+    if (this.docKeydownHandler) {
+      this.container.ownerDocument.removeEventListener("keydown", this.docKeydownHandler);
+      this.docKeydownHandler = null;
+    }
+    this.overlay.remove(); this.toolbar.remove(); this.extraToolbar?.remove(); this.colorPalette.remove();
+  }
 
   /** Unfinished drawing is committed unless explicitly cancelled; edit gestures are cancelled. */
   flush(commitDrawing = true): void {
@@ -387,6 +428,7 @@ export class PenController {
         perfLog.push(this.perfStroke); perfMark(this.perfStroke, "down"); perfHeap(this.perfStroke, "down");
       }
       event.preventDefault(); event.stopPropagation(); this.overlay.focus({ preventScroll: true });
+      if (this.tool === "select") lastActiveLassoController = this;
       this.bounds = this.container.getBoundingClientRect();
       this.pointerId = event.pointerId; this.pointerType = event.pointerType; this.delta = { x: 0, y: 0 };
       this.downTime = event.timeStamp; this.lastRawTime = -Infinity;
@@ -480,13 +522,15 @@ export class PenController {
       if (gesture === "erase") {
         const bounds = this.container.getBoundingClientRect(); this.opts.onChange?.(eraseInk(this.snapshot, this.current, bounds.width, bounds.height));
       } else if (gesture === "lasso") {
-        this.selection = selectInk(this.snapshot, this.current); this.drawSelection();
+        this.selection = selectInk(this.snapshot, this.current);
+        this.drawSelection();
+        this.opts.onSelectionChange?.(this.selection.length > 0);
       } else if (gesture === "move") this.opts.onChange?.(transformSelectedInk(this.snapshot, this.selection, this.delta));
       this.flush();
     });
     const cancel = (event: PointerEvent) => { this.palm.end(event, this.pointerType, this.pointerId); if (event.pointerId === this.pointerId) this.flush(); };
     this.overlay.addEventListener("pointercancel", cancel); this.overlay.addEventListener("lostpointercapture", cancel);
-    this.overlay.addEventListener("keydown", (event: KeyboardEvent) => {
+    const handleKeydown = (event: KeyboardEvent) => {
       if (!this.active) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
         event.preventDefault(); event.stopPropagation(); this.flush(); this.clearSelection();
@@ -494,9 +538,23 @@ export class PenController {
       } else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); this.flush(); this.clearSelection(); }
       else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "v") { event.preventDefault(); event.stopPropagation(); this.flush(); this.pasteInk(); }
       else if (["Delete", "Backspace"].includes(event.key) && this.selection.length) {
-        event.preventDefault(); event.stopPropagation(); this.opts.onChange?.(transformSelectedInk(this.records(), this.selection, null)); this.clearSelection();
+        event.preventDefault(); event.stopPropagation(); this.deleteSelection();
       }
-    });
+    };
+    this.overlay.addEventListener("keydown", handleKeydown);
+    this.docKeydownHandler = (event: KeyboardEvent) => {
+      if (!this.active || this.tool !== "select") return;
+      if (event.target === this.overlay) return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) return;
+      const key = event.key.toLowerCase();
+      if ((event.metaKey || event.ctrlKey) && key === "v") {
+        if (lastActiveLassoController === this) handleKeydown(event);
+      } else if ((event.key === "Escape" || event.key === "Delete" || event.key === "Backspace") && this.selection.length) {
+        handleKeydown(event);
+      }
+    };
+    this.container.ownerDocument.addEventListener("keydown", this.docKeydownHandler);
   }
   private addDrawSample(bounds: DOMRect, event: PointerEvent): void {
     const context = this.prediction?.getContext("2d");
@@ -547,10 +605,21 @@ export class PenController {
     predictionContext.beginPath(); predictionContext.moveTo(last.x - bounds.left, last.y - bounds.top);
     predictionContext.lineTo(predicted.x - bounds.left, predicted.y - bounds.top); predictionContext.stroke();
   }
-  private clearSelection(): void { this.selection = []; this.selectionRect?.remove(); this.selectionRect = null; this.toolbar.hidden = true; this.colorPalette.hidden = true; }
+  clearSelection(): void {
+    const hadSelection = this.selection.length > 0;
+    this.selection = []; this.selectionRect?.remove(); this.selectionRect = null;
+    this.toolbar.hidden = true; this.colorPalette.hidden = true;
+    if (this.extraToolbar) this.extraToolbar.hidden = true;
+    if (hadSelection) this.opts.onSelectionChange?.(false);
+  }
+  private refocusOverlay(): void {
+    if (this.active) this.overlay.focus({ preventScroll: true });
+  }
   private toggleColorPalette(): void {
     if (!this.selection.length) return;
     this.colorPalette.hidden = !this.colorPalette.hidden;
+    if (!this.colorPalette.hidden) this.positionToolbars();
+    this.refocusOverlay();
   }
   private applySelectionColor(color: string): void {
     const selected = new Map(this.selection.map(entry => [entry.id, new Set(entry.indexes)]));
@@ -559,33 +628,77 @@ export class PenController {
       return [{ id: record.id, before: cloneStrokes(record.strokes), after: cloneStrokes(record.strokes), color: { before: record.color, after: color } }];
     });
     this.colorPalette.hidden = true;
-    if (!changes.length) return;
-    this.opts.onBegin?.(); this.opts.onChange?.(changes); this.drawSelection();
+    if (!changes.length) { this.refocusOverlay(); return; }
+    this.opts.onActionBegin?.(); this.opts.onBegin?.(); this.opts.onChange?.(changes); this.drawSelection();
+    this.refocusOverlay();
   }
-  private copySelection(): void {
+  private copySelection(fromCut = false): void {
     const selected = new Map(this.selection.map(entry => [entry.id, new Set(entry.indexes)]));
-    lassoClipboard = this.records().flatMap((record) => record.strokes.filter((_, index) => selected.get(record.id)?.has(index))).map(stroke => stroke.map(point => ({ ...point })));
+    const grouped = new Map<string, InkClipboardEntry>();
+    for (const record of this.records()) {
+      const picked = record.strokes.filter((_, index) => selected.get(record.id)?.has(index));
+      if (!picked.length) continue;
+      const brush: "pen" | "highlight" = record.brush === "highlight" ? "highlight" : "pen";
+      const key = JSON.stringify([brush, record.color ?? null, record.width ?? null, record.opacity ?? null]);
+      let entry = grouped.get(key);
+      if (!entry) {
+        entry = { strokes: [], brush, color: record.color, width: record.width, opacity: record.opacity };
+        grouped.set(key, entry);
+      }
+      for (const stroke of picked) entry.strokes.push(stroke.map(point => ({ ...point })));
+    }
+    lassoClipboard = { entries: [...grouped.values()], fromCut, pasteCount: 0 };
+    lastActiveLassoController = this;
+    this.refocusOverlay();
   }
   private deleteSelection(): void {
     if (!this.selection.length) return;
-    this.opts.onBegin?.(); this.opts.onChange?.(transformSelectedInk(this.records(), this.selection, null)); this.clearSelection();
+    this.opts.onActionBegin?.(); this.opts.onBegin?.();
+    this.opts.onChange?.(transformSelectedInk(this.records(), this.selection, null));
+    this.clearSelection();
+    this.refocusOverlay();
   }
   private pasteInk(): void {
-    if (!lassoClipboard.length) return;
-    this.opts.onBegin?.(); this.opts.onCommit(cloneStrokes(lassoClipboard), this.tool === "highlight" ? "highlight" : "pen");
+    if (!lassoClipboard.entries.length) return;
+    const pasteStep = lassoClipboard.fromCut && lassoClipboard.pasteCount === 0 ? 0 : (lassoClipboard.pasteCount + (lassoClipboard.fromCut ? 0 : 1));
+    lassoClipboard.pasteCount++;
+    const allPoints = lassoClipboard.entries.flatMap(entry => entry.strokes.flat());
+    let dx = 0, dy = 0;
+    if (pasteStep > 0 && allPoints.length) {
+      let left = 1, right = 0, top = 1, bottom = 0;
+      for (const point of allPoints) { left = Math.min(left, point.x); right = Math.max(right, point.x); top = Math.min(top, point.y); bottom = Math.max(bottom, point.y); }
+      const raw = 0.02 * pasteStep;
+      dx = right + raw <= 1 ? raw : left - raw >= 0 ? -raw : Math.max(-left, Math.min(1 - right, raw));
+      dy = bottom + raw <= 1 ? raw : top - raw >= 0 ? -raw : Math.max(-top, Math.min(1 - bottom, raw));
+    }
+    const entries: InkClipboardEntry[] = lassoClipboard.entries.map(entry => ({
+      ...entry,
+      strokes: entry.strokes.map(stroke => stroke.map(point => ({ ...point, x: Math.max(0, Math.min(1, point.x + dx)), y: Math.max(0, Math.min(1, point.y + dy)) }))),
+    }));
+    this.opts.onActionBegin?.(); this.opts.onBegin?.();
+    if (this.opts.onPaste) {
+      this.opts.onPaste(entries);
+    } else {
+      for (const entry of entries) this.opts.onCommit(entry.strokes, entry.brush, entry.width, entry.opacity);
+    }
+    this.refocusOverlay();
   }
-  private recognizeSelection(): void {
-    const bounds = this.selectionBounds(); if (!bounds) return;
+  private renderSelectionPng(bounds: { x: number; y: number; width: number; height: number }, monochrome: boolean): string | null {
     const rect = this.container.getBoundingClientRect(), selected = new Map(this.selection.map(entry => [entry.id, new Set(entry.indexes)]));
     const canvas = document.createElement("canvas"), padding = 16;
     const width = Math.max(1, bounds.width * rect.width), height = Math.max(1, bounds.height * rect.height);
     const scale = Math.min(1, 2000 / Math.max(width, height));
     canvas.width = Math.ceil(width * scale + padding * 2); canvas.height = Math.ceil(height * scale + padding * 2);
-    const context = canvas.getContext("2d"); if (!context) return;
+    const context = canvas.getContext("2d"); if (!context) return null;
     context.fillStyle = "white"; context.fillRect(0, 0, canvas.width, canvas.height);
-    context.strokeStyle = "black"; context.lineWidth = 3; context.lineCap = "round"; context.lineJoin = "round";
+    context.lineCap = "round"; context.lineJoin = "round";
     for (const record of this.records()) for (const [index, stroke] of record.strokes.entries()) {
       if (!selected.get(record.id)?.has(index) || !stroke.length) continue;
+      context.save();
+      context.strokeStyle = monochrome ? "black" : (record.color ?? INK_DEFAULT_COLOR);
+      context.lineWidth = monochrome ? 3 : (record.width ?? (record.brush === "highlight" ? 16 : 3)) * scale;
+      if (!monochrome && record.opacity !== undefined) context.globalAlpha = record.opacity;
+      else if (!monochrome && record.brush === "highlight") context.globalAlpha = 0.32;
       context.beginPath();
       stroke.forEach((point, pointIndex) => {
         const x = padding + (point.x - bounds.x) * rect.width * scale, y = padding + (point.y - bounds.y) * rect.height * scale;
@@ -593,8 +706,33 @@ export class PenController {
       });
       if (stroke.length === 1) context.lineTo(padding + (stroke[0].x - bounds.x) * rect.width * scale + .1, padding + (stroke[0].y - bounds.y) * rect.height * scale);
       context.stroke();
+      context.restore();
     }
-    this.container.dispatchEvent(new CustomEvent("ms-recognize-ink", { bubbles: true, detail: { image: canvas.toDataURL("image/png") } }));
+    return canvas.toDataURL("image/png");
+  }
+  private recognizeSelection(): void {
+    const bounds = this.selectionBounds(); if (!bounds) return;
+    const image = this.renderSelectionPng(bounds, true); if (!image) return;
+    this.container.dispatchEvent(new CustomEvent("ms-recognize-ink", { bubbles: true, detail: { image } }));
+    this.refocusOverlay();
+  }
+  private excerptSelection(): void {
+    const bounds = this.selectionBounds(); if (!bounds || !this.opts.onExcerpt) return;
+    const image = this.renderSelectionPng(bounds, false); if (!image) return;
+    const picked = this.selection.map(entry => ({ id: entry.id, indexes: [...entry.indexes] }));
+    this.opts.onExcerpt(picked, bounds, image);
+    this.clearSelection();
+    this.refocusOverlay();
+  }
+  private unbindSelection(): void {
+    if (!this.selection.length || !this.opts.onUnbind) return;
+    const selectedIds = new Set(this.selection.map(entry => entry.id));
+    const boundIds = this.records().filter(record => selectedIds.has(record.id) && !!record.hostAnnotationId).map(record => record.id);
+    if (!boundIds.length) { this.refocusOverlay(); return; }
+    this.opts.onActionBegin?.(); this.opts.onBegin?.();
+    this.opts.onUnbind(boundIds);
+    this.drawSelection();
+    this.refocusOverlay();
   }
   private selectionBounds(): { x: number; y: number; width: number; height: number } | null {
     const selected = new Map(this.selection.map((entry) => [entry.id, new Set(entry.indexes)]));
@@ -608,18 +746,60 @@ export class PenController {
     const bounds = this.selectionBounds(), rect = this.container.getBoundingClientRect();
     return !!bounds && point.x >= bounds.x - 8 / rect.width && point.x <= bounds.x + bounds.width + 8 / rect.width && point.y >= bounds.y - 8 / rect.height && point.y <= bounds.y + bounds.height + 8 / rect.height;
   }
+  private clampToolbarPos(el: HTMLElement, prefLeft: number, prefTop: number, altTop: number, containerW: number, containerH: number): { left: number; top: number; height: number } {
+    const w = el.offsetWidth || el.getBoundingClientRect().width;
+    const h = el.offsetHeight || el.getBoundingClientRect().height;
+    const left = Math.max(0, Math.min(Math.max(0, containerW - w), prefLeft));
+    let top = prefTop;
+    if (top < 0 || top + h > containerH) top = altTop;
+    top = Math.max(0, Math.min(Math.max(0, containerH - h), top));
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+    return { left, top, height: h };
+  }
+  private positionToolbars(): void {
+    const bounds = this.selectionBounds(); if (!bounds) return;
+    const rect = this.container.getBoundingClientRect();
+    const cw = Math.max(1, rect.width), ch = Math.max(1, rect.height);
+    const selLeft = (bounds.x + this.delta.x) * cw;
+    const selTop = (bounds.y + this.delta.y) * ch;
+    const selBottom = (bounds.y + bounds.height + this.delta.y) * ch;
+    const tbH = this.toolbar.offsetHeight || this.toolbar.getBoundingClientRect().height || 28;
+    const tbPos = this.clampToolbarPos(this.toolbar, selLeft, selTop - tbH - 4, selBottom + 6, cw, ch);
+    if (this.extraToolbar && !this.extraToolbar.hidden) {
+      const extraH = this.extraToolbar.offsetHeight || this.extraToolbar.getBoundingClientRect().height || 28;
+      this.clampToolbarPos(this.extraToolbar, tbPos.left, tbPos.top + tbPos.height + 4, tbPos.top - extraH - 4, cw, ch);
+    }
+    if (!this.colorPalette.hidden) {
+      const palH = this.colorPalette.offsetHeight || this.colorPalette.getBoundingClientRect().height || 26;
+      const anchorBottom = this.extraToolbar && !this.extraToolbar.hidden
+        ? (parseFloat(this.extraToolbar.style.top) || tbPos.top) + (this.extraToolbar.offsetHeight || 28) + 4
+        : tbPos.top + tbPos.height + 4;
+      this.clampToolbarPos(this.colorPalette, tbPos.left, anchorBottom, tbPos.top - palH - 4, cw, ch);
+    }
+  }
   private drawSelection(): void {
     this.selectionRect?.remove(); this.selectionRect = null;
-    const bounds = this.selectionBounds(); if (!bounds) { this.toolbar.hidden = true; this.colorPalette.hidden = true; return; }
+    const bounds = this.selectionBounds();
+    if (!bounds) {
+      this.toolbar.hidden = true; this.colorPalette.hidden = true;
+      if (this.extraToolbar) this.extraToolbar.hidden = true;
+      return;
+    }
     const rect = this.container.getBoundingClientRect(), selection = document.createElementNS(SVGNS, "rect");
     selection.setAttribute("class", "ms-pen-selection"); selection.setAttribute("x", String((bounds.x + this.delta.x) * rect.width - 5));
     selection.setAttribute("y", String((bounds.y + this.delta.y) * rect.height - 5)); selection.setAttribute("width", String(bounds.width * rect.width + 10));
     selection.setAttribute("height", String(bounds.height * rect.height + 10)); this.overlay.append(selection); this.selectionRect = selection;
     this.toolbar.hidden = false;
-    this.toolbar.style.left = `${Math.max(0, bounds.x * rect.width)}px`;
-    this.toolbar.style.top = `${Math.max(0, bounds.y * rect.height - 32)}px`;
-    this.colorPalette.style.left = `${Math.max(0, bounds.x * rect.width)}px`;
-    this.colorPalette.style.top = `${Math.max(0, bounds.y * rect.height + 4)}px`;
+    if (this.extraToolbar) {
+      this.extraToolbar.hidden = false;
+      if (this.unbindButton) {
+        const selectedIds = new Set(this.selection.map(entry => entry.id));
+        const hasBound = this.records().some(record => selectedIds.has(record.id) && !!record.hostAnnotationId);
+        this.unbindButton.disabled = !hasBound;
+      }
+    }
+    this.positionToolbars();
   }
 
   static render(layer: HTMLElement, strokes: Stroke[][], width: number, height: number, color: string | undefined, brush: "pen" | "highlight" = "pen", thickness?: number, opacity?: number): void {
