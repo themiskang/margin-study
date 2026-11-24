@@ -137,7 +137,7 @@ orca orchestration send --to run:<统筹席 run id> --subject "<卡号> 第 N �
 | 规划席 | **常驻** | `worker-start --keep-open`（结构化，自动 `worker_done`） | 一个 dispatch 长期复用；卡收口 `worker-release` 休眠保上下文，下张卡 `send --to dispatch:` 唤醒 |
 | 复核席 | **常驻** | 同上 | 同上；同一条上下文承接 9+ 轮复判，避免换会话后重复判已修项 |
 | 执行席 | **临时（每卡）** | `worker-start --worktree new-child`（结构化，不带 `--keep-open`） | 卡收口自动关闭；失败先 `worker-show` 判断「重试 / 换人」，连续 3 次失败触发 `circuit_broken` |
-| 取证席 | **临时（每任务）** | `worker-start`（pi / hermes），每次干净室 | 出结果即收，输出进证据目录 |
+| 取证席 | **临时（每任务）** | 首选 `worker-start --agent hermes`（**GLM-5.4**，terminal 模式必须写 `worker_done`）；备用 `--agent pi --model magpie/auto/deepseek-v4.1-flash`；每次干净室 | 出结果即收，输出进证据目录 |
 | 批量杂活 | 一次性 | `worktree create --no-parent --agent … --prompt` 或网页端 4 号池 | 不保留会话 |
 
 **禁止的做法（都实测踩过）**
