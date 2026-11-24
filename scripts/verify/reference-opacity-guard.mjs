@@ -189,26 +189,133 @@ function stringLiteralValue(node) {
   return null;
 }
 
+function followAliasSymbol(sym, checker) {
+  const seen = new Set();
+  let cur = sym;
+  while (cur && (cur.flags & ts.SymbolFlags.Alias) && !seen.has(cur)) {
+    seen.add(cur);
+    cur = checker.getAliasedSymbol(cur);
+  }
+  return cur;
+}
+
+function isCanonicalDeclaration(sym, baseDir) {
+  if (!sym) return false;
+  const decls = sym.getDeclarations() ?? [];
+  return decls.some(d =>
+    ts.isVariableDeclaration(d) &&
+    ts.isIdentifier(d.name) &&
+    d.name.text === CANONICAL_CONST_NAME &&
+    relative(baseDir, d.getSourceFile().fileName).replace(/\\/g, "/") === CANONICAL_SOURCE_FILE
+  );
+}
+
+function describeSymbolLocation(sym, baseDir) {
+  const decl = sym?.getDeclarations()?.[0];
+  if (!decl) return "unknown";
+  const sf = decl.getSourceFile();
+  return `${relative(baseDir, sf.fileName).replace(/\\/g, "/")}:${sf.getLineAndCharacterOfPosition(decl.getStart(sf)).line + 1}`;
+}
+
+function isConstVariableDeclaration(varDecl) {
+  const list = varDecl.parent;
+  return !!list && ts.isVariableDeclarationList(list) && Boolean(list.flags & ts.NodeFlags.Const);
+}
+
 /**
- * Resolve producer argument via TypeScript TypeChecker to guarantee:
- * 1. Argument is `INK_REFERENCE_OPACITY` or `String(INK_REFERENCE_OPACITY)` (with unshadowed global String).
- * 2. Identifier resolves via import alias chain to the canonical declaration
- *    `export const INK_REFERENCE_OPACITY = 0.35` in `src/annot/penGeometry.ts`
- *    (rejects local const/let/var shadowing, parameter shadowing, catch/block shadowing, or other modules).
+ * Pure TypeChecker semantic resolver: follows imports, re-export chains, namespace
+ * member access (`G.INK_REFERENCE_OPACITY`), destructuring aliases (`const { INK_REFERENCE_OPACITY: X } = G`),
+ * renamed imports (`import { INK_REFERENCE_OPACITY as Y }`), and const aliases to verify
+ * the final declaration is `src/annot/penGeometry.ts:INK_REFERENCE_OPACITY`.
+ */
+function resolveExprToCanonical(node, checker, baseDir, seen = new Set()) {
+  const expr = unwrapExpr(node);
+  if (!expr || seen.has(expr)) return { ok: false, reason: "缺少或循环表达式" };
+  seen.add(expr);
+
+  // 1. Property access: e.g. G.INK_REFERENCE_OPACITY
+  if (ts.isPropertyAccessExpression(expr)) {
+    const rawSym = checker.getSymbolAtLocation(expr.name) ?? checker.getSymbolAtLocation(expr);
+    const target = followAliasSymbol(rawSym, checker);
+    if (isCanonicalDeclaration(target, baseDir)) return { ok: true };
+    return {
+      ok: false,
+      reason: `成员表达式 ${expr.getText()} 解析来源为 ${describeSymbolLocation(target, baseDir)}，非规范来源 ${CANONICAL_SOURCE_FILE}:${CANONICAL_CONST_NAME}`,
+    };
+  }
+
+  // 2. Element access with static string key: e.g. G["INK_REFERENCE_OPACITY"]
+  if (ts.isElementAccessExpression(expr)) {
+    const key = stringLiteralValue(expr.argumentExpression);
+    if (key) {
+      const objType = checker.getTypeAtLocation(expr.expression);
+      const propSym = objType?.getProperty(key);
+      const target = followAliasSymbol(propSym, checker);
+      if (isCanonicalDeclaration(target, baseDir)) return { ok: true };
+      return {
+        ok: false,
+        reason: `索引表达式 ${expr.getText()} 解析来源为 ${describeSymbolLocation(target, baseDir)}，非规范来源 ${CANONICAL_SOURCE_FILE}:${CANONICAL_CONST_NAME}`,
+      };
+    }
+    return { ok: false, reason: `动态索引表达式 ${expr.getText()} 无法静态解析到规范常量` };
+  }
+
+  // 3. Identifier: direct import, renamed import, re-export chain, destructuring alias, or const alias
+  if (ts.isIdentifier(expr)) {
+    const rawSym = checker.getSymbolAtLocation(expr);
+    if (!rawSym) return { ok: false, reason: `标识符 ${expr.text} 无法解析符号` };
+    const target = followAliasSymbol(rawSym, checker);
+    if (isCanonicalDeclaration(target, baseDir)) return { ok: true };
+
+    // Follow non-parameter `const` destructuring binding or `const` variable alias
+    const decl = target?.getDeclarations()?.[0];
+    if (decl && ts.isBindingElement(decl)) {
+      const pattern = decl.parent;
+      const varDecl = pattern?.parent;
+      if (ts.isObjectBindingPattern(pattern) && varDecl && ts.isVariableDeclaration(varDecl) && isConstVariableDeclaration(varDecl) && varDecl.initializer) {
+        const propNameNode = decl.propertyName ?? decl.name;
+        const propName = ts.isIdentifier(propNameNode) ? propNameNode.text : stringLiteralValue(propNameNode);
+        if (propName) {
+          const objType = checker.getTypeAtLocation(varDecl.initializer);
+          const propSym = objType?.getProperty(propName);
+          const resolvedProp = followAliasSymbol(propSym, checker);
+          if (isCanonicalDeclaration(resolvedProp, baseDir)) return { ok: true };
+          return {
+            ok: false,
+            reason: `解构别名 ${expr.text} 解析来源为 ${describeSymbolLocation(resolvedProp, baseDir)}，非规范来源 ${CANONICAL_SOURCE_FILE}:${CANONICAL_CONST_NAME}`,
+          };
+        }
+      }
+    }
+    if (decl && ts.isVariableDeclaration(decl) && isConstVariableDeclaration(decl) && decl.initializer) {
+      const initCheck = resolveExprToCanonical(decl.initializer, checker, baseDir, seen);
+      if (initCheck.ok) return { ok: true };
+    }
+
+    return {
+      ok: false,
+      reason: `标识符 ${expr.text} 解析来源为 ${describeSymbolLocation(target, baseDir)}（局部/参数遮蔽或非规范模块），非规范来源 ${CANONICAL_SOURCE_FILE}:${CANONICAL_CONST_NAME}`,
+    };
+  }
+
+  return { ok: false, reason: `定义点写入 ${TOKEN_NAME} 禁止字面量/非常量表达式，必须引用规范常量 ${CANONICAL_CONST_NAME}` };
+}
+
+/**
+ * Resolve producer argument via TypeScript TypeChecker:
+ * unwraps optional `String(...)` (with unshadowed global `String`) and delegates
+ * purely to semantic symbol resolution against `src/annot/penGeometry.ts:INK_REFERENCE_OPACITY`.
  */
 function verifyCanonicalProducerArg(node, checker, baseDir) {
   const expr = unwrapExpr(node);
   if (!expr) return { ok: false, reason: "缺少参数表达式" };
-  let ident = null;
-  if (ts.isIdentifier(expr)) {
-    ident = expr;
-  } else if (
+  let valueExpr = expr;
+  if (
     ts.isCallExpression(expr) &&
     ts.isIdentifier(expr.expression) &&
     expr.expression.text === "String" &&
     expr.arguments.length === 1
   ) {
-    // Reject locally shadowed `String`
     const strSym = checker.getSymbolAtLocation(expr.expression);
     if (strSym) {
       const strDecls = strSym.getDeclarations() ?? [];
@@ -216,39 +323,9 @@ function verifyCanonicalProducerArg(node, checker, baseDir) {
         return { ok: false, reason: "String 标识符被局部遮蔽" };
       }
     }
-    const arg = unwrapExpr(expr.arguments[0]);
-    if (arg && ts.isIdentifier(arg)) ident = arg;
+    valueExpr = expr.arguments[0];
   }
-  if (!ident) {
-    return { ok: false, reason: `定义点写入 ${TOKEN_NAME} 禁止字面量/非常量表达式，必须引用规范常量 ${CANONICAL_CONST_NAME}` };
-  }
-
-  let sym = checker.getSymbolAtLocation(ident);
-  if (!sym) return { ok: false, reason: `标识符 ${ident.text} 无法解析符号` };
-
-  // Must be an imported alias (not a local const/let/var, parameter, catch binding, or block-scoped var)
-  const localDecls = sym.getDeclarations() ?? [];
-  const isAlias = Boolean(sym.flags & ts.SymbolFlags.Alias);
-  if (!isAlias) {
-    const decl = localDecls[0];
-    const declLoc = decl ? `${relative(baseDir, decl.getSourceFile().fileName).replace(/\\/g, "/")}:${decl.getSourceFile().getLineAndCharacterOfPosition(decl.getStart()).line + 1}` : "unknown";
-    return { ok: false, reason: `标识符 ${ident.text} 被局部/参数声明遮蔽（声明于 ${declLoc}），非规范导入来源 ${CANONICAL_SOURCE_FILE}` };
-  }
-
-  const targetSym = checker.getAliasedSymbol(sym);
-  if (!targetSym) return { ok: false, reason: `导入别名 ${ident.text} 无法解析目标符号` };
-  const targetDecls = targetSym.getDeclarations() ?? [];
-  const canonicalDecl = targetDecls.find(d => {
-    if (!ts.isVariableDeclaration(d) || !ts.isIdentifier(d.name) || d.name.text !== CANONICAL_CONST_NAME) return false;
-    const rel = relative(baseDir, d.getSourceFile().fileName).replace(/\\/g, "/");
-    return rel === CANONICAL_SOURCE_FILE;
-  });
-  if (!canonicalDecl) {
-    const actualDecl = targetDecls[0];
-    const actualLoc = actualDecl ? `${relative(baseDir, actualDecl.getSourceFile().fileName).replace(/\\/g, "/")}:${actualDecl.getSourceFile().getLineAndCharacterOfPosition(actualDecl.getStart()).line + 1}` : "unknown";
-    return { ok: false, reason: `标识符 ${ident.text} 解析来源为 ${actualLoc}，非规范来源 ${CANONICAL_SOURCE_FILE}:${CANONICAL_CONST_NAME}` };
-  }
-  return { ok: true };
+  return resolveExprToCanonical(valueExpr, checker, baseDir);
 }
 
 export async function checkReferenceOpacityStatic(baseDir = root) {
