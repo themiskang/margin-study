@@ -102,6 +102,8 @@ const automatedSuites=[
   ["workspace-scenes","src/workspace/scene-acceptance.mjs"],
   ["workspace-occlusion-default","src/workspace/occlusion-default-acceptance.mjs"],
   ["workspace-a26","src/workspace/a26-acceptance.mjs"],
+  ["workspace-clean-view-template","scripts/verify/clean-view-template-acceptance.mjs"],
+  ["workspace-clean-view","scripts/verify/clean-view-acceptance.mjs"],
   ["mindmap-layout","src/mindmap/layout-acceptance.mjs"],
   ["mindmap-a18","src/mindmap/a18-acceptance.mjs"],
   ["mindmap-a19","src/mindmap/a19-acceptance.mjs"],

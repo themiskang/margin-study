@@ -45,6 +45,7 @@ export const FEATURE_INDEX: FeatureEntry[] = [
   command("open-document-reader", "在 MarginStudy 中打开当前文档（PDF / Word / EPUB / HTML / Markdown）", "按文件类型自动选择阅读器打开当前文档", ["打开文档", "document", "epub", "html", "markdown"]),
   command("open-study-workspace", "打开 MarginStudy 学习工作区", "打开学习工作区：阅读、脑图、复习与整理同屏", ["工作区", "workspace", "学习区"]),
   command("toggle-interface-mode", "切换界面模式", "在场景界面与传统界面之间切换（Cmd+Alt+I）", ["界面模式", "传统界面", "场景界面"]),
+  command("toggle-clean-view", "切换简洁显示", "隐藏或恢复工作区工具栏与浮窗，手写时保留精简笔条（Cmd/Ctrl+Alt+H）", ["简洁显示", "简洁", "隐藏工具栏", "clean view", "minimal"]),
   command("import-web-article", "导入网页 / 微信文章", "抓取网页或微信文章正文保存为可标注文档", ["网页", "微信", "导入", "import", "web"]),
   command("open-research-browser", "打开研究浏览器", "打开内置浏览器查询资料并摘录", ["研究浏览器", "浏览器", "research"]),
   command("manage-review-decks", "新建与管理复习卡组", "创建、重命名和删除复习卡组", ["卡组", "牌组", "deck", "复习卡组"]),

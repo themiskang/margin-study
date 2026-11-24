@@ -68,11 +68,12 @@ interface WorkspaceState {
   placement: "left" | "right" | "bottom"; tabLimit: number; showTabs: boolean;
   documentNavigation: boolean; documentNavigationTab: DocumentNavigationTab;
   bottomMode: BottomMode; bottomCollapsed: boolean;
+  cleanView: boolean;
 }
 const defaults = (): WorkspaceState => ({
   tabs: [], library: false, auxiliary: "cards", reader: true, mindmap: true, ratio: 0.5,
   libraryWidth: 206, auxiliaryWidth: 320, auxiliaryWidths:{cards:320,review:320,research:440,ai:440}, linkMode: "both", placement: "left", tabLimit: 7, showTabs: true, documentNavigation: false, documentNavigationTab: "contents",
-  bottomMode: "reading", bottomCollapsed: false,
+  bottomMode: "reading", bottomCollapsed: false, cleanView: false,
 });
 const supported = (file: TFile) => isStudyDocumentPath(file.path);
 const studyDocumentDragType = "application/x-marginstudy-document-paths";
@@ -99,7 +100,8 @@ export class StudyWorkspaceView extends ItemView {
   private comparisons: ComparisonView[] = [];
   private comparisonDirection: "auto" | "horizontal" | "vertical" = "auto";
   private comparisonSwapped = false;
-  private cleanView = false;
+  private cleanHandleEl: HTMLButtonElement | null = null;
+  private cleanHandleDispose: (() => void) | null = null;
   private cleanPenStrip: HTMLElement | null = null;
   private tabBar!: HTMLElement;
   private readerTabRow!: HTMLElement;
@@ -232,6 +234,7 @@ export class StudyWorkspaceView extends ItemView {
     if (documentNavigationTabs.some(tab => tab.id === value.documentNavigationTab)) next.documentNavigationTab = value.documentNavigationTab;
     if (["reading", "writing", "recall"].includes(value.bottomMode)) next.bottomMode = value.bottomMode;
     if (typeof value.bottomCollapsed === "boolean") next.bottomCollapsed = value.bottomCollapsed;
+    if (typeof value.cleanView === "boolean") next.cleanView = value.cleanView;
     if (!this.closed) await this.openChain.catch(() => {});
     this.state = next;
     if (!this.closed) {
@@ -329,9 +332,16 @@ export class StudyWorkspaceView extends ItemView {
         const target=event.target;
         if (!(target instanceof Element && target.closest("input,textarea,[contenteditable=true]")) && this.canContinuousExcerpt()) { event.preventDefault(); this.toggleContinuousExcerpt(); return; }
       }
+      if (!event.defaultPrevented && (event.ctrlKey || event.metaKey) && event.altKey && !event.shiftKey && (event.code==="KeyH" || event.key.toLowerCase()==="h") && !document.querySelector(".ms-modal-bg,.modal-container")) {
+        const target=event.target;
+        const activeWorkspace=this.app.workspace.activeLeaf===this.leaf||(target instanceof Node&&this.root.contains(target));
+        if (activeWorkspace && !(target instanceof Element && target.closest("input,textarea,[contenteditable=true]"))) { event.preventDefault(); event.stopPropagation(); this.toggleCleanView(); return; }
+      }
       if (event.key !== "Escape" || event.defaultPrevented || document.querySelector(".ms-modal-bg,.modal-container")) return;
       if (this.popup) { event.preventDefault(); this.dismissPopup(); return; }
       if (this.reader?.getBlockSelectionMode()) { event.preventDefault();this.reader.setBlockSelectionMode(false);this.drawToolbar();return; }
+      const escTarget=event.target;
+      if (this.state.cleanView && !(escTarget instanceof Element && escTarget.closest("input,textarea,[contenteditable=true]"))) { event.preventDefault(); this.setCleanView(false); return; }
       if (this.focusedStage) { event.preventDefault(); this.toggleFocus(); }
     });
     this.plugin.viewEvents.onDocumentCardSelect = this.documentHook;
@@ -368,6 +378,7 @@ export class StudyWorkspaceView extends ItemView {
     if (initial instanceof TFile && supported(initial)) await this.openFile(initial);
   }
   async onClose(): Promise<void> {
+    this.cleanHandleDispose?.(); this.cleanHandleDispose = null; this.cleanHandleEl = null;
     this.bottomPressDisposers.splice(0).forEach(dispose=>dispose());
     this.closePageDialog?.();
     this.captureReader(); this.closed = true;
@@ -451,8 +462,8 @@ export class StudyWorkspaceView extends ItemView {
         if (reader.getFilePath() !== file.path) throw new Error("文档未完成加载");
         this.plugin.activeReader = reader; this.plugin.store.registerDocument(file.path);
         const canvas = this.plugin.store.canvases.find(canvas => canvas.id === this.plugin.store.activeCanvasId);
-        if (canvas) canvas.lastDocumentPath = file.path;
-        this.plugin.store.save(); this.applyLayout(); this.drawTabs(); this.drawLibrary();
+        if (canvas && canvas.lastDocumentPath !== file.path) { canvas.lastDocumentPath = file.path; this.plugin.store.save(); }
+        this.applyLayout(); this.drawTabs(); this.drawLibrary();
         if (reader instanceof ReaderView && !restoredTabState) await reader.fitWidth();
         reader.setRecallHintProvider?.(this.recallHintProvider);
         this.recallSettingsSetId = null;
@@ -591,6 +602,7 @@ export class StudyWorkspaceView extends ItemView {
     if("setHandwritingSyncAvailable"in reader)(reader as ChildReader & {setHandwritingSyncAvailable(value:boolean):void}).setHandwritingSyncAvailable(!!this.renderer);
     if(reader.getHandwritingSyncPreference())this.renderer?.setHandwritingMode(reader.getHandwritingMode());
     this.readerTool=reader.getHandwritingMode()==="off"?"text":reader.getHandwritingMode();
+    this.syncCleanPenStrip();
   }
   private recallHintProvider = async (request: import("../types").RecallHintRequest): Promise<import("../types").RecallHintResult> => {
     const english = request.language === "en";
@@ -765,6 +777,7 @@ export class StudyWorkspaceView extends ItemView {
     this.toolbar.append(controls);
     this.syncHistoryButtons();
     this.drawBottomCapsule();
+    this.syncCleanPenStrip();
     this.toolbarSignature=this.currentToolbarSignature();
   }
   private currentToolbarSignature():string {
@@ -823,54 +836,145 @@ export class StudyWorkspaceView extends ItemView {
 
   /** 5.0.2 简洁显示：顶部把手长按临时隐藏工具栏与浮窗，轻点恢复。 */
   private cleanViewHandle(): HTMLElement {
-    const handle = el("button", { type: "button", class: "ms-clean-view-handle", "aria-label": "简洁显示把手", title: "长按隐藏工具栏；轻点恢复" });
+    const LONG_PRESS_MS = 420;
+    const handle = el("button", {
+      type: "button",
+      class: "ms-clean-view-handle",
+      "aria-label": this.state.cleanView ? "恢复全部按钮" : "简洁显示把手",
+      title: "点顶部把手恢复，按住把手再次隐藏",
+    }) as HTMLButtonElement;
     handle.append(el("span", { "aria-hidden": "true" }));
-    let timer: number | null = null, longPressed = false;
-    const clear = () => { if (timer !== null) { window.clearTimeout(timer); timer = null; } };
-    handle.addEventListener("pointerdown", event => {
-      if (event.button !== 0) return;
-      longPressed = false; clear();
-      timer = window.setTimeout(() => { longPressed = true; timer = null; this.setCleanView(true); }, 420);
-    });
-    for (const type of ["pointercancel", "pointerleave"]) handle.addEventListener(type, clear);
-    handle.addEventListener("pointerup", () => {
+    this.cleanHandleEl = handle;
+    let timer: number | null = null, pointerId: number | null = null, startX = 0, startY = 0, longPressed = false;
+    const clear = () => {
+      if (timer !== null) { window.clearTimeout(timer); timer = null; }
+      pointerId = null;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      window.removeEventListener("blur", onCancel);
+    };
+    const onMove = (event: PointerEvent) => {
+      if (event.pointerId !== pointerId) return;
+      if (Math.hypot(event.clientX - startX, event.clientY - startY) > 8) clear();
+    };
+    const onUp = (event: PointerEvent) => {
+      if (pointerId !== null && event.pointerId !== pointerId) return;
       clear();
       // The click generated by the long-press release must be swallowed once; the next tap restores.
       if (longPressed) window.setTimeout(() => { longPressed = false; }, 0);
+    };
+    const onCancel = () => { clear(); longPressed = false; };
+    handle.addEventListener("pointerdown", event => {
+      if (event.button !== 0 || event.isPrimary === false) return;
+      clear();
+      longPressed = false;
+      pointerId = event.pointerId;
+      startX = event.clientX;
+      startY = event.clientY;
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onCancel);
+      window.addEventListener("blur", onCancel);
+      timer = window.setTimeout(() => {
+        timer = null;
+        if (this.closed || !handle.isConnected) { clear(); return; }
+        longPressed = true;
+        this.setCleanView(true);
+      }, LONG_PRESS_MS);
     });
+    handle.addEventListener("pointercancel", onCancel);
     handle.addEventListener("click", event => {
       event.stopPropagation();
       if (longPressed) { longPressed = false; return; }
-      if (this.cleanView) this.setCleanView(false);
+      if (this.state.cleanView) this.setCleanView(false);
     });
     handle.addEventListener("keydown", event => {
       if (event.key !== "Enter" && event.key !== " ") return;
-      event.preventDefault(); this.setCleanView(!this.cleanView);
+      event.preventDefault(); this.toggleCleanView();
     });
+    this.cleanHandleDispose = () => { clear(); longPressed = false; };
+    this.register(() => { this.cleanHandleDispose?.(); this.cleanHandleDispose = null; });
     return handle;
   }
-  /** 5.0.2 手写时的精简笔条：只保留笔/荧光笔/铅笔/橡皮。 */
+  private isHandwritingTool(tool = this.readerTool): boolean {
+    return tool === "pen" || tool === "highlight" || tool === "eraser" || tool === "lasso";
+  }
+  /** 5.0.2 手写时的精简笔条：只保留笔/荧光笔/铅笔/橡皮，直连阅读器手写预设与模式。 */
   private drawCleanPenStrip(): HTMLElement {
     const strip = el("div", { class: "ms-clean-pen-strip", role: "toolbar", "aria-label": "精简笔条" });
     strip.hidden = true;
-    for (const [label, text] of [["普通笔 1", "笔"], ["荧光笔", "荧光"], ["铅笔", "铅笔"], ["橡皮擦", "橡皮"]] as const) {
-      const button = el("button", { type: "button", class: "ms-clean-pen-action", text, "aria-label": label, title: label });
-      button.addEventListener("click", () => { this.readerAction(label); this.drawToolbar(); });
+    const actions: { id: "pen" | "highlighter" | "pencil" | "eraser"; label: string; text: string }[] = [
+      { id: "pen", label: "普通笔 1", text: "笔" },
+      { id: "highlighter", label: "荧光笔", text: "荧光" },
+      { id: "pencil", label: "铅笔", text: "铅笔" },
+      { id: "eraser", label: "橡皮擦", text: "橡皮" },
+    ];
+    for (const item of actions) {
+      const button = el("button", { type: "button", class: "ms-clean-pen-action", text: item.text, "aria-label": item.label, title: item.label, "aria-pressed": "false" }) as HTMLButtonElement;
+      button.dataset.cleanPenAction = item.id;
+      button.addEventListener("click", () => {
+        if (!this.reader) { this.chooseDocument(); return; }
+        const presets = this.handwritingPresets();
+        if (item.id === "pen") {
+          const preset = presets.find(preset => preset.type !== "pencil" && preset.type !== "highlighter");
+          if (preset) this.setReaderHandwritingPreset(preset.id, false);
+          else this.setReaderHandwritingMode("pen", false);
+        } else if (item.id === "highlighter") {
+          const marker = presets.find(preset => preset.type === "highlighter");
+          if (marker) this.setReaderHandwritingPreset(marker.id, false);
+          else this.setReaderHandwritingMode("highlight", false);
+        } else if (item.id === "pencil") {
+          const pencil = presets.find(preset => preset.type === "pencil");
+          if (pencil) this.setReaderHandwritingPreset(pencil.id, false);
+          else this.setReaderHandwritingMode("pen", false);
+        } else {
+          this.setReaderHandwritingMode("eraser", false);
+        }
+      });
       strip.append(button);
     }
     this.cleanPenStrip = strip;
     return strip;
   }
-  private setCleanView(enabled: boolean): void {
-    if (this.cleanView === enabled) return;
-    this.cleanView = enabled;
+  private syncCleanPenStrip(): void {
+    if (!this.cleanPenStrip) return;
+    const visible = this.state.cleanView && this.isHandwritingTool();
+    this.cleanPenStrip.hidden = !visible;
+    const presets = this.handwritingPresets();
+    const penOne = presets.find(preset => preset.type !== "pencil" && preset.type !== "highlighter");
+    const marker = presets.find(preset => preset.type === "highlighter");
+    const pencil = presets.find(preset => preset.type === "pencil");
+    const activePreset = this.reader?.getActiveHandwritingPreset?.();
+    const pressed: Record<string, boolean> = {
+      pen: this.readerTool === "pen" && (!!penOne ? activePreset === penOne.id : true),
+      highlighter: this.readerTool === "highlight" && (!marker || !activePreset || activePreset === marker.id),
+      pencil: this.readerTool === "pen" && !!pencil && activePreset === pencil.id,
+      eraser: this.readerTool === "eraser",
+    };
+    for (const button of this.cleanPenStrip.querySelectorAll<HTMLButtonElement>(".ms-clean-pen-action")) {
+      const active = !!pressed[button.dataset.cleanPenAction ?? ""];
+      button.setAttribute("aria-pressed", String(active));
+      button.classList.toggle("is-active", active);
+    }
+  }
+  private syncCleanViewDom(): void {
+    const enabled = this.state.cleanView;
     this.root.classList.toggle("is-clean-view", enabled);
     this.root.dataset.cleanView = String(enabled);
-    if (this.cleanPenStrip) this.cleanPenStrip.hidden = !(enabled && this.readerTool === "pen");
-    if (enabled) this.dismissPopup();
-    this.showWorkspaceNotice(enabled ? "已进入简洁显示，轻点顶部把手恢复" : "已退出简洁显示");
+    if (this.cleanHandleEl) this.cleanHandleEl.setAttribute("aria-label", enabled ? "恢复全部按钮" : "简洁显示把手");
+    this.syncCleanPenStrip();
   }
-  public isCleanView(): boolean { return this.cleanView; }
+  public setCleanView(enabled: boolean): void {
+    if (this.state.cleanView === enabled) return;
+    this.state.cleanView = enabled;
+    this.syncCleanViewDom();
+    if (enabled) this.dismissPopup();
+    this.showWorkspaceNotice(enabled ? "已进入简洁显示，点顶部把手恢复" : "已退出简洁显示");
+    this.saveLayout();
+  }
+  public toggleCleanView(): void { this.setCleanView(!this.state.cleanView); }
+  public isCleanView(): boolean { return this.state.cleanView; }
 
   private openFavoritesMenu(anchor: HTMLElement): void {
     const menu = new Menu();
@@ -937,7 +1041,7 @@ export class StudyWorkspaceView extends ItemView {
     if (!this.bottomCapsule) return;
     this.bottomPressDisposers.splice(0).forEach(dispose=>dispose());
     const dock=this.bottomCapsule;
-    const effectiveMode = this.cleanView && this.readerTool === "pen" ? "writing" : this.state.bottomMode;
+    const effectiveMode = this.state.cleanView && this.isHandwritingTool() ? "writing" : this.state.bottomMode;
     dock.dataset.mode=effectiveMode;
     dock.dataset.collapsed=String(this.state.bottomCollapsed);
     dock.replaceChildren();
@@ -1207,17 +1311,17 @@ export class StudyWorkspaceView extends ItemView {
       if(this.workspaceNoticeLayer?.contains(notice))this.workspaceNoticeLayer.replaceChildren();
     },duration);
   }
-  private setReaderHandwritingMode(mode:"pen"|"highlight"|"eraser"|"lasso"|"off"):void {
+  private setReaderHandwritingMode(mode:"pen"|"highlight"|"eraser"|"lasso"|"off",toggle=true):void {
     if(!this.reader){this.chooseDocument();return;}
     this.reader.setAutomaticTextExcerpt(false);
     if(this.reader instanceof ReaderView)this.reader.setContinuousExcerptPen("inactive");
     this.reader.setBlockSelectionMode(false);this.reader.setRegionMode(false);
     const current=this.reader.getHandwritingMode();
-    this.reader.setHandwritingMode(current===mode?"off":mode);
+    this.reader.setHandwritingMode(toggle&&current===mode?"off":mode);
     this.readerTool=this.reader.getHandwritingMode()==="off"?"text":this.reader.getHandwritingMode();
     this.state.bottomMode="writing";this.drawToolbar();
   }
-  private setReaderHandwritingPreset(preset:HandwritingPresetId):void {
+  private setReaderHandwritingPreset(preset:HandwritingPresetId,toggle=true):void {
     if(!this.reader){this.chooseDocument();return;}
     this.reader.setAutomaticTextExcerpt(false);
     if(this.reader instanceof ReaderView)this.reader.setContinuousExcerptPen("inactive");
@@ -1225,7 +1329,7 @@ export class StudyWorkspaceView extends ItemView {
     const mode=this.handwritingPresets().find(item=>item.id===preset)?.type==="highlighter"?"highlight":"pen";
     const same=this.reader.getHandwritingMode()===mode&&this.reader.getActiveHandwritingPreset?.()===preset;
     this.reader.setActiveHandwritingPreset?.(preset);
-    this.reader.setHandwritingMode(same?"off":mode);
+    this.reader.setHandwritingMode(toggle&&same?"off":mode);
     this.readerTool=this.reader.getHandwritingMode()==="off"?"text":this.reader.getHandwritingMode();
     this.state.bottomMode="writing";this.drawToolbar();
   }
@@ -2388,9 +2492,8 @@ export class StudyWorkspaceView extends ItemView {
     this.root.dataset.library=String(this.state.library); this.root.dataset.auxiliary=this.state.auxiliary;
     this.root.dataset.reader=String(this.state.reader); this.root.dataset.mindmap=String(this.state.mindmap);
     this.root.dataset.placement=this.state.placement; this.root.dataset.tabs=String(this.state.showTabs);
-    this.root.classList.toggle("is-clean-view", this.cleanView);
     this.root.dataset.readerTool = this.readerTool;
-    if (this.cleanPenStrip) this.cleanPenStrip.hidden = !(this.cleanView && this.readerTool === "pen");
+    this.syncCleanViewDom();
     const link=this.root.querySelector<HTMLElement>(".ms-native-divider-link");if(link){(link as HTMLButtonElement).disabled=!this.state.reader||!this.state.mindmap;link.title=this.linkModeLabel();link.setAttribute("aria-description",this.linkModeLabel());link.textContent=this.state.linkMode==="both"?"⇄":this.state.linkMode==="document"?"→":this.state.linkMode==="mindmap"?"←":"·";link.dataset.link=this.state.linkMode;}
     this.root.dataset.link=this.state.linkMode;
     this.root.style.setProperty("--ms-library-width",this.state.libraryWidth+"px");
