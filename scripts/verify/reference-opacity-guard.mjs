@@ -31,19 +31,29 @@ const ALLOWED_CSS_SELECTORS = new Set([".ms-ink-reference", ".ms-document-notebo
 const EXACT_CSS_FALLBACK = `var(${TOKEN_NAME}, 0.35)`;
 
 /**
- * 生产代码反推的参考层选择器族清单（含来源文件）：
- * - .ms-ink-reference: src/annot/baseController.ts:1142, src/pdf/annotationLayer.ts:694/719, src/word/htmlAnnot.ts:716
- * - .ms-document-notebook-reference: src/annot/baseController.ts:526, src/pdf/annotationLayer.ts:695/720/809, src/word/htmlAnnot.ts:601
- * - .ms-html-reference-range / .ms-html-reference-segment: src/word/htmlAnnot.ts:601/681
- * - .ms-ann-region: src/pdf/annotationLayer.ts:835（参考笔记本区域摘录复用该类，样式表无独立 opacity）
- * - [data-ms-reference*] / [data-ms-ink-reference*]: src/annot/baseController.ts:1749（统一参考态标记）
+ * 生产代码 7 处参考态渲染路径反推的参考层选择器族清单（含容器与子元素类名 + 来源文件:行号）：
+ * 1. .ms-ink-reference                (src/annot/baseController.ts:1142, src/pdf/annotationLayer.ts:694,720, src/word/htmlAnnot.ts:715)
+ * 2. .ms-document-notebook-reference  (src/annot/baseController.ts:526, src/pdf/annotationLayer.ts:695,721,810, src/word/htmlAnnot.ts:601)
+ * 3. [data-ms-reference*] / [data-ms-ink-reference*] (src/annot/baseController.ts:1749)
+ * 4. .ms-html-reference-range / .ms-html-reference-segment (src/word/htmlAnnot.ts:601,680)
+ * 5. .ms-ann-region                   (src/pdf/annotationLayer.ts:849, src/word/htmlAnnot.ts:731,738)
+ * 6. .ms-ann-voice                    (src/pdf/annotationLayer.ts:827, src/word/htmlAnnot.ts:694)
+ * 7. .ms-ann-pen                      (src/word/htmlAnnot.ts:710)
+ * 8. .ms-ann-dot                      (src/pdf/annotationLayer.ts:892)
+ * 9. .ms-ink-recall-mask              (src/annot/baseController.ts:539)
+ * 10. .ms-free-overlay-image / .ms-free-overlay-text (src/annot/overlay.ts:59,61)
  */
 const REFERENCE_SELECTOR_FAMILY = [
-  { pattern: /\.ms-ink-reference(?![\w-])/, source: "src/annot/baseController.ts:1142, src/pdf/annotationLayer.ts:694, src/word/htmlAnnot.ts:716" },
-  { pattern: /\.ms-document-notebook-reference(?![\w-])/, source: "src/annot/baseController.ts:526, src/pdf/annotationLayer.ts:695,809" },
-  { pattern: /\.ms-html-reference-(?:range|segment)(?![\w-])/, source: "src/word/htmlAnnot.ts:601,681" },
-  { pattern: /\.ms-ann-region(?![\w-])/, source: "src/pdf/annotationLayer.ts:835" },
-  { pattern: /\[data-ms-(?:ink-)?reference[^\]]*\]/, source: "src/annot/baseController.ts:1749" },
+  { name: ".ms-ink-reference", pattern: /\.ms-ink-reference(?![\w-])/, source: "src/annot/baseController.ts:1142, src/pdf/annotationLayer.ts:694,720, src/word/htmlAnnot.ts:715" },
+  { name: ".ms-document-notebook-reference", pattern: /\.ms-document-notebook-reference(?![\w-])/, source: "src/annot/baseController.ts:526, src/pdf/annotationLayer.ts:695,721,810, src/word/htmlAnnot.ts:601" },
+  { name: "[data-ms-(ink-)reference]", pattern: /\[data-ms-(?:ink-)?reference[^\]]*\]/, source: "src/annot/baseController.ts:1749" },
+  { name: ".ms-html-reference-range/.ms-html-reference-segment", pattern: /\.ms-html-reference-(?:range|segment)(?![\w-])/, source: "src/word/htmlAnnot.ts:601,680" },
+  { name: ".ms-ann-region", pattern: /\.ms-ann-region(?![\w-])/, source: "src/pdf/annotationLayer.ts:849, src/word/htmlAnnot.ts:731,738" },
+  { name: ".ms-ann-voice", pattern: /\.ms-ann-voice(?![\w-])/, source: "src/pdf/annotationLayer.ts:827, src/word/htmlAnnot.ts:694" },
+  { name: ".ms-ann-pen", pattern: /\.ms-ann-pen(?![\w-])/, source: "src/word/htmlAnnot.ts:710" },
+  { name: ".ms-ann-dot", pattern: /\.ms-ann-dot(?![\w-])/, source: "src/pdf/annotationLayer.ts:892" },
+  { name: ".ms-ink-recall-mask", pattern: /\.ms-ink-recall-mask(?![\w-])/, source: "src/annot/baseController.ts:539" },
+  { name: ".ms-free-overlay-image/.ms-free-overlay-text", pattern: /\.ms-free-overlay-(?:image|text)(?![\w-])/, source: "src/annot/overlay.ts:59,61" },
 ];
 
 /** 参考态种类注册表（双向包含校验：运行时发现集合必须与注册表完全相等）。 */
@@ -684,6 +694,7 @@ export async function checkReferenceOpacityStatic(baseDir = root) {
     passed: violations.length === 0 && countOk,
     expected: { ts: EXPECTED_TS_COUNT, cssFallback: EXPECTED_CSS_FALLBACK_COUNT, producer: EXPECTED_PRODUCER_COUNT, total: EXPECTED_TOTAL },
     actual: { ts: allowedTs.length, cssFallback: allowedCssFallback.length, producer: allowedProducers.length, total },
+    selectorFamily: REFERENCE_SELECTOR_FAMILY.map(({ name, source }) => ({ name, source })),
     allowedTs,
     allowedCssFallback,
     allowedProducers,
@@ -751,21 +762,32 @@ export async function checkReferenceOpacityRuntime(baseDir = root, expectedKinds
         fontScale: 1,
       };
 
-      // 1. ink (reference layer pen holder)
+      // 1. ink (reference layer pen holder with visible SVG stroke child)
       const inkAnn = { id: "ref-ink", type: "pen", inkLayerId: "layer-ref", documentNotebookId: "default" };
       const inkEl = document.createElement("div");
       inkEl.className = "ms-ann ms-ann-pen ms-ink-reference";
+      inkEl.style.cssText = "position:absolute;left:0;top:0;width:100px;height:40px;";
+      const inkSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      inkSvg.setAttribute("class", "ms-pen-render");
+      inkSvg.setAttribute("width", "100");
+      inkSvg.setAttribute("height", "40");
+      inkEl.appendChild(inkSvg);
       mark(inkEl, inkAnn);
       host.appendChild(inkEl);
 
-      // 2. document-notebook (reference notebook highlight)
-      const nbAnn = { id: "ref-nb", type: "highlight", documentNotebookId: "nb-ref" };
+      // 2. document-notebook (voice annotation with visible child glyph span)
+      const nbAnn = { id: "ref-voice", type: "voice", audioPath: "a.m4a", documentNotebookId: "nb-ref" };
       const nbEl = document.createElement("div");
-      nbEl.className = "ms-ann ms-ann-highlight ms-document-notebook-reference";
+      nbEl.className = "ms-ann ms-ann-voice ms-document-notebook-reference";
+      nbEl.style.cssText = "left:40px;top:40px;";
+      const voiceGlyph = document.createElement("span");
+      voiceGlyph.className = "ms-ann-voice-glyph";
+      voiceGlyph.textContent = "🎙";
+      nbEl.appendChild(voiceGlyph);
       mark(nbEl, nbAnn);
       host.appendChild(nbEl);
 
-      // 3. overlay-image (real createFreeOverlay in ink reference state)
+      // 3. overlay-image (real createFreeOverlay in ink reference state -> contains img.ms-free-overlay-image)
       const imgAnn = {
         id: "ref-img-overlay", docPath: "doc.pdf", docKind: "pdf", page: 1, type: "note",
         rects: [{ x: 20, y: 20, w: 120, h: 60 }], text: "", color: "#111111", image: dummyImg,
@@ -776,7 +798,7 @@ export async function checkReferenceOpacityRuntime(baseDir = root, expectedKinds
       mark(imgOverlay.element, imgAnn);
       host.appendChild(imgOverlay.element);
 
-      // 4. overlay-text (real createFreeOverlay in ink reference state)
+      // 4. overlay-text (real createFreeOverlay in ink reference state -> contains div.ms-free-overlay-text)
       const txtAnn = {
         id: "ref-txt-overlay", docPath: "doc.pdf", docKind: "pdf", page: 1, type: "note",
         rects: [{ x: 20, y: 100, w: 120, h: 60 }], text: "Ref text", color: "#111111",
@@ -802,14 +824,20 @@ export async function checkReferenceOpacityRuntime(baseDir = root, expectedKinds
       const maskAnn = { id: "ref-mask", type: "pen", inkBrush: "highlight", inkLayerId: "layer-ref", documentNotebookId: "default" };
       const maskEl = document.createElement("div");
       maskEl.className = "ms-ink-recall-mask ms-ink-reference";
+      maskEl.style.cssText = "position:absolute;left:20px;top:260px;width:80px;height:20px;";
       maskEl.dataset.recallInkMask = "";
       mark(maskEl, maskAnn);
       host.appendChild(maskEl);
 
-      // 7. html-range (HTML reference range in reference notebook)
+      // 7. html-range (HTML reference range with visible .ms-html-reference-segment child)
       const htmlAnn = { id: "ref-html", type: "highlight", documentNotebookId: "nb-ref" };
       const htmlRefEl = document.createElement("div");
       htmlRefEl.className = "ms-ann ms-html-reference-range ms-document-notebook-reference";
+      htmlRefEl.style.cssText = "position:absolute;left:20px;top:300px;width:120px;height:24px;";
+      const htmlSeg = document.createElement("span");
+      htmlSeg.className = "ms-html-reference-segment";
+      htmlSeg.style.cssText = "left:0;top:0;width:100px;height:18px;background:#ffd54f;";
+      htmlRefEl.appendChild(htmlSeg);
       mark(htmlRefEl, htmlAnn);
       host.appendChild(htmlRefEl);
 
@@ -817,6 +845,7 @@ export async function checkReferenceOpacityRuntime(baseDir = root, expectedKinds
       const regionAnn = { id: "ref-region", type: "region", documentNotebookId: "nb-ref" };
       const regionEl = document.createElement("div");
       regionEl.className = "ms-ann ms-ann-region ms-document-notebook-reference";
+      regionEl.style.cssText = "position:absolute;left:20px;top:340px;width:100px;height:50px;";
       mark(regionEl, regionAnn);
       host.appendChild(regionEl);
 
@@ -827,39 +856,79 @@ export async function checkReferenceOpacityRuntime(baseDir = root, expectedKinds
         return el.tagName.toLowerCase() + cls + (kind ? \`[data-overlay-kind="\${kind}"]\` : "") + (ref ? \`[data-ms-reference="\${ref}"]\` : "");
       };
 
-      const snapshotMarked = () => [...document.querySelectorAll("[data-ms-reference]")].map(el => ({
-        kind: el.getAttribute("data-ms-reference") || "",
-        descriptor: describeEl(el),
-        opacity: getComputedStyle(el).opacity,
-      }));
+      const isVisiblePainted = (el: Element) => {
+        const st = getComputedStyle(el);
+        if (st.display === "none" || st.visibility === "hidden") return false;
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      };
+
+      /** Collect painted leaf nodes under a marked reference root and compute effectiveAlpha = Π(opacity) from root->leaf. */
+      const collectLeaves = (rootEl: Element) => {
+        const leaves: Element[] = [];
+        const visit = (el: Element) => {
+          if (!isVisiblePainted(el)) return;
+          const visibleChildren = [...el.children].filter(isVisiblePainted);
+          if (!visibleChildren.length) { leaves.push(el); return; }
+          for (const child of visibleChildren) visit(child);
+        };
+        visit(rootEl);
+        if (!leaves.length) leaves.push(rootEl);
+        return leaves.map(leaf => {
+          let effectiveAlpha = 1;
+          const chain: string[] = [];
+          for (let cur: Element | null = leaf; cur; cur = cur === rootEl ? null : cur.parentElement) {
+            const op = parseFloat(getComputedStyle(cur).opacity);
+            effectiveAlpha *= Number.isFinite(op) ? op : 1;
+            chain.unshift(describeEl(cur));
+          }
+          return {
+            kind: rootEl.getAttribute("data-ms-reference") || "",
+            chain: chain.join(" > "),
+            leafOpacity: parseFloat(getComputedStyle(leaf).opacity),
+            effectiveAlpha,
+          };
+        });
+      };
+
+      const snapshotMarked = () => {
+        const roots = [...document.querySelectorAll("[data-ms-reference]")];
+        const leaves = roots.flatMap(collectLeaves);
+        return {
+          rootsCount: roots.length,
+          kinds: [...new Set(roots.map(r => r.getAttribute("data-ms-reference") || ""))].sort(),
+          leaves,
+        };
+      };
       const findUnmarked = () => [...document.querySelectorAll(${JSON.stringify(REFERENCE_CLASS_PROBE_QUERY)})]
         .filter(el => !el.hasAttribute("data-ms-reference"))
         .map(describeEl);
 
-      // Phase A: Before producer runs (token absent) -> CSS fallback must yield 0.35 on ALL [data-ms-reference] elements
-      const fallbackItems = snapshotMarked();
+      // Phase A: Before producer runs (token absent) -> CSS fallback must yield effectiveAlpha=0.35 on ALL painted leaves
+      const fallbackSnap = snapshotMarked();
 
-      // Phase B: Run real BaseAnnotationController producer -> token & ALL [data-ms-reference] elements must yield 0.35
+      // Phase B: Run real BaseAnnotationController producer -> token & ALL painted leaves must yield effectiveAlpha=0.35
       proto.syncReferenceOpacityToken.call({});
       const tokenVal = getComputedStyle(document.documentElement).getPropertyValue("${TOKEN_NAME}").trim();
-      const liveItems = snapshotMarked();
+      const liveSnap = snapshotMarked();
       const unmarked = findUnmarked();
 
       (window as any).__probe = {
         constVal: String(INK_REFERENCE_OPACITY),
         tokenVal,
-        elementsChecked: liveItems.length,
-        kinds: [...new Set(liveItems.map(item => item.kind))].sort(),
+        elementsChecked: liveSnap.rootsCount,
+        leavesChecked: liveSnap.leaves.length,
+        kinds: liveSnap.kinds,
         unmarked,
-        fallbackItems,
-        liveItems,
+        fallbackLeaves: fallbackSnap.leaves,
+        liveLeaves: liveSnap.leaves,
       };
     } catch (e) {
       (window as any).__probe = { error: String(e) };
     }
     (window as any).__done = true;
   `);
-  await writeFile(htmlFile, '<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/reader.css"></head><body><script type="module" src="/probe.js"></script></body></html>');
+  await writeFile(htmlFile, '<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/base.css"><link rel="stylesheet" href="/reader.css"></head><body><script type="module" src="/probe.js"></script></body></html>');
 
   let server;
   const session = `marginstudy-ref-op-${process.pid}-${Date.now()}`;
@@ -881,13 +950,15 @@ export async function checkReferenceOpacityRuntime(baseDir = root, expectedKinds
         },
       }],
     });
-    const cssText = await readFile(join(baseDir, "src/styles/styles-reader.css"), "utf8");
+    const baseCssText = await readFile(join(baseDir, "src/styles/styles-base.css"), "utf8");
+    const readerCssText = await readFile(join(baseDir, "src/styles/styles-reader.css"), "utf8");
     const jsText = await readFile(bundleJs, "utf8");
     const htmlText = await readFile(htmlFile, "utf8");
     server = createServer((req, res) => {
       const path = new URL(req.url, "http://127.0.0.1").pathname;
       if (path === "/probe.js") { res.setHeader("Content-Type", "text/javascript"); res.end(jsText); return; }
-      if (path === "/reader.css") { res.setHeader("Content-Type", "text/css"); res.end(cssText); return; }
+      if (path === "/base.css") { res.setHeader("Content-Type", "text/css"); res.end(baseCssText); return; }
+      if (path === "/reader.css") { res.setHeader("Content-Type", "text/css"); res.end(readerCssText); return; }
       res.setHeader("Content-Type", "text/html; charset=utf-8"); res.end(htmlText);
     });
     await new Promise(done => server.listen(0, "127.0.0.1", done));
@@ -898,11 +969,9 @@ export async function checkReferenceOpacityRuntime(baseDir = root, expectedKinds
     const errors = [];
     if (probe.error) errors.push(`runtime probe threw: ${probe.error}`);
     else {
-      // 1. Check unmarked reference elements
       if (probe.unmarked?.length) {
         errors.push(`渲染出的参考态元素缺少 data-ms-reference 标记: ${probe.unmarked.join(", ")}`);
       }
-      // 2. Bidirectional registry check: discoveredKinds === expectedKinds
       const expectedSet = new Set(expectedKinds);
       const discoveredSet = new Set(probe.kinds ?? []);
       const missingKinds = [...expectedSet].filter(k => !discoveredSet.has(k));
@@ -910,19 +979,19 @@ export async function checkReferenceOpacityRuntime(baseDir = root, expectedKinds
       if (missingKinds.length) errors.push(`参考态种类注册表缺失（渲染未产出或缺少标记）: ${missingKinds.join(", ")}`);
       if (extraKinds.length) errors.push(`参考态种类注册表未登记多余种类: ${extraKinds.join(", ")}`);
 
-      // 3. Check token & every discovered [data-ms-reference] element computed opacity === 0.35
       if (probe.constVal !== TARGET_OPACITY_STR) errors.push(`INK_REFERENCE_OPACITY=${probe.constVal} !== ${TARGET_OPACITY_STR}`);
       if (probe.tokenVal !== TARGET_OPACITY_STR || probe.tokenVal !== probe.constVal) {
         errors.push(`documentElement ${TOKEN_NAME}=${JSON.stringify(probe.tokenVal)} !== ${TARGET_OPACITY_STR} / const=${probe.constVal}`);
       }
-      for (const item of probe.liveItems) {
-        if (item.opacity !== TARGET_OPACITY_STR || item.opacity !== probe.constVal) {
-          errors.push(`live [${item.kind}] ${item.descriptor} computed opacity=${item.opacity} !== ${TARGET_OPACITY_STR}`);
+      const ALPHA_TOL = 1e-6;
+      for (const leaf of probe.liveLeaves) {
+        if (Math.abs(leaf.effectiveAlpha - TARGET_OPACITY) > ALPHA_TOL) {
+          errors.push(`live [${leaf.kind}] ${leaf.chain} effectiveAlpha=${leaf.effectiveAlpha} !== ${TARGET_OPACITY_STR}`);
         }
       }
-      for (const item of probe.fallbackItems) {
-        if (item.opacity !== TARGET_OPACITY_STR) {
-          errors.push(`fallback [${item.kind}] ${item.descriptor} computed opacity=${item.opacity} !== ${TARGET_OPACITY_STR}`);
+      for (const leaf of probe.fallbackLeaves) {
+        if (Math.abs(leaf.effectiveAlpha - TARGET_OPACITY) > ALPHA_TOL) {
+          errors.push(`fallback [${leaf.kind}] ${leaf.chain} effectiveAlpha=${leaf.effectiveAlpha} !== ${TARGET_OPACITY_STR}`);
         }
       }
     }
@@ -959,7 +1028,7 @@ if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
         console.error(`FAIL reference-opacity-guard baseline mismatch: actual=${JSON.stringify(result.actual)} expected=${JSON.stringify(result.expected)}`);
       }
     } else {
-      console.log(`PASS reference-opacity-guard(static) (${result.actual.ts} TS + ${result.actual.cssFallback} CSS fallback + ${result.actual.producer} producer = ${result.actual.total}, 0 violations)`);
+      console.log(`PASS reference-opacity-guard(static) (${result.actual.ts} TS + ${result.actual.cssFallback} CSS fallback + ${result.actual.producer} producer = ${result.actual.total}, selectorFamily=${result.selectorFamily.length}, 0 violations)`);
     }
   }
   if (!staticOnly) {
@@ -969,7 +1038,7 @@ if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
       failed = true;
       for (const e of rt.errors) console.error(`FAIL reference-opacity-guard(runtime): ${e}`);
     } else {
-      console.log(`PASS reference-opacity-guard(runtime) (token=${rt.probe.tokenVal}, kinds=${rt.probe.kinds.length} [${rt.probe.kinds.join(",")}], elementsChecked=${rt.probe.elementsChecked}, all=${TARGET_OPACITY_STR})`);
+      console.log(`PASS reference-opacity-guard(runtime) (token=${rt.probe.tokenVal}, kinds=${rt.probe.kinds.length} [${rt.probe.kinds.join(",")}], elementsChecked=${rt.probe.elementsChecked}, leavesChecked=${rt.probe.leavesChecked}, allEffectiveAlpha=${TARGET_OPACITY_STR})`);
     }
   }
   if (failed) process.exit(1);
