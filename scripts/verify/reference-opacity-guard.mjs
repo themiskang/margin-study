@@ -1,7 +1,7 @@
 /**
- * [INPUT]: 扫描 src/** 的 TypeScript AST/符号表、src/styles/** 的 CSS 规则，并在真实 Chromium DOM 中执行生产者与计算样式运行时断言。
- * [OUTPUT]: 双轨静态校验（递归 calc 规范化数值 0.35 + 精确形态白名单 + 生产者侧 TypeChecker 规范来源解析）与运行时计算样式断言，违规则报文件:行号并退出 1。
- * [POS]: GAP-07b-3 参考层透明度单源、CSS 回退、token 生产者与运行时计算值守卫。
+ * [INPUT]: 扫描 src/** 的 TypeScript AST/符号表、src/styles/** 的 CSS 规则（含嵌套 @media/@supports），并在真实 Chromium DOM 中遍历全部参考元素断言计算透明度。
+ * [OUTPUT]: 参考层选择器族覆盖 + 递归 calc 规范化数值 0.35 + TypeChecker 值表达式符号解析 + 真实 DOM 全集运行时断言，违规则报文件:行号/选择器/元素并退出 1。
+ * [POS]: GAP-07b-3 参考层透明度单源、CSS 回退、token 生产者与运行时全集守卫。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -30,6 +30,32 @@ const EXPECTED_TOTAL = EXPECTED_TS_COUNT + EXPECTED_CSS_FALLBACK_COUNT + EXPECTE
 const ALLOWED_CSS_SELECTORS = new Set([".ms-ink-reference", ".ms-document-notebook-reference"]);
 const EXACT_CSS_FALLBACK = `var(${TOKEN_NAME}, 0.35)`;
 
+/**
+ * 生产代码反推的参考层选择器族清单（含来源文件）：
+ * - .ms-ink-reference: src/annot/baseController.ts:1139, src/pdf/annotationLayer.ts:692/713, src/word/htmlAnnot.ts:713
+ * - .ms-document-notebook-reference: src/annot/baseController.ts:525, src/pdf/annotationLayer.ts:692/713
+ * - .ms-html-reference-range / .ms-html-reference-segment: src/word/htmlAnnot.ts:601/679
+ * - [data-ms-ink-reference*]: 参考态自定义属性前缀
+ * - .ms-free-overlay / .ms-free-overlay-image / .ms-free-overlay-text 与参考态组合: src/annot/overlay.ts:50-61 + baseController.ts:1139
+ */
+const REFERENCE_SELECTOR_FAMILY = [
+  { pattern: /\.ms-ink-reference(?![\w-])/, source: "src/annot/baseController.ts:1139, src/pdf/annotationLayer.ts:692, src/word/htmlAnnot.ts:713" },
+  { pattern: /\.ms-document-notebook-reference(?![\w-])/, source: "src/annot/baseController.ts:525, src/pdf/annotationLayer.ts:692" },
+  { pattern: /\.ms-html-reference-(?:range|segment)(?![\w-])/, source: "src/word/htmlAnnot.ts:601,679" },
+  { pattern: /\[data-ms-ink-reference[^\]]*\]/, source: "reference-layer data attribute family" },
+];
+
+const REFERENCE_DOM_QUERY = [
+  ".ms-ink-reference",
+  ".ms-document-notebook-reference",
+  ".ms-html-reference-range",
+  "[data-ms-ink-reference]",
+].join(", ");
+
+function matchesReferenceSelectorFamily(selector) {
+  return REFERENCE_SELECTOR_FAMILY.some(entry => entry.pattern.test(selector));
+}
+
 async function collectFiles(dir, ext) {
   const entries = await readdir(dir, { withFileTypes: true });
   const out = [];
@@ -52,6 +78,88 @@ function walk(node, visit) {
 
 function isTarget035(value) {
   return Number.isFinite(value) && Math.abs(value - TARGET_OPACITY) < EPS;
+}
+
+/**
+ * Brace-aware CSS rule parser supporting nested @media / @supports / @layer / @container blocks.
+ * Returns flat list of style rules: { selectorText, selectors, body, bodyStart, atRule }.
+ */
+function parseCssStyleRules(cssText) {
+  const rules = [];
+  const len = cssText.length;
+
+  function skipComment(pos) {
+    if (cssText[pos] === "/" && cssText[pos + 1] === "*") {
+      const end = cssText.indexOf("*/", pos + 2);
+      return end < 0 ? len : end + 2;
+    }
+    return pos;
+  }
+
+  function findMatchingBrace(openPos) {
+    let depth = 1;
+    let i = openPos + 1;
+    while (i < len && depth > 0) {
+      if (cssText[i] === "/" && cssText[i + 1] === "*") { i = skipComment(i); continue; }
+      if (cssText[i] === '"' || cssText[i] === "'") {
+        const q = cssText[i++];
+        while (i < len && cssText[i] !== q) { if (cssText[i] === "\\") i++; i++; }
+        i++;
+        continue;
+      }
+      if (cssText[i] === "{") depth++;
+      else if (cssText[i] === "}") depth--;
+      i++;
+    }
+    return i - 1;
+  }
+
+  function parseBlock(start, end, atRule) {
+    let i = start;
+    while (i < end) {
+      while (i < end) {
+        if (/\s/.test(cssText[i])) { i++; continue; }
+        if (cssText[i] === "/" && cssText[i + 1] === "*") { i = skipComment(i); continue; }
+        break;
+      }
+      if (i >= end) break;
+      const headerStart = i;
+      while (i < end && cssText[i] !== "{" && cssText[i] !== ";") {
+        if (cssText[i] === "/" && cssText[i + 1] === "*") { i = skipComment(i); continue; }
+        if (cssText[i] === '"' || cssText[i] === "'") {
+          const q = cssText[i++];
+          while (i < end && cssText[i] !== q) { if (cssText[i] === "\\") i++; i++; }
+          i++;
+          continue;
+        }
+        i++;
+      }
+      if (i >= end) break;
+      if (cssText[i] === ";") { i++; continue; }
+      const header = cssText.slice(headerStart, i).replace(/\/\*[\s\S]*?\*\//g, "").trim();
+      const closePos = findMatchingBrace(i);
+      const bodyStart = i + 1;
+      if (header.startsWith("@")) {
+        // Container at-rules (@media, @supports, @layer, @container, @document) contain nested style rules
+        if (/^@(?:media|supports|layer|container|document|scope)\b/i.test(header)) {
+          parseBlock(bodyStart, closePos, atRule ? `${atRule} > ${header}` : header);
+        }
+      } else if (header) {
+        const selectors = header.split(",").map(s => s.trim()).filter(Boolean);
+        rules.push({
+          selectorText: header,
+          selectors,
+          body: cssText.slice(bodyStart, closePos),
+          bodyStart,
+          atRule,
+        });
+      }
+      i = closePos + 1;
+    }
+  }
+
+  parseBlock(0, len, null);
+  return rules;
 }
 
 /** Extract top-level balanced `calc(...)` inner expressions (supports nested parens and nested calc()). */
@@ -80,11 +188,6 @@ function extractCalcInnerExpressions(str) {
   return results;
 }
 
-/**
- * Recursive-descent evaluator for CSS calc() supporting numbers, percentages (35% -> 0.35),
- * scientific notation, + - * /, nested parentheses, and nested calc(...).
- * Returns finite number or NaN if unevaluable (e.g., var(--x)).
- */
 function evalCalcExpr(expr) {
   const tokens = [];
   let pos = 0;
@@ -235,15 +338,10 @@ function isUnshadowedGlobal(ident, checker, baseDir) {
   return !decls.some(d => !d.getSourceFile().isDeclarationFile && resolve(d.getSourceFile().fileName).startsWith(resolve(baseDir, "src")));
 }
 
-/**
- * Resolve a runtime object expression (after stripping all type assertions/parens/non-null)
- * and look up property `key` ONLY from its true runtime module/object symbol, NEVER from an asserted type.
- */
 function resolvePropertyOnRuntimeObject(objNode, key, checker, baseDir, seen) {
   const rawObj = unwrapExpr(objNode);
   if (!rawObj) return { ok: false, reason: "缺少对象表达式" };
 
-  // Follow const alias of an object (e.g. `const M = G` or `const M = F as typeof G`)
   if (ts.isIdentifier(rawObj)) {
     const rawSym = checker.getSymbolAtLocation(rawObj);
     const targetSym = followAliasSymbol(rawSym, checker);
@@ -252,7 +350,6 @@ function resolvePropertyOnRuntimeObject(objNode, key, checker, baseDir, seen) {
       seen.add(decl.initializer);
       return resolvePropertyOnRuntimeObject(decl.initializer, key, checker, baseDir, seen);
     }
-    // True module namespace import (`import * as G from "..."`)
     if (targetSym && (targetSym.flags & ts.SymbolFlags.ValueModule)) {
       const exports = checker.getExportsOfModule(targetSym);
       const member = exports.find(s => s.name === key);
@@ -269,8 +366,6 @@ function resolvePropertyOnRuntimeObject(objNode, key, checker, baseDir, seen) {
     };
   }
 
-  // If rawObj is itself a property/element access (e.g. `(F.INK_REFERENCE_OPACITY as typeof G)['INK_REFERENCE_OPACITY']`),
-  // report the real underlying symbol location (e.g. fakeOpacity.ts) and reject!
   if (ts.isPropertyAccessExpression(rawObj)) {
     const rawSym = followAliasSymbol(checker.getSymbolAtLocation(rawObj.name) ?? checker.getSymbolAtLocation(rawObj), checker);
     return {
@@ -285,21 +380,11 @@ function resolvePropertyOnRuntimeObject(objNode, key, checker, baseDir, seen) {
   };
 }
 
-/**
- * Pure TypeChecker semantic resolver over VALUE expressions (never asserted types):
- * - Strips type assertions (`as`, `<T>`, `satisfies`), parens, `!`, `String(...)`, `Number(...)`,
- *   `.toString()`, and pure template interpolation `` `${x}` ``.
- * - Checks EVERY branch of `??`, `||`, and `cond ? a : b`.
- * - Resolves imports, re-export chains, namespace members (`G.INK_REFERENCE_OPACITY`),
- *   element access (`G["INK_REFERENCE_OPACITY"]`), destructuring aliases, and const aliases
- *   strictly against `src/annot/penGeometry.ts:INK_REFERENCE_OPACITY`.
- */
 function resolveExprToCanonical(node, checker, baseDir, seen = new Set()) {
   const expr = unwrapExpr(node);
   if (!expr || seen.has(expr)) return { ok: false, reason: "缺少或循环表达式" };
   seen.add(expr);
 
-  // 0a. String(x) / Number(x) wrapper calls
   if (
     ts.isCallExpression(expr) &&
     ts.isIdentifier(expr.expression) &&
@@ -312,7 +397,6 @@ function resolveExprToCanonical(node, checker, baseDir, seen = new Set()) {
     return resolveExprToCanonical(expr.arguments[0], checker, baseDir, seen);
   }
 
-  // 0b. x.toString() wrapper call
   if (
     ts.isCallExpression(expr) &&
     ts.isPropertyAccessExpression(expr.expression) &&
@@ -322,7 +406,6 @@ function resolveExprToCanonical(node, checker, baseDir, seen = new Set()) {
     return resolveExprToCanonical(expr.expression.expression, checker, baseDir, seen);
   }
 
-  // 0c. Pure template interpolation `${x}`
   if (
     ts.isTemplateExpression(expr) &&
     expr.head.text === "" &&
@@ -332,7 +415,6 @@ function resolveExprToCanonical(node, checker, baseDir, seen = new Set()) {
     return resolveExprToCanonical(expr.templateSpans[0].expression, checker, baseDir, seen);
   }
 
-  // 0d. Branching: x ?? y, x || y -> BOTH branches must resolve to canonical
   if (
     ts.isBinaryExpression(expr) &&
     (expr.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken ||
@@ -345,7 +427,6 @@ function resolveExprToCanonical(node, checker, baseDir, seen = new Set()) {
     return { ok: true };
   }
 
-  // 0e. Conditional: cond ? a : b -> BOTH branches must resolve to canonical
   if (ts.isConditionalExpression(expr)) {
     const t = resolveExprToCanonical(expr.whenTrue, checker, baseDir, new Set(seen));
     if (!t.ok) return t;
@@ -354,12 +435,10 @@ function resolveExprToCanonical(node, checker, baseDir, seen = new Set()) {
     return { ok: true };
   }
 
-  // 1. Property access: e.g. G.INK_REFERENCE_OPACITY (must check runtime object, not asserted type)
   if (ts.isPropertyAccessExpression(expr)) {
     return resolvePropertyOnRuntimeObject(expr.expression, expr.name.text, checker, baseDir, seen);
   }
 
-  // 2. Element access with static string key: e.g. G["INK_REFERENCE_OPACITY"]
   if (ts.isElementAccessExpression(expr)) {
     const key = stringLiteralValue(expr.argumentExpression);
     if (key) {
@@ -368,7 +447,6 @@ function resolveExprToCanonical(node, checker, baseDir, seen = new Set()) {
     return { ok: false, reason: `动态索引表达式 ${expr.getText()} 无法静态解析到规范常量` };
   }
 
-  // 3. Identifier: direct import, renamed import, re-export chain, destructuring alias, or const alias
   if (ts.isIdentifier(expr)) {
     const rawSym = checker.getSymbolAtLocation(expr);
     if (!rawSym) return { ok: false, reason: `标识符 ${expr.text} 无法解析符号` };
@@ -412,7 +490,7 @@ export async function checkReferenceOpacityStatic(baseDir = root) {
   const allowedProducers = [];
   const violations = [];
 
-  // 1. Create TypeScript Program over src/**/*.ts for real symbol + import-chain resolution
+  // 1. TypeScript AST + TypeChecker over src/**/*.ts
   const tsFiles = await collectFiles(join(baseDir, "src"), ".ts");
   const program = ts.createProgram(tsFiles, {
     target: ts.ScriptTarget.ESNext,
@@ -432,7 +510,6 @@ export async function checkReferenceOpacityStatic(baseDir = root) {
     const handledTokenNodes = new Set();
 
     walk(sf, node => {
-      // (a) Numeric literals equal to 0.35
       if (ts.isNumericLiteral(node) && isTarget035(Number(node.text))) {
         const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
         const raw = node.getText(sf);
@@ -449,7 +526,6 @@ export async function checkReferenceOpacityStatic(baseDir = root) {
         }
       }
 
-      // (b) setProperty("--ms-ink-reference-opacity", X) producer calls with TypeChecker canonical resolution
       if (ts.isCallExpression(node) &&
           ts.isPropertyAccessExpression(node.expression) &&
           node.expression.name.text === "setProperty" &&
@@ -462,18 +538,12 @@ export async function checkReferenceOpacityStatic(baseDir = root) {
           if (resolved.ok) {
             allowedProducers.push({ file: rel, line, form: node.getText(sf) });
           } else {
-            violations.push({
-              file: rel,
-              line,
-              text: node.getText(sf),
-              reason: resolved.reason,
-            });
+            violations.push({ file: rel, line, text: node.getText(sf), reason: resolved.reason });
           }
         }
       }
     });
 
-    // (c) Any other string/template literal containing --ms-ink-reference-opacity
     walk(sf, node => {
       if (handledTokenNodes.has(node)) return;
       let text = null;
@@ -491,17 +561,22 @@ export async function checkReferenceOpacityStatic(baseDir = root) {
     });
   }
 
-  // 2. Scan CSS rules with dual-track: recursive calc + normalized 0.35 + exact whitelist form
+  // 2. CSS rules (including nested @media / @supports / @layer):
+  //    Track A (selector-family): ANY `opacity` on reference-layer selectors (regardless of value or !important)
+  //            must match the exact canonical whitelist.
+  //    Track B (value-normalized): ANY non-:disabled `opacity` normalizing to 0.35 or unevaluable calc()
+  //            anywhere in CSS must match the exact canonical whitelist.
   const cssFiles = await collectFiles(join(baseDir, "src", "styles"), ".css");
   for (const absPath of cssFiles) {
     const rel = relative(baseDir, absPath).replace(/\\/g, "/");
     const content = await readFile(absPath, "utf8");
-    for (const ruleMatch of content.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-      const selectorText = ruleMatch[1].replace(/\/\*[\s\S]*?\*\//g, "").trim();
-      const selectors = selectorText.split(",").map(s => s.trim()).filter(Boolean);
-      const body = ruleMatch[2];
-      const bodyStart = ruleMatch.index + ruleMatch[1].length + 1;
+    const rules = parseCssStyleRules(content);
+
+    for (const rule of rules) {
+      const { selectorText, selectors, body, bodyStart, atRule } = rule;
       const isDisabledOnly = selectors.length > 0 && selectors.every(s => /:disabled\b/.test(s));
+      const isReferenceSelector = selectors.some(matchesReferenceSelectorFamily);
+      const ctxPrefix = atRule ? `${atRule} -> ` : "";
 
       for (const declMatch of body.matchAll(/([-\w]+)\s*:\s*([^;]+)/g)) {
         const prop = declMatch[1].trim().toLowerCase();
@@ -514,7 +589,8 @@ export async function checkReferenceOpacityStatic(baseDir = root) {
           violations.push({
             file: rel,
             line,
-            text: `${prop}: ${val}`,
+            selector: selectorText,
+            text: `${ctxPrefix}${selectorText} { ${prop}: ${val} }`,
             reason: `禁止在 CSS 中直接定义 ${TOKEN_NAME}（必须由 TS 常量引用定义点写入）`,
           });
           continue;
@@ -526,7 +602,8 @@ export async function checkReferenceOpacityStatic(baseDir = root) {
             violations.push({
               file: rel,
               line,
-              text: `${prop}: ${val}`,
+              selector: selectorText,
+              text: `${ctxPrefix}${selectorText} { ${prop}: ${val} }`,
               reason: check.kind === "unevaluable" ? "不可判定 calc() 表达式（保守拒绝）" : "归一值 0.35，禁止 CSS 变量赋值形态",
             });
           }
@@ -534,37 +611,52 @@ export async function checkReferenceOpacityStatic(baseDir = root) {
         }
 
         if (prop !== "opacity") continue;
-        if (isDisabledOnly) continue;
+        if (isDisabledOnly && !isReferenceSelector) continue;
 
+        const isAllowedCanonical =
+          rel === "src/styles/styles-reader.css" &&
+          atRule === null &&
+          selectors.length === 1 &&
+          ALLOWED_CSS_SELECTORS.has(selectors[0]) &&
+          val === EXACT_CSS_FALLBACK;
+
+        // Track A: Reference selector family — ANY opacity declaration (any value, !important, @media, compound)
+        if (isReferenceSelector) {
+          if (isAllowedCanonical) {
+            allowedCssFallback.push({ file: rel, line, selector: selectors[0], form: `opacity: ${val}` });
+          } else {
+            violations.push({
+              file: rel,
+              line,
+              selector: selectorText,
+              text: `${ctxPrefix}${selectorText} { opacity: ${val} }`,
+              reason: `参考层选择器族上禁止非规范 opacity 声明（仅允许顶层精确形态 opacity: ${EXACT_CSS_FALLBACK}）`,
+            });
+          }
+          continue;
+        }
+
+        // Track B: Non-reference selectors — normalized 0.35 or unevaluable calc()
         const check = inspectCssOpacityValue(val);
         if (check.kind === "none") continue;
         if (check.kind === "unevaluable") {
           violations.push({
             file: rel,
             line,
-            text: `${selectorText} { opacity: ${val} }`,
+            selector: selectorText,
+            text: `${ctxPrefix}${selectorText} { opacity: ${val} }`,
             reason: "不可判定 calc() 表达式（保守拒绝）",
           });
           continue;
         }
-
-        const isAllowedFallback =
-          rel === "src/styles/styles-reader.css" &&
-          selectors.length === 1 &&
-          ALLOWED_CSS_SELECTORS.has(selectors[0]) &&
-          val === EXACT_CSS_FALLBACK;
-
-        if (isAllowedFallback) {
-          allowedCssFallback.push({ file: rel, line, selector: selectors[0], form: `opacity: ${val}` });
-        } else {
-          violations.push({
-            file: rel,
-            line,
-            text: `${selectorText} { opacity: ${val} }`,
-            normalized: TARGET_OPACITY,
-            reason: `归一值 0.35，非精确白名单形态 opacity: ${EXACT_CSS_FALLBACK}`,
-          });
-        }
+        violations.push({
+          file: rel,
+          line,
+          selector: selectorText,
+          text: `${ctxPrefix}${selectorText} { opacity: ${val} }`,
+          normalized: TARGET_OPACITY,
+          reason: `归一值 0.35，非精确白名单形态 opacity: ${EXACT_CSS_FALLBACK}`,
+        });
       }
     }
   }
@@ -589,9 +681,11 @@ export async function checkReferenceOpacityStatic(baseDir = root) {
 
 /**
  * Runtime real-DOM assertion in Chromium:
- * Bundles BaseAnnotationController + INK_REFERENCE_OPACITY from baseDir, runs the real
- * syncReferenceOpacityToken() producer, and verifies computed opacity on both reference classes
- * and --ms-ink-reference-opacity on documentElement match both "0.35" (independent truth) and String(INK_REFERENCE_OPACITY).
+ * Renders the full reference element family (overlay image/text via real createFreeOverlay,
+ * notebook+ink image combo, ink reference, notebook reference, HTML reference range,
+ * recall ink mask), runs BaseAnnotationController.prototype.syncReferenceOpacityToken,
+ * and iterates document.querySelectorAll over ALL matched reference elements, asserting
+ * every element's computed opacity === 0.35 (both with token and CSS fallback without token).
  */
 export async function checkReferenceOpacityRuntime(baseDir = root) {
   const temp = await mkdtemp(join(tmpdir(), "marginstudy-ref-opacity-rt-"));
@@ -619,31 +713,94 @@ export async function checkReferenceOpacityRuntime(baseDir = root) {
   `);
   await writeFile(entryTs, `
     import { BaseAnnotationController } from ${JSON.stringify(join(baseDir, "src/annot/baseController.ts"))};
+    import { createFreeOverlay } from ${JSON.stringify(join(baseDir, "src/annot/overlay.ts"))};
     import { INK_REFERENCE_OPACITY } from ${JSON.stringify(join(baseDir, "src/annot/penGeometry.ts"))};
     try {
+      const host = document.createElement("div");
+      host.style.cssText = "position:relative;width:500px;height:700px;";
+      document.body.appendChild(host);
+
+      const dummyImg = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==";
+      const surface = {
+        parent: host,
+        box: { left: 20, top: 20, width: 120, height: 60 },
+        bounds: () => ({ width: 500, height: 700 }),
+        geometry: () => null,
+        fontScale: 1,
+      };
+
+      // 1. Plain ink reference element
       const inkEl = document.createElement("div");
       inkEl.className = "ms-ink-reference";
+      host.appendChild(inkEl);
+
+      // 2. Document notebook reference element
       const nbEl = document.createElement("div");
       nbEl.className = "ms-document-notebook-reference";
-      document.body.append(inkEl, nbEl);
+      host.appendChild(nbEl);
 
-      // 1. Before producer runs (token absent): CSS fallback must compute 0.35
-      const fallbackInk = getComputedStyle(inkEl).opacity;
-      const fallbackNb = getComputedStyle(nbEl).opacity;
+      // 3. Real image free-overlay in ink reference state (via createFreeOverlay)
+      const imgOverlay = createFreeOverlay({
+        id: "ref-img-overlay", docPath: "doc.pdf", docKind: "pdf", page: 1, type: "note",
+        rects: [{ x: 20, y: 20, w: 120, h: 60 }], text: "", color: "#111111", image: dummyImg,
+        inkLayerId: "layer-ref", overlay: { kind: "image" }, createdAt: "2026-11-24",
+      } as any, surface as any, { readonly: true, imageSource: dummyImg });
+      imgOverlay.element.classList.add("ms-ink-reference");
+      host.appendChild(imgOverlay.element);
 
-      // 2. Run the real BaseAnnotationController producer method
+      // 4. Real text free-overlay in ink reference state (via createFreeOverlay)
+      const txtOverlay = createFreeOverlay({
+        id: "ref-txt-overlay", docPath: "doc.pdf", docKind: "pdf", page: 1, type: "note",
+        rects: [{ x: 20, y: 100, w: 120, h: 60 }], text: "Ref text", color: "#111111",
+        inkLayerId: "layer-ref", overlay: { kind: "text", fontSize: 16 }, createdAt: "2026-11-24",
+      } as any, surface as any, { readonly: true });
+      txtOverlay.element.classList.add("ms-ink-reference");
+      host.appendChild(txtOverlay.element);
+
+      // 5. Combined notebook + ink reference image overlay
+      const comboOverlay = createFreeOverlay({
+        id: "ref-combo-img", docPath: "doc.pdf", docKind: "pdf", page: 1, type: "note",
+        rects: [{ x: 20, y: 180, w: 120, h: 60 }], text: "", color: "#111111", image: dummyImg,
+        inkLayerId: "layer-ref", documentNotebookId: "nb-ref", overlay: { kind: "image" }, createdAt: "2026-11-24",
+      } as any, surface as any, { readonly: true, imageSource: dummyImg });
+      comboOverlay.element.classList.add("ms-ink-reference", "ms-document-notebook-reference");
+      host.appendChild(comboOverlay.element);
+
+      // 6. Recall ink mask in reference state
+      const maskEl = document.createElement("div");
+      maskEl.className = "ms-ink-recall-mask ms-ink-reference";
+      host.appendChild(maskEl);
+
+      // 7. HTML reference range in notebook reference state
+      const htmlRefEl = document.createElement("div");
+      htmlRefEl.className = "ms-ann ms-html-reference-range ms-document-notebook-reference";
+      host.appendChild(htmlRefEl);
+
+      const describeEl = (el: Element) => {
+        const cls = [...el.classList].map(c => "." + c).join("");
+        const kind = el.getAttribute("data-overlay-kind");
+        return el.tagName.toLowerCase() + cls + (kind ? \`[data-overlay-kind="\${kind}"]\` : "");
+      };
+
+      const snapshotAll = () => [...document.querySelectorAll(${JSON.stringify(REFERENCE_DOM_QUERY)})].map(el => ({
+        descriptor: describeEl(el),
+        opacity: getComputedStyle(el).opacity,
+      }));
+
+      // Phase A: Before producer runs (token absent) -> CSS fallback must yield 0.35 on ALL reference elements
+      const fallbackItems = snapshotAll();
+
+      // Phase B: Run real BaseAnnotationController producer -> token & ALL reference elements must yield 0.35
       (BaseAnnotationController.prototype as any).syncReferenceOpacityToken.call({});
       const tokenVal = getComputedStyle(document.documentElement).getPropertyValue("${TOKEN_NAME}").trim();
-      const liveInk = getComputedStyle(inkEl).opacity;
-      const liveNb = getComputedStyle(nbEl).opacity;
+      const liveItems = snapshotAll();
 
       (window as any).__probe = {
         constVal: String(INK_REFERENCE_OPACITY),
         tokenVal,
-        liveInk,
-        liveNb,
-        fallbackInk,
-        fallbackNb,
+        elementsChecked: liveItems.length,
+        fallbackItems,
+        liveItems,
       };
     } catch (e) {
       (window as any).__probe = { error: String(e) };
@@ -689,12 +846,21 @@ export async function checkReferenceOpacityRuntime(baseDir = root) {
     const errors = [];
     if (probe.error) errors.push(`runtime probe threw: ${probe.error}`);
     else {
+      if (probe.elementsChecked < 7) errors.push(`expected >=7 reference elements, got ${probe.elementsChecked}`);
       if (probe.constVal !== TARGET_OPACITY_STR) errors.push(`INK_REFERENCE_OPACITY=${probe.constVal} !== ${TARGET_OPACITY_STR}`);
-      if (probe.tokenVal !== TARGET_OPACITY_STR || probe.tokenVal !== probe.constVal) errors.push(`documentElement ${TOKEN_NAME}=${JSON.stringify(probe.tokenVal)} !== ${TARGET_OPACITY_STR} / const=${probe.constVal}`);
-      if (probe.liveInk !== TARGET_OPACITY_STR || probe.liveInk !== probe.constVal) errors.push(`.ms-ink-reference computed opacity=${probe.liveInk} !== ${TARGET_OPACITY_STR} / const=${probe.constVal}`);
-      if (probe.liveNb !== TARGET_OPACITY_STR || probe.liveNb !== probe.constVal) errors.push(`.ms-document-notebook-reference computed opacity=${probe.liveNb} !== ${TARGET_OPACITY_STR} / const=${probe.constVal}`);
-      if (probe.fallbackInk !== TARGET_OPACITY_STR) errors.push(`.ms-ink-reference fallback opacity=${probe.fallbackInk} !== ${TARGET_OPACITY_STR}`);
-      if (probe.fallbackNb !== TARGET_OPACITY_STR) errors.push(`.ms-document-notebook-reference fallback opacity=${probe.fallbackNb} !== ${TARGET_OPACITY_STR}`);
+      if (probe.tokenVal !== TARGET_OPACITY_STR || probe.tokenVal !== probe.constVal) {
+        errors.push(`documentElement ${TOKEN_NAME}=${JSON.stringify(probe.tokenVal)} !== ${TARGET_OPACITY_STR} / const=${probe.constVal}`);
+      }
+      for (const item of probe.liveItems) {
+        if (item.opacity !== TARGET_OPACITY_STR || item.opacity !== probe.constVal) {
+          errors.push(`live ${item.descriptor} computed opacity=${item.opacity} !== ${TARGET_OPACITY_STR}`);
+        }
+      }
+      for (const item of probe.fallbackItems) {
+        if (item.opacity !== TARGET_OPACITY_STR) {
+          errors.push(`fallback ${item.descriptor} computed opacity=${item.opacity} !== ${TARGET_OPACITY_STR}`);
+        }
+      }
     }
     return { passed: errors.length === 0, probe, errors };
   } finally {
@@ -737,7 +903,7 @@ if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
       failed = true;
       for (const e of rt.errors) console.error(`FAIL reference-opacity-guard(runtime): ${e}`);
     } else {
-      console.log(`PASS reference-opacity-guard(runtime) (token=${rt.probe.tokenVal}, ink=${rt.probe.liveInk}, notebook=${rt.probe.liveNb}, fallback=${rt.probe.fallbackInk}/${rt.probe.fallbackNb})`);
+      console.log(`PASS reference-opacity-guard(runtime) (token=${rt.probe.tokenVal}, elementsChecked=${rt.probe.elementsChecked}, all=${TARGET_OPACITY_STR})`);
     }
   }
   if (failed) process.exit(1);
