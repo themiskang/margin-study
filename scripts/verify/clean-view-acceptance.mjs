@@ -616,60 +616,83 @@ let g907Harness: Awaited<ReturnType<typeof createHarness>> | null = null;
   const inBounds = (r: ReturnType<typeof rectObj>, root: ReturnType<typeof rectObj>) =>
     !!r && !!root && r.left >= root.left - 1 && r.right <= root.right + 1 && r.top >= root.top - 1 && r.bottom <= root.bottom + 1 && r.width > 0 && r.height > 0;
 
-  // Reset to normal
+  const auditState = (stateName: string, opts: { expectPenStrip: boolean; expectTocTabs: boolean }) => {
+    const rootRect = rectObj(h.root)!;
+    const controls: { name: string; el: HTMLElement; rect: NonNullable<ReturnType<typeof rectObj>>; inBounds: boolean; hit: ReturnType<typeof hitCheck> }[] = [];
+    const addControl = (name: string, el: HTMLElement | null) => {
+      if (!el || !el.checkVisibility()) return;
+      const rect = rectObj(el)!;
+      controls.push({ name, el, rect, inBounds: inBounds(rect, rootRect), hit: hitCheck(el) });
+    };
+    addControl("handle", h.root.querySelector<HTMLElement>(".ms-clean-view-handle"));
+    const stripEl = h.root.querySelector<HTMLElement>(".ms-clean-pen-strip");
+    addControl("pen-strip", stripEl);
+    const penButtons = stripEl && stripEl.checkVisibility() ? [...stripEl.querySelectorAll<HTMLButtonElement>("button")] : [];
+    for (const b of penButtons) addControl("pen:" + (b.getAttribute("aria-label") ?? b.textContent?.trim()), b);
+    const tocTabs = [...h.root.querySelectorAll<HTMLButtonElement>(".ms-document-navigation-tabs [role='tab']")].filter(t => t.checkVisibility());
+    for (const t of tocTabs) addControl("toc:" + (t.getAttribute("aria-label") ?? t.textContent?.trim()), t);
+    addControl("attachment", h.root.querySelector<HTMLElement>(".ms-workspace-attachment-capsule"));
+
+    assert(controls.some(c => c.name === "handle"), \`\${stateName} @\${width}x\${height}: handle missing/invisible\`);
+    if (opts.expectPenStrip) {
+      assert(controls.some(c => c.name === "pen-strip") && penButtons.length === 4, \`\${stateName} @\${width}x\${height}: pen strip/4 buttons missing\`);
+    }
+    if (opts.expectTocTabs) {
+      assert(tocTabs.length === 5, \`\${stateName} @\${width}x\${height}: expected 5 TOC tabs, got \${tocTabs.length}\`);
+    }
+    for (const c of controls) {
+      assert(c.inBounds, \`\${stateName} @\${width}x\${height}: \${c.name} out of root bounds: \${JSON.stringify(c.rect)} vs \${JSON.stringify(rootRect)}\`);
+      assert(c.hit.ok, \`\${stateName} @\${width}x\${height}: \${c.name} center hit failed: \${JSON.stringify(c.hit)}\`);
+    }
+
+    const pairs: { a: string; b: string; area: number }[] = [];
+    const overlaps: { a: string; b: string; area: number; rectA: any; rectB: any }[] = [];
+    for (let i = 0; i < controls.length; i++) {
+      for (let j = i + 1; j < controls.length; j++) {
+        const a = controls[i], b = controls[j];
+        if (a.el.contains(b.el) || b.el.contains(a.el)) continue;
+        const area = intersectArea(a.rect, b.rect);
+        pairs.push({ a: a.name, b: b.name, area });
+        if (area > 0) overlaps.push({ a: a.name, b: b.name, area, rectA: a.rect, rectB: b.rect });
+      }
+    }
+    assert(overlaps.length === 0, \`\${stateName} @\${width}x\${height}: pairwise overlap detected: \${JSON.stringify(overlaps)}\`);
+    return {
+      state: stateName,
+      rootRect,
+      controlCount: controls.length,
+      pairCount: pairs.length,
+      maxOverlapArea: pairs.reduce((m, p) => Math.max(m, p.area), 0),
+      overlaps,
+      controls: controls.map(c => ({ name: c.name, rect: c.rect, inBounds: c.inBounds, hitOk: c.hit.ok })),
+    };
+  };
+
+  // 1. Normal
   (h.view.getReader() as any).setHandwritingMode("off");
   if ((h.view as any).state.documentNavigation) (h.view as any).toggleDocumentNavigation();
   h.view.setCleanView(false);
   await frame();
-  const rootRect = rectObj(h.root)!;
-  const normalHandle = rectObj(h.root.querySelector(".ms-clean-view-handle"));
-  const normalHit = hitCheck(h.root.querySelector(".ms-clean-view-handle"));
-  assert(inBounds(normalHandle, rootRect) && normalHit.ok, \`normal handle fail @\${width}x\${height}\`);
+  const normal = auditState("normal", { expectPenStrip: false, expectTocTabs: false });
 
-  // Clean hidden
+  // 2. Clean hidden
   h.view.setCleanView(true);
   await frame();
-  const cleanHandleEl = h.root.querySelector(".ms-clean-view-handle");
-  const attachEl = h.root.querySelector(".ms-workspace-attachment-capsule");
-  const cleanHandle = rectObj(cleanHandleEl);
-  const attachRect = rectObj(attachEl);
-  const cleanHandleHit = hitCheck(cleanHandleEl);
-  const attachHit = attachEl ? hitCheck(attachEl) : { ok: true };
-  const handleAttachOverlap = intersectArea(cleanHandle, attachRect);
-  assert(inBounds(cleanHandle, rootRect) && cleanHandleHit.ok, \`clean handle fail @\${width}x\${height}\`);
-  assert(!attachEl || (inBounds(attachRect, rootRect) && attachHit.ok), \`attachment fail @\${width}x\${height}\`);
-  assert(handleAttachOverlap === 0, \`handle/attachment overlap=\${handleAttachOverlap} @\${width}x\${height} handle=\${JSON.stringify(cleanHandle)} attach=\${JSON.stringify(attachRect)}\`);
+  const cleanHidden = auditState("clean-hidden", { expectPenStrip: false, expectTocTabs: false });
 
-  // Clean handwriting
+  // 3. Clean handwriting
   (h.view.getReader() as any).setHandwritingMode("pen");
   await frame();
-  const stripEl = h.root.querySelector<HTMLElement>(".ms-clean-pen-strip")!;
-  const stripRect = rectObj(stripEl);
-  const penButtons = [...stripEl.querySelectorAll<HTMLButtonElement>("button")];
-  const penChecks = penButtons.map(b => ({ label: b.getAttribute("aria-label"), inBounds: inBounds(rectObj(b), rootRect), hit: hitCheck(b) }));
-  const handleStripOverlap = intersectArea(cleanHandle, stripRect);
-  const attachStripOverlap = intersectArea(attachRect, stripRect);
-  assert(penButtons.length === 4 && penChecks.every(c => c.inBounds && c.hit.ok), \`pen strip fail @\${width}x\${height}: \${JSON.stringify(penChecks)}\`);
-  assert(handleStripOverlap === 0 && attachStripOverlap === 0, \`strip overlap @\${width}x\${height}: hs=\${handleStripOverlap} as=\${attachStripOverlap}\`);
+  const cleanHandwriting = auditState("clean-handwriting", { expectPenStrip: true, expectTocTabs: false });
 
-  // Clean + TOC open
+  // 4. Clean handwriting + TOC open
   (h.view as any).toggleDocumentNavigation();
   await frame();
-  const tocTabs = [...h.root.querySelectorAll<HTMLButtonElement>(".ms-document-navigation-tabs [role='tab']")];
-  const tocChecks = tocTabs.map(t => ({ label: t.getAttribute("aria-label") ?? t.textContent?.trim(), inBounds: inBounds(rectObj(t), rootRect), hit: hitCheck(t) }));
-  assert(tocTabs.length === 5 && tocChecks.every(c => c.inBounds && c.hit.ok), \`toc tabs fail @\${width}x\${height}: \${JSON.stringify(tocChecks)}\`);
+  const cleanHandwritingToc = auditState("clean-handwriting-toc", { expectPenStrip: true, expectTocTabs: true });
 
   return {
     viewport: [width, height],
-    rootRect,
-    normalHandle,
-    cleanHandle,
-    attachRect,
-    stripRect,
-    overlaps: { handleAttach: handleAttachOverlap, handleStrip: handleStripOverlap, attachStrip: attachStripOverlap },
-    penChecks,
-    tocTabCount: tocTabs.length,
-    tocChecks,
+    states: [normal, cleanHidden, cleanHandwriting, cleanHandwritingToc],
   };
 };
 

@@ -766,6 +766,8 @@ body.ms-theme-dark .ms-study-workspace[data-reading-theme] .ms-workspace-tab>but
 .is-clean-view .ms-workspace-splitter-auxiliary,
 .is-clean-view .ms-workspace-auxiliary,
 .is-clean-view .ms-bottom-capsule-shell { display:none !important; }
+.ms-study-workspace.is-clean-view .ms-workspace-reader.has-document-navigation { grid-template-rows:38px minmax(0,1fr); }
+.ms-study-workspace.is-clean-view .ms-workspace-reader.has-document-navigation > .ms-workspace-reader-tab-row { height:38px; padding-top:6px; box-sizing:border-box; }
 .is-clean-view .ms-study-workspace button.ms-workspace-attachment-capsule,
 .ms-study-workspace.is-clean-view button.ms-workspace-attachment-capsule { transform:translateY(-10px); transition:none; }
 @media (max-width:900px) and (max-height:600px) {
