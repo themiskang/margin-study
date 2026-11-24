@@ -84,6 +84,7 @@ const automatedSuites=[
   ["refs-b7-02-explicit-false-preserved","scripts/verify/annotation-refs/export-roundtrip/b7-02-explicit-false-preserved.mjs"],
   ["refs-b7-03-cross-vault-missing-refs","scripts/verify/annotation-refs/export-roundtrip/b7-03-cross-vault-missing-refs.mjs"],
   ["recovery-delete-guard","scripts/verify/recovery-delete-guard.mjs"],
+  ["reference-opacity-guard","scripts/verify/reference-opacity-guard.mjs"],
   ["status-a28-ui","src/documents/a28-ui-acceptance.mjs"],
   ["mobile-sha256","src/model/sha256-acceptance.mjs"],
   ["study","src/study/acceptance.mjs"],
