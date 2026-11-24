@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 扫描 src/** 的 TypeScript AST 与 src/styles/** 的 CSS 规则。
- * [OUTPUT]: 校验参考层不透明度 0.35 精确形态与基线计数（1 TS + 2 CSS 回退 = 3），违规则报文件:行号并退出 1。
+ * [OUTPUT]: 双轨校验（规范化数值 0.35 + 精确形态白名单）与基线计数（1 TS + 2 CSS 回退 = 3），违规则报文件:行号与「归一值 0.35」并退出 1。
  * [POS]: GAP-07b-3 参考层透明度单源与 CSS 回退静态守卫。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
@@ -13,10 +13,13 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 const req = createRequire(join(root, "package.json"));
 const ts = req("typescript");
 
+const TARGET_OPACITY = 0.35;
+const EPS = 1e-9;
 const EXPECTED_TS_COUNT = 1;
 const EXPECTED_CSS_FALLBACK_COUNT = 2;
 const EXPECTED_TOTAL = EXPECTED_TS_COUNT + EXPECTED_CSS_FALLBACK_COUNT;
 const ALLOWED_CSS_SELECTORS = new Set([".ms-ink-reference", ".ms-document-notebook-reference"]);
+const EXACT_CSS_FALLBACK = "var(--ms-ink-reference-opacity, 0.35)";
 
 async function collectFiles(dir, ext) {
   const entries = await readdir(dir, { withFileTypes: true });
@@ -38,19 +41,100 @@ function walk(node, visit) {
   ts.forEachChild(node, child => walk(child, visit));
 }
 
+function isTarget035(value) {
+  return Number.isFinite(value) && Math.abs(value - TARGET_OPACITY) < EPS;
+}
+
+/** Safe recursive-descent evaluator for pure numeric/percentage calc() expressions. */
+function evalCalcExpr(expr) {
+  const tokens = [];
+  const tokenRe = /\s*(?:([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)(%?)|([+\-*/()]))/gy;
+  let pos = 0;
+  while (pos < expr.length) {
+    if (/\s/.test(expr[pos])) { pos++; continue; }
+    tokenRe.lastIndex = pos;
+    const m = tokenRe.exec(expr);
+    if (!m) return NaN;
+    pos = tokenRe.lastIndex;
+    if (m[1] !== undefined) {
+      const n = Number(m[1]);
+      tokens.push({ type: "num", value: m[2] === "%" ? n / 100 : n });
+    } else {
+      tokens.push({ type: "op", value: m[3] });
+    }
+  }
+  let idx = 0;
+  const peek = () => tokens[idx];
+  const parseExpr = () => {
+    let left = parseTerm();
+    while (peek()?.type === "op" && (peek().value === "+" || peek().value === "-")) {
+      const op = tokens[idx++].value;
+      const right = parseTerm();
+      left = op === "+" ? left + right : left - right;
+    }
+    return left;
+  };
+  const parseTerm = () => {
+    let left = parseFactor();
+    while (peek()?.type === "op" && (peek().value === "*" || peek().value === "/")) {
+      const op = tokens[idx++].value;
+      const right = parseFactor();
+      left = op === "*" ? left * right : left / right;
+    }
+    return left;
+  };
+  const parseFactor = () => {
+    const tok = peek();
+    if (!tok) return NaN;
+    if (tok.type === "num") { idx++; return tok.value; }
+    if (tok.type === "op" && tok.value === "+") { idx++; return parseFactor(); }
+    if (tok.type === "op" && tok.value === "-") { idx++; return -parseFactor(); }
+    if (tok.type === "op" && tok.value === "(") {
+      idx++;
+      const v = parseExpr();
+      if (peek()?.type !== "op" || peek().value !== ")") return NaN;
+      idx++;
+      return v;
+    }
+    return NaN;
+  };
+  const result = parseExpr();
+  return idx === tokens.length ? result : NaN;
+}
+
+/**
+ * Normalize all numeric/percentage/calc() values inside a CSS value string and
+ * return whether any resolves to 0.35 (covering 0.35, .35, 0.350, 35%, 35.0%, 0.35e0, calc(...)).
+ */
+function hasNormalized035(rawVal) {
+  const cleaned = rawVal.replace(/\/\*[\s\S]*?\*\//g, "").replace(/!important\s*$/i, "").trim();
+  // 1. Check calc(...) expressions
+  for (const m of cleaned.matchAll(/\bcalc\(([^()]*)\)/gi)) {
+    const evaluated = evalCalcExpr(m[1]);
+    if (isTarget035(evaluated)) return true;
+  }
+  // 2. Check all standalone numeric / percentage tokens (including scientific notation)
+  for (const m of cleaned.matchAll(/(?<![\w.])([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)(%?)(?![\w.%])/g)) {
+    const num = Number(m[1]);
+    const normalized = m[2] === "%" ? num / 100 : num;
+    if (isTarget035(normalized)) return true;
+  }
+  return false;
+}
+
 export async function checkReferenceOpacity(baseDir = root) {
   const allowedTs = [];
   const allowedCssFallback = [];
   const violations = [];
 
-  // 1. Scan TypeScript AST for any numeric literal equal to 0.35 (including .35, 0.350, 3.5e-1)
+  // 1. Scan TypeScript AST for any numeric literal normalizing to 0.35 (0.35, .35, 0.350, 3.5e-1, etc.)
   const tsFiles = await collectFiles(join(baseDir, "src"), ".ts");
   for (const absPath of tsFiles) {
     const rel = relative(baseDir, absPath).replace(/\\/g, "/");
     const content = await readFile(absPath, "utf8");
     const sf = ts.createSourceFile(rel, content, ts.ScriptTarget.Latest, true);
     walk(sf, node => {
-      if (!ts.isNumericLiteral(node) || Number(node.text) !== 0.35) return;
+      if (!ts.isNumericLiteral(node) || !isTarget035(Number(node.text))) return;
       const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
       const raw = node.getText(sf);
       const isAllowedConst =
@@ -62,14 +146,13 @@ export async function checkReferenceOpacity(baseDir = root) {
       if (isAllowedConst) {
         allowedTs.push({ file: rel, line, form: "INK_REFERENCE_OPACITY = 0.35" });
       } else {
-        violations.push({ file: rel, line, text: raw, reason: "disallowed TS 0.35 literal" });
+        violations.push({ file: rel, line, text: raw, normalized: TARGET_OPACITY, reason: "归一值 0.35，非允许 TS 常量形态" });
       }
     });
   }
 
-  // 2. Scan CSS rules for reference/opacity 0.35 / .35 / 0.350 / 35%
+  // 2. Scan CSS rules with dual-track: normalized 0.35 + exact whitelist form
   const cssFiles = await collectFiles(join(baseDir, "src", "styles"), ".css");
-  const literalRe = /(?<![\w.])(?:0?\.350*|35%)(?![\w.%])/g;
   for (const absPath of cssFiles) {
     const rel = relative(baseDir, absPath).replace(/\\/g, "/");
     const content = await readFile(absPath, "utf8");
@@ -79,6 +162,7 @@ export async function checkReferenceOpacity(baseDir = root) {
       const body = ruleMatch[2];
       const bodyStart = ruleMatch.index + ruleMatch[1].length + 1;
       const isDisabledOnly = selectors.length > 0 && selectors.every(s => /:disabled\b/.test(s));
+
       for (const declMatch of body.matchAll(/([-\w]+)\s*:\s*([^;]+)/g)) {
         const prop = declMatch[1].trim().toLowerCase();
         const val = declMatch[2].trim();
@@ -86,31 +170,32 @@ export async function checkReferenceOpacity(baseDir = root) {
         const valStart = declStart + declMatch[0].indexOf(declMatch[2]);
         const line = content.slice(0, valStart).split("\n").length;
 
-        // Check custom property assignments for reference/ink opacity
-        if (prop.startsWith("--") && /reference|ink/i.test(prop) && literalRe.test(val)) {
-          literalRe.lastIndex = 0;
-          violations.push({ file: rel, line, text: `${prop}: ${val}`, reason: "disallowed CSS variable 0.35 assignment" });
+        // Disallow any CSS custom property assignment for reference/ink opacity normalizing to 0.35
+        if (prop.startsWith("--") && /reference|ink/i.test(prop) && hasNormalized035(val)) {
+          violations.push({ file: rel, line, text: `${prop}: ${val}`, normalized: TARGET_OPACITY, reason: "归一值 0.35，禁止 CSS 变量赋值形态" });
           continue;
         }
-        literalRe.lastIndex = 0;
 
         if (prop !== "opacity") continue;
         if (isDisabledOnly) continue;
-
-        const hasLiteral = literalRe.test(val);
-        literalRe.lastIndex = 0;
-        if (!hasLiteral) continue;
+        if (!hasNormalized035(val)) continue;
 
         const isAllowedFallback =
           rel === "src/styles/styles-reader.css" &&
           selectors.length === 1 &&
           ALLOWED_CSS_SELECTORS.has(selectors[0]) &&
-          val === "var(--ms-ink-reference-opacity, 0.35)";
+          val === EXACT_CSS_FALLBACK;
 
         if (isAllowedFallback) {
           allowedCssFallback.push({ file: rel, line, selector: selectors[0], form: `opacity: ${val}` });
         } else {
-          violations.push({ file: rel, line, text: `${selectorText} { opacity: ${val} }`, reason: "disallowed CSS opacity 0.35 form" });
+          violations.push({
+            file: rel,
+            line,
+            text: `${selectorText} { opacity: ${val} }`,
+            normalized: TARGET_OPACITY,
+            reason: "归一值 0.35，非精确白名单形态 opacity: var(--ms-ink-reference-opacity, 0.35)",
+          });
         }
       }
     }
