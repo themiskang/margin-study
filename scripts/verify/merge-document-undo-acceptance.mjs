@@ -434,6 +434,47 @@ async function runAll() {
     assert((await readPageCollection(h.plugin, createdFile2)).pages.map(p => p.id).join(",") === revIds2.join(","), "guard #2 lost reordered pages!");
     assert(notices.length > noticesBeforeGuard2, "guard #2 did not emit notice");
 
+    // Anti-accidental-delete guard #3: user adds bookmark to newly created .msref -> Undo MUST refuse delete
+    await h.view.openFile(h.srcPdf);
+    await h.runMergeModal("page", h.dstPdf.path);
+    const createdPath3 = h.view.getReader()?.getFilePath()!;
+    const reader3 = h.view.getReader() as ReaderView;
+    reader3.toggleBookmark(1);
+    await h.plugin.store.flush();
+    const noticesBeforeGuard3 = notices.length;
+    await (h.view as any).applyHistory(false);
+    assert(h.app.vault.getAbstractFileByPath(createdPath3) !== null, "guard #3 deleted .msref with new bookmark!");
+    assert(h.plugin.store.getDocMeta(createdPath3).bookmarks?.includes(1), "guard #3 lost new bookmark!");
+    assert(notices.length > noticesBeforeGuard3, "guard #3 did not emit notice");
+
+    // Anti-accidental-delete guard #4: new annotation written to disk sidecar while .msref view is closed -> Undo MUST refuse delete
+    await h.view.openFile(h.srcPdf);
+    await h.runMergeModal("page", h.dstPdf.path);
+    const createdPath4 = h.view.getReader()?.getFilePath()!;
+    const reader4 = h.view.getReader() as ReaderView;
+    await reader4.onClose();
+    const sidecar4 = h.plugin.store.sidecarPath(createdPath4);
+    const diskSidecar4 = JSON.parse(await h.app.vault.adapter.read(sidecar4));
+    diskSidecar4.annotations.push({
+      id: "disk-after-close-note",
+      docPath: createdPath4,
+      docKind: "pdf",
+      page: 1,
+      type: "note",
+      rects: [{ x: 30, y: 120, w: 70, h: 20 }],
+      pdfCoordinateSpace: "pdf",
+      text: "written after close",
+      color: "#000",
+      createdAt: stamp,
+    });
+    await h.app.vault.adapter.write(sidecar4, JSON.stringify(diskSidecar4));
+    const noticesBeforeGuard4 = notices.length;
+    await (h.view as any).applyHistory(false);
+    assert(h.app.vault.getAbstractFileByPath(createdPath4) !== null, "guard #4 deleted .msref with disk annotation written after onClose!");
+    const afterDisk4 = JSON.parse(await h.app.vault.adapter.read(sidecar4));
+    assert(afterDisk4.annotations.some((a: any) => a.id === "disk-after-close-note"), "guard #4 lost disk annotation written after onClose!");
+    assert(notices.length > noticesBeforeGuard4, "guard #4 did not emit notice");
+
     // Source & target original PDFs SHA-256 & annotations untouched
     assert(bytesSig(h.sources.get(h.srcPdf.path)!.binary) === srcSigBefore, "src PDF bytes changed");
     assert(bytesSig(h.sources.get(h.dstPdf.path)!.binary) === dstSigBefore, "dst PDF bytes changed");
@@ -447,6 +488,8 @@ async function runAll() {
       preservedCollectionAndPageIds: true,
       refusedDeleteAfterAnnotationEdit: true,
       refusedDeleteAfterPageReorder: true,
+      refusedDeleteAfterBookmark: true,
+      refusedDeleteAfterCloseDiskWrite: true,
       originalPdfsUnchanged: true,
     };
   }

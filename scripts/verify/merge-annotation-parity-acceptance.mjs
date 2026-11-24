@@ -555,12 +555,16 @@ const api = await loadModules();
   const set = env.store.createStudySet("G6c-05", [srcFile.path]);
   env.store.setActiveStudySet(set.id);
 
-  // Seed distinct annotations on physical page 3 and physical page 1 of src.pdf
+  // Seed distinct annotations on physical page 3 and physical page 1 of src.pdf,
+  // PLUS annotations created AFTER inserting 2 pages at the front (so source:1 is at display page 3, offset +2!).
   await env.store.saveAnnotationsNow(srcFile.path, [
     { id: "p3-hl", docPath: srcFile.path, docKind: "pdf", page: 3, type: "highlight", rects: [{ x: 10, y: 100, w: 80, h: 15 }], pdfCoordinateSpace: "pdf", text: "phys-3-hl", color: "#ffd54f", createdAt: "2026-11-24" },
     { id: "p3-note", docPath: srcFile.path, docKind: "pdf", page: 3, type: "note", rects: [{ x: 10, y: 140, w: 80, h: 20 }], pdfCoordinateSpace: "pdf", text: "phys-3-note", noteText: "p3", color: "#ce93d8", createdAt: "2026-11-24" },
     { id: "p1-hl", docPath: srcFile.path, docKind: "pdf", page: 1, type: "highlight", rects: [{ x: 10, y: 200, w: 80, h: 15 }], pdfCoordinateSpace: "pdf", text: "phys-1-hl", color: "#ffd54f", createdAt: "2026-11-24" },
     { id: "imp-note", docPath: srcFile.path, docKind: "pdf", page: 2, pdfReferencePages: [{ id: "import:ext1", page: 2 }], type: "note", rects: [{ x: 20, y: 200, w: 80, h: 20 }], pdfCoordinateSpace: "pdf", text: "imported-page-note", color: "#43a047", createdAt: "2026-11-24" },
+    // Created on display page 3 (which maps to source:1 after inserting 2 pages at front): page=3, pdfReferencePages=[{id:"source:1", page:3}]
+    { id: "post-reorder-hl", docPath: srcFile.path, docKind: "pdf", page: 3, pdfReferencePages: [{ id: "source:1", page: 3 }], type: "highlight", rects: [{ x: 40, y: 260, w: 90, h: 15 }], pdfCoordinateSpace: "pdf", text: "post-reorder-source1-hl", color: "#80cbc4", createdAt: "2026-11-24" },
+    { id: "post-reorder-note", docPath: srcFile.path, docKind: "pdf", page: 3, pdfReferencePages: [{ id: "source:1", page: 3 }], type: "note", rects: [{ x: 40, y: 300, w: 90, h: 20 }], pdfCoordinateSpace: "pdf", text: "post-reorder-source1-note", noteText: "added after +2 insert", color: "#ff8a80", createdAt: "2026-11-24" },
   ]);
 
   // Simulate EditedPdfDocument: [source:3, import:ext1(page 2), blank:b1, source:1]
@@ -619,9 +623,11 @@ const api = await loadModules();
   const editedLinked = editedDoc.getLinkedAnnotations();
   check("G6c-05 phys-3-hl aligns to display page 1 (offset 0)", editedLinked.find((a) => a.text === "phys-3-hl")?.page, 1);
   check("G6c-05 phys-1-hl aligns to display page 3 (offset 0)", editedLinked.find((a) => a.text === "phys-1-hl")?.page, 3);
+  check("G6c-05 post-reorder-source1-hl aligns to display page 3 (source:1, offset 0, NOT page 1)", editedLinked.find((a) => a.text === "post-reorder-source1-hl")?.page, 3);
   const editedSidecar = await env.store.loadAnnotations(mergedEdited.path);
   check("G6c-05 phys-3-note aligns to page 1", editedSidecar.find((a) => a.text === "phys-3-note")?.page, 1);
   check("G6c-05 imported-page-note aligns to page 2", editedSidecar.find((a) => a.text === "imported-page-note")?.page, 2);
+  check("G6c-05 post-reorder-source1-note aligns to page 3 (source:1, offset 0, NOT page 1)", editedSidecar.find((a) => a.text === "post-reorder-source1-note")?.page, 3);
   await editedDoc.destroy();
 
   // 3. .msref as source: underlying PDF excerpts live-map + source .msref local non-excerpt snapshots copied without duplicating

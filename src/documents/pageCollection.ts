@@ -142,7 +142,7 @@ export class PageCollectionDocument {
     for (const [path, annotations] of this.annotations) for (const source of annotations) {
       if (!excerptTypes.has(source.type)) continue;
       const matches = this.pageCollection.pages.map((entry,index) => ({entry,page:index+1})).filter(({entry}) => entry.sourcePath === path && entry.annotations === "include" && entry.sourceNotebookId === annotationNotebook(source));
-      const geometry: PdfPageGeometry[] = matches.flatMap(({entry,page}) => annotationGeometry(source).filter((part) => part.page === entry.sourcePage).map((part) => ({page,rects:part.rects})));
+      const geometry: PdfPageGeometry[] = matches.flatMap(({entry,page}) => annotationGeometry(source).filter((part) => sourcePageForAnnotationPart(source, part.page) === entry.sourcePage).map((part) => ({page,rects:part.rects})));
       if (!geometry.length) continue; const first = geometry[0];
       result.push({ ...source, id: `linked:${encodeURIComponent(path)}:${source.id}`, page: first.page, rects: first.rects, pdfGeometry: geometry,
         referenceSource: { docPath: path, anchorAnnId: source.id, page: source.page, notebookId: annotationNotebook(source) } });
@@ -168,6 +168,13 @@ export function mapCollectionAnnotation(annotation: Annotation, collection: Page
 }
 async function validateSources(plugin: MarginStudyPlugin, collection: PageCollection): Promise<void> {
   const document = new PageCollectionDocument(plugin, collection); try { for (let index = 1; index <= collection.pages.length; index++) await document.getPage(index); } finally { await document.destroy(); }
+}
+function sourcePageForAnnotationPart(annotation: Annotation, partPage: number): number | null {
+  const ref = annotation.pdfReferencePages?.find((entry) => entry.page === partPage);
+  if (!ref) return partPage;
+  if (!ref.id.startsWith("source:")) return null;
+  const sourcePage = Number(ref.id.slice("source:".length));
+  return Number.isInteger(sourcePage) && sourcePage >= 1 ? sourcePage : null;
 }
 function cloneSnapshotAnnotation(
   ann: Annotation,
@@ -259,7 +266,7 @@ async function snapshotAnnotations(plugin: MarginStudyPlugin, targetPath: string
       await copyNonExcerptAnnotationsFromSource(
         plugin, cached, target, targetPath, notebookId,
         entry.sourcePath, entry.sourceNotebookId, entry.id, targetPage,
-        (ann) => annotationGeometry(ann).filter((part) => part.page === entry.sourcePage),
+        (ann) => annotationGeometry(ann).filter((part) => sourcePageForAnnotationPart(ann, part.page) === entry.sourcePage),
         layersToSync,
       );
     }
