@@ -3239,14 +3239,28 @@ export class Store {
   upsertCardTemplate(template: CardTemplate): void { this.mutate("保存卡片模板", () => { const i = this.cardTemplates.findIndex(t => t.id === template.id); if (i < 0) this.cardTemplates.push(clone(template)); else this.cardTemplates[i] = clone(template); }); }
   removeCardTemplate(id: string): void { this.mutate("删除卡片模板", () => { this.cardTemplates = this.cardTemplates.filter(t => t.id !== id); }); }
 
+  private createdCollectionGrants = new Map<string, { token: string; collectionId: string }>();
   getDocMeta(path: string): DocMeta { return this.docMeta[path] ?? {}; }
   updateDocMeta(path: string, patch: Partial<DocMeta>): void { this.docMeta[path] = { ...this.getDocMeta(path), ...patch }; this.save(); }
-  /** Single guarded Store cleanup entry for undo of a newly created .msref collection. */
+  /** Issue a single-session capability token authorizing guarded Undo cleanup of a newly created merge collection. */
+  markCreatedCollection(path: string, collectionId: string): string {
+    const token = uid("merge-grant");
+    this.createdCollectionGrants.set(path, { token, collectionId });
+    return token;
+  }
+  /** Single guarded Store cleanup entry: rejects live documents (not created by this merge or still present in vault). */
   async purgeCreatedCollection(
     path: string,
-    expected: { diskSidecar: string | null; annotations: Annotation[]; meta: DocMeta; studySetId?: string | null; previousLastDocPath?: string },
+    expected: { creationToken: string; collectionId: string; diskSidecar: string | null; annotations: Annotation[]; meta: DocMeta; studySetId?: string | null; previousLastDocPath?: string },
   ): Promise<void> {
+    const grant = this.createdCollectionGrants.get(path);
+    if (!grant || !expected?.creationToken || grant.token !== expected.creationToken || grant.collectionId !== expected.collectionId) {
+      throw new Error("非本次合并新建的活文档，拒绝清理批注、书签与注册信息");
+    }
     const adapter = this.host.app.vault.adapter;
+    if (this.host.app.vault.getAbstractFileByPath(path) || await adapter.exists(path)) {
+      throw new Error("活文档文件仍存在，拒绝清理批注、书签与注册信息");
+    }
     const sidecar = this.sidecarPath(path);
     const currentDisk = await adapter.exists(sidecar) ? await adapter.read(sidecar) : null;
     if (currentDisk !== expected.diskSidecar) {
@@ -3268,8 +3282,22 @@ export class Store {
     if (set) set.docPaths = set.docPaths.filter(p => p !== path);
     const canvas = this.canvases.find(c => c.id === this.activeCanvasId);
     if (canvas && canvas.lastDocumentPath === path) canvas.lastDocumentPath = expected.previousLastDocPath;
+    this.createdCollectionGrants.delete(path);
     this.save();
     await this.flush();
+  }
+  /** Restore a preserved DocumentRecord (keeping its original id) on Redo, falling back to registerDocument if absent. */
+  restoreDocumentRecord(path: string, preserved?: DocumentRecord): DocumentRecord | undefined {
+    if (!path) return undefined;
+    const existing = this.documents.find(d => d.path === path);
+    if (existing) return this.registerDocument(path);
+    if (preserved && preserved.path === path && preserved.id && !this.documents.some(d => d.id === preserved.id)) {
+      const restored: DocumentRecord = { ...structuredClone(preserved), missing: false };
+      this.documents.push(restored);
+      this.save();
+      return restored;
+    }
+    return this.registerDocument(path);
   }
   toggleFoldPage(path: string, page: number): void { const values = new Set(this.getDocMeta(path).foldedPages ?? []); values.has(page) ? values.delete(page) : values.add(page); this.updateDocMeta(path, { foldedPages: [...values].sort((a,b) => a-b) }); }
   toggleBookmark(path: string, page: number): void { const values = new Set(this.getDocMeta(path).bookmarks ?? []); values.has(page) ? values.delete(page) : values.add(page); this.updateDocMeta(path, { bookmarks: [...values].sort((a,b) => a-b) }); }

@@ -1,6 +1,6 @@
 import { Notice, TFile } from "obsidian";
 import type MarginStudyPlugin from "../main";
-import type { Annotation, DocMeta, PdfPageGeometry } from "../types";
+import type { Annotation, DocMeta, DocumentRecord, PdfPageGeometry } from "../types";
 import { uid } from "../utils/id";
 import { sha256Hex } from "../utils/sha256";
 import { loadPdf } from "../pdf/pdfjs";
@@ -322,7 +322,7 @@ export async function createPageCollection(plugin: MarginStudyPlugin, options: {
   else plugin.store.updateStudySet(set.id,{docPaths:nextDocPaths});
   plugin.store.setActiveStudySet(set.id); plugin.store.registerDocument(path); plugin.store.save(); await plugin.store.flush(); plugin.refreshSidebar(); return file;
 }
-export async function recreatePageCollection(plugin: MarginStudyPlugin, path: string, collection: PageCollection, metadata: any, annotations: Annotation[], studySetId?: string | null): Promise<TFile> {
+export async function recreatePageCollection(plugin: MarginStudyPlugin, path: string, collection: PageCollection, metadata: any, annotations: Annotation[], studySetId?: string | null, preservedRecord?: DocumentRecord): Promise<TFile> {
   if (!vaultPath(path) || !path.toLowerCase().endsWith(`.${PAGE_COLLECTION_EXTENSION}`)) throw new Error("重组文档路径无效");
   if (await plugin.app.vault.adapter.exists(path)) throw new Error("目标路径已存在同名文件，无法重做合并新建文档");
   const bytes = collectionBytes(collection);
@@ -335,28 +335,35 @@ export async function recreatePageCollection(plugin: MarginStudyPlugin, path: st
   const selected = studySetId ?? plugin.store.activeStudySetId;
   const set = plugin.store.studySets.find((item) => item.id === selected);
   if (set && !set.docPaths.includes(path)) set.docPaths = [...set.docPaths, path];
-  plugin.store.registerDocument(path); plugin.store.save(); await plugin.store.flush(); plugin.refreshSidebar();
+  plugin.store.restoreDocumentRecord(path, preservedRecord); plugin.store.save(); await plugin.store.flush(); plugin.refreshSidebar();
   return file;
 }
 export interface CreatedCollectionGuardSnapshot {
   path: string;
+  creationToken: string;
   fileDigest: string;
   collection: PageCollection;
   annotations: Annotation[];
   diskSidecar: string | null;
   meta: DocMeta;
+  documentRecord?: DocumentRecord;
 }
 export async function captureCreatedCollectionGuard(plugin: MarginStudyPlugin, file: TFile): Promise<CreatedCollectionGuardSnapshot> {
   const bytes = await plugin.app.vault.readBinary(file);
+  const collection = parsePageCollection(bytes);
   const sidecar = plugin.store.sidecarPath(file.path);
   const diskSidecar = await plugin.app.vault.adapter.exists(sidecar) ? await plugin.app.vault.adapter.read(sidecar) : null;
+  const creationToken = plugin.store.markCreatedCollection(file.path, collection.id);
+  const documentRecord = structuredClone(plugin.store.documents.find((d) => d.path === file.path));
   return {
     path: file.path,
+    creationToken,
     fileDigest: sha256Hex(bytes),
-    collection: parsePageCollection(bytes),
+    collection,
     annotations: structuredClone(await plugin.store.loadAnnotations(file.path)),
     diskSidecar,
     meta: structuredClone(plugin.store.getDocMeta(file.path)),
+    documentRecord,
   };
 }
 export async function verifyCreatedCollectionUnchanged(plugin: MarginStudyPlugin, expected: CreatedCollectionGuardSnapshot): Promise<TFile> {
@@ -413,6 +420,8 @@ export async function cleanupCreatedPageCollection(
     }
     await plugin.app.vault.trash(currentFile, true);
     await plugin.store.purgeCreatedCollection(expected.path, {
+      creationToken: expected.creationToken,
+      collectionId: expected.collection.id,
       diskSidecar: expected.diskSidecar,
       annotations: expected.annotations,
       meta: expected.meta,

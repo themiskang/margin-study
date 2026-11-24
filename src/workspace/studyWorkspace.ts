@@ -2557,6 +2557,7 @@ export class StudyWorkspaceView extends ItemView {
                 guardSnapshot.meta,
                 guardSnapshot.annotations,
                 createdSetId,
+                guardSnapshot.documentRecord,
               );
               guardSnapshot = await captureCreatedCollectionGuard(this.plugin, recreated);
               await this.openFile(recreated);

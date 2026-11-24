@@ -384,6 +384,9 @@ async function runAll() {
     assert(afterMerge.anns.length === 2, "PDF merge did not snapshot both dst and src non-excerpt notes");
 
     const docRecordBeforeUndo = h.plugin.store.documents.find((d: any) => d.path === createdPath)?.id;
+    // Simulate a saved reading-return position pointing at createdPath's DocumentRecord.id (page 2)
+    (h.view as any).handwritingReturn = { path: createdPath, documentId: docRecordBeforeUndo, page: 2, scrollTop: 120, scrollLeft: 0 };
+
     // 1st Undo
     await (h.view as any).applyHistory(false);
     assert(h.app.vault.getAbstractFileByPath(createdPath) === null, "1st undo did not trash created.msref");
@@ -391,11 +394,20 @@ async function runAll() {
     assert(Object.keys(h.plugin.store.getDocMeta(createdPath)).length === 0, "1st undo did not clear DocMeta");
     assert(JSON.stringify(snapWorkspace()) === JSON.stringify(beforeMerge), "1st undo workspace diff !== 0: " + JSON.stringify(snapWorkspace()) + " vs " + JSON.stringify(beforeMerge));
 
-    // Redo
+    // Redo -> DocumentRecord.id MUST be reused AND returnFromHandwritingSource MUST restore page 2 (no "原阅读文档不存在")
     await (h.view as any).applyHistory(true);
     const recreatedFile = h.app.vault.getAbstractFileByPath(createdPath) as TFile;
     assert(!!recreatedFile, "redo did not recreate file at original path");
     const docRecordAfterRedo = h.plugin.store.documents.find((d: any) => d.path === createdPath)?.id;
+    assert(docRecordAfterRedo === docRecordBeforeUndo, "redo rebuilt DocumentRecord.id: before=" + docRecordBeforeUndo + " after=" + docRecordAfterRedo);
+    await (h.view as any).returnFromHandwritingSource();
+    const returnedReader = h.view.getReader() as ReaderView;
+    assert(returnedReader.getFilePath() === createdPath && returnedReader.getCurrentPage() === 2, "returnFromHandwritingSource did not restore original page 2: path=" + returnedReader.getFilePath() + " page=" + returnedReader.getCurrentPage());
+    // Also verify cold reload preserves the exact DocumentRecord.id on disk
+    const coldStore = new Store(h.plugin);
+    await coldStore.load();
+    assert(coldStore.documents.find((d: any) => d.path === createdPath)?.id === docRecordBeforeUndo, "cold reload lost preserved DocumentRecord.id");
+
     const afterRedo = {
       ws: snapWorkspace(),
       manifest: await readPageCollection(h.plugin, recreatedFile),
@@ -535,6 +547,41 @@ async function runAll() {
     assert(bypassRejected, "Store.purgeCreatedCollection did not reject stale snapshot!");
     const afterBypassDisk5 = JSON.parse(await h.app.vault.adapter.read(sidecar5));
     assert(afterBypassDisk5.annotations.some((a: any) => a.id === "toctou-during-onclose-note"), "Store bypass cleared disk annotation!");
+
+    // Store live-document bypass guard #7: calling purgeCreatedCollection on a LIVE document with matching snapshot MUST be rejected (3->3 anns, bookmark & registration preserved!)
+    const liveMsref = await createPageCollection(h.plugin, {
+      title: "Live Existing Doc",
+      pages: [{ sourcePath: h.dstPdf.path, sourcePage: 1, origin: "toc" }],
+      origin: "toc",
+      studySetId: "set-1",
+    });
+    const liveAnns = [
+      { id: "live-a1", docPath: liveMsref.path, docKind: "pdf", page: 1, type: "note", rects: [{ x: 10, y: 100, w: 60, h: 20 }], pdfCoordinateSpace: "pdf", text: "live1", color: "#000", createdAt: stamp },
+      { id: "live-a2", docPath: liveMsref.path, docKind: "pdf", page: 1, type: "note", rects: [{ x: 10, y: 140, w: 60, h: 20 }], pdfCoordinateSpace: "pdf", text: "live2", color: "#000", createdAt: stamp },
+      { id: "live-a3", docPath: liveMsref.path, docKind: "pdf", page: 1, type: "note", rects: [{ x: 10, y: 180, w: 60, h: 20 }], pdfCoordinateSpace: "pdf", text: "live3", color: "#000", createdAt: stamp },
+    ];
+    await h.plugin.store.saveAnnotationsNow(liveMsref.path, liveAnns);
+    h.plugin.store.toggleBookmark(liveMsref.path, 1);
+    await h.plugin.store.flush();
+    const liveSidecarPath = h.plugin.store.sidecarPath(liveMsref.path);
+    const liveDiskBefore = await h.app.vault.adapter.read(liveSidecarPath);
+    const liveMetaBefore = structuredClone(h.plugin.store.getDocMeta(liveMsref.path));
+    let liveBypassRejected = false;
+    try {
+      await (h.plugin.store as any).purgeCreatedCollection(liveMsref.path, {
+        diskSidecar: liveDiskBefore,
+        annotations: structuredClone(liveAnns),
+        meta: liveMetaBefore,
+        studySetId: "set-1",
+      });
+    } catch {
+      liveBypassRejected = true;
+    }
+    const liveDiskAfterCount = JSON.parse(await h.app.vault.adapter.read(liveSidecarPath)).annotations.length;
+    assert(liveBypassRejected, "live-document bypass #7 was NOT rejected! disk anns 3->" + liveDiskAfterCount);
+    assert(liveDiskAfterCount === 3, "live-document bypass #7 wiped disk annotations: 3->" + liveDiskAfterCount);
+    assert(h.plugin.store.getDocMeta(liveMsref.path).bookmarks?.includes(1), "live-document bypass #7 wiped bookmark!");
+    assert(h.plugin.store.documents.some((d: any) => d.path === liveMsref.path), "live-document bypass #7 wiped documents registration!");
 
     // Source & target original PDFs SHA-256 & annotations untouched
     assert(bytesSig(h.sources.get(h.srcPdf.path)!.binary) === srcSigBefore, "src PDF bytes changed");
