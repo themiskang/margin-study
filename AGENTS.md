@@ -21,6 +21,43 @@ Codex 是本项目的执行席。用户已授权的任务中，发现问题后�
 - 每次准备结束执行轮前，逐项核对完成定义与尚未完成项；只要仍有可由 Codex 独立完成的项目，就继续，不用汇报代替执行。若确需硬阻塞，必须说明阻塞证据、已经尝试的恢复方式和唯一需要的外部条件，并把首个恢复动作写入任务卡的 `PROGRESS.md`。
 - 实机行为按原版状态、宿主状态和采集版本记录。L3 调用链、L4 实机操作、合成断言分别登记。保留失败记录与范围豁免。开发包只进入已授权的隔离库，正式部署需单独授权。禁止复制正式库的 Claudian 凭证。
 
+## 我是 Orca 对话：优先用 Orca 自己的能力
+
+本会话运行在 Orca 里。**凡是 Orca 已内置的能力，先调 Orca CLI，不要自己拼 shell、不要后台 nohup、不要长 sleep 等。**
+
+### 起席位一律用「对话」面板（业主非技术背景，要看得懂、能直接续聊）
+```
+orca agent launch --agent <id> --worktree "path:<repo>" \
+  --prompt "$(cat <brief>)" --model <model> --surface chat --focus
+```
+- 便捷脚本：`.agent-artifacts/seats/chat.sh <agent> <brief> [model]`（已内置回报指令）。
+- 需要业主观看/续聊的一律对话面板；终端只在跑长脚本且业主明确要求时用。
+
+### 消息闭环：对话席位不会自动回报 → 「派包写指令 + 我主动拉」
+- **派包硬要求**（每个 brief 必带）：回答完立刻
+  `orca orchestration send --to run:<run id> --subject "<席位> 完成" --body "<结论摘要>"`
+  对话面板没有 `worker_done`，不写这条等于没交付。
+- **我每轮主动拉**：`orca orchestration inbox --json --limit 40`（或 `check`），再决定 reply 或继续。
+- **不收结果的等待上限 20 秒**；需要更久就先回话、下一轮再拉。
+- 统一 Run：`run_9e66a465ded8`（`orca orchestration run-current` 取当前）。
+
+### 常用 Orca 能力（先查再写）
+| 需求 | 命令 |
+|---|---|
+| 会话/终端列表 | `orca agent list` / `orca terminal list` |
+| 读会话内容 | `orca agent read <orca_session_id:…> --limit N`（上限 100） |
+| 受管 worker（自动 worker_done） | `orca orchestration worker-start/-read/-show/-stop` |
+| 消息 | `orca orchestration send/check/reply/inbox` |
+
+### 模型命名：Orca 与 CLI 相反（两边都踩过）
+| 入口 | 写法 |
+|---|---|
+| **Orca** | `--model gemini-4-neon-xhigh`（档位写进名字，**不传** `--effort`） |
+| **agy CLI** | `agy --model gemini-4-neon --effort xhigh` |
+
+**验收纪律**：验证命令必须与投产命令**同一入口、同一参数集**；只在 CLI 验过就搬到 Orca 会报
+`Agent antigravity model gemini-4-neon does not support effort xhigh.`
+
 ## 开源边界
 
 - 严禁提交 `evidence/` 或大体积私有夹具。
