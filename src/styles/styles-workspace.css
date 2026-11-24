@@ -753,19 +753,25 @@ body.ms-theme-dark .ms-study-workspace[data-reading-theme] .ms-workspace-tab>but
 
 /* ===== 5.0.2 简洁显示 ===== */
 .ms-clean-view-handle { position:absolute; left:4px; top:2px; transform:none; z-index:40; width:70px; height:14px; padding:0; border:0; border-radius:0 0 8px 8px; background:#0002; box-shadow:none; cursor:grab; touch-action:none; display:flex; align-items:center; justify-content:center; }
-.is-clean-view .ms-clean-view-handle {left:50%;transform:translateX(-50%);}
+.is-clean-view .ms-clean-view-handle { left:50%; top:0; transform:translateX(-50%); width:76px; height:24px; }
 .ms-clean-view-handle > span { width:34px; height:3px; border-radius:2px; background:#8a8f98cc; }
 .ms-clean-view-handle:hover { background:#0003; }
 .ms-clean-view-handle:focus-visible { outline:2px solid var(--interactive-accent,#5b6cff); outline-offset:2px; }
 .is-clean-view .ms-workspace-toolbar,
+.is-clean-view .ms-workspace-library,
+.is-clean-view .ms-workspace-splitter-library,
 .is-clean-view .ms-workspace-floating-actions,
 .is-clean-view .ms-fixed-views,
 .is-clean-view .ms-workspace-tabs,
+.is-clean-view .ms-workspace-splitter-auxiliary,
 .is-clean-view .ms-workspace-auxiliary,
 .is-clean-view .ms-bottom-capsule-shell { display:none !important; }
+.ms-study-workspace.is-clean-view .ms-workspace-reader.has-document-navigation { grid-template-rows:38px minmax(0,1fr); }
+.ms-study-workspace.is-clean-view .ms-workspace-reader.has-document-navigation > .ms-workspace-reader-tab-row { height:38px; padding-top:6px; box-sizing:border-box; }
 .is-clean-view .ms-study-workspace button.ms-workspace-attachment-capsule,
-.ms-study-workspace.is-clean-view button.ms-workspace-attachment-capsule { transform:translateY(-10px); }
+.ms-study-workspace.is-clean-view button.ms-workspace-attachment-capsule { transform:translateY(-10px); transition:none; }
 @media (max-width:900px) and (max-height:600px) {
+  .is-clean-view .ms-clean-view-handle { height:12px; }
   .is-clean-view .ms-study-workspace button.ms-workspace-attachment-capsule,
   .ms-study-workspace.is-clean-view button.ms-workspace-attachment-capsule { transform:translateY(-18px); }
 }
@@ -774,9 +780,13 @@ body.ms-theme-dark .ms-study-workspace[data-reading-theme] .ms-workspace-tab>but
 .ms-clean-pen-strip[hidden] { display:none !important; }
 .ms-clean-pen-action { min-width:40px; height:30px; padding:0 8px; border:0; border-radius:14px; background:transparent; color:#fff; font-size:12px; cursor:pointer; }
 .ms-clean-pen-action:hover { background:#ffffff1f; }
-/* 5.0.2 场景模板独立状态栏 */
+.ms-clean-pen-action[aria-pressed="true"] { background:#ffffff38; font-weight:600; }
+/* 场景模板状态栏档位（自有扩展：MN5 5.0.2 无 statusBar 字段，mn5 schema 3 导出零泄漏） */
 [data-status-bar="hidden"] .ms-bottom-capsule-shell { display:none !important; }
-[data-status-bar="compact"] .ms-bottom-capsule-shell .ms-bottom-primary { display:none !important; }
+[data-status-bar="compact"] .ms-bottom-capsule-shell .ms-bottom-primary.ms-bottom-scenes { width:max-content; left:0; padding:0 6px; gap:0; }
+[data-status-bar="compact"] .ms-bottom-capsule-shell .ms-bottom-primary.ms-bottom-scenes .ms-bottom-scene-nav { flex:0 0 auto; width:auto; }
+[data-status-bar="compact"] .ms-bottom-capsule-shell .ms-bottom-primary.ms-bottom-scenes .ms-bottom-scene-nav .ms-bottom-divider,
+[data-status-bar="compact"] .ms-bottom-capsule-shell .ms-bottom-primary.ms-bottom-scenes .ms-bottom-scene-tools { display:none; }
 
 /* ===== 5.0.2 书脊文档栏 ===== */
 .ms-document-spine-list { display:flex; flex-direction:column; gap:2px; max-height:52vh; overflow-y:auto; margin-top:8px; padding-right:4px; }

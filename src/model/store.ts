@@ -613,6 +613,7 @@ export class Store {
   /** Stable document identity also repairs snapshots captured before an asynchronous rename. */
   normalizeWorkspaceState(state: Record<string, unknown>): Record<string, unknown> {
     const next = clone(state);
+    if ("cleanView" in next && typeof next.cleanView !== "boolean") next.cleanView = false;
     if (!Array.isArray(next.tabs)) return next;
     const active = next.tabs.find(tab => tab?.path === next.activePath);
     for (const tab of next.tabs) {

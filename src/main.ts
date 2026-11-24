@@ -204,6 +204,10 @@ export default class MarginStudyPlugin extends Plugin {
       if (this.studyWorkspace) this.studyWorkspace.toggleInterfaceMode();
       else if (!toggleStudyInterface(this.store)) new Notice("请先选择学习集");
     } });
+    this.addCommand({ id: "toggle-clean-view", name: "切换简洁显示", hotkeys: [{ modifiers: ["Mod", "Alt"], key: "H" }], callback: () => {
+      if (this.studyWorkspace) this.studyWorkspace.toggleCleanView();
+      else new Notice("请先打开 MarginStudy 学习工作区");
+    } });
     this.addCommand({ id: "recover-document-sources", name: "处理待恢复的原文档来源", callback: () => this.recoveryPrompts.openPending() });
     this.addCommand({ id: "local-sync-status", name: "查看本地状态与保护快照", callback: () => this.showLocalStatus() });
     this.addCommand({ id: "import-web-article", name: "导入网页 / 微信文章", callback: () => openWebImport(this) });
