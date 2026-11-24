@@ -165,13 +165,25 @@ async function snapshotAnnotations(plugin: MarginStudyPlugin, targetPath: string
   for (const entry of entries) {
     if (entry.annotations !== "include") continue;
     if (!cached.has(entry.sourcePath)) cached.set(entry.sourcePath, await plugin.store.loadAnnotations(entry.sourcePath));
+    const sourceAnns = cached.get(entry.sourcePath)!;
     const sourceMeta = notebookMeta(plugin.store.getDocMeta(entry.sourcePath),entry.sourceNotebookId), ink = inkLayerState(sourceMeta);
-    for (const ann of cached.get(entry.sourcePath)!) {
-      if (annotationNotebook(ann) !== entry.sourceNotebookId || ann.overlay?.deleted || excerptTypes.has(ann.type) || !annotationGeometry(ann).some((part) => part.page === entry.sourcePage)) continue;
-      if (isInkLayerBound(ann) && !isOrphanInkLayer(ann, ink) && annotationInkLayer(ann, ink) !== ink.active) continue;
+    const deletedHostIds = new Set(sourceAnns.filter((ann) => annotationNotebook(ann) === entry.sourceNotebookId && ann.overlay?.deleted).map((ann) => ann.id));
+    const eligible = sourceAnns.filter((ann) => {
+      if (annotationNotebook(ann) !== entry.sourceNotebookId || ann.overlay?.deleted || excerptTypes.has(ann.type) || !annotationGeometry(ann).some((part) => part.page === entry.sourcePage)) return false;
+      if (ann.type === "pen" && ann.bindToInkLayer !== false && ann.hostAnnotationId && deletedHostIds.has(ann.hostAnnotationId)) return false;
+      if (isInkLayerBound(ann) && !isOrphanInkLayer(ann, ink) && annotationInkLayer(ann, ink) !== ink.active) return false;
+      return true;
+    });
+    const idMap = new Map(eligible.map((ann) => [ann.id, uid("ann")]));
+    for (const ann of eligible) {
       const page = collectionPageIndex(collection, entry.id), geometry = annotationGeometry(ann).filter((part) => part.page === entry.sourcePage).map((part) => ({page,rects:part.rects.map((rect) => ({...rect}))}));
-      target.push({ ...ann, id: uid("ann"), docPath: targetPath, documentNotebookId: notebookId, cardId: undefined, page, rects: geometry[0]?.rects ?? [], pdfGeometry: geometry,
-        pdfReferencePages: [{id:entry.id,page}], inkLayerId: "default", strokes: ann.strokes?.map((stroke) => stroke.map((point) => ({...point}))), overlay: ann.overlay ? {...ann.overlay,box:ann.overlay.box?{...ann.overlay.box}:undefined} : undefined });
+      const next: Annotation = { ...ann, id: idMap.get(ann.id)!, docPath: targetPath, documentNotebookId: notebookId, cardId: undefined, page, rects: geometry[0]?.rects ?? [], pdfGeometry: geometry,
+        pdfReferencePages: [{id:entry.id,page}], strokes: ann.strokes?.map((stroke) => stroke.map((point) => ({...point}))), overlay: ann.overlay ? {...ann.overlay,box:ann.overlay.box?{...ann.overlay.box}:undefined} : undefined };
+      if (ann.hostAnnotationId !== undefined) {
+        const mappedHost = idMap.get(ann.hostAnnotationId);
+        if (mappedHost) next.hostAnnotationId = mappedHost; else delete next.hostAnnotationId;
+      }
+      target.push(next);
     }
   }
   plugin.store.saveAnnotationsDebounced(targetPath,target);

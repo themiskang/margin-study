@@ -60,8 +60,12 @@ export async function flattenPdfAnnotations(output: PDFDocument, page: PDFPage, 
   const drawPriority = ({ annotation }: PdfExportAnnotation) =>
     Number((annotation.type === "pen" && !annotation.overlay) === handwritingOnTop);
   const ordered = [...annotations].sort((first, second) => drawPriority(first) - drawPriority(second));
+  const deletedHostIds = new Set(ordered.filter(({ annotation }) => annotation.overlay?.deleted).map(({ annotation }) => annotation.id));
   for (const {annotation:ann,opacity} of ordered) {
-    current(); const rects=annotationGeometry(ann).find(part=>part.page===number)?.rects ?? [];
+    current();
+    if (ann.overlay?.deleted) continue;
+    if (ann.type === "pen" && ann.bindToInkLayer !== false && ann.hostAnnotationId && deletedHostIds.has(ann.hostAnnotationId)) continue;
+    const rects=annotationGeometry(ann).find(part=>part.page===number)?.rects ?? [];
     if (ann.page!==number&&!rects.length) continue;
     if (ann.overlay && !ann.overlay.deleted && rects[0]) {
       const box=pdfRectToCssRect(rawRect(rects[0],ann.pdfCoordinateSpace),viewport);if(!box)continue;
@@ -79,7 +83,7 @@ export async function flattenPdfAnnotations(output: PDFDocument, page: PDFPage, 
       for (const stroke of strokes) {
         const raw=stroke.map(point=>viewport.convertToPdfPoint(point.x*viewport.width,point.y*viewport.height));
         if (!raw.length)continue;
-        const draw=(points:number[][],thickness:number)=>{const path=points.map((point,index)=>`${index?'L':'M'} ${point[0]} ${-point[1]}`).join(' ');page.drawSvgPath(path,{x:0,y:0,borderColor:color(ann.color ?? INK_DEFAULT_COLOR),borderWidth:thickness,borderOpacity:opacity*inkOpacity,borderLineCap:LineCapStyle.Round});};
+        const draw=(points:number[][],thickness:number)=>{const path=points.map((point,index)=>`${index?'L':'M'} ${point[0]} ${-point[1]}`).join(' ');page.drawSvgPath(path,{x:0,y:0,borderColor:color(ann.color ?? INK_DEFAULT_COLOR),borderWidth:thickness,opacity:opacity*inkOpacity,borderOpacity:opacity*inkOpacity,borderLineCap:LineCapStyle.Round});};
         if (!highlight&&stroke.some(point=>point.pressure!==undefined)) {for(let index=1;index<raw.length;index++)draw([raw[index-1],raw[index]],width/3*(.8+5*((stroke[index-1].pressure??.5)+(stroke[index].pressure??.5))/2));}
         else draw(raw,width);
       } continue;

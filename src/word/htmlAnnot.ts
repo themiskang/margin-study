@@ -598,8 +598,9 @@ export class HtmlAnnotationController extends BaseAnnotationController {
     // A reference notebook must never wrap the active notebook's text. Nested
     // wrappers would dim that text and remove it when references hide in recall.
     if (this.isNotebookReference(ann)) {
-      const holder = el("div", { class: "ms-ann ms-html-reference-range", "aria-hidden": "true" });
+      const holder = el("div", { class: "ms-ann ms-html-reference-range ms-document-notebook-reference", "aria-hidden": "true" });
       holder.dataset.annId = ann.id;
+      this.markReferenceElement(holder, true, "html-range");
       body.append(holder);
       this.referenceRanges.set(ann.id, { annotation: ann, element: holder });
       this.layoutReferenceRange(ann, holder, located);
@@ -710,7 +711,9 @@ export class HtmlAnnotationController extends BaseAnnotationController {
     holder.dataset.annId = ann.id;
     if(ann.inkBrush==="highlight")holder.dataset.recallInk="";
     holder.dataset.inkLayerId = ann.inkLayerId ?? "default";
-    holder.classList.toggle("ms-ink-reference", this.isInkReference(ann));
+    const inkRef = this.isInkReference(ann);
+    holder.classList.toggle("ms-ink-reference", inkRef);
+    this.markReferenceElement(holder, inkRef || this.isNotebookReference(ann), "ink");
     const w = body.clientWidth;
     const h = body.clientHeight;
     if (ann.strokes && w && h) PenController.render(holder, ann.strokes, w, h, ann.color, ann.inkBrush, ann.inkWidth, ann.inkOpacity);

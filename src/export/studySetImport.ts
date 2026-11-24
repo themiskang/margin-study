@@ -186,14 +186,28 @@ export async function importStudySetPackage(plugin: MarginStudyPlugin, bytes: Ar
         if (pathMap.has(attachment) || await vault.adapter.exists(next)) (documentAttachments[mapped] ??= []).push(next);
       }
     }
+    const referencedDocPaths = new Set<string>([
+      ...documentPaths,
+      ...(sourceSet?.docPaths ?? []).map(safeStudySetPath),
+      ...(payload.documents ?? []).map(document => safeStudySetPath(document.path)),
+    ]);
+    const writtenSidecars = new Set<string>();
+    const importedAnnotationPaths = new Set<string>();
     for (const [path, list] of Object.entries(payload.annotations ?? {})) {
-      const mapped = pathMap.get(path);
-      if (!mapped || !documentPaths.has(path) || !Array.isArray(list) || !list.length) continue;
+      if (!Array.isArray(list) || !list.length) continue;
+      const safe = safeStudySetPath(path);
+      const inPackage = documentPaths.has(safe);
+      if (!inPackage && !referencedDocPaths.has(safe)) continue;
+      const mapped = pathMap.get(safe) ?? safe;
+      const sidecar = store.sidecarPath(mapped);
+      if (!inPackage && (writtenSidecars.has(sidecar) || await vault.adapter.exists(sidecar))) continue;
+      writtenSidecars.add(sidecar);
+      importedAnnotationPaths.add(safe);
       const annotations = list.map(annotation => ({
         ...remapStrings(annotation), docPath: mapped, cardId: annotation.cardId ? cardIds.get(annotation.cardId) : undefined,
       }));
       validateAnnotationCollection(annotations);
-      writes.push({ path: store.sidecarPath(mapped), sidecar: true,
+      writes.push({ path: sidecar, sidecar: true,
         bytes: strToU8(JSON.stringify({ schemaVersion: 2, annotations })) });
       summary.annotations += annotations.length;
     }
@@ -322,12 +336,13 @@ export async function importStudySetPackage(plugin: MarginStudyPlugin, bytes: Ar
             set.documentAttachments[path] = [...new Set([...(set.documentAttachments[path] ?? []), ...attachments])];
           }
         }
-        for (const path of documentPaths) {
+        for (const path of new Set([...documentPaths, ...importedAnnotationPaths])) {
+          const inPackage = documentPaths.has(path);
           const metadata = payload.documents?.find(document => document.path === path);
           const mapped = documentPath(path);
-          store.registerDocument(mapped, metadata?.sourceUrl, sourceBytes.get(mapped));
+          if (inPackage) store.registerDocument(mapped, metadata?.sourceUrl, sourceBytes.get(mapped));
           const meta = payload.docMeta?.[path];
-          if (meta && typeof meta === "object") {
+          if (meta && typeof meta === "object" && (inPackage || !store.docMeta[mapped])) {
             const mappedMeta = remapStrings(meta);
             const edits = mappedMeta.pdfPageEdits;
             if (edits?.version === 1 && Array.isArray(edits.pages) && edits.pages.length === 0) delete mappedMeta.pdfPageEdits;
