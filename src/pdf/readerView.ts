@@ -726,10 +726,10 @@ export class ReaderView extends ItemView {
   getPageReferences(pages: number[]): PageReferenceInput[] {
     if (!this.loadedPath) return [];
     return pages.map((page) => { const entry = this.getPageReference(page), edited = this.doc instanceof EditedPdfDocument ? this.doc.edits.pages[page-1] : undefined;
-      if (edited?.imported) return {sourcePath:edited.imported.path,sourcePage:edited.imported.page,sourceNotebookId:this.getDocumentNotebookId()};
+      if (edited?.imported) return {sourcePath:edited.imported.path,sourcePage:edited.imported.page,sourceNotebookId:this.getDocumentNotebookId(),collectionSource:{path:this.loadedPath!,page,referenceId:edited.id,notebookId:this.getDocumentNotebookId(),hadSourceSnapshots:false}};
       const sourcePage = this.doc instanceof EditedPdfDocument ? edited?.sourcePage : page;
       if (!entry && !sourcePage) throw new Error("空白插页暂不能用于书页重组");
-      return entry ? {sourcePath:entry.sourcePath,sourcePage:entry.sourcePage,sourceNotebookId:entry.sourceNotebookId} : {sourcePath:this.loadedPath!,sourcePage:sourcePage!,sourceNotebookId:this.getDocumentNotebookId()}; });
+      return entry ? {sourcePath:entry.sourcePath,sourcePage:entry.sourcePage,sourceNotebookId:entry.sourceNotebookId,collectionSource:{path:this.loadedPath!,page,referenceId:entry.id,notebookId:this.getDocumentNotebookId(),hadSourceSnapshots:entry.annotations==="include"}} : {sourcePath:this.loadedPath!,sourcePage:sourcePage!,sourceNotebookId:this.getDocumentNotebookId()}; });
   }
   async openPageSource(page = this.currentPage): Promise<void> {
     const entry = this.getPageReference(page); if (!entry) return; const file = this.app.vault.getAbstractFileByPath(entry.sourcePath);

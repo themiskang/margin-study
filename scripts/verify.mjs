@@ -125,6 +125,8 @@ const automatedSuites=[
   ["study-set-import","src/export/studySetImport-acceptance.mjs"],
   ["lasso-model-binding","scripts/verify/lasso-model-binding-acceptance.mjs"],
   ["lasso-ui-workflow","scripts/verify/lasso-ui-workflow-acceptance.mjs"],
+  ["merge-annotation-parity","scripts/verify/merge-annotation-parity-acceptance.mjs"],
+  ["merge-document-undo","scripts/verify/merge-document-undo-acceptance.mjs"],
 ];
 const replaySuites=[
   ["document-more","scripts/verify/compare-document-more-evidence.py"],

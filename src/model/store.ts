@@ -3241,8 +3241,10 @@ export class Store {
 
   getDocMeta(path: string): DocMeta { return this.docMeta[path] ?? {}; }
   updateDocMeta(path: string, patch: Partial<DocMeta>): void { this.docMeta[path] = { ...this.getDocMeta(path), ...patch }; this.save(); }
+  clearDocMeta(path: string): void { if (path in this.docMeta) { delete this.docMeta[path]; this.save(); } }
   toggleFoldPage(path: string, page: number): void { const values = new Set(this.getDocMeta(path).foldedPages ?? []); values.has(page) ? values.delete(page) : values.add(page); this.updateDocMeta(path, { foldedPages: [...values].sort((a,b) => a-b) }); }
   toggleBookmark(path: string, page: number): void { const values = new Set(this.getDocMeta(path).bookmarks ?? []); values.has(page) ? values.delete(page) : values.add(page); this.updateDocMeta(path, { bookmarks: [...values].sort((a,b) => a-b) }); }
+  unregisterDocument(path: string): void { const index = this.documents.findIndex(d => d.path === path); if (index >= 0) { this.documents.splice(index, 1); this.save(); } }
   registerDocument(path: string, sourceUrl?: string, bytes?: Uint8Array): DocumentRecord | undefined {
     if (!path) return undefined;
     let doc = this.documents.find(d => d.path === path);

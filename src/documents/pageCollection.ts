@@ -27,7 +27,16 @@ export interface PageCollection {
   createdAt: string;
   pages: PageReference[];
 }
-export type PageReferenceInput = Pick<PageReference, "sourcePath" | "sourcePage"> & Partial<Omit<PageReference, "id" | "sourcePath" | "sourcePage">>;
+export interface PageCollectionLocalSource {
+  path: string;
+  page: number;
+  referenceId?: string;
+  notebookId: string;
+  hadSourceSnapshots?: boolean;
+}
+export type PageReferenceInput = Pick<PageReference, "sourcePath" | "sourcePage">
+  & Partial<Omit<PageReference, "id" | "sourcePath" | "sourcePage">>
+  & { collectionSource?: PageCollectionLocalSource };
 export interface LinkedPageAnnotation extends Annotation { referenceSource: { docPath: string; anchorAnnId: string; page: number; notebookId: string }; }
 const excerptTypes = new Set(["highlight", "underline", "strike", "region"]);
 const locks = new Set<string>();
@@ -160,40 +169,135 @@ export function mapCollectionAnnotation(annotation: Annotation, collection: Page
 async function validateSources(plugin: MarginStudyPlugin, collection: PageCollection): Promise<void> {
   const document = new PageCollectionDocument(plugin, collection); try { for (let index = 1; index <= collection.pages.length; index++) await document.getPage(index); } finally { await document.destroy(); }
 }
-async function snapshotAnnotations(plugin: MarginStudyPlugin, targetPath: string, collection: PageCollection, entries: PageReference[], notebookId: string): Promise<void> {
-  const target = await plugin.store.loadAnnotations(targetPath); const cached = new Map<string,Annotation[]>();
-  for (const entry of entries) {
-    if (entry.annotations !== "include") continue;
-    if (!cached.has(entry.sourcePath)) cached.set(entry.sourcePath, await plugin.store.loadAnnotations(entry.sourcePath));
-    const sourceAnns = cached.get(entry.sourcePath)!;
-    const sourceMeta = notebookMeta(plugin.store.getDocMeta(entry.sourcePath),entry.sourceNotebookId), ink = inkLayerState(sourceMeta);
-    const deletedHostIds = new Set(sourceAnns.filter((ann) => annotationNotebook(ann) === entry.sourceNotebookId && ann.overlay?.deleted).map((ann) => ann.id));
-    const eligible = sourceAnns.filter((ann) => {
-      if (annotationNotebook(ann) !== entry.sourceNotebookId || ann.overlay?.deleted || excerptTypes.has(ann.type) || !annotationGeometry(ann).some((part) => part.page === entry.sourcePage)) return false;
-      if (ann.type === "pen" && ann.bindToInkLayer !== false && ann.hostAnnotationId && deletedHostIds.has(ann.hostAnnotationId)) return false;
-      if (isInkLayerBound(ann) && !isOrphanInkLayer(ann, ink) && annotationInkLayer(ann, ink) !== ink.active) return false;
-      return true;
-    });
-    const idMap = new Map(eligible.map((ann) => [ann.id, uid("ann")]));
-    for (const ann of eligible) {
-      const page = collectionPageIndex(collection, entry.id), geometry = annotationGeometry(ann).filter((part) => part.page === entry.sourcePage).map((part) => ({page,rects:part.rects.map((rect) => ({...rect}))}));
-      const next: Annotation = { ...ann, id: idMap.get(ann.id)!, docPath: targetPath, documentNotebookId: notebookId, cardId: undefined, page, rects: geometry[0]?.rects ?? [], pdfGeometry: geometry,
-        pdfReferencePages: [{id:entry.id,page}], strokes: ann.strokes?.map((stroke) => stroke.map((point) => ({...point}))), overlay: ann.overlay ? {...ann.overlay,box:ann.overlay.box?{...ann.overlay.box}:undefined} : undefined };
-      if (ann.hostAnnotationId !== undefined) {
-        const mappedHost = idMap.get(ann.hostAnnotationId);
-        if (mappedHost) next.hostAnnotationId = mappedHost; else delete next.hostAnnotationId;
-      }
-      target.push(next);
+function cloneSnapshotAnnotation(
+  ann: Annotation,
+  nextId: string,
+  targetPath: string,
+  notebookId: string,
+  targetEntryId: string,
+  targetPage: number,
+  parts: PdfPageGeometry[],
+  idMap: Map<string, string>,
+): Annotation {
+  const geometry = parts.map((part) => ({ page: targetPage, rects: part.rects.map((rect) => ({ ...rect })) }));
+  const next: Annotation = {
+    ...ann,
+    id: nextId,
+    docPath: targetPath,
+    documentNotebookId: notebookId,
+    cardId: undefined,
+    page: targetPage,
+    rects: geometry[0]?.rects ?? [],
+    pdfGeometry: geometry,
+    pdfReferencePages: [{ id: targetEntryId, page: targetPage }],
+    ...(ann.strokes !== undefined ? { strokes: ann.strokes.map((stroke) => stroke.map((point) => ({ ...point }))) } : {}),
+    ...(ann.overlay !== undefined ? { overlay: structuredClone(ann.overlay) } : {}),
+    ...(ann.pos !== undefined ? { pos: { ...ann.pos } } : {}),
+    ...(ann.images !== undefined ? { images: [...ann.images] } : {}),
+    ...(ann.excerptBlocks !== undefined ? { excerptBlocks: structuredClone(ann.excerptBlocks) } : {}),
+    ...(ann.range !== undefined ? { range: structuredClone(ann.range) } : {}),
+  };
+  delete next.cardId;
+  if (ann.hostAnnotationId !== undefined) {
+    const mappedHost = idMap.get(ann.hostAnnotationId);
+    if (mappedHost) next.hostAnnotationId = mappedHost;
+    else {
+      delete next.hostAnnotationId;
+      delete next.hostBindingId;
     }
   }
-  plugin.store.saveAnnotationsDebounced(targetPath,target);
+  return next;
+}
+async function copyNonExcerptAnnotationsFromSource(
+  plugin: MarginStudyPlugin,
+  cached: Map<string, Annotation[]>,
+  target: Annotation[],
+  targetPath: string,
+  targetNotebookId: string,
+  sourcePath: string,
+  sourceNotebookId: string,
+  targetEntryId: string,
+  targetPage: number,
+  matchParts: (ann: Annotation) => PdfPageGeometry[],
+  layersToSync: Map<string, string>,
+): Promise<void> {
+  if (!cached.has(sourcePath)) cached.set(sourcePath, await plugin.store.loadAnnotations(sourcePath));
+  const sourceAnns = cached.get(sourcePath)!;
+  const sourceMeta = notebookMeta(plugin.store.getDocMeta(sourcePath), sourceNotebookId), ink = inkLayerState(sourceMeta);
+  const deletedHostIds = new Set(sourceAnns.filter((ann) => annotationNotebook(ann) === sourceNotebookId && ann.overlay?.deleted).map((ann) => ann.id));
+  const eligible: { ann: Annotation; parts: PdfPageGeometry[] }[] = [];
+  for (const ann of sourceAnns) {
+    if (annotationNotebook(ann) !== sourceNotebookId || ann.overlay?.deleted || ann.mediaDeleted || excerptTypes.has(ann.type)) continue;
+    if (ann.type === "pen" && (!ann.strokes?.length || !ann.strokes.some((stroke) => stroke.length > 0))) continue;
+    const parts = matchParts(ann);
+    if (!parts.length) continue;
+    if (ann.type === "pen" && ann.bindToInkLayer !== false && ann.hostAnnotationId && deletedHostIds.has(ann.hostAnnotationId)) continue;
+    if (isInkLayerBound(ann) && !isOrphanInkLayer(ann, ink) && annotationInkLayer(ann, ink) !== ink.active) continue;
+    eligible.push({ ann, parts });
+  }
+  const idMap = new Map(eligible.map(({ ann }) => [ann.id, uid("ann")]));
+  for (const { ann, parts } of eligible) {
+    if (isInkLayerBound(ann) && !isOrphanInkLayer(ann, ink)) {
+      const layerId = annotationInkLayer(ann, ink);
+      if (layerId !== "default") {
+        const layer = ink.layers.find((item) => item.id === layerId);
+        if (layer && !layersToSync.has(layer.id)) layersToSync.set(layer.id, layer.name);
+      }
+    }
+    target.push(cloneSnapshotAnnotation(ann, idMap.get(ann.id)!, targetPath, targetNotebookId, targetEntryId, targetPage, parts, idMap));
+  }
+}
+async function snapshotAnnotations(plugin: MarginStudyPlugin, targetPath: string, collection: PageCollection, entries: PageReference[], notebookId: string, inputs?: PageReferenceInput[]): Promise<void> {
+  const target = await plugin.store.loadAnnotations(targetPath); const cached = new Map<string, Annotation[]>();
+  const layersToSync = new Map<string, string>();
+  for (let index = 0; index < entries.length; index++) {
+    const entry = entries[index];
+    if (entry.annotations !== "include") continue;
+    const targetPage = collectionPageIndex(collection, entry.id);
+    const localSource = inputs?.[index]?.collectionSource;
+    if (!localSource?.hadSourceSnapshots) {
+      await copyNonExcerptAnnotationsFromSource(
+        plugin, cached, target, targetPath, notebookId,
+        entry.sourcePath, entry.sourceNotebookId, entry.id, targetPage,
+        (ann) => annotationGeometry(ann).filter((part) => part.page === entry.sourcePage),
+        layersToSync,
+      );
+    }
+    if (localSource) {
+      await copyNonExcerptAnnotationsFromSource(
+        plugin, cached, target, targetPath, notebookId,
+        localSource.path, localSource.notebookId, entry.id, targetPage,
+        (ann) => {
+          if (localSource.referenceId && ann.pdfReferencePages?.length) {
+            const matchedPages = new Set(ann.pdfReferencePages.filter((ref) => ref.id === localSource.referenceId).map((ref) => ref.page));
+            return matchedPages.size ? annotationGeometry(ann).filter((part) => matchedPages.has(part.page)) : [];
+          }
+          return annotationGeometry(ann).filter((part) => part.page === localSource.page);
+        },
+        layersToSync,
+      );
+    }
+  }
+  if (layersToSync.size) {
+    const targetMeta = notebookMeta(plugin.store.getDocMeta(targetPath), notebookId);
+    const existing = inkLayerState(targetMeta).layers.map((layer) => ({ ...layer }));
+    let changed = false;
+    for (const [id, name] of layersToSync) {
+      if (!existing.some((layer) => layer.id === id)) {
+        existing.push({ id, name });
+        changed = true;
+      }
+    }
+    if (changed) updateNotebookMeta(plugin, targetPath, { handwritingLayers: existing }, notebookId);
+  }
+  plugin.store.saveAnnotationsDebounced(targetPath, target);
 }
 async function includeSelectionFolds(plugin: MarginStudyPlugin, path: string, collection: PageCollection, entries: PageReference[], notebookId: string): Promise<void> {
   const meta = notebookMeta(plugin.store.getDocMeta(path),notebookId), folded = new Set(meta.foldedPages ?? []);
   for (const entry of entries) if (entry.origin === "selection" && notebookMeta(plugin.store.getDocMeta(entry.sourcePath),entry.sourceNotebookId).foldedPages?.includes(entry.sourcePage)) folded.add(collectionPageIndex(collection,entry.id));
   updateNotebookMeta(plugin,path,{foldedPages:[...folded].sort((a,b)=>a-b)},notebookId);
 }
-export async function createPageCollection(plugin: MarginStudyPlugin, options: { title: string; pages: PageReferenceInput[]; origin?: PageReferenceOrigin; annotations?: "clean" | "include"; studySetId?: string; folder?: string }): Promise<TFile> {
+export async function createPageCollection(plugin: MarginStudyPlugin, options: { title: string; pages: PageReferenceInput[]; origin?: PageReferenceOrigin; annotations?: "clean" | "include"; studySetId?: string; folder?: string; recordLibraryHistory?: boolean }): Promise<TFile> {
   const title = options.title.trim(); if (!title || title.length > 120) throw new Error("请填写 1–120 字的文档名称");
   const origin = options.origin ?? "toc", collection: PageCollection = { format:"marginstudy-page-collection",version:1,id:uid("collection"),title,createdAt:new Date().toISOString(),pages:options.pages.map((entry) => reference(entry,options.annotations ?? (origin === "selection" ? "include" : "clean"),origin)) };
   collectionBytes(collection); await validateSources(plugin,collection);
@@ -202,10 +306,29 @@ export async function createPageCollection(plugin: MarginStudyPlugin, options: {
   const basename = title.replace(/[\\/:*?"<>|\u0000-\u001f]/g,"_").replace(/[. ]+$/,"") || "重组文档"; let path = `${folder}/${basename}.msref`, suffix = 2;
   while (await plugin.app.vault.adapter.exists(path)) path = `${folder}/${basename} ${suffix++}.msref`;
   const file = await plugin.app.vault.createBinary(path,collectionBytes(collection));
-  await snapshotAnnotations(plugin,path,collection,collection.pages,"default"); await includeSelectionFolds(plugin,path,collection,collection.pages,"default");
+  await snapshotAnnotations(plugin,path,collection,collection.pages,"default",options.pages); await includeSelectionFolds(plugin,path,collection,collection.pages,"default");
   const selected = options.studySetId ?? plugin.store.activeStudySetId;
   const set = plugin.store.studySets.find((item) => item.id === selected) ?? plugin.store.createStudySet("我的学习集");
-  plugin.store.updateStudySet(set.id,{docPaths:[...new Set([...set.docPaths,path])]}); plugin.store.setActiveStudySet(set.id); plugin.store.registerDocument(path); plugin.store.save(); await plugin.store.flush(); plugin.refreshSidebar(); return file;
+  const nextDocPaths = [...new Set([...set.docPaths, path])];
+  if (options.recordLibraryHistory === false) set.docPaths = nextDocPaths;
+  else plugin.store.updateStudySet(set.id,{docPaths:nextDocPaths});
+  plugin.store.setActiveStudySet(set.id); plugin.store.registerDocument(path); plugin.store.save(); await plugin.store.flush(); plugin.refreshSidebar(); return file;
+}
+export async function recreatePageCollection(plugin: MarginStudyPlugin, path: string, collection: PageCollection, metadata: any, annotations: Annotation[], studySetId?: string | null): Promise<TFile> {
+  if (!vaultPath(path) || !path.toLowerCase().endsWith(`.${PAGE_COLLECTION_EXTENSION}`)) throw new Error("重组文档路径无效");
+  if (await plugin.app.vault.adapter.exists(path)) throw new Error("目标路径已存在同名文件，无法重做合并新建文档");
+  const bytes = collectionBytes(collection);
+  await validateSources(plugin, collection);
+  const parts = path.split("/"); parts.pop(); let prefix = "";
+  for (const part of parts) { prefix = prefix ? `${prefix}/${part}` : part; if (!await plugin.app.vault.adapter.exists(prefix)) await plugin.app.vault.createFolder(prefix); }
+  const file = await plugin.app.vault.createBinary(path, bytes);
+  if (metadata && Object.keys(metadata).length) plugin.store.updateDocMeta(path, structuredClone(metadata));
+  plugin.store.saveAnnotationsDebounced(path, structuredClone(annotations));
+  const selected = studySetId ?? plugin.store.activeStudySetId;
+  const set = plugin.store.studySets.find((item) => item.id === selected);
+  if (set && !set.docPaths.includes(path)) set.docPaths = [...set.docPaths, path];
+  plugin.store.registerDocument(path); plugin.store.save(); await plugin.store.flush(); plugin.refreshSidebar();
+  return file;
 }
 export async function appendPageReferences(plugin: MarginStudyPlugin, file: TFile, inputs: PageReferenceInput[], notebookId?: string): Promise<PageCollection> {
   if (locks.has(file.path)) throw new Error("此重组文档正在更新"); locks.add(file.path);
@@ -214,7 +337,7 @@ export async function appendPageReferences(plugin: MarginStudyPlugin, file: TFil
     const next = {...collection,pages:[...collection.pages,...pages]}; collectionBytes(next); await validateSources(plugin,{...next,pages});
     const id = notebookId ?? plugin.store.getDocMeta(file.path).activeDocumentNotebookId ?? "default";
     if (JSON.stringify(await readPageCollection(plugin,file))!==JSON.stringify(collection)) throw new Error("文档已在其他窗口更新，请重新打开后再操作");
-    await plugin.app.vault.modifyBinary(file,collectionBytes(next)); await snapshotAnnotations(plugin,file.path,next,pages,id); await includeSelectionFolds(plugin,file.path,next,pages,id); await plugin.store.flush(); return next;
+    await plugin.app.vault.modifyBinary(file,collectionBytes(next)); await snapshotAnnotations(plugin,file.path,next,pages,id,inputs); await includeSelectionFolds(plugin,file.path,next,pages,id); await plugin.store.flush(); return next;
   } finally { locks.delete(file.path); }
 }
 export async function reorderPageReferences(plugin: MarginStudyPlugin, file: TFile, orderedIds: string[]): Promise<PageCollection> {
@@ -229,7 +352,7 @@ export async function reorderPageReferences(plugin: MarginStudyPlugin, file: TFi
     const main=remap(meta); plugin.store.updateDocMeta(file.path,{foldedPages:main.foldedPages,bookmarks:main.bookmarks,documentNotebookMeta:scoped});await plugin.store.flush();return next;
   } finally { locks.delete(file.path); }
 }
-async function restorePageReferences(plugin: MarginStudyPlugin, file: TFile, expected: PageCollection, target: PageCollection, metadata: any): Promise<void> {
+export async function restorePageReferences(plugin: MarginStudyPlugin, file: TFile, expected: PageCollection, target: PageCollection, metadata: any): Promise<void> {
   if (locks.has(file.path)) throw new Error("此重组文档正在更新"); locks.add(file.path);
   try {
     if (JSON.stringify(await readPageCollection(plugin,file)) !== JSON.stringify(expected)) throw new Error("文档已在其他窗口更新，请重新打开后再操作");
@@ -237,9 +360,27 @@ async function restorePageReferences(plugin: MarginStudyPlugin, file: TFile, exp
     if (JSON.stringify(await readPageCollection(plugin,file)) !== JSON.stringify(expected)) throw new Error("文档已在其他窗口更新，请重新打开后再操作");
     await plugin.app.vault.modifyBinary(file,collectionBytes(target));
     const current=plugin.store.getDocMeta(file.path), scoped={...current.documentNotebookMeta};
-    for(const [id,state] of Object.entries(metadata.documentNotebookMeta??{})) scoped[id]={...scoped[id],foldedPages:(state as any).foldedPages,bookmarks:(state as any).bookmarks};
-    plugin.store.updateDocMeta(file.path,{foldedPages:metadata.foldedPages,bookmarks:metadata.bookmarks,documentNotebookMeta:scoped});await plugin.store.flush();
+    for(const [id,state] of Object.entries(metadata.documentNotebookMeta??{})) scoped[id]={...scoped[id],foldedPages:(state as any).foldedPages,bookmarks:(state as any).bookmarks,handwritingLayers:(state as any).handwritingLayers};
+    for(const id of Object.keys(scoped)) if (!(id in (metadata.documentNotebookMeta??{}))) delete scoped[id];
+    plugin.store.updateDocMeta(file.path,{foldedPages:metadata.foldedPages,bookmarks:metadata.bookmarks,handwritingLayers:metadata.handwritingLayers,documentNotebookMeta:Object.keys(scoped).length?scoped:undefined});await plugin.store.flush();
   } finally { locks.delete(file.path); }
+}
+export async function restorePageCollectionSnapshot(
+  plugin: MarginStudyPlugin,
+  file: TFile,
+  expectedCollection: PageCollection,
+  targetCollection: PageCollection,
+  targetMeta: any,
+  expectedAnnotations: Annotation[],
+  targetAnnotations: Annotation[],
+): Promise<void> {
+  const currentAnnotations = await plugin.store.loadAnnotations(file.path);
+  if (JSON.stringify(currentAnnotations) !== JSON.stringify(expectedAnnotations)) {
+    throw new Error("文档批注已变化，页面撤销已取消");
+  }
+  await restorePageReferences(plugin, file, expectedCollection, targetCollection, targetMeta);
+  plugin.store.saveAnnotationsDebounced(file.path, structuredClone(targetAnnotations));
+  await plugin.store.flush();
 }
 export function parsePageRange(value: string, count: number): number[] {
   const result: number[] = []; for (const token of value.trim().split(/[,，\s]+/).filter(Boolean)) {
