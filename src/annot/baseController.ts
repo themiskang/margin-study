@@ -1751,8 +1751,8 @@ export abstract class BaseAnnotationController {
     else delete element.dataset.msReference;
   }
   protected referenceKindFor(ann: Annotation, element?: HTMLElement): string {
-    if (element?.hasAttribute("data-recall-ink-mask") || element?.classList.contains("ms-ink-recall-mask")) return "recall-mask";
-    if (element?.classList.contains("ms-html-reference-range")) return "html-range";
+    if (element?.hasAttribute?.("data-recall-ink-mask") || element?.dataset?.recallInkMask !== undefined || element?.classList?.contains?.("ms-ink-recall-mask")) return "recall-mask";
+    if (element?.classList?.contains?.("ms-html-reference-range")) return "html-range";
     if (ann.overlay) {
       if (ann.overlay.kind === "image") return this.isNotebookReference(ann) ? "notebook-ink-image" : "overlay-image";
       return "overlay-text";
