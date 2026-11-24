@@ -25,7 +25,7 @@
 | GAP-07c/d | PDF-02，逐层显隐/锁定/z-order | **超 MN5 增强，后置登记** | 探查确认 7 维属 MN5 之外的增强（MN5 无 Photoshop 式逐层控制）。仅在用户明确要求时排期。 | P3 |
 | HOST-P2 | 宿主弹窗销毁卫生 | 待排查 | 1.12.7 基线宿主整轮抛 7 次 `e.isShown is not a function`（`app.js:1`，栈内无插件帧）；1.15.1 上未复现。属宿主自定义 modal 销毁边界。 | P2 |
 | GAP-08 | PDF-03，套索选择 | 待核对 | 圈选笔迹和区域后验证移动、删除、转摘录、解绑保全及撤销重做。逐条复核工具条与实际菜单动作。 | P1 |
-| GAP-09 | PDF-04，简洁显示 | 已有合成覆盖，待实机 | 循环验证三态、快捷键、重载与精简笔条。复核长按阈值、状态栏模板默认值和窄窗可达性。 | P1 |
+| GAP-09 | MN5-PARITY，简洁显示（三态/笔条/快捷键/模板） | **已验收（合成 8/8、异厂 PASS、`verify:public` 104/104、`px-gap` 295/298，`10-minimal*` 0 skipped）**。精简笔条 4 按钮真实切换工具（`pen/pen-1`、`highlight/highlight-1`、`pen/pencil-1`、`eraser`），且在 pen/highlight/eraser/lasso 全部手写态常显；`WorkspaceState.cleanView` 持久化 + 脏值降级；隐藏清单补侧栏与两条分隔条；命令 `toggle-clean-view` + 功能搜索 + `Mod+Alt+H`/`Escape`（输入框/弹窗内触发次数 0）；长按 420ms + `>8px` 位移取消 + `isPrimary`/`blur`/`onClose` 清理；`statusBar: compact` 去死钮、`mn5` schema 3 导出零泄漏；四视口 × 四状态全对零重叠（324 对检查、92 中心点命中、20 次真实页签点击）。新增公开套件 `workspace-clean-view{,-template}`，`px-gap` 放行 `10-minimal*`。**业主实机签收未计入**：(1) macOS 触控板 + Pad 触屏/Pencil 的 420ms 长按手感与防误触；(2) Obsidian 1.15.1 真实宿主原生状态栏/标签栏/窄分屏下把手与笔条可达性及宿主热键无冲突；(3) 真机深浅主题与窄窗切换肉眼观感。并入 GAP 批次统一实机验收（macOS 批次 + Pad 并入 GAP-13）。 | P1 已完成 |
 | GAP-10 | YAN-01，R2–R10 锚点 | 待核对 | 九个锚点全部落在目标可见区，页码和偏移符合对应验收阈值。复核跨页、改名、工作区重开和缺源恢复。 | P1 |
 | GAP-11 | YAN-02，冷启动耗时 | 待采样 | 五次干净冷启动的中位数、P95 符合验收阈值，首屏可交互。另记录大型学习集、书脊及 PDF 渲染的规模和性能。 | P2 |
 | GAP-12 | A3，379 项原生菜单与场景对齐 | 等待 MN5 5.0.2 原生采集 | 按 [采集计划](specs/mn502-capture-plan.md) 和 [菜单矩阵](specs/page-menu-state-matrix.md) 逐项比对标签、顺序、图标、启用态、快捷键和动作。剩余宿主差异写入 [架构决策](architecture/decisions-mn502.md)。 | P2 |
