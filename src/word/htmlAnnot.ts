@@ -6,6 +6,7 @@ import { todayStr } from "../srs";
 import { Notice, sanitizeHTMLToDom } from "obsidian";
 import { saveVoiceBlob } from "../audio/voice";
 import { PenController } from "../annot/pen";
+import { cloneStrokes } from "../annot/penGeometry";
 import { handwritingPresetWidth } from "../annot/handwritingPresets";
 import { BaseAnnotationController, SelTarget, VoiceTarget } from "../annot/baseController";
 import { NavigationHistory } from "../anchors/navigationHistory";
@@ -309,7 +310,11 @@ export class HtmlAnnotationController extends BaseAnnotationController {
       getWidth: () => handwritingPresetWidth(this.getHandwritingPreset(), "document"),
       getOpacity: () => this.getHandwritingPreset().opacity,
       isVanishPen: () => this.isVanishPen(),
+      onActionBegin: () => this.ensurePenRevision(),
       onCommit: (strokes, brush, width, opacity) => this.createPenAnnotation(strokes, layerId, notebookId, brush, width, opacity),
+      onPaste: (entries) => this.pastePenAnnotations(entries, layerId, notebookId),
+      onExcerpt: (_selection, bounds, image) => this.excerptLassoSelection(bounds, image),
+      onUnbind: (ids) => this.unbindInkAnnotations(ids),
       getInk: () => this.getPenRecords(undefined, layerId),
       onChange: (changes) => this.commitPenChanges(changes),
       onUndo: () => this.undoPenChange(), onRedo: () => this.redoPenChange(),
@@ -323,6 +328,9 @@ export class HtmlAnnotationController extends BaseAnnotationController {
   protected flushPen(commitDrawing = true): void { this.pen?.flush(commitDrawing); }
   protected onPenToolChanged(): void { this.pen?.setTool(this.penTool); }
 
+  protected clearPenSelections(): void {
+    this.pen?.clearSelection();
+  }
   protected teardownPen(): void {
     if (this.pen) {
       this.pen.setActive(false);
@@ -355,6 +363,49 @@ export class HtmlAnnotationController extends BaseAnnotationController {
       createdAt: todayStr(),
     };
     this.pushAnnotation(ann);
+  }
+  private pastePenAnnotations(entries: { strokes: Stroke[][]; brush: "pen" | "highlight"; color?: string; width?: number; opacity?: number }[], layerId: string, documentNotebookId: string): void {
+    if (!this.docPath || !entries.length) return;
+    const annotations: Annotation[] = entries.map(entry => ({
+      id: uid("ann"),
+      docPath: this.docPath!,
+      docKind: "html",
+      page: 0,
+      type: "pen",
+      rects: [],
+      text: "",
+      color: entry.color ?? this.getHandwritingPreset().color,
+      strokes: cloneStrokes(entry.strokes),
+      inkBrush: entry.brush,
+      inkRecallPurpose: entry.brush === "highlight" ? this.getHandwritingPreset().recallPurpose ?? "mask" : undefined,
+      inkWidth: entry.width ?? handwritingPresetWidth(this.getHandwritingPreset(), "document"),
+      inkOpacity: entry.opacity ?? (entry.brush === "highlight" ? 0.32 : 1),
+      inkLayerId: layerId,
+      documentNotebookId,
+      createdAt: todayStr(),
+    }));
+    this.pushPastedPenAnnotations(annotations);
+  }
+  private excerptLassoSelection(bounds: { x: number; y: number; width: number; height: number }, image: string): void {
+    if (!this.docPath) return;
+    const body = this.getBodyEl(), rect = body.getBoundingClientRect();
+    const selRect = {
+      left: bounds.x * rect.width,
+      top: bounds.y * rect.height,
+      right: (bounds.x + bounds.width) * rect.width,
+      bottom: (bounds.y + bounds.height) * rect.height,
+    };
+    const text = this.extractTextInRect(selRect);
+    const startNode = this.nodeAtOffset(body, selRect.left, selRect.top);
+    const endNode = this.nodeAtOffset(body, selRect.right, selRect.bottom);
+    let range: DomRange = { start: 0, end: 0 };
+    if (startNode.nodeType === Node.TEXT_NODE && endNode.nodeType === Node.TEXT_NODE) {
+      const selection = document.createRange();
+      selection.setStart(startNode, 0); selection.setEnd(endNode, (endNode.textContent ?? "").length);
+      const resolved = this.resolveSelection(selection);
+      if (resolved?.kind === "html") range = resolved.range;
+    }
+    this.commitRegion({ kind: "html", range }, image, text);
   }
 
   // ===== 套索/区域摘录 =====
@@ -395,15 +446,18 @@ export class HtmlAnnotationController extends BaseAnnotationController {
       this.lassoOverlay?.remove();
       this.lassoOverlay = null;
     };
+    const blur = () => this.cancelRegionGesture();
     this.cleanupLasso?.();
     this.cleanupLasso = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("blur", blur);
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
     window.addEventListener("pointercancel", cancel);
+    window.addEventListener("blur", blur);
   };
 
   private onLassoPointerMove(e: PointerEvent): void {

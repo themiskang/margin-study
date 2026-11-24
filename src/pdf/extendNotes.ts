@@ -436,7 +436,13 @@ export class ExtendNotes {
         getColor: () => this.reader.getHandwritingColor(),
         getInk: () => this.notes().find(item=>item.id===note.id)?.ink ?? [],
         onCommit: (strokes,brush) => commit([...(this.notes().find(item=>item.id===note.id)?.ink ?? []),{id:uid("extend-ink"),strokes,color:this.reader.getHandwritingColor(),brush}]),
-        onChange: changes => commit((this.notes().find(item=>item.id===note.id)?.ink ?? []).map(record=>{const change=changes.find(item=>item.id===record.id);return change ? {...record,strokes:change.after} : record;}).filter(record=>record.strokes.length)),
+        onChange: changes => commit((this.notes().find(item=>item.id===note.id)?.ink ?? []).map(record=>{
+          const change=changes.find(item=>item.id===record.id);
+          if (!change) return record;
+          const next = { ...record, strokes: change.after };
+          if (change.color) next.color = change.color.after;
+          return next;
+        }).filter(record=>record.strokes.length)),
         onUndo: () => {void this.reader.undoLastEdit();}, onRedo: () => {void this.reader.redoLastEdit();},
       });
       this.pens.set(note.id,{page,controller:pen}); this.syncHandwriting();

@@ -123,6 +123,8 @@ const automatedSuites=[
   ["study-set-export","src/export/studySet-acceptance.mjs"],
   ["study-set-export-ui","src/export/studySet-ui-acceptance.mjs"],
   ["study-set-import","src/export/studySetImport-acceptance.mjs"],
+  ["lasso-model-binding","scripts/verify/lasso-model-binding-acceptance.mjs"],
+  ["lasso-ui-workflow","scripts/verify/lasso-ui-workflow-acceptance.mjs"],
 ];
 const replaySuites=[
   ["document-more","scripts/verify/compare-document-more-evidence.py"],

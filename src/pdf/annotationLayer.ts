@@ -375,8 +375,19 @@ export class AnnotationController extends BaseAnnotationController {
       getOpacity: () => this.getHandwritingPreset().opacity,
       isVanishPen: () => this.isVanishPen(),
       onBegin: () => { source = handwritingSource(this.plugin.store.documents ?? [], this.docPath, num); },
+      onActionBegin: () => this.ensurePenRevision(),
       onInputActivity: change => this.plugin.store.noteInputActivity?.(change),
       onCommit: (strokes, brush, width, opacity) => this.createPenAnnotation(num, strokes, layerId, notebookId, brush, width, opacity, undefined, source),
+      onPaste: (entries) => this.pastePenAnnotations(num, entries, layerId, notebookId, source),
+      onExcerpt: (_selection, bounds, image) => this.excerptLassoSelection(num, bounds, image),
+      onUnbind: (ids) => this.unbindInkAnnotations(ids),
+      onSelectionChange: (hasSelection) => {
+        if (hasSelection) {
+          for (const [page, other] of this.penControllers) {
+            if (page !== num) other.clearSelection();
+          }
+        }
+      },
       getInk: () => this.getPenRecords(num, layerId).map(record => ({ ...record, strokes: this.reader.projectAnnotationInk(num, record.strokes) })),
       onChange: (changes) => this.commitPenChanges(changes, { project: strokes => this.reader.projectAnnotationInk(num, strokes), unproject: strokes => this.reader.projectAnnotationInk(num, strokes, true) }),
       onUndo: () => this.undoPenChange(), onRedo: () => this.redoPenChange(),
@@ -388,6 +399,9 @@ export class AnnotationController extends BaseAnnotationController {
     this.penControllers.set(num, pc);
   }
 
+  protected clearPenSelections(): void {
+    for (const pc of this.penControllers.values()) pc.clearSelection();
+  }
   protected teardownPen(): void {
     for (const pc of this.penControllers.values()) {
       pc.setActive(false);
@@ -421,6 +435,53 @@ export class AnnotationController extends BaseAnnotationController {
       createdAt: todayStr(),
     };
     this.pushAnnotation(ann);
+  }
+  private pastePenAnnotations(pageNum: number, entries: { strokes: Stroke[][]; brush: "pen" | "highlight"; color?: string; width?: number; opacity?: number }[], layerId: string, documentNotebookId: string, source?: HandwritingSource): void {
+    if (!this.docPath || !entries.length) return;
+    const resolvedSource = source ?? handwritingSource(this.plugin.store.documents ?? [], this.docPath, pageNum);
+    const annotations: Annotation[] = entries.map(entry => ({
+      id: uid("ann"),
+      docPath: this.docPath!,
+      docKind: "pdf",
+      page: pageNum,
+      type: "pen",
+      rects: [],
+      text: "",
+      color: entry.color ?? this.getHandwritingPreset().color,
+      strokes: this.reader.projectAnnotationInk(pageNum, entry.strokes, true),
+      inkBrush: entry.brush,
+      inkRecallPurpose: entry.brush === "highlight" ? this.getHandwritingPreset().recallPurpose ?? "mask" : undefined,
+      inkWidth: entry.width ?? handwritingPresetWidth(this.getHandwritingPreset(), "document"),
+      inkOpacity: entry.opacity ?? (entry.brush === "highlight" ? 0.32 : 1),
+      inkLayerId: layerId,
+      documentNotebookId,
+      ...resolvedSource,
+      createdAt: todayStr(),
+    }));
+    this.pushPastedPenAnnotations(annotations);
+  }
+  private excerptLassoSelection(pageNum: number, bounds: { x: number; y: number; width: number; height: number }, fallbackImage: string): void {
+    if (!this.docPath) return;
+    const rec = this.reader.getPageRecord(pageNum);
+    if (!rec?.viewport) return;
+    const wrapperRect = rec.wrapper.getBoundingClientRect();
+    const canvasRect = rec.canvas.getBoundingClientRect();
+    const client = {
+      left: wrapperRect.left + bounds.x * wrapperRect.width,
+      top: wrapperRect.top + bounds.y * wrapperRect.height,
+      right: wrapperRect.left + (bounds.x + bounds.width) * wrapperRect.width,
+      bottom: wrapperRect.top + (bounds.y + bounds.height) * wrapperRect.height,
+      width: Math.max(4, bounds.width * wrapperRect.width),
+      height: Math.max(4, bounds.height * wrapperRect.height),
+    };
+    const pdfRect = clientRectToPdfRect(client, canvasRect, rec.viewport) ?? { x: bounds.x, y: bounds.y, w: Math.max(0.01, bounds.width), h: Math.max(0.01, bounds.height) };
+    const ix1 = Math.max(client.left, canvasRect.left), iy1 = Math.max(client.top, canvasRect.top);
+    const ix2 = Math.min(client.right, canvasRect.right), iy2 = Math.min(client.bottom, canvasRect.bottom);
+    const captured = ix2 - ix1 > 0 && iy2 - iy1 > 0
+      ? this.captureRegion(pageNum, ix1 - canvasRect.left, iy1 - canvasRect.top, ix2 - ix1, iy2 - iy1)
+      : undefined;
+    const target: SelTarget = { kind: "pdf", pageNum, rects: [pdfRect], pdfGeometry: [{ page: pageNum, rects: [pdfRect] }], pdfCoordinateSpace: "pdf" };
+    this.commitRegion(target, captured || fallbackImage, "");
   }
 
   // ===== 套索/区域摘录 =====
@@ -458,16 +519,19 @@ export class AnnotationController extends BaseAnnotationController {
       this.cleanupLasso = null;
       void this.onLassoPointerUp(ev, pageEl);
     };
+    const blur = () => this.cancelRegionGesture();
     this.cleanupLasso?.();
     this.cleanupLasso = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("blur", blur);
     };
     const cancel = (ev: PointerEvent) => { if (ev.pointerId === pointerId) this.cancelRegionGesture(); };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
     window.addEventListener("pointercancel", cancel);
+    window.addEventListener("blur", blur);
   };
 
   private onLassoPointerMove(e: PointerEvent, pageEl: HTMLElement): void {
@@ -515,9 +579,12 @@ export class AnnotationController extends BaseAnnotationController {
     const pdfRect = clientRectToPdfRect(client, canvas, rec.viewport);
     if (!pdfRect) return;
 
+    const ix1 = Math.max(client.left, canvas.left), iy1 = Math.max(client.top, canvas.top);
+    const ix2 = Math.min(client.right, canvas.right), iy2 = Math.min(client.bottom, canvas.bottom);
+    if (ix2 - ix1 <= 0 || iy2 - iy1 <= 0) return;
+
     // 截图
-    const image = this.captureRegion(pageNum, Math.max(client.left, canvas.left) - canvas.left, Math.max(client.top, canvas.top) - canvas.top,
-      Math.min(client.right, canvas.right) - Math.max(client.left, canvas.left), Math.min(client.bottom, canvas.bottom) - Math.max(client.top, canvas.top));
+    const image = this.captureRegion(pageNum, ix1 - canvas.left, iy1 - canvas.top, ix2 - ix1, iy2 - iy1);
 
     const target: SelTarget = { kind: "pdf", pageNum, rects: [pdfRect], pdfGeometry: [{ page: pageNum, rects: [pdfRect] }], pdfCoordinateSpace: "pdf" };
     if (revision !== this.documentRevision || regionSession !== this.regionSession || docPath !== this.docPath) return;

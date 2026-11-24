@@ -129,10 +129,15 @@ body .ms-image-crop-modal button.ms-image-crop-handle { position:absolute; z-ind
 .ms-pen-overlay[data-tool="erase"] { cursor: cell; }
 .ms-pen-overlay[data-tool="select"] { cursor: crosshair; }
 .ms-pen-selection { fill: transparent; stroke: var(--interactive-accent, #3478f6); stroke-width: 1.5; stroke-dasharray: 5 3; pointer-events: none; }
-.ms-pen-selection-toolbar { display: flex; gap: 4px; align-items: center; }
+.ms-pen-selection-toolbar { display: flex; flex-wrap: wrap; max-width: 100%; box-sizing: border-box; gap: 4px; align-items: center; }
 .ms-pen-selection-toolbar[hidden] { display: none; }
 .ms-pen-selection-toolbar button { padding: 2px 6px; font-size: 12px; line-height: 1.4; border-radius: 4px; border: 1px solid var(--background-modifier-border); background: var(--background-primary); color: var(--text-normal); }
 .ms-pen-selection-toolbar button:hover { background: var(--background-modifier-hover); }
+.ms-pen-selection-extra { display: flex; flex-wrap: wrap; max-width: 100%; box-sizing: border-box; gap: 4px; align-items: center; }
+.ms-pen-selection-extra[hidden] { display: none; }
+.ms-pen-selection-extra button { padding: 2px 6px; font-size: 12px; line-height: 1.4; border-radius: 4px; border: 1px solid var(--background-modifier-border); background: var(--background-primary); color: var(--text-normal); }
+.ms-pen-selection-extra button:hover { background: var(--background-modifier-hover); }
+.ms-pen-selection-extra button:disabled { opacity: 0.45; cursor: not-allowed; }
 .ms-pen-color-palette { display: flex; gap: 4px; padding: 4px; border-radius: 4px; border: 1px solid var(--background-modifier-border); background: var(--background-primary); }
 .ms-pen-color-palette[hidden] { display: none; }
 .ms-pen-color-palette button { width: 16px; height: 16px; padding: 0; border-radius: 50%; border: 1px solid var(--background-modifier-border); }
@@ -250,6 +255,7 @@ body.ms-theme-dark .ms-modal.ms-ink-layer-modal { color: #111; background: #fff;
 .ms-free-overlay-chrome > .ms-free-overlay-tools, .ms-free-overlay-chrome > .ms-free-overlay-resize { pointer-events: auto; }
 .ms-free-overlay-chrome.is-active > .ms-free-overlay-tools, .ms-free-overlay-chrome:focus-within > .ms-free-overlay-tools, .ms-free-overlay-chrome:hover > .ms-free-overlay-tools { display: flex; }
 .ms-free-overlay-chrome.is-active > .ms-free-overlay-resize, .ms-free-overlay-chrome:focus-within > .ms-free-overlay-resize, .ms-free-overlay-chrome:hover > .ms-free-overlay-resize { display: flex; }
+.ms-pen-mode .ms-overlay-handles-layer .ms-free-overlay-tools, .ms-pen-mode .ms-overlay-handles-layer .ms-free-overlay-resize, .ms-pen-mode .ms-free-overlay-chrome > .ms-free-overlay-tools, .ms-pen-mode .ms-free-overlay-chrome > .ms-free-overlay-resize { pointer-events: none; }
 .ms-free-overlay.ms-ink-reference { border-color: transparent; cursor: default; }
 .ms-overlay-text-editor textarea { width: 100%; min-height: 160px; resize: vertical; }
 .ms-overlay-editor-styling { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
