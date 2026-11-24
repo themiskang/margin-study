@@ -689,7 +689,12 @@ export class AnnotationController extends BaseAnnotationController {
     }
     const projected = this.reader.projectAnnotationInk(pageNum, ann.strokes!);
     const entry: PageInkEntry = { ann, strokes: ann.strokes!, projected, fingerprint: this.annotationFingerprint(ann), reference: this.isInkReference(ann), masks: this.appendRecallInkMasks(state.maskLayer, ann, projected, state.width, state.height) };
-    entry.masks.forEach(mask => { mask.classList.toggle("ms-ink-reference", entry.reference); mask.classList.toggle("ms-document-notebook-reference", this.isNotebookReference(ann)); });
+    entry.masks.forEach(mask => {
+      const nbRef = this.isNotebookReference(ann);
+      mask.classList.toggle("ms-ink-reference", entry.reference);
+      mask.classList.toggle("ms-document-notebook-reference", nbRef);
+      this.markReferenceElement(mask, entry.reference || nbRef, "recall-mask");
+    });
     state.entries.push(entry); this.paintRasterEntry(state, entry, true);
   }
 
@@ -710,7 +715,12 @@ export class AnnotationController extends BaseAnnotationController {
     for (const ann of incremental ? [] : visible) {
       const projected = this.reader.projectAnnotationInk(pageNum, ann.strokes!);
       const entry: PageInkEntry = { ann, strokes: ann.strokes!, projected, fingerprint: this.annotationFingerprint(ann), reference: this.isInkReference(ann), masks: this.appendRecallInkMasks(state.maskLayer, ann, projected, state.width, state.height) };
-      entry.masks.forEach(mask => { mask.classList.toggle("ms-ink-reference", entry.reference); mask.classList.toggle("ms-document-notebook-reference", this.isNotebookReference(ann)); });
+      entry.masks.forEach(mask => {
+      const nbRef = this.isNotebookReference(ann);
+      mask.classList.toggle("ms-ink-reference", entry.reference);
+      mask.classList.toggle("ms-document-notebook-reference", nbRef);
+      this.markReferenceElement(mask, entry.reference || nbRef, "recall-mask");
+    });
       state.entries.push(entry); this.paintRasterEntry(state, entry);
     }
   }
@@ -795,7 +805,12 @@ export class AnnotationController extends BaseAnnotationController {
 
     const made: HTMLElement[] = [];
     const finish = () => {
-      made.forEach((element) => element.classList.toggle("ms-document-notebook-reference", this.isNotebookReference(ann)));
+      const nbRef = this.isNotebookReference(ann);
+      made.forEach((element) => {
+        element.classList.toggle("ms-document-notebook-reference", nbRef);
+        const isRef = nbRef || (!!ann.overlay && this.isInkReference(ann));
+        this.markReferenceElement(element, isRef, this.referenceKindFor(ann, element));
+      });
       made.forEach((element) => element.classList.toggle("ms-reference-source", !!(ann as LinkedPageAnnotation).referenceSource));
       this.elMap.set(key, { annId: ann.id, els: made, scale, page: pageNum, fingerprint: this.annotationFingerprint(ann), strokes: ann.strokes });
     };

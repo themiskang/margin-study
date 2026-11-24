@@ -522,7 +522,10 @@ export abstract class BaseAnnotationController {
     } else counter?.remove();
     for (const element of root.querySelectorAll<HTMLElement>("[data-ann-id]")) {
       const ann = displayed.get(element.dataset.annId ?? ""); if (!ann) continue;
-      element.classList.toggle("ms-document-notebook-reference", this.isNotebookReference(ann));
+      const nbRef = this.isNotebookReference(ann);
+      element.classList.toggle("ms-document-notebook-reference", nbRef);
+      const isRef = nbRef || ((ann.type === "pen" || !!ann.overlay || element.hasAttribute("data-recall-ink-mask")) && this.isInkReference(ann));
+      this.markReferenceElement(element, isRef, this.referenceKindFor(ann, element));
       if (element.hasAttribute("data-recall-ink")) continue;
       const occluded = active && (element.hasAttribute("data-recall-ink-mask") ? this.recall.getOption("maskHighlighter") : covered(ann));
       const key = element.dataset.recallKey ?? "excerpt:"+ann.id;
@@ -1138,6 +1141,7 @@ export abstract class BaseAnnotationController {
       }, crop: () => this.cropFreeImage(ann.id), edit: () => this.editFreeOverlay(ann.id), remove: () => this.deleteFreeOverlay(ann.id), undo: () => this.undoOverlayChange(), redo: () => this.redoOverlayChange(), card: () => { const current = this.editableOverlay(ann.id); if (current) this.makeCard(current,"excerpt"); } });
     rendered.element.classList.toggle("ms-ink-reference", readonly);
     rendered.element.style.opacity = String(inkLayerOpacity(readonly));
+    this.markReferenceElement(rendered.element, readonly, this.referenceKindFor(ann, rendered.element));
     this.syncReferenceOpacityToken();
     this.overlayElements.set(rendered.element, rendered.dispose); return rendered.element;
   }
@@ -1742,6 +1746,21 @@ export abstract class BaseAnnotationController {
   }
   protected isAnnotationVisible(ann: Annotation): boolean { const state = this.getDocumentNotebooks(), id = annotationNotebook(ann); return !ann.mediaDeleted && !ann.overlay?.deleted && !this.isBoundToDeletedHost(ann) && (id === state.active || id === state.overlay); }
   protected getAnnotationsForDisplay(): Annotation[] { return this.cache.filter((ann) => this.isAnnotationVisible(ann) && (!ann.overlay || this.isInkVisible(ann))).sort((a,b) => Number(this.isNotebookReference(a)) - Number(this.isNotebookReference(b))).map((ann) => this.mapAnnotationForDisplay(ann)); }
+  protected markReferenceElement(element: HTMLElement, active: boolean, kind: string): void {
+    if (active) element.dataset.msReference = kind;
+    else delete element.dataset.msReference;
+  }
+  protected referenceKindFor(ann: Annotation, element?: HTMLElement): string {
+    if (element?.hasAttribute("data-recall-ink-mask") || element?.classList.contains("ms-ink-recall-mask")) return "recall-mask";
+    if (element?.classList.contains("ms-html-reference-range")) return "html-range";
+    if (ann.overlay) {
+      if (ann.overlay.kind === "image") return this.isNotebookReference(ann) ? "notebook-ink-image" : "overlay-image";
+      return "overlay-text";
+    }
+    if (ann.type === "pen") return "ink";
+    if (ann.type === "region") return "region-excerpt";
+    return "document-notebook";
+  }
   protected syncReferenceOpacityToken(): void {
     if (typeof document !== "undefined") document.documentElement?.style?.setProperty?.("--ms-ink-reference-opacity", String(INK_REFERENCE_OPACITY));
   }
