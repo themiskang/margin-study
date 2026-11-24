@@ -25,7 +25,7 @@ import { StudyWorkspaceView } from "${project}/src/workspace/studyWorkspace";
 import { ReaderView } from "${project}/src/pdf/readerView";
 import {
   createPageCollection, readPageCollection, reorderPageReferences, openPageCollectionDocument,
-  cleanupCreatedPageCollection,
+  cleanupCreatedPageCollection, verifyCreatedCollectionUnchanged,
 } from "${project}/src/documents/pageCollection";
 import * as pageCollectionApi from "${project}/src/documents/pageCollection";
 import { createNotebookBytes } from "${project}/src/documents/notebookFormat";
@@ -637,6 +637,63 @@ async function runAll() {
     }
     assert(wrongCollectionRejected, "token used on wrong collection B was NOT rejected!");
     assert(h.app.vault.getAbstractFileByPath(mergeResultB.file.path) !== null, "wrong-collection token deleted B!");
+    // #8d: Reference isolation — mutating returned object from verifyCreatedCollectionUnchanged MUST NOT rebind internal grant to unrelated TOC collection!
+    const verifiedA: any = await verifyCreatedCollectionUnchanged(h.plugin, mergeResultA.guardSnapshot);
+    const leakedObj = verifiedA.grant ?? verifiedA.snapshot;
+    const liveManifest = await readPageCollection(h.plugin, liveMsref);
+    let mutateThrew = false;
+    try {
+      leakedObj.path = liveMsref.path;
+      leakedObj.collectionId = liveManifest.id;
+      leakedObj.mergeTxId = "rebound-tx";
+    } catch {
+      mutateThrew = true;
+    }
+    let liveTrashCount = 0;
+    const origTrashLive = h.app.vault.trash.bind(h.app.vault);
+    h.app.vault.trash = async (f: TFile, system?: boolean) => {
+      if (f.path === liveMsref.path) liveTrashCount++;
+      return origTrashLive(f, system);
+    };
+    try {
+      let rebindRejected = false;
+      try {
+        await cleanupCreatedPageCollection(h.plugin, {
+          ...mergeResultA.guardSnapshot,
+          path: liveMsref.path,
+          collectionId: liveManifest.id,
+          collection: liveManifest,
+          mergeTxId: leakedObj.mergeTxId,
+          annotations: structuredClone(liveAnns),
+          diskSidecar: liveDiskBefore,
+          meta: structuredClone(h.plugin.store.getDocMeta(liveMsref.path)),
+        });
+      } catch {
+        rebindRejected = true;
+      }
+      assert(mutateThrew || leakedObj.collectionId !== liveManifest.id, "returned grant object was mutable and re-bound to live TOC collection!");
+      assert(rebindRejected, "cleanup after mutating returned grant was NOT rejected!");
+      assert(liveTrashCount === 0, "unrelated TOC collection was trashed! liveTrashCount=" + liveTrashCount);
+      assert(h.app.vault.getAbstractFileByPath(liveMsref.path) !== null, "unrelated TOC collection file deleted!");
+      assert(JSON.parse(await h.app.vault.adapter.read(liveSidecarPath)).annotations.length === 3, "unrelated TOC annotations lost!");
+      assert(h.plugin.store.getDocMeta(liveMsref.path).bookmarks?.includes(1), "unrelated TOC bookmark lost!");
+      assert(h.plugin.store.documents.some((d: any) => d.path === liveMsref.path), "unrelated TOC registration lost!");
+    } finally {
+      h.app.vault.trash = origTrashLive;
+    }
+    // #8e: Digest / mismatched-field submission rejected, target B zero changes
+    let digestMismatchRejected = false;
+    try {
+      await cleanupCreatedPageCollection(h.plugin, {
+        ...mergeResultB.guardSnapshot,
+        collectionId: mergeResultA.guardSnapshot.collectionId,
+      });
+    } catch {
+      digestMismatchRejected = true;
+    }
+    assert(digestMismatchRejected, "mismatched collectionId/digest was NOT rejected!");
+    assert(h.app.vault.getAbstractFileByPath(mergeResultB.file.path) !== null, "target B was modified by mismatched digest submission!");
+
     // #8c: consume A's token once (succeeds), then reuse A's token a 2nd time -> MUST reject
     await cleanupCreatedPageCollection(h.plugin, mergeResultA.guardSnapshot, { studySetId: "set-1" });
     assert(h.app.vault.getAbstractFileByPath(mergeResultA.file.path) === null, "first valid use of A token did not clean A");

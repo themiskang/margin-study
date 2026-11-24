@@ -323,14 +323,26 @@ export async function createPageCollection(plugin: MarginStudyPlugin, options: {
   plugin.store.setActiveStudySet(set.id); plugin.store.registerDocument(path); plugin.store.save(); await plugin.store.flush(); plugin.refreshSidebar(); return file;
 }
 interface MergeCreationGrant {
-  token: string;
-  path: string;
-  collectionId: string;
-  sourcePath: string;
-  mergeTxId: string;
-  used: boolean;
+  readonly token: string;
+  readonly path: string;
+  readonly collectionId: string;
+  readonly sourcePath: string;
+  readonly mergeTxId: string;
+  readonly digest: string;
 }
-const mergeCreationGrants = new WeakMap<MarginStudyPlugin, Map<string, MergeCreationGrant>>();
+export interface VerifiedCollectionSnapshot {
+  readonly path: string;
+  readonly collectionId: string;
+  readonly sourcePath: string;
+  readonly mergeTxId: string;
+  readonly digest: string;
+  readonly used: boolean;
+}
+const mergeCreationGrants = new WeakMap<MarginStudyPlugin, Map<string, Readonly<MergeCreationGrant>>>();
+const consumedMergeTokens = new WeakMap<MarginStudyPlugin, Set<string>>();
+function grantDigest(path: string, collectionId: string, sourcePath: string, mergeTxId: string): string {
+  return sha256Hex(JSON.stringify([path, collectionId, sourcePath, mergeTxId]));
+}
 export interface CreatedCollectionGuardSnapshot {
   path: string;
   token: string;
@@ -360,9 +372,10 @@ async function mintMergeCreationGuard(
   const sidecar = plugin.store.sidecarPath(file.path);
   const diskSidecar = await plugin.app.vault.adapter.exists(sidecar) ? await plugin.app.vault.adapter.read(sidecar) : null;
   const token = uid("merge-token");
+  const digest = grantDigest(file.path, collection.id, sourcePath, mergeTxId);
   let grants = mergeCreationGrants.get(plugin);
   if (!grants) { grants = new Map(); mergeCreationGrants.set(plugin, grants); }
-  grants.set(token, { token, path: file.path, collectionId: collection.id, sourcePath, mergeTxId, used: false });
+  grants.set(token, Object.freeze({ token, path: file.path, collectionId: collection.id, sourcePath, mergeTxId, digest }));
   const documentRecord = structuredClone(plugin.store.documents.find((d) => d.path === file.path));
   return {
     path: file.path,
@@ -422,22 +435,36 @@ export async function recreatePageCollection(
   return { file, guardSnapshot };
 }
 function validateMergeCreationGrant(plugin: MarginStudyPlugin, expected: CreatedCollectionGuardSnapshot): MergeCreationGrant {
-  const grant = mergeCreationGrants.get(plugin)?.get(expected?.token);
-  if (!grant) throw new Error("无效的合并撤销令牌，拒绝清理");
-  if (grant.used) throw new Error("合并撤销令牌已使用，禁止重复使用");
+  const stored = mergeCreationGrants.get(plugin)?.get(expected?.token);
+  if (!stored) throw new Error("无效的合并撤销令牌，拒绝清理");
+  // Copy from the frozen registry record so comparison never depends on any caller-held reference.
+  const copy: MergeCreationGrant = {
+    token: stored.token,
+    path: stored.path,
+    collectionId: stored.collectionId,
+    sourcePath: stored.sourcePath,
+    mergeTxId: stored.mergeTxId,
+    digest: stored.digest,
+  };
+  if (consumedMergeTokens.get(plugin)?.has(copy.token)) throw new Error("合并撤销令牌已使用，禁止重复使用");
+  const expectedDigest = grantDigest(expected.path, expected.collectionId, expected.sourcePath, expected.mergeTxId);
   if (
-    grant.path !== expected.path
-    || grant.collectionId !== expected.collectionId
-    || grant.collectionId !== expected.collection?.id
-    || grant.sourcePath !== expected.sourcePath
-    || grant.mergeTxId !== expected.mergeTxId
+    copy.digest !== expectedDigest
+    || copy.path !== expected.path
+    || copy.collectionId !== expected.collectionId
+    || copy.collectionId !== expected.collection?.id
+    || copy.sourcePath !== expected.sourcePath
+    || copy.mergeTxId !== expected.mergeTxId
   ) {
     throw new Error("合并撤销令牌与目标集合身份不匹配，拒绝清理");
   }
-  return grant;
+  return copy;
 }
-export async function verifyCreatedCollectionUnchanged(plugin: MarginStudyPlugin, expected: CreatedCollectionGuardSnapshot): Promise<{ file: TFile; grant: MergeCreationGrant }> {
-  const grant = validateMergeCreationGrant(plugin, expected);
+export async function verifyCreatedCollectionUnchanged(
+  plugin: MarginStudyPlugin,
+  expected: CreatedCollectionGuardSnapshot,
+): Promise<{ file: TFile; snapshot: VerifiedCollectionSnapshot }> {
+  const copy = validateMergeCreationGrant(plugin, expected);
   const currentFile = plugin.app.vault.getAbstractFileByPath(expected.path);
   if (!(currentFile instanceof TFile)) throw new Error("新建合并文档已不存在，撤销已取消");
   const currentBytes = await plugin.app.vault.readBinary(currentFile);
@@ -445,7 +472,7 @@ export async function verifyCreatedCollectionUnchanged(plugin: MarginStudyPlugin
     throw new Error("新建合并文档内容已被修改，已取消删除以保护您的数据");
   }
   const currentCollection = parsePageCollection(currentBytes);
-  if (currentCollection.id !== grant.collectionId || JSON.stringify(currentCollection) !== JSON.stringify(expected.collection)) {
+  if (currentCollection.id !== copy.collectionId || JSON.stringify(currentCollection) !== JSON.stringify(expected.collection)) {
     throw new Error("新建合并文档页面已被修改，已取消删除以保护您的数据");
   }
   const sidecar = plugin.store.sidecarPath(expected.path);
@@ -458,13 +485,21 @@ export async function verifyCreatedCollectionUnchanged(plugin: MarginStudyPlugin
     throw new Error("新建合并文档批注已被修改，已取消删除以保护您的数据");
   }
   const currentMeta = plugin.store.getDocMeta(expected.path);
-  if (!currentMeta.createdByMergeTxId || currentMeta.createdByMergeTxId !== grant.mergeTxId) {
+  if (!currentMeta.createdByMergeTxId || currentMeta.createdByMergeTxId !== copy.mergeTxId) {
     throw new Error("非本次合并新建的集合（缺少或错配 createdByMergeTxId），拒绝清理");
   }
   if (JSON.stringify(currentMeta) !== JSON.stringify(expected.meta)) {
     throw new Error("新建合并文档书签、折页或图层元数据已被修改，已取消删除以保护您的数据");
   }
-  return { file: currentFile, grant };
+  const snapshot: VerifiedCollectionSnapshot = Object.freeze({
+    path: copy.path,
+    collectionId: copy.collectionId,
+    sourcePath: copy.sourcePath,
+    mergeTxId: copy.mergeTxId,
+    digest: copy.digest,
+    used: consumedMergeTokens.get(plugin)?.has(copy.token) ?? false,
+  });
+  return { file: currentFile, snapshot };
 }
 /** Single two-stage guarded deletion entry: verify bound single-use token + 4-dim -> onClose -> re-verify from disk -> consume token -> trash + guarded Store purge. */
 export async function cleanupCreatedPageCollection(
@@ -482,7 +517,7 @@ export async function cleanupCreatedPageCollection(
   try {
     await verifyCreatedCollectionUnchanged(plugin, expected);
     if (options.beforeVerify) await options.beforeVerify();
-    let verified: { file: TFile; grant: MergeCreationGrant };
+    let verified: { file: TFile; snapshot: VerifiedCollectionSnapshot };
     try {
       verified = await verifyCreatedCollectionUnchanged(plugin, expected);
     } catch (error) {
@@ -492,10 +527,12 @@ export async function cleanupCreatedPageCollection(
       }
       throw error;
     }
-    verified.grant.used = true;
+    let consumed = consumedMergeTokens.get(plugin);
+    if (!consumed) { consumed = new Set(); consumedMergeTokens.set(plugin, consumed); }
+    consumed.add(expected.token);
     await plugin.app.vault.trash(verified.file, true);
     await plugin.store.purgeCreatedCollection(expected.path, {
-      mergeTxId: verified.grant.mergeTxId,
+      mergeTxId: verified.snapshot.mergeTxId,
       diskSidecar: expected.diskSidecar,
       annotations: expected.annotations,
       meta: expected.meta,
