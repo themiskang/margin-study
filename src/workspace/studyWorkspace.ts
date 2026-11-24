@@ -12,7 +12,7 @@ import { openVocabularyLookup } from "../vocabulary/view";
 import { clearOcrBuffer } from "../ocr/ocr";
 import { useStudySidebarSpace } from "./hostSidebars";
 import { DocumentNavigation, documentNavigationTabs } from "./documentNavigation";
-import { appendPageReferences, captureCreatedCollectionGuard, cleanupCreatedPageCollection, createPageCollection, parsePageRange, readPageCollection, recreatePageCollection, restorePageCollectionSnapshot } from "../documents/pageCollection";
+import { appendPageReferences, cleanupCreatedPageCollection, createMergePageCollection, parsePageRange, readPageCollection, recreatePageCollection, restorePageCollectionSnapshot } from "../documents/pageCollection";
 import type { PageReferenceInput } from "../documents/pageCollection";
 import { documentNotebookState } from "../annot/documentNotebooks";
 import type { DocumentNavigationTab } from "./documentNavigation";
@@ -2502,17 +2502,15 @@ export class StudyWorkspaceView extends ItemView {
           }));
           const activeCanvas = this.plugin.store.canvases.find((c) => c.id === this.plugin.store.activeCanvasId);
           const previousLastDocPath = activeCanvas?.lastDocumentPath;
-          const created = await createPageCollection(this.plugin, {
+          const { file: created, guardSnapshot: initialGuard } = await createMergePageCollection(this.plugin, {
             title: `${file.basename} + ${(sourcePath.split("/").pop() ?? "文档").replace(/\.[^.]+$/, "")}`,
+            sourcePath,
             pages: [...targetPageInputs, ...inputs],
-            origin: "document",
-            annotations: "include",
             studySetId: this.plugin.store.activeStudySetId ?? undefined,
-            recordLibraryHistory: false,
           });
           const createdPath = created.path;
           const createdSetId = this.plugin.store.activeStudySetId;
-          let guardSnapshot = await captureCreatedCollectionGuard(this.plugin, created);
+          let guardSnapshot = initialGuard;
           status.textContent = `已新建合并文档「${created.basename}」`;
           new Notice(`已新建合并文档「${created.basename}」`);
           this.refresh(true);
@@ -2552,15 +2550,11 @@ export class StudyWorkspaceView extends ItemView {
             } else {
               const recreated = await recreatePageCollection(
                 this.plugin,
-                createdPath,
-                guardSnapshot.collection,
-                guardSnapshot.meta,
-                guardSnapshot.annotations,
+                guardSnapshot,
                 createdSetId,
-                guardSnapshot.documentRecord,
               );
-              guardSnapshot = await captureCreatedCollectionGuard(this.plugin, recreated);
-              await this.openFile(recreated);
+              guardSnapshot = recreated.guardSnapshot;
+              await this.openFile(recreated.file);
               this.drawTabs();
               this.drawLibrary();
               this.refresh(true);

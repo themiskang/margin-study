@@ -3239,23 +3239,16 @@ export class Store {
   upsertCardTemplate(template: CardTemplate): void { this.mutate("保存卡片模板", () => { const i = this.cardTemplates.findIndex(t => t.id === template.id); if (i < 0) this.cardTemplates.push(clone(template)); else this.cardTemplates[i] = clone(template); }); }
   removeCardTemplate(id: string): void { this.mutate("删除卡片模板", () => { this.cardTemplates = this.cardTemplates.filter(t => t.id !== id); }); }
 
-  private createdCollectionGrants = new Map<string, { token: string; collectionId: string }>();
   getDocMeta(path: string): DocMeta { return this.docMeta[path] ?? {}; }
   updateDocMeta(path: string, patch: Partial<DocMeta>): void { this.docMeta[path] = { ...this.getDocMeta(path), ...patch }; this.save(); }
-  /** Issue a single-session capability token authorizing guarded Undo cleanup of a newly created merge collection. */
-  markCreatedCollection(path: string, collectionId: string): string {
-    const token = uid("merge-grant");
-    this.createdCollectionGrants.set(path, { token, collectionId });
-    return token;
-  }
-  /** Single guarded Store cleanup entry: rejects live documents (not created by this merge or still present in vault). */
+  /** Single guarded Store cleanup entry: requires createdByMergeTxId proof and rejects any live document still in vault. */
   async purgeCreatedCollection(
     path: string,
-    expected: { creationToken: string; collectionId: string; diskSidecar: string | null; annotations: Annotation[]; meta: DocMeta; studySetId?: string | null; previousLastDocPath?: string },
+    expected: { mergeTxId: string; diskSidecar: string | null; annotations: Annotation[]; meta: DocMeta; studySetId?: string | null; previousLastDocPath?: string },
   ): Promise<void> {
-    const grant = this.createdCollectionGrants.get(path);
-    if (!grant || !expected?.creationToken || grant.token !== expected.creationToken || grant.collectionId !== expected.collectionId) {
-      throw new Error("非本次合并新建的活文档，拒绝清理批注、书签与注册信息");
+    const currentMeta = this.getDocMeta(path);
+    if (!expected?.mergeTxId || currentMeta.createdByMergeTxId !== expected.mergeTxId) {
+      throw new Error("非本次合并新建的集合（缺少或错配 createdByMergeTxId），拒绝清理批注、书签与注册信息");
     }
     const adapter = this.host.app.vault.adapter;
     if (this.host.app.vault.getAbstractFileByPath(path) || await adapter.exists(path)) {
@@ -3270,7 +3263,6 @@ export class Store {
     if (JSON.stringify(currentAnnotations) !== JSON.stringify(expected.annotations)) {
       throw new Error("新建合并文档批注已被修改，已取消清理以保护您的数据");
     }
-    const currentMeta = this.getDocMeta(path);
     if (JSON.stringify(currentMeta) !== JSON.stringify(expected.meta)) {
       throw new Error("新建合并文档元数据已被修改，已取消清理以保护您的数据");
     }
@@ -3282,7 +3274,6 @@ export class Store {
     if (set) set.docPaths = set.docPaths.filter(p => p !== path);
     const canvas = this.canvases.find(c => c.id === this.activeCanvasId);
     if (canvas && canvas.lastDocumentPath === path) canvas.lastDocumentPath = expected.previousLastDocPath;
-    this.createdCollectionGrants.delete(path);
     this.save();
     await this.flush();
   }

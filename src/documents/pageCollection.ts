@@ -322,25 +322,21 @@ export async function createPageCollection(plugin: MarginStudyPlugin, options: {
   else plugin.store.updateStudySet(set.id,{docPaths:nextDocPaths});
   plugin.store.setActiveStudySet(set.id); plugin.store.registerDocument(path); plugin.store.save(); await plugin.store.flush(); plugin.refreshSidebar(); return file;
 }
-export async function recreatePageCollection(plugin: MarginStudyPlugin, path: string, collection: PageCollection, metadata: any, annotations: Annotation[], studySetId?: string | null, preservedRecord?: DocumentRecord): Promise<TFile> {
-  if (!vaultPath(path) || !path.toLowerCase().endsWith(`.${PAGE_COLLECTION_EXTENSION}`)) throw new Error("重组文档路径无效");
-  if (await plugin.app.vault.adapter.exists(path)) throw new Error("目标路径已存在同名文件，无法重做合并新建文档");
-  const bytes = collectionBytes(collection);
-  await validateSources(plugin, collection);
-  const parts = path.split("/"); parts.pop(); let prefix = "";
-  for (const part of parts) { prefix = prefix ? `${prefix}/${part}` : part; if (!await plugin.app.vault.adapter.exists(prefix)) await plugin.app.vault.createFolder(prefix); }
-  const file = await plugin.app.vault.createBinary(path, bytes);
-  if (metadata && Object.keys(metadata).length) plugin.store.updateDocMeta(path, structuredClone(metadata));
-  plugin.store.saveAnnotationsDebounced(path, structuredClone(annotations));
-  const selected = studySetId ?? plugin.store.activeStudySetId;
-  const set = plugin.store.studySets.find((item) => item.id === selected);
-  if (set && !set.docPaths.includes(path)) set.docPaths = [...set.docPaths, path];
-  plugin.store.restoreDocumentRecord(path, preservedRecord); plugin.store.save(); await plugin.store.flush(); plugin.refreshSidebar();
-  return file;
+interface MergeCreationGrant {
+  token: string;
+  path: string;
+  collectionId: string;
+  sourcePath: string;
+  mergeTxId: string;
+  used: boolean;
 }
+const mergeCreationGrants = new WeakMap<MarginStudyPlugin, Map<string, MergeCreationGrant>>();
 export interface CreatedCollectionGuardSnapshot {
   path: string;
-  creationToken: string;
+  token: string;
+  collectionId: string;
+  sourcePath: string;
+  mergeTxId: string;
   fileDigest: string;
   collection: PageCollection;
   annotations: Annotation[];
@@ -348,25 +344,100 @@ export interface CreatedCollectionGuardSnapshot {
   meta: DocMeta;
   documentRecord?: DocumentRecord;
 }
-export async function captureCreatedCollectionGuard(plugin: MarginStudyPlugin, file: TFile): Promise<CreatedCollectionGuardSnapshot> {
+/** Module-private single minting point: only called inside createMergePageCollection / recreatePageCollection. */
+async function mintMergeCreationGuard(
+  plugin: MarginStudyPlugin,
+  file: TFile,
+  sourcePath: string,
+  mergeTxId: string,
+): Promise<CreatedCollectionGuardSnapshot> {
+  const meta = structuredClone(plugin.store.getDocMeta(file.path));
+  if (!mergeTxId || meta.createdByMergeTxId !== mergeTxId) {
+    throw new Error("非本次合并新建的集合（缺少 createdByMergeTxId），拒绝铸造撤销令牌");
+  }
   const bytes = await plugin.app.vault.readBinary(file);
   const collection = parsePageCollection(bytes);
   const sidecar = plugin.store.sidecarPath(file.path);
   const diskSidecar = await plugin.app.vault.adapter.exists(sidecar) ? await plugin.app.vault.adapter.read(sidecar) : null;
-  const creationToken = plugin.store.markCreatedCollection(file.path, collection.id);
+  const token = uid("merge-token");
+  let grants = mergeCreationGrants.get(plugin);
+  if (!grants) { grants = new Map(); mergeCreationGrants.set(plugin, grants); }
+  grants.set(token, { token, path: file.path, collectionId: collection.id, sourcePath, mergeTxId, used: false });
   const documentRecord = structuredClone(plugin.store.documents.find((d) => d.path === file.path));
   return {
     path: file.path,
-    creationToken,
+    token,
+    collectionId: collection.id,
+    sourcePath,
+    mergeTxId,
     fileDigest: sha256Hex(bytes),
     collection,
     annotations: structuredClone(await plugin.store.loadAnnotations(file.path)),
     diskSidecar,
-    meta: structuredClone(plugin.store.getDocMeta(file.path)),
+    meta,
     documentRecord,
   };
 }
-export async function verifyCreatedCollectionUnchanged(plugin: MarginStudyPlugin, expected: CreatedCollectionGuardSnapshot): Promise<TFile> {
+/** Single merge-creation entry: stamps createdByMergeTxId and mints a bound single-use undo token in the same transaction. */
+export async function createMergePageCollection(
+  plugin: MarginStudyPlugin,
+  options: { title: string; sourcePath: string; pages: PageReferenceInput[]; studySetId?: string; folder?: string },
+): Promise<{ file: TFile; guardSnapshot: CreatedCollectionGuardSnapshot }> {
+  const mergeTxId = uid("merge-tx");
+  const file = await createPageCollection(plugin, {
+    title: options.title,
+    pages: options.pages,
+    origin: "document",
+    annotations: "include",
+    studySetId: options.studySetId,
+    folder: options.folder,
+    recordLibraryHistory: false,
+  });
+  plugin.store.updateDocMeta(file.path, { createdByMergeTxId: mergeTxId });
+  await plugin.store.flush();
+  const guardSnapshot = await mintMergeCreationGuard(plugin, file, options.sourcePath, mergeTxId);
+  return { file, guardSnapshot };
+}
+export async function recreatePageCollection(
+  plugin: MarginStudyPlugin,
+  expected: CreatedCollectionGuardSnapshot,
+  studySetId?: string | null,
+): Promise<{ file: TFile; guardSnapshot: CreatedCollectionGuardSnapshot }> {
+  const path = expected.path;
+  if (!vaultPath(path) || !path.toLowerCase().endsWith(`.${PAGE_COLLECTION_EXTENSION}`)) throw new Error("重组文档路径无效");
+  if (!expected.mergeTxId || expected.meta?.createdByMergeTxId !== expected.mergeTxId) throw new Error("缺少有效的合并创建证据，无法重做");
+  if (await plugin.app.vault.adapter.exists(path)) throw new Error("目标路径已存在同名文件，无法重做合并新建文档");
+  const bytes = collectionBytes(expected.collection);
+  await validateSources(plugin, expected.collection);
+  const parts = path.split("/"); parts.pop(); let prefix = "";
+  for (const part of parts) { prefix = prefix ? `${prefix}/${part}` : part; if (!await plugin.app.vault.adapter.exists(prefix)) await plugin.app.vault.createFolder(prefix); }
+  const file = await plugin.app.vault.createBinary(path, bytes);
+  if (expected.meta && Object.keys(expected.meta).length) plugin.store.updateDocMeta(path, structuredClone(expected.meta));
+  plugin.store.saveAnnotationsDebounced(path, structuredClone(expected.annotations));
+  const selected = studySetId ?? plugin.store.activeStudySetId;
+  const set = plugin.store.studySets.find((item) => item.id === selected);
+  if (set && !set.docPaths.includes(path)) set.docPaths = [...set.docPaths, path];
+  plugin.store.restoreDocumentRecord(path, expected.documentRecord); plugin.store.save(); await plugin.store.flush(); plugin.refreshSidebar();
+  const guardSnapshot = await mintMergeCreationGuard(plugin, file, expected.sourcePath, expected.mergeTxId);
+  return { file, guardSnapshot };
+}
+function validateMergeCreationGrant(plugin: MarginStudyPlugin, expected: CreatedCollectionGuardSnapshot): MergeCreationGrant {
+  const grant = mergeCreationGrants.get(plugin)?.get(expected?.token);
+  if (!grant) throw new Error("无效的合并撤销令牌，拒绝清理");
+  if (grant.used) throw new Error("合并撤销令牌已使用，禁止重复使用");
+  if (
+    grant.path !== expected.path
+    || grant.collectionId !== expected.collectionId
+    || grant.collectionId !== expected.collection?.id
+    || grant.sourcePath !== expected.sourcePath
+    || grant.mergeTxId !== expected.mergeTxId
+  ) {
+    throw new Error("合并撤销令牌与目标集合身份不匹配，拒绝清理");
+  }
+  return grant;
+}
+export async function verifyCreatedCollectionUnchanged(plugin: MarginStudyPlugin, expected: CreatedCollectionGuardSnapshot): Promise<{ file: TFile; grant: MergeCreationGrant }> {
+  const grant = validateMergeCreationGrant(plugin, expected);
   const currentFile = plugin.app.vault.getAbstractFileByPath(expected.path);
   if (!(currentFile instanceof TFile)) throw new Error("新建合并文档已不存在，撤销已取消");
   const currentBytes = await plugin.app.vault.readBinary(currentFile);
@@ -374,7 +445,7 @@ export async function verifyCreatedCollectionUnchanged(plugin: MarginStudyPlugin
     throw new Error("新建合并文档内容已被修改，已取消删除以保护您的数据");
   }
   const currentCollection = parsePageCollection(currentBytes);
-  if (JSON.stringify(currentCollection) !== JSON.stringify(expected.collection)) {
+  if (currentCollection.id !== grant.collectionId || JSON.stringify(currentCollection) !== JSON.stringify(expected.collection)) {
     throw new Error("新建合并文档页面已被修改，已取消删除以保护您的数据");
   }
   const sidecar = plugin.store.sidecarPath(expected.path);
@@ -387,12 +458,15 @@ export async function verifyCreatedCollectionUnchanged(plugin: MarginStudyPlugin
     throw new Error("新建合并文档批注已被修改，已取消删除以保护您的数据");
   }
   const currentMeta = plugin.store.getDocMeta(expected.path);
+  if (!currentMeta.createdByMergeTxId || currentMeta.createdByMergeTxId !== grant.mergeTxId) {
+    throw new Error("非本次合并新建的集合（缺少或错配 createdByMergeTxId），拒绝清理");
+  }
   if (JSON.stringify(currentMeta) !== JSON.stringify(expected.meta)) {
     throw new Error("新建合并文档书签、折页或图层元数据已被修改，已取消删除以保护您的数据");
   }
-  return currentFile;
+  return { file: currentFile, grant };
 }
-/** Single two-stage guarded deletion entry: verify -> close views (onClose) -> re-verify from disk -> trash + guarded Store purge. */
+/** Single two-stage guarded deletion entry: verify bound single-use token + 4-dim -> onClose -> re-verify from disk -> consume token -> trash + guarded Store purge. */
 export async function cleanupCreatedPageCollection(
   plugin: MarginStudyPlugin,
   expected: CreatedCollectionGuardSnapshot,
@@ -408,9 +482,9 @@ export async function cleanupCreatedPageCollection(
   try {
     await verifyCreatedCollectionUnchanged(plugin, expected);
     if (options.beforeVerify) await options.beforeVerify();
-    let currentFile: TFile;
+    let verified: { file: TFile; grant: MergeCreationGrant };
     try {
-      currentFile = await verifyCreatedCollectionUnchanged(plugin, expected);
+      verified = await verifyCreatedCollectionUnchanged(plugin, expected);
     } catch (error) {
       const existing = plugin.app.vault.getAbstractFileByPath(expected.path);
       if (existing instanceof TFile && options.onConflictAfterClose) {
@@ -418,10 +492,10 @@ export async function cleanupCreatedPageCollection(
       }
       throw error;
     }
-    await plugin.app.vault.trash(currentFile, true);
+    verified.grant.used = true;
+    await plugin.app.vault.trash(verified.file, true);
     await plugin.store.purgeCreatedCollection(expected.path, {
-      creationToken: expected.creationToken,
-      collectionId: expected.collection.id,
+      mergeTxId: verified.grant.mergeTxId,
       diskSidecar: expected.diskSidecar,
       annotations: expected.annotations,
       meta: expected.meta,

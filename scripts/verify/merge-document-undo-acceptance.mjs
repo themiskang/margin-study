@@ -25,7 +25,9 @@ import { StudyWorkspaceView } from "${project}/src/workspace/studyWorkspace";
 import { ReaderView } from "${project}/src/pdf/readerView";
 import {
   createPageCollection, readPageCollection, reorderPageReferences, openPageCollectionDocument,
+  cleanupCreatedPageCollection,
 } from "${project}/src/documents/pageCollection";
+import * as pageCollectionApi from "${project}/src/documents/pageCollection";
 import { createNotebookBytes } from "${project}/src/documents/notebookFormat";
 
 (HTMLElement.prototype as any).empty = function () { this.replaceChildren(); };
@@ -582,6 +584,71 @@ async function runAll() {
     assert(liveDiskAfterCount === 3, "live-document bypass #7 wiped disk annotations: 3->" + liveDiskAfterCount);
     assert(h.plugin.store.getDocMeta(liveMsref.path).bookmarks?.includes(1), "live-document bypass #7 wiped bookmark!");
     assert(h.plugin.store.documents.some((d: any) => d.path === liveMsref.path), "live-document bypass #7 wiped documents registration!");
+
+    // Token hardening #8a: TOC collection MUST NOT be able to mint a token (no public mint API; forged cleanup rejected)
+    assert(typeof (pageCollectionApi as any).captureCreatedCollectionGuard === "undefined", "public captureCreatedCollectionGuard mint API still exposed (can mint token for TOC collection)!");
+    assert(typeof (h.plugin.store as any).markCreatedCollection === "undefined", "public Store.markCreatedCollection mint API still exposed!");
+    assert(!h.plugin.store.getDocMeta(liveMsref.path).createdByMergeTxId, "TOC collection unexpectedly has createdByMergeTxId");
+    let tocCleanupRejected = false;
+    try {
+      await cleanupCreatedPageCollection(h.plugin, {
+        path: liveMsref.path,
+        token: "forged-token",
+        mergeTxId: "forged-tx",
+        sourcePath: h.srcPdf.path,
+        fileDigest: "forged",
+        collection: await readPageCollection(h.plugin, liveMsref),
+        annotations: structuredClone(liveAnns),
+        diskSidecar: liveDiskBefore,
+        meta: liveMetaBefore,
+      } as any);
+    } catch {
+      tocCleanupRejected = true;
+    }
+    assert(tocCleanupRejected, "forged cleanup on TOC collection was NOT rejected!");
+    assert(h.app.vault.getAbstractFileByPath(liveMsref.path) !== null, "TOC collection file was deleted!");
+    assert(JSON.parse(await h.app.vault.adapter.read(liveSidecarPath)).annotations.length === 3, "TOC collection annotations were lost!");
+    assert(h.plugin.store.getDocMeta(liveMsref.path).bookmarks?.includes(1), "TOC collection bookmark was lost!");
+
+    // Token hardening #8b & #8c: createMergePageCollection -> wrong collectionId rejected & single-use reuse rejected
+    const mergeResultA = await (pageCollectionApi as any).createMergePageCollection(h.plugin, {
+      title: "Token Test A",
+      sourcePath: h.srcPdf.path,
+      pages: [{ sourcePath: h.srcPdf.path, sourcePage: 1, sourceNotebookId: "nb-src", annotations: "include", origin: "document" }],
+      studySetId: "set-1",
+    });
+    const mergeResultB = await (pageCollectionApi as any).createMergePageCollection(h.plugin, {
+      title: "Token Test B",
+      sourcePath: h.srcPdf.path,
+      pages: [{ sourcePath: h.srcPdf.path, sourcePage: 1, sourceNotebookId: "nb-src", annotations: "include", origin: "document" }],
+      studySetId: "set-1",
+    });
+    assert(!!h.plugin.store.getDocMeta(mergeResultA.file.path).createdByMergeTxId, "merge collection A missing createdByMergeTxId");
+    // #8b: use A's token against B's collection -> MUST reject, B untouched
+    let wrongCollectionRejected = false;
+    try {
+      await cleanupCreatedPageCollection(h.plugin, {
+        ...mergeResultB.guardSnapshot,
+        token: mergeResultA.guardSnapshot.token,
+        mergeTxId: mergeResultA.guardSnapshot.mergeTxId,
+      });
+    } catch {
+      wrongCollectionRejected = true;
+    }
+    assert(wrongCollectionRejected, "token used on wrong collection B was NOT rejected!");
+    assert(h.app.vault.getAbstractFileByPath(mergeResultB.file.path) !== null, "wrong-collection token deleted B!");
+    // #8c: consume A's token once (succeeds), then reuse A's token a 2nd time -> MUST reject
+    await cleanupCreatedPageCollection(h.plugin, mergeResultA.guardSnapshot, { studySetId: "set-1" });
+    assert(h.app.vault.getAbstractFileByPath(mergeResultA.file.path) === null, "first valid use of A token did not clean A");
+    let reuseRejected = false;
+    try {
+      await cleanupCreatedPageCollection(h.plugin, mergeResultA.guardSnapshot, { studySetId: "set-1" });
+    } catch {
+      reuseRejected = true;
+    }
+    assert(reuseRejected, "reused token was NOT rejected on 2nd call!");
+    // Clean up B cleanly
+    await cleanupCreatedPageCollection(h.plugin, mergeResultB.guardSnapshot, { studySetId: "set-1" });
 
     // Source & target original PDFs SHA-256 & annotations untouched
     assert(bytesSig(h.sources.get(h.srcPdf.path)!.binary) === srcSigBefore, "src PDF bytes changed");
