@@ -176,7 +176,13 @@ function inspectCssOpacityValue(rawVal) {
 }
 
 function unwrapExpr(node) {
-  while (node && (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isNonNullExpression(node))) {
+  while (node && (
+    ts.isParenthesizedExpression(node) ||
+    ts.isAsExpression(node) ||
+    ts.isTypeAssertionExpression(node) ||
+    ts.isSatisfiesExpression(node) ||
+    ts.isNonNullExpression(node)
+  )) {
     node = node.expression;
   }
   return node;
@@ -222,40 +228,142 @@ function isConstVariableDeclaration(varDecl) {
   return !!list && ts.isVariableDeclarationList(list) && Boolean(list.flags & ts.NodeFlags.Const);
 }
 
+function isUnshadowedGlobal(ident, checker, baseDir) {
+  const sym = checker.getSymbolAtLocation(ident);
+  if (!sym) return true;
+  const decls = sym.getDeclarations() ?? [];
+  return !decls.some(d => !d.getSourceFile().isDeclarationFile && resolve(d.getSourceFile().fileName).startsWith(resolve(baseDir, "src")));
+}
+
 /**
- * Pure TypeChecker semantic resolver: follows imports, re-export chains, namespace
- * member access (`G.INK_REFERENCE_OPACITY`), destructuring aliases (`const { INK_REFERENCE_OPACITY: X } = G`),
- * renamed imports (`import { INK_REFERENCE_OPACITY as Y }`), and const aliases to verify
- * the final declaration is `src/annot/penGeometry.ts:INK_REFERENCE_OPACITY`.
+ * Resolve a runtime object expression (after stripping all type assertions/parens/non-null)
+ * and look up property `key` ONLY from its true runtime module/object symbol, NEVER from an asserted type.
+ */
+function resolvePropertyOnRuntimeObject(objNode, key, checker, baseDir, seen) {
+  const rawObj = unwrapExpr(objNode);
+  if (!rawObj) return { ok: false, reason: "缺少对象表达式" };
+
+  // Follow const alias of an object (e.g. `const M = G` or `const M = F as typeof G`)
+  if (ts.isIdentifier(rawObj)) {
+    const rawSym = checker.getSymbolAtLocation(rawObj);
+    const targetSym = followAliasSymbol(rawSym, checker);
+    const decl = targetSym?.getDeclarations()?.[0];
+    if (decl && ts.isVariableDeclaration(decl) && isConstVariableDeclaration(decl) && decl.initializer && !seen.has(decl.initializer)) {
+      seen.add(decl.initializer);
+      return resolvePropertyOnRuntimeObject(decl.initializer, key, checker, baseDir, seen);
+    }
+    // True module namespace import (`import * as G from "..."`)
+    if (targetSym && (targetSym.flags & ts.SymbolFlags.ValueModule)) {
+      const exports = checker.getExportsOfModule(targetSym);
+      const member = exports.find(s => s.name === key);
+      const resolved = followAliasSymbol(member, checker);
+      if (isCanonicalDeclaration(resolved, baseDir)) return { ok: true };
+      return {
+        ok: false,
+        reason: `模块成员 ${rawObj.getText()}.${key} 解析来源为 ${describeSymbolLocation(resolved ?? targetSym, baseDir)}，非规范来源 ${CANONICAL_SOURCE_FILE}:${CANONICAL_CONST_NAME}`,
+      };
+    }
+    return {
+      ok: false,
+      reason: `对象 ${rawObj.getText()} 解析来源为 ${describeSymbolLocation(targetSym, baseDir)}，非规范模块来源 ${CANONICAL_SOURCE_FILE}:${CANONICAL_CONST_NAME}`,
+    };
+  }
+
+  // If rawObj is itself a property/element access (e.g. `(F.INK_REFERENCE_OPACITY as typeof G)['INK_REFERENCE_OPACITY']`),
+  // report the real underlying symbol location (e.g. fakeOpacity.ts) and reject!
+  if (ts.isPropertyAccessExpression(rawObj)) {
+    const rawSym = followAliasSymbol(checker.getSymbolAtLocation(rawObj.name) ?? checker.getSymbolAtLocation(rawObj), checker);
+    return {
+      ok: false,
+      reason: `类型断言掩盖底层取值 ${rawObj.getText()}（真实来源 ${describeSymbolLocation(rawSym, baseDir)}），非规范来源 ${CANONICAL_SOURCE_FILE}:${CANONICAL_CONST_NAME}`,
+    };
+  }
+
+  return {
+    ok: false,
+    reason: `对象表达式 ${rawObj.getText()} 无法在剥离类型断言后解析到规范模块 ${CANONICAL_SOURCE_FILE}`,
+  };
+}
+
+/**
+ * Pure TypeChecker semantic resolver over VALUE expressions (never asserted types):
+ * - Strips type assertions (`as`, `<T>`, `satisfies`), parens, `!`, `String(...)`, `Number(...)`,
+ *   `.toString()`, and pure template interpolation `` `${x}` ``.
+ * - Checks EVERY branch of `??`, `||`, and `cond ? a : b`.
+ * - Resolves imports, re-export chains, namespace members (`G.INK_REFERENCE_OPACITY`),
+ *   element access (`G["INK_REFERENCE_OPACITY"]`), destructuring aliases, and const aliases
+ *   strictly against `src/annot/penGeometry.ts:INK_REFERENCE_OPACITY`.
  */
 function resolveExprToCanonical(node, checker, baseDir, seen = new Set()) {
   const expr = unwrapExpr(node);
   if (!expr || seen.has(expr)) return { ok: false, reason: "缺少或循环表达式" };
   seen.add(expr);
 
-  // 1. Property access: e.g. G.INK_REFERENCE_OPACITY
+  // 0a. String(x) / Number(x) wrapper calls
+  if (
+    ts.isCallExpression(expr) &&
+    ts.isIdentifier(expr.expression) &&
+    (expr.expression.text === "String" || expr.expression.text === "Number") &&
+    expr.arguments.length === 1
+  ) {
+    if (!isUnshadowedGlobal(expr.expression, checker, baseDir)) {
+      return { ok: false, reason: `${expr.expression.text} 标识符被局部遮蔽` };
+    }
+    return resolveExprToCanonical(expr.arguments[0], checker, baseDir, seen);
+  }
+
+  // 0b. x.toString() wrapper call
+  if (
+    ts.isCallExpression(expr) &&
+    ts.isPropertyAccessExpression(expr.expression) &&
+    expr.expression.name.text === "toString" &&
+    expr.arguments.length === 0
+  ) {
+    return resolveExprToCanonical(expr.expression.expression, checker, baseDir, seen);
+  }
+
+  // 0c. Pure template interpolation `${x}`
+  if (
+    ts.isTemplateExpression(expr) &&
+    expr.head.text === "" &&
+    expr.templateSpans.length === 1 &&
+    expr.templateSpans[0].literal.text === ""
+  ) {
+    return resolveExprToCanonical(expr.templateSpans[0].expression, checker, baseDir, seen);
+  }
+
+  // 0d. Branching: x ?? y, x || y -> BOTH branches must resolve to canonical
+  if (
+    ts.isBinaryExpression(expr) &&
+    (expr.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken ||
+     expr.operatorToken.kind === ts.SyntaxKind.BarBarToken)
+  ) {
+    const left = resolveExprToCanonical(expr.left, checker, baseDir, new Set(seen));
+    if (!left.ok) return left;
+    const right = resolveExprToCanonical(expr.right, checker, baseDir, new Set(seen));
+    if (!right.ok) return right;
+    return { ok: true };
+  }
+
+  // 0e. Conditional: cond ? a : b -> BOTH branches must resolve to canonical
+  if (ts.isConditionalExpression(expr)) {
+    const t = resolveExprToCanonical(expr.whenTrue, checker, baseDir, new Set(seen));
+    if (!t.ok) return t;
+    const f = resolveExprToCanonical(expr.whenFalse, checker, baseDir, new Set(seen));
+    if (!f.ok) return f;
+    return { ok: true };
+  }
+
+  // 1. Property access: e.g. G.INK_REFERENCE_OPACITY (must check runtime object, not asserted type)
   if (ts.isPropertyAccessExpression(expr)) {
-    const rawSym = checker.getSymbolAtLocation(expr.name) ?? checker.getSymbolAtLocation(expr);
-    const target = followAliasSymbol(rawSym, checker);
-    if (isCanonicalDeclaration(target, baseDir)) return { ok: true };
-    return {
-      ok: false,
-      reason: `成员表达式 ${expr.getText()} 解析来源为 ${describeSymbolLocation(target, baseDir)}，非规范来源 ${CANONICAL_SOURCE_FILE}:${CANONICAL_CONST_NAME}`,
-    };
+    return resolvePropertyOnRuntimeObject(expr.expression, expr.name.text, checker, baseDir, seen);
   }
 
   // 2. Element access with static string key: e.g. G["INK_REFERENCE_OPACITY"]
   if (ts.isElementAccessExpression(expr)) {
     const key = stringLiteralValue(expr.argumentExpression);
     if (key) {
-      const objType = checker.getTypeAtLocation(expr.expression);
-      const propSym = objType?.getProperty(key);
-      const target = followAliasSymbol(propSym, checker);
-      if (isCanonicalDeclaration(target, baseDir)) return { ok: true };
-      return {
-        ok: false,
-        reason: `索引表达式 ${expr.getText()} 解析来源为 ${describeSymbolLocation(target, baseDir)}，非规范来源 ${CANONICAL_SOURCE_FILE}:${CANONICAL_CONST_NAME}`,
-      };
+      return resolvePropertyOnRuntimeObject(expr.expression, key, checker, baseDir, seen);
     }
     return { ok: false, reason: `动态索引表达式 ${expr.getText()} 无法静态解析到规范常量` };
   }
@@ -267,7 +375,6 @@ function resolveExprToCanonical(node, checker, baseDir, seen = new Set()) {
     const target = followAliasSymbol(rawSym, checker);
     if (isCanonicalDeclaration(target, baseDir)) return { ok: true };
 
-    // Follow non-parameter `const` destructuring binding or `const` variable alias
     const decl = target?.getDeclarations()?.[0];
     if (decl && ts.isBindingElement(decl)) {
       const pattern = decl.parent;
@@ -276,20 +383,14 @@ function resolveExprToCanonical(node, checker, baseDir, seen = new Set()) {
         const propNameNode = decl.propertyName ?? decl.name;
         const propName = ts.isIdentifier(propNameNode) ? propNameNode.text : stringLiteralValue(propNameNode);
         if (propName) {
-          const objType = checker.getTypeAtLocation(varDecl.initializer);
-          const propSym = objType?.getProperty(propName);
-          const resolvedProp = followAliasSymbol(propSym, checker);
-          if (isCanonicalDeclaration(resolvedProp, baseDir)) return { ok: true };
-          return {
-            ok: false,
-            reason: `解构别名 ${expr.text} 解析来源为 ${describeSymbolLocation(resolvedProp, baseDir)}，非规范来源 ${CANONICAL_SOURCE_FILE}:${CANONICAL_CONST_NAME}`,
-          };
+          return resolvePropertyOnRuntimeObject(varDecl.initializer, propName, checker, baseDir, seen);
         }
       }
     }
     if (decl && ts.isVariableDeclaration(decl) && isConstVariableDeclaration(decl) && decl.initializer) {
       const initCheck = resolveExprToCanonical(decl.initializer, checker, baseDir, seen);
       if (initCheck.ok) return { ok: true };
+      return initCheck;
     }
 
     return {
@@ -301,31 +402,8 @@ function resolveExprToCanonical(node, checker, baseDir, seen = new Set()) {
   return { ok: false, reason: `定义点写入 ${TOKEN_NAME} 禁止字面量/非常量表达式，必须引用规范常量 ${CANONICAL_CONST_NAME}` };
 }
 
-/**
- * Resolve producer argument via TypeScript TypeChecker:
- * unwraps optional `String(...)` (with unshadowed global `String`) and delegates
- * purely to semantic symbol resolution against `src/annot/penGeometry.ts:INK_REFERENCE_OPACITY`.
- */
 function verifyCanonicalProducerArg(node, checker, baseDir) {
-  const expr = unwrapExpr(node);
-  if (!expr) return { ok: false, reason: "缺少参数表达式" };
-  let valueExpr = expr;
-  if (
-    ts.isCallExpression(expr) &&
-    ts.isIdentifier(expr.expression) &&
-    expr.expression.text === "String" &&
-    expr.arguments.length === 1
-  ) {
-    const strSym = checker.getSymbolAtLocation(expr.expression);
-    if (strSym) {
-      const strDecls = strSym.getDeclarations() ?? [];
-      if (strDecls.some(d => !d.getSourceFile().isDeclarationFile && resolve(d.getSourceFile().fileName).startsWith(resolve(baseDir, "src")))) {
-        return { ok: false, reason: "String 标识符被局部遮蔽" };
-      }
-    }
-    valueExpr = expr.arguments[0];
-  }
-  return resolveExprToCanonical(valueExpr, checker, baseDir);
+  return resolveExprToCanonical(node, checker, baseDir);
 }
 
 export async function checkReferenceOpacityStatic(baseDir = root) {
