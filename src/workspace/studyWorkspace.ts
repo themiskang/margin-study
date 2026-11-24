@@ -12,7 +12,9 @@ import { openVocabularyLookup } from "../vocabulary/view";
 import { clearOcrBuffer } from "../ocr/ocr";
 import { useStudySidebarSpace } from "./hostSidebars";
 import { DocumentNavigation, documentNavigationTabs } from "./documentNavigation";
-import { appendPageReferences, createPageCollection, parsePageRange } from "../documents/pageCollection";
+import { appendPageReferences, cleanupCreatedPageCollection, createMergePageCollection, parsePageRange, readPageCollection, recreatePageCollection, restorePageCollectionSnapshot } from "../documents/pageCollection";
+import type { PageReferenceInput } from "../documents/pageCollection";
+import { documentNotebookState } from "../annot/documentNotebooks";
 import type { DocumentNavigationTab } from "./documentNavigation";
 import type MarginStudyPlugin from "../main";
 import { handwritingPresets } from "../annot/handwritingPresets";
@@ -125,8 +127,11 @@ export class StudyWorkspaceView extends ItemView {
   private contextSource: "reader" | "mindmap" | "note" | null = null;
   private readerHandwritingDisposers:(()=>void)[]=[];
   private syncingHandwriting=false;
-  private historyScope:"reader"|"library"="library";
+  private historyScope:"reader"|"library"|"workspace"="library";
   private libraryHistorySignature="";
+  private workspaceUndo: { label: string; apply: (redo: boolean) => Promise<void> }[] = [];
+  private workspaceRedo: { label: string; apply: (redo: boolean) => Promise<void> }[] = [];
+  private applyingWorkspaceHistory = false;
   private undoButton:HTMLButtonElement|null=null;
   private redoButton:HTMLButtonElement|null=null;
   private auxiliaryKind = "";
@@ -688,17 +693,76 @@ export class StudyWorkspaceView extends ItemView {
     if (active !== undefined) button.setAttribute("aria-pressed", String(active));
     button.style.setProperty("padding", "5px", "important");setNativeIcon(button, icon); button.addEventListener("click", callback); return button;
   }
+  private getWorkspaceEditHistoryState(): { canUndo: boolean; canRedo: boolean; undoLabel?: string; redoLabel?: string } {
+    return {
+      canUndo: !this.applyingWorkspaceHistory && this.workspaceUndo.length > 0,
+      canRedo: !this.applyingWorkspaceHistory && this.workspaceRedo.length > 0,
+      undoLabel: this.workspaceUndo[this.workspaceUndo.length - 1]?.label,
+      redoLabel: this.workspaceRedo[this.workspaceRedo.length - 1]?.label,
+    };
+  }
+  private recordWorkspaceEdit(label: string, apply: (redo: boolean) => Promise<void>): void {
+    this.workspaceUndo.push({ label, apply });
+    if (this.workspaceUndo.length > 40) this.workspaceUndo.shift();
+    this.workspaceRedo = [];
+    this.historyScope = "workspace";
+    this.syncHistoryButtons();
+  }
+  private async applyWorkspaceHistory(redo: boolean): Promise<void> {
+    if (this.closed || this.applyingWorkspaceHistory) return;
+    const source = redo ? this.workspaceRedo : this.workspaceUndo;
+    const target = redo ? this.workspaceUndo : this.workspaceRedo;
+    const change = source[source.length - 1];
+    if (!change) return;
+    this.applyingWorkspaceHistory = true;
+    this.syncHistoryButtons();
+    try {
+      await change.apply(redo);
+      if (this.closed) return;
+      source.pop();
+      target.push(change);
+      this.historyScope = "workspace";
+    } catch (error) {
+      new Notice(error instanceof Error ? error.message : String(error));
+    } finally {
+      this.applyingWorkspaceHistory = false;
+      this.syncHistoryButtons();
+      this.scheduleRefresh();
+    }
+  }
+  private async refreshOpenPageCollection(path: string, preserveEditHistory = true): Promise<void> {
+    const tasks: Promise<void>[] = [];
+    if (this.reader instanceof ReaderView && this.reader.getFilePath() === path) {
+      tasks.push(this.reader.refreshPageCollection(undefined, preserveEditHistory));
+    }
+    for (const item of this.comparisons) {
+      if (item.reader instanceof ReaderView && item.reader.getFilePath() === path) {
+        tasks.push(item.reader.refreshPageCollection(undefined, preserveEditHistory));
+      }
+    }
+    await Promise.all(tasks);
+  }
   private syncHistoryButtons():void {
-    const state=this.historyScope==="reader"?this.reader?.getEditHistoryState():this.plugin.store.getLibraryHistoryState();
-    if(this.undoButton){this.undoButton.disabled=!state?.canUndo;this.undoButton.title=state?.undoLabel?"撤销"+state.undoLabel:this.historyScope==="reader"?"没有可撤销的手写、批注或页编辑":"没有可撤销的卡片或脑图变更";}
-    if(this.redoButton){this.redoButton.disabled=!state?.canRedo;this.redoButton.title=state?.redoLabel?"重做"+state.redoLabel:this.historyScope==="reader"?"没有可重做的手写、批注或页编辑":"没有可重做的卡片或脑图变更";}
+    const state=this.currentHistoryState();
+    const isLibrary=this.historyScope==="library";
+    if(this.undoButton){this.undoButton.disabled=!state?.canUndo;this.undoButton.title=state?.undoLabel?"撤销"+state.undoLabel:!isLibrary?"没有可撤销的手写、批注或页编辑":"没有可撤销的卡片或脑图变更";}
+    if(this.redoButton){this.redoButton.disabled=!state?.canRedo;this.redoButton.title=state?.redoLabel?"重做"+state.redoLabel:!isLibrary?"没有可重做的手写、批注或页编辑":"没有可重做的卡片或脑图变更";}
     const undo=this.bottomCapsule?.querySelector<HTMLButtonElement>('[data-bottom-action="undo"]'),redo=this.bottomCapsule?.querySelector<HTMLButtonElement>('[data-bottom-action="redo"]');
     if(undo){undo.disabled=!state?.canUndo;undo.title=this.undoButton?.title??"撤销";}
     if(redo){redo.disabled=!state?.canRedo;redo.title=this.redoButton?.title??"重做";}
   }
-  private applyHistory(redo:boolean):void {
-    if(this.historyScope==="reader"){if(redo)this.reader?.redoLastEdit();else this.reader?.undoLastEdit();}
-    else{if(redo)this.plugin.store.redoLibraryChange();else this.plugin.store.undoLibraryChange();}
+  private async applyHistory(redo:boolean):Promise<void> {
+    if(this.historyScope==="library"){if(redo)this.plugin.store.redoLibraryChange();else this.plugin.store.undoLibraryChange();}
+    else if(this.historyScope==="workspace"){
+      const ws=this.getWorkspaceEditHistoryState();
+      if(redo?ws.canRedo:ws.canUndo)await this.applyWorkspaceHistory(redo);
+      else if(redo)await this.reader?.redoLastEdit();
+      else await this.reader?.undoLastEdit();
+    }else{
+      const readerState=this.reader?.getEditHistoryState();
+      if(redo?readerState?.canRedo:readerState?.canUndo){if(redo)await this.reader?.redoLastEdit();else await this.reader?.undoLastEdit();}
+      else await this.applyWorkspaceHistory(redo);
+    }
     this.syncHistoryButtons();this.scheduleRefresh();
   }
   private drawToolbar(): void {
@@ -1272,8 +1336,24 @@ export class StudyWorkspaceView extends ItemView {
     button.addEventListener("pointerdown",down);button.addEventListener("click",click,true);button.addEventListener("contextmenu",menu);
     this.bottomPressDisposers.push(()=>{cancel();button.removeEventListener("pointerdown",down);button.removeEventListener("click",click,true);button.removeEventListener("contextmenu",menu);window.removeEventListener("pointermove",move);window.removeEventListener("pointerup",release);window.removeEventListener("pointercancel",release);window.removeEventListener("blur",cancel);window.removeEventListener("keydown",key);});
   }
-  private currentHistoryState():{canUndo?:boolean;canRedo?:boolean}|undefined {
-    return this.historyScope==="reader"?this.reader?.getEditHistoryState():this.plugin.store.getLibraryHistoryState();
+  private currentHistoryState():{canUndo?:boolean;canRedo?:boolean;undoLabel?:string;redoLabel?:string}|undefined {
+    if(this.historyScope==="library")return this.plugin.store.getLibraryHistoryState();
+    const readerState=this.reader?.getEditHistoryState();
+    const wsState=this.getWorkspaceEditHistoryState();
+    if(this.historyScope==="workspace"){
+      return {
+        canUndo: wsState.canUndo || !!readerState?.canUndo,
+        canRedo: wsState.canRedo || !!readerState?.canRedo,
+        undoLabel: wsState.canUndo ? wsState.undoLabel : readerState?.undoLabel,
+        redoLabel: wsState.canRedo ? wsState.redoLabel : readerState?.redoLabel,
+      };
+    }
+    return {
+      canUndo: !!readerState?.canUndo || wsState.canUndo,
+      canRedo: !!readerState?.canRedo || wsState.canRedo,
+      undoLabel: readerState?.canUndo ? readerState.undoLabel : wsState.undoLabel,
+      redoLabel: readerState?.canRedo ? readerState.redoLabel : wsState.redoLabel,
+    };
   }
   private activateBottomMode(mode:BottomMode):void {
     this.reader?.setBlockSelectionMode(false);this.reader?.setRegionMode(false);
@@ -2350,17 +2430,17 @@ export class StudyWorkspaceView extends ItemView {
     pane.style.setProperty("--ms-document-menu-height", Math.max(70, root.height - top - 12) + "px");
     pane.style.setProperty("--ms-document-menu-arrow", clamp(center - left, 16, width - 16) + "px");
   }
-  /** 5.0.2 合并：把当前页 / 页范围 / 整本 PDF 合并进另一份文档（目标为 .msref 时追加引用，否则新建集合）。 */
+  /** 5.0.2 合并：把当前页 / 页范围 / 整本 PDF 或重组文档合并进另一份文档（目标为 .msref 时追加引用，否则新建集合）。 */
   private openMergeIntoDocument(): void {
     const reader = this.reader;
-    if (!(reader instanceof ReaderView) || !reader.getPdfPageEdits()) { new Notice("合并需要先打开 PDF 文档"); return; }
-    const sourcePath = reader.getFilePath()!, sourcePages = reader.getDisplayPages().length || reader.getDoc()?.numPages || 0;
-    if (!sourcePages) { new Notice("当前 PDF 尚未加载完成"); return; }
+    if (!(reader instanceof ReaderView) || !reader.getDoc()) { new Notice("合并需要先打开 PDF 或重组文档"); return; }
+    const sourcePath = reader.getFilePath()!, sourcePages = reader.getDoc()?.numPages || 0;
+    if (!sourcePages) { new Notice("当前文档尚未加载完成"); return; }
     const targets = this.documents().filter(file => file.path !== sourcePath && ["pdf", "msref"].includes(file.extension.toLowerCase()));
     if (!targets.length) { new Notice("当前学习集里没有可合并到的另一份文档"); return; }
     const { modal, close } = createModal("合并到另一份文档");
     const scope = el("select", { class: "ms-select", "aria-label": "合并范围" }) as HTMLSelectElement;
-    scope.append(el("option", { value: "page", text: "当前页" }), el("option", { value: "range", text: "页范围" }), el("option", { value: "document", text: "整本 PDF" }));
+    scope.append(el("option", { value: "page", text: "当前页" }), el("option", { value: "range", text: "页范围" }), el("option", { value: "document", text: sourcePath.toLowerCase().endsWith(".msref") ? "整份重组文档" : "整本 PDF" }));
     const range = el("input", { type: "text", class: "ms-search", "aria-label": "合并页范围", placeholder: "例如 1-3, 5" }) as HTMLInputElement;
     range.disabled = true;
     scope.addEventListener("change", () => { range.disabled = scope.value !== "range"; });
@@ -2379,22 +2459,108 @@ export class StudyWorkspaceView extends ItemView {
         else if (scope.value === "range") pages = [...new Set<number>(parsePageRange(range.value, sourcePages))].sort((a, b) => a - b);
         else pages = Array.from({ length: sourcePages }, (_, index) => index + 1);
         if (!pages.length) throw new Error("请选择至少一页");
-        const inputs = pages.map(page => ({ sourcePath, sourcePage: page, origin: "page" as const }));
+        const origin = scope.value === "document" ? "document" as const : "page" as const;
+        const inputs: PageReferenceInput[] = reader.getPageReferences(pages).map((entry) => ({
+          ...entry,
+          annotations: "include",
+          origin,
+        }));
         if (file.extension.toLowerCase() === "msref") {
-          await appendPageReferences(this.plugin, file, inputs);
+          const before = await readPageCollection(this.plugin, file);
+          const beforeMeta = structuredClone(this.plugin.store.getDocMeta(targetPath));
+          const beforeAnnotations = structuredClone(await this.plugin.store.loadAnnotations(targetPath));
+          const after = await appendPageReferences(this.plugin, file, inputs);
+          const afterMeta = structuredClone(this.plugin.store.getDocMeta(targetPath));
+          const afterAnnotations = structuredClone(await this.plugin.store.loadAnnotations(targetPath));
+          await this.refreshOpenPageCollection(targetPath, true);
+          reader.recordExtendEdit("合并到文档", async (redo) => {
+            const latestFile = this.app.vault.getAbstractFileByPath(targetPath);
+            if (!(latestFile instanceof TFile)) throw new Error("目标重组文档已不存在，合并撤销已取消");
+            await restorePageCollectionSnapshot(
+              this.plugin,
+              latestFile,
+              redo ? before : after,
+              redo ? after : before,
+              redo ? afterMeta : beforeMeta,
+              redo ? beforeAnnotations : afterAnnotations,
+              redo ? afterAnnotations : beforeAnnotations,
+            );
+            await this.refreshOpenPageCollection(targetPath, true);
+          });
+          this.syncHistoryButtons();
           status.textContent = `已合并 ${pages.length} 页到「${file.basename}」`;
           new Notice(`已合并 ${pages.length} 页到「${file.basename}」`);
         } else {
           const targetPages = await this.pdfPageCount(file);
-          const created = await createPageCollection(this.plugin, {
+          const targetNotebookId = documentNotebookState(this.plugin.store.getDocMeta(file.path)).active;
+          const targetPageInputs: PageReferenceInput[] = Array.from({ length: targetPages }, (_, index) => ({
+            sourcePath: file.path,
+            sourcePage: index + 1,
+            sourceNotebookId: targetNotebookId,
+            annotations: "include",
+            origin: "document",
+          }));
+          const activeCanvas = this.plugin.store.canvases.find((c) => c.id === this.plugin.store.activeCanvasId);
+          const previousLastDocPath = activeCanvas?.lastDocumentPath;
+          const { file: created, guardSnapshot: initialGuard } = await createMergePageCollection(this.plugin, {
             title: `${file.basename} + ${(sourcePath.split("/").pop() ?? "文档").replace(/\.[^.]+$/, "")}`,
-            pages: [...Array.from({ length: targetPages }, (_, index) => ({ sourcePath: file.path, sourcePage: index + 1, origin: "document" as const })), ...inputs],
-            origin: "document", studySetId: this.plugin.store.activeStudySetId ?? undefined,
+            sourcePath,
+            pages: [...targetPageInputs, ...inputs],
+            studySetId: this.plugin.store.activeStudySetId ?? undefined,
           });
+          const createdPath = created.path;
+          const createdSetId = this.plugin.store.activeStudySetId;
+          let guardSnapshot = initialGuard;
           status.textContent = `已新建合并文档「${created.basename}」`;
           new Notice(`已新建合并文档「${created.basename}」`);
           this.refresh(true);
-          void this.openPath(created.path).catch(error => new Notice("合并文档已创建，但未能打开：" + String(error)));
+          try {
+            await this.openPath(createdPath);
+          } catch (error) {
+            new Notice("合并文档已创建，但未能打开：" + String(error));
+          }
+          this.recordWorkspaceEdit("合并新建文档", async (redo) => {
+            if (!redo) {
+              await cleanupCreatedPageCollection(this.plugin, guardSnapshot, {
+                studySetId: createdSetId,
+                previousLastDocPath,
+                beforeVerify: async () => {
+                  if (this.comparisons.some((item) => item.reader.getFilePath() === createdPath)) await this.closeComparison();
+                  if (this.reader?.getFilePath() === createdPath) {
+                    await this.releaseReader();
+                    this.state.activePath = undefined;
+                  }
+                },
+                onConflictAfterClose: async (existing) => {
+                  await this.openFile(existing);
+                  this.drawTabs();
+                  this.drawLibrary();
+                  this.refresh(true);
+                },
+              });
+              const tabIndex = this.state.tabs.findIndex((tab) => tab.path === createdPath);
+              if (tabIndex >= 0) this.state.tabs.splice(tabIndex, 1);
+              const prevFile = this.app.vault.getAbstractFileByPath(sourcePath);
+              if (prevFile instanceof TFile) await this.openFile(prevFile);
+              else this.showEmptyReader();
+              this.drawTabs();
+              this.drawLibrary();
+              this.refresh(true);
+              this.saveLayout();
+            } else {
+              const recreated = await recreatePageCollection(
+                this.plugin,
+                guardSnapshot,
+                createdSetId,
+              );
+              guardSnapshot = recreated.guardSnapshot;
+              await this.openFile(recreated.file);
+              this.drawTabs();
+              this.drawLibrary();
+              this.refresh(true);
+              this.saveLayout();
+            }
+          });
         }
         close();
       })().catch(error => { status.textContent = "合并失败：" + String((error as Error).message ?? error); confirm.disabled = false; });

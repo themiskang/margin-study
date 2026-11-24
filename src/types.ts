@@ -586,6 +586,8 @@ export interface DocMeta {
   mergeProcessedPens?: Record<string, { finalPenId: string; bindingId: string; oldHostId?: string; reason?: string }>;
   /** Committed D4 unbind event deduplication keys persisted independent of localEvents ring size. */
   unbindEventKeys?: string[];
+  /** Transaction ID stamped when this .msref collection was newly created by openMergeIntoDocument. */
+  createdByMergeTxId?: string;
 }
 
 export const BRANCH_STYLES: { id: string; name: string }[] = [
