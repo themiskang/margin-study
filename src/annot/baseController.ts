@@ -1138,7 +1138,7 @@ export abstract class BaseAnnotationController {
       }, crop: () => this.cropFreeImage(ann.id), edit: () => this.editFreeOverlay(ann.id), remove: () => this.deleteFreeOverlay(ann.id), undo: () => this.undoOverlayChange(), redo: () => this.redoOverlayChange(), card: () => { const current = this.editableOverlay(ann.id); if (current) this.makeCard(current,"excerpt"); } });
     rendered.element.classList.toggle("ms-ink-reference", readonly);
     rendered.element.style.opacity = String(inkLayerOpacity(readonly));
-    if (typeof document !== "undefined") document.documentElement?.style?.setProperty?.("--ms-ink-reference-opacity", String(INK_REFERENCE_OPACITY));
+    this.syncReferenceOpacityToken();
     this.overlayElements.set(rendered.element, rendered.dispose); return rendered.element;
   }
   setOverlayBindToInkLayer(id: string, bound: boolean): void {
