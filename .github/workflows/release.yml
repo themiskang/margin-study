@@ -28,7 +28,6 @@ jobs:
           for f in manifest.json main.js styles.css pdf.worker.js; do
             test -f "$f" && cp "$f" release/ || { echo "missing $f"; exit 1; }
           done
-          if [ -f ocr.swift ]; then cp ocr.swift release/; fi
           ls -l release
       - name: Publish release
         uses: softprops/action-gh-release@v2
