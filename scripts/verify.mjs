@@ -22,6 +22,7 @@ const automatedSuites=[
   ["typecheck","node_modules/typescript/bin/tsc","--noEmit"],
   ["build","esbuild.config.mjs","production"],
   ["build-determinism","scripts/verify/build-determinism-acceptance.mjs"],
+  ["ego-harness-parity","scripts/verify/ego-harness-parity-acceptance.mjs"],
   ["pdf-save","scripts/verify/pdf-save-acceptance.mjs"],
   ["pdf-hw-eraser","src/pdf/hw-eraser-acceptance.mjs"],
   ["word-hw-eraser","src/word/hw-eraser-acceptance.mjs"],

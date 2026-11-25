@@ -61,7 +61,7 @@ try {
   await browser("open","about:blank");
   await browser("set","viewport","1512","851");
   await browser("open",\`http://127.0.0.1:\${server.address().port}\`);
-  const deadline=Date.now()+90000;
+  const deadline=Date.now()+(process.env.MARGINSTUDY_BROWSER==="ego"?300000:90000);
   for (;;) {
     const status=JSON.parse((await browser("eval","({done:window.done,fatal:window.fatal})")).stdout);
     if(status.fatal) throw new Error(JSON.stringify(status.fatal));
@@ -92,7 +92,7 @@ try {
 try {
   const runnerPath = join(temp, "runner.mjs");
   await writeFile(runnerPath, runner);
-  const { stdout, stderr } = await promisify(execFile)(process.execPath, [runnerPath], { cwd: project, maxBuffer: 4 * 1024 * 1024, timeout: 180000, env: process.env });
+  const { stdout, stderr } = await promisify(execFile)(process.execPath, [runnerPath], { cwd: project, maxBuffer: 4 * 1024 * 1024, timeout: process.env.MARGINSTUDY_BROWSER === "ego" ? 360000 : 180000, env: process.env });
   if (stdout) process.stdout.write(stdout);
   if (stderr) process.stderr.write(stderr);
   const measured = JSON.parse(await readFile(output, "utf8"));
