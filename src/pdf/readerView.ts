@@ -1365,8 +1365,12 @@ export class ReaderView extends ItemView {
       this.suppressScrollSave = false;
       return;
     }
+    if (this.isPinching()) return;
     if (this.savePositionTimer !== null) window.clearTimeout(this.savePositionTimer);
-    this.savePositionTimer = window.setTimeout(() => { this.savePositionTimer = null; this.saveReadingState(); }, 250);
+    this.savePositionTimer = window.setTimeout(() => {
+      this.savePositionTimer = null;
+      if (!this.isPinching()) this.saveReadingState();
+    }, 250);
   };
   private async applyRestoredState(): Promise<void> {
     const saved = this.restoredState;
@@ -1539,6 +1543,10 @@ export class ReaderView extends ItemView {
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
+    if (this.savePositionTimer !== null) {
+      window.clearTimeout(this.savePositionTimer);
+      this.savePositionTimer = null;
+    }
     this.annController?.abortActiveGestures();
     this.extendNotes.cancelActiveGesture();
     if (this.pinchPointers.size >= 3) {

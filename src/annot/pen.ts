@@ -246,6 +246,8 @@ export class PenController {
   private temporary = new Map<SVGGElement, number>();
   private perfStroke: PerfStroke | null = null;
   private docKeydownHandler: ((event: KeyboardEvent) => void) | null = null;
+  private winBlurHandler: ((event: Event) => void) | null = null;
+  private docVisibilityHandler: (() => void) | null = null;
   color = "#e53935";
 
   constructor(private container: HTMLElement, private opts: PenOptions) {
@@ -325,6 +327,14 @@ export class PenController {
     if (this.docKeydownHandler) {
       this.container.ownerDocument.removeEventListener("keydown", this.docKeydownHandler);
       this.docKeydownHandler = null;
+    }
+    if (this.winBlurHandler) {
+      this.container.ownerDocument.defaultView?.removeEventListener("blur", this.winBlurHandler);
+      this.winBlurHandler = null;
+    }
+    if (this.docVisibilityHandler) {
+      this.container.ownerDocument.removeEventListener("visibilitychange", this.docVisibilityHandler);
+      this.docVisibilityHandler = null;
     }
     this.overlay.remove(); this.toolbar.remove(); this.extraToolbar?.remove(); this.colorPalette.remove();
   }
@@ -593,6 +603,14 @@ export class PenController {
       }
     };
     this.container.ownerDocument.addEventListener("keydown", this.docKeydownHandler);
+    this.winBlurHandler = (event: Event) => {
+      if (event.isTrusted && (this.gesture !== null || this.pointerId !== null)) this.abortActiveGesture();
+    };
+    this.docVisibilityHandler = () => {
+      if (this.container.ownerDocument.visibilityState === "hidden" && (this.gesture !== null || this.pointerId !== null)) this.abortActiveGesture();
+    };
+    this.container.ownerDocument.defaultView?.addEventListener("blur", this.winBlurHandler);
+    this.container.ownerDocument.addEventListener("visibilitychange", this.docVisibilityHandler);
   }
   private addDrawSample(bounds: DOMRect, event: PointerEvent): void {
     const context = this.prediction?.getContext("2d");

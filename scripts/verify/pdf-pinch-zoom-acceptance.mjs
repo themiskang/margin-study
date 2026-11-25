@@ -764,11 +764,42 @@ async function openReader(filesMap: Record<string, object | string>, pdfPath: st
     assert(wsSaveAfterLift === 1, \`PZ-05 Q2 clean view Store.save after lift expected 1, got \${wsSaveAfterLift}\`);
     assert(cleanActive, "PZ-05 clean view exited unexpectedly during pinch");
     assert(handle && handleBox && handleBox.width > 0 && handleBox.height > 0 && handleBox.top >= 0 && handleBox.left >= 0, "PZ-05 clean view handle obstructed/missing");
+
+    // Q2b: Scroll -> immediately pinch within 100ms (before 250ms saveReadingPosition debounce expires) -> total Store.save() === 1
+    let scrollPinchSaves = 0;
+    let scrollPinchSavesDuringMove = -1;
+    store.save = ((...args: any[]) => { scrollPinchSaves++; return origWsSave(...args); }) as any;
+    scrollEl.scrollTop += 60;
+    scrollEl.dispatchEvent(new Event("scroll"));
+    await wait(50); // < 100ms, 250ms timer is still pending!
+    const spCx = box.left + box.width / 2;
+    const spCy = box.top + box.height / 2;
+    sendPointer(scrollEl, "pointerdown", 381, spCx - 40, spCy, { isPrimary: true });
+    await wait(25);
+    sendPointer(scrollEl, "pointerdown", 382, spCx + 40, spCy, { isPrimary: false });
+    for (let i = 1; i <= 12; i++) {
+      const half = 40 + i * 2;
+      sendPointer(window, "pointermove", 381, spCx - half, spCy, { isPrimary: true });
+      sendPointer(window, "pointermove", 382, spCx + half, spCy, { isPrimary: false });
+      await wait(25); // 12 * 25ms = 300ms > 250ms debounce window!
+    }
+    scrollPinchSavesDuringMove = scrollPinchSaves;
+    sendPointer(window, "pointerup", 382, spCx + 64, spCy, { isPrimary: false });
+    sendPointer(window, "pointerup", 381, spCx - 64, spCy, { isPrimary: true });
+    const sAfterScrollPinch = reader.getScale();
+    await waitPagesRendered(reader, [1], sAfterScrollPinch);
+    await wait(350);
+    await frame();
+    const scrollPinchSavesAfterLift = scrollPinchSaves;
+    store.save = origWsSave;
+    assert(scrollPinchSavesDuringMove === 0, \`PZ-05 Q2b scroll+immediate-pinch Store.save during move expected 0, got \${scrollPinchSavesDuringMove}\`);
+    assert(scrollPinchSavesAfterLift === 1, \`PZ-05 Q2b scroll+immediate-pinch total Store.save expected 1, got \${scrollPinchSavesAfterLift}\`);
+
     return {
       passed: true,
       rotationResults,
       spreadResults,
-      cleanView: { scaleBefore: sBefore, scaleAfter: sAfter, wsSaveDuringMove, wsSaveAfterLift, cleanActive, handleVisible: true },
+      cleanView: { scaleBefore: sBefore, scaleAfter: sAfter, wsSaveDuringMove, wsSaveAfterLift, scrollPinchSavesDuringMove, scrollPinchSavesAfterLift, cleanActive, handleVisible: true },
     };
   } finally {
     await ws.onClose();
@@ -913,6 +944,55 @@ let q3Ctx: { view: ReaderView; store: Store; ov: Element; lostEvents: { isTruste
     await view.onClose();
     view.containerEl.remove();
     q3Ctx = null;
+  }
+};
+
+// ===== Q3b: Trusted window.blur (no pointercancel / no lostpointercapture) must clear previews and prevent commit on later pointerup =====
+let q3bCtx: { view: ReaderView; store: Store; blurEvents: boolean[]; undoBefore: number; canUndoBefore: boolean; inksBefore: number } | null = null;
+(window as any).setupQ3bTrustedBlur = async () => {
+  useNativePointerCapture = false; // no pointer capture so blur happens with zero lostpointercapture and zero pointercancel
+  const { view, store } = await openReader({ "q3b-blur.pdf": { name: "q3b", pages: 1 } }, "q3b-blur.pdf");
+  await view.renderPage(1);
+  view.setHandwritingMode("pen");
+  await frame();
+  const rec1 = view.getPageRecord(1)!;
+  const blurEvents: boolean[] = [];
+  window.addEventListener("blur", (ev: Event) => blurEvents.push(ev.isTrusted), true);
+  const box = rec1.wrapper.getBoundingClientRect();
+  const inksBefore = (await store.loadAnnotations("q3b-blur.pdf")).filter((a: any) => a.type === "pen").length;
+  const undoBefore = (view as any).annController.editUndo.length;
+  const canUndoBefore = view.getEditHistoryState().canUndo;
+  q3bCtx = { view, store, blurEvents, undoBefore, canUndoBefore, inksBefore };
+  return { x: Math.round(box.left + 120), y: Math.round(box.top + 120) };
+};
+(window as any).checkQ3bAfterBlur = () => {
+  if (!q3bCtx) throw new Error("No q3bCtx");
+  return {
+    blurEvents: q3bCtx.blurEvents,
+    visibilityState: document.visibilityState,
+    previewsAfterBlur: document.querySelectorAll(".ms-pen-preview").length,
+    undoAfterBlur: (q3bCtx.view as any).annController.editUndo.length,
+  };
+};
+(window as any).finishQ3bTrustedBlur = async (afterBlur: any) => {
+  if (!q3bCtx) throw new Error("No q3bCtx");
+  const { view, store, undoBefore, canUndoBefore, inksBefore } = q3bCtx;
+  try {
+    await frame();
+    const inksAfterUp = (await store.loadAnnotations("q3b-blur.pdf")).filter((a: any) => a.type === "pen").length;
+    const undoAfterUp = (view as any).annController.editUndo.length;
+    const canUndoAfterUp = view.getEditHistoryState().canUndo;
+    const previewsAfterUp = document.querySelectorAll(".ms-pen-preview").length;
+    assert(afterBlur.blurEvents.some((t: boolean) => t === true), \`Q3b did not observe trusted window.blur: \${JSON.stringify(afterBlur.blurEvents)}\`);
+    assert(afterBlur.previewsAfterBlur === 0, \`Q3b trusted blur left .ms-pen-preview elements: \${afterBlur.previewsAfterBlur}\`);
+    assert(inksAfterUp === inksBefore && undoAfterUp === undoBefore && canUndoAfterUp === canUndoBefore,
+      \`Q3b trusted blur + pointerup committed half-drawn stroke: inks \${inksBefore}->\${inksAfterUp}, editUndo \${undoBefore}->\${undoAfterUp}, canUndo \${canUndoBefore}->\${canUndoAfterUp}\`);
+    assert(previewsAfterUp === 0, \`Q3b previews remained after pointerup: \${previewsAfterUp}\`);
+    return { passed: true, afterBlur, inksBefore, inksAfterUp, undoBefore, undoAfterUp, canUndoAfterUp };
+  } finally {
+    await view.onClose();
+    view.containerEl.remove();
+    q3bCtx = null;
   }
 };
 
@@ -1162,6 +1242,63 @@ try {
     });
     const q3NativeLostCapture = await evalJson("window.finishQ3NativeLostCapture()");
 
+    // Q3b: Trusted window.blur (via CDP Target.createTarget + activateTarget) while pen stroke is active (no pointercancel / no lostpointercapture)
+    const q3bPos = await evalJson("window.setupQ3bTrustedBlur()");
+    let q3bAfterBlur = null;
+    await new Promise((resolveCdp, rejectCdp) => {
+      const ws = new WebSocket(target.webSocketDebuggerUrl);
+      const browserWs = new WebSocket(browserUrl);
+      let nextId = 1;
+      const sendOn = (sock, method, params = {}) => new Promise((res, rej) => {
+        const id = nextId++;
+        const onMsg = ev => {
+          const msg = JSON.parse(ev.data);
+          if (msg.id !== id) return;
+          sock.removeEventListener("message", onMsg);
+          if (msg.error) rej(new Error(JSON.stringify(msg.error)));
+          else res(msg.result);
+        };
+        sock.addEventListener("message", onMsg);
+        sock.send(JSON.stringify({ id, method, params }));
+      });
+      let openCount = 0;
+      const onOpen = async () => {
+        if (++openCount < 2) return;
+        let createdTargetId = null;
+        try {
+          await sendOn(ws, "Input.dispatchMouseEvent", { type: "mousePressed", x: q3bPos.x, y: q3bPos.y, button: "left", clickCount: 1, pointerType: "pen" });
+          await sendOn(ws, "Input.dispatchMouseEvent", { type: "mouseMoved", x: q3bPos.x + 50, y: q3bPos.y + 30, button: "left", buttons: 1, pointerType: "pen" });
+          await new Promise(r => setTimeout(r, 30));
+          // Trigger genuine trusted window.blur by creating & activating another tab via browser CDP
+          const created = await sendOn(browserWs, "Target.createTarget", { url: "about:blank" });
+          createdTargetId = created.targetId;
+          await sendOn(browserWs, "Target.activateTarget", { targetId: createdTargetId });
+          await new Promise(r => setTimeout(r, 60));
+          const evalRes = await sendOn(ws, "Runtime.evaluate", { expression: "window.checkQ3bAfterBlur()", returnByValue: true });
+          q3bAfterBlur = evalRes?.result?.value;
+          // Close the extra tab, reactivate main page, then send trusted pointerup
+          await sendOn(browserWs, "Target.closeTarget", { targetId: createdTargetId });
+          createdTargetId = null;
+          await sendOn(browserWs, "Target.activateTarget", { targetId: target.id });
+          await new Promise(r => setTimeout(r, 40));
+          await sendOn(ws, "Input.dispatchMouseEvent", { type: "mouseReleased", x: q3bPos.x + 50, y: q3bPos.y + 30, button: "left", clickCount: 1, pointerType: "pen" });
+          ws.close();
+          browserWs.close();
+          resolveCdp();
+        } catch (err) {
+          if (createdTargetId) await sendOn(browserWs, "Target.closeTarget", { targetId: createdTargetId }).catch(() => {});
+          ws.close();
+          browserWs.close();
+          rejectCdp(err);
+        }
+      };
+      ws.addEventListener("open", onOpen);
+      browserWs.addEventListener("open", onOpen);
+      ws.addEventListener("error", () => rejectCdp(new Error("CDP page WebSocket error in Q3b")));
+      browserWs.addEventListener("error", () => rejectCdp(new Error("CDP browser WebSocket error in Q3b")));
+    });
+    const q3bTrustedBlur = await evalJson(`window.finishQ3bTrustedBlur(${JSON.stringify(q3bAfterBlur)})`);
+
     // Re-test PZ-02 anchor accuracy in 768x1024 (portrait Pad / narrow split)
     await browser("set", "viewport", "768", "1024");
     const pz02Portrait = await evalJson("window.runPZ02()");
@@ -1182,6 +1319,7 @@ try {
       pz06,
       cdpTouchSmoke,
       q3NativeLostCapture,
+      q3bTrustedBlur,
     };
 
     if (process.env.MARGINSTUDY_EVIDENCE_DIR) {
