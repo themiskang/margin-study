@@ -187,3 +187,16 @@ G10b-03 **3/3 次确定性失败**（切本后 `refreshExtendLayout` 打断导�
 **门禁稳定性实录（TEST-FLAKE-LOAD 复现）**：合入后首轮全量 `verify:public` 为 **110/111**，
 `word-hw-eraser` 在 **121.0s** 超时（上限 120s）；单跑该套件 **60.4s / 247/247 PASS**；同机第二轮全量 **111/111**。
 结论：负载下超时假红，非产品回退；该套件 120s 上限偏紧，已登记到 `TEST-FLAKE-LOAD` 待规划席裁决是否放宽（属基础设施时限，非判据）。
+
+## 2026-11-25 · PDF 双指缩放收口（合并 `5683920`，发布 1.5.2）
+
+触控设备 PDF 阅读区双指缩放。`verify:public` 111→**112/112**、`px-gap` 295/298，异厂 codex 复核 4/4 PASS。
+
+**五轮修复的真实边角（每轮均有 Red→Green 实测）**：
+1. 断言空壳：套件读 `undoStack`（不存在），撤销栈长度恒 0 → 改读 `editUndo/editRedo` 并加注入自证。
+2. 留白区第二指重入框选 → 残留 `.ms-lasso`；用 `isPinching()` 守卫 + `stopImmediatePropagation`。
+3. 简洁工作区松手 **保存 2 次**（缩放与阅读位置各触发一次）→ 合并为一次原子写入。
+4. 原生 **捕获丢失** 时抬指前提交半截笔画 → `lostpointercapture` 立即 `abortActiveGesture()`。
+5. **滚动防抖穿越捏合**（滚动后 250ms 内捏合仍会保存）与 **可信 blur/hidden 未中止**（残留 2 个预览后误提交）→ 捏合开始取消待执行防抖、失焦仅在手势活动时中止。
+
+已装 1.5.2 到 Mac `yan` 库与 Pad 两个库（`Documents/yan`、`Documents/MarginStudy-A30-Isolated`）。
