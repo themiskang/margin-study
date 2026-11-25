@@ -385,8 +385,11 @@ async function openReader(filesMap: Record<string, object | string>, pdfPath: st
         assert(selBefore.length === 2, \`PZ-03 lasso failed to select 2 strokes before pinch: \${JSON.stringify(selBefore)}\`);
       }
 
+      const annCtrl = (view as any).annController;
+      assert(Array.isArray(annCtrl.editUndo) && Array.isArray(annCtrl.editRedo), "PZ-03 missing real editUndo/editRedo arrays");
       const histBefore = view.getEditHistoryState();
-      const undoLenBefore = ((view as any).annController.undoStack?.length ?? 0);
+      const undoLenBefore = annCtrl.editUndo.length;
+      const redoLenBefore = annCtrl.editRedo.length;
       const r = rec1.wrapper.getBoundingClientRect();
       // Land finger 1 outside the selection (at bottom-left) so lasso mode actually hits clearSelection() on finger 1!
       const cx = r.left + r.width * 0.5;
@@ -401,7 +404,8 @@ async function openReader(filesMap: Record<string, object | string>, pdfPath: st
       const inksAfterJson = JSON.stringify(inksAfter);
       const hostsAfter = inksAfter.map((a: any) => [a.id, a.hostAnnotationId ?? null]);
       const histAfter = view.getEditHistoryState();
-      const undoLenAfter = ((view as any).annController.undoStack?.length ?? 0);
+      const undoLenAfter = annCtrl.editUndo.length;
+      const redoLenAfter = annCtrl.editRedo.length;
       const selAfter = mode === "lasso" ? (pc.selection as any[]).map(s => s.id).sort() : [];
       const residue = {
         preview: document.querySelectorAll(".ms-pen-preview").length,
@@ -410,16 +414,16 @@ async function openReader(filesMap: Record<string, object | string>, pdfPath: st
       };
 
       assert(scaleAfter > scaleBefore, \`PZ-03 mode=\${mode} pinch did not zoom: \${scaleBefore} -> \${scaleAfter}\`);
+      assert(histAfter.canUndo === histBefore.canUndo && histAfter.canRedo === histBefore.canRedo && undoLenAfter === undoLenBefore && redoLenAfter === redoLenBefore,
+        \`PZ-03 mode=\${mode} editUndo/editRedo mutated: undo \${undoLenBefore}->\${undoLenAfter}, redo \${redoLenBefore}->\${redoLenAfter}, canUndo \${histBefore.canUndo}->\${histAfter.canUndo}, canRedo \${histBefore.canRedo}->\${histAfter.canRedo}\`);
       assert(inksAfterJson === baselineInksJson, \`PZ-03 mode=\${mode} ink JSON mutated\`);
       assert(JSON.stringify(hostsAfter) === JSON.stringify(baselineHosts), \`PZ-03 mode=\${mode} hostAnnotationId mutated\`);
-      assert(histAfter.canUndo === histBefore.canUndo && histAfter.canRedo === histBefore.canRedo && undoLenAfter === undoLenBefore,
-        \`PZ-03 mode=\${mode} undo stack mutated\`);
       if (mode === "lasso") {
         assert(JSON.stringify(selAfter) === JSON.stringify(selBefore), \`PZ-03 lasso selection lost: \${JSON.stringify(selBefore)} -> \${JSON.stringify(selAfter)}\`);
       }
       assert(residue.preview === 0 && residue.lassoTrail === 0 && residue.msLasso === 0,
         \`PZ-03 mode=\${mode} DOM residue: \${JSON.stringify(residue)}\`);
-      modeResults[mode] = { scaleBefore, scaleAfter, selBefore, selAfter, residue, undoLenAfter };
+      modeResults[mode] = { scaleBefore, scaleAfter, selBefore, selAfter, residue, undoLenBefore, undoLenAfter, redoLenBefore, redoLenAfter, canUndo: histAfter.canUndo, canRedo: histAfter.canRedo };
     }
 
     // Explicit pointercancel check: must NOT commit half-drawn stroke
@@ -427,14 +431,64 @@ async function openReader(filesMap: Record<string, object | string>, pdfPath: st
     await frame();
     const ov = rec1.wrapper.querySelector(".ms-pen-overlay")!;
     const r = rec1.wrapper.getBoundingClientRect();
+    const undoBeforeCancel = (view as any).annController.editUndo.length;
     sendPointer(ov, "pointerdown", 401, r.left + 80, r.top + 80, { pointerType: "pen", isPrimary: true });
     sendPointer(ov, "pointermove", 401, r.left + 140, r.top + 120, { pointerType: "pen", isPrimary: true });
     sendPointer(ov, "pointercancel", 401, r.left + 140, r.top + 120, { pointerType: "pen", isPrimary: true });
     await frame();
+    assert((view as any).annController.editUndo.length === undoBeforeCancel, "PZ-03 pointercancel pushed to editUndo!");
     assert(JSON.stringify(await getInks()) === baselineInksJson, "PZ-03 pointercancel committed a half-drawn stroke!");
     assert(document.querySelectorAll(".ms-pen-preview").length === 0, "PZ-03 pointercancel left .ms-pen-preview");
 
-    return { passed: true, modeResults, pointerCancelClean: true };
+    // H1: ExtendNotes placing mode + diagonal 2-finger pinch must NOT spawn .ms-lasso (mid-pinch or after lift), must NOT leave active drag, and must NOT create stray extend note
+    view.setScale(1.2);
+    await waitPagesRendered(view, [1], 1.2);
+    view.beginExtend();
+    await frame();
+    const rExt = rec1.wrapper.getBoundingClientRect();
+    const extCx = rExt.left + rExt.width * 0.5;
+    const extCy = rExt.top + rExt.height * 0.5;
+    const extNotesBefore = view.getExtendNotes().length;
+    const extScaleBefore = view.getScale();
+    // Diagonal 2-finger pinch (staggered 30ms) so Finger 2 moves in both X and Y
+    sendPointer(rec1.canvas, "pointerdown", 441, extCx - 30, extCy - 30, { isPrimary: true });
+    await wait(30);
+    sendPointer(rec1.canvas, "pointerdown", 442, extCx + 30, extCy + 30, { isPrimary: false });
+    for (let i = 1; i <= 8; i++) {
+      const d = 30 + i * 4;
+      sendPointer(window, "pointermove", 441, extCx - d, extCy - d, { isPrimary: true });
+      sendPointer(window, "pointermove", 442, extCx + d, extCy + d, { isPrimary: false });
+      await frame();
+    }
+    const midPinchLassos = [...document.querySelectorAll(".ms-lasso")].map(el => ({ className: el.className, style: el.getAttribute("style"), parent: el.parentElement?.className }));
+    const midPinchExtendDrag = Boolean((view as any).extendNotes.cancelDrag);
+    sendPointer(window, "pointerup", 442, extCx + 62, extCy + 62, { isPrimary: false });
+    sendPointer(window, "pointerup", 441, extCx - 62, extCy - 62, { isPrimary: true });
+    const extScaleAfter = view.getScale();
+    await waitPagesRendered(view, [1], extScaleAfter);
+    await wait(60);
+    await frame();
+    const residualLassos = [...document.querySelectorAll(".ms-lasso")].map(el => ({ className: el.className, style: el.getAttribute("style"), parent: el.parentElement?.className }));
+    const activeExtendDrag = Boolean((view as any).extendNotes.cancelDrag);
+    assert(extScaleAfter > extScaleBefore, \`PZ-03 H1 ExtendNotes pinch did not zoom: \${extScaleBefore} -> \${extScaleAfter}\`);
+    assert(midPinchLassos.length === 0 && !midPinchExtendDrag, \`PZ-03 H1 ExtendNotes pinch spawned .ms-lasso on 2nd finger: lassos=\${JSON.stringify(midPinchLassos)}, activeDrag=\${midPinchExtendDrag}\`);
+    assert(residualLassos.length === 0, \`PZ-03 H1 ExtendNotes pinch left .ms-lasso residue: \${JSON.stringify(residualLassos)}\`);
+    assert(!activeExtendDrag, "PZ-03 H1 ExtendNotes pinch left active cancelDrag gesture");
+    assert(view.getExtendNotes().length === extNotesBefore, \`PZ-03 H1 ExtendNotes pinch created stray extend note: \${extNotesBefore} -> \${view.getExtendNotes().length}\`);
+    // Subsequent single-finger region drag in ExtendNotes placing mode still creates an extend note cleanly
+    const rExt2 = rec1.wrapper.getBoundingClientRect();
+    sendPointer(rec1.canvas, "pointerdown", 451, rExt2.left + 80, rExt2.top + 120, { pointerType: "touch", isPrimary: true });
+    sendPointer(window, "pointermove", 451, rExt2.left + 220, rExt2.top + 220, { pointerType: "touch", isPrimary: true });
+    sendPointer(window, "pointerup", 451, rExt2.left + 220, rExt2.top + 220, { pointerType: "touch", isPrimary: true });
+    await wait(60);
+    await frame();
+    const extNotesAfterSingle = view.getExtendNotes().length;
+    assert(extNotesAfterSingle === extNotesBefore + 1, \`PZ-03 H1 ExtendNotes single-finger region drag failed after pinch: \${extNotesBefore} -> \${extNotesAfterSingle}\`);
+    assert(document.querySelectorAll(".ms-lasso").length === 0, "PZ-03 H1 ExtendNotes single-finger drag left .ms-lasso");
+    view.stopExtend();
+    await frame();
+
+    return { passed: true, modeResults, pointerCancelClean: true, extendNotesPinch: { extScaleBefore, extScaleAfter, residualLassos: residualLassos.length, activeExtendDrag, extNotesBefore, extNotesAfterSingle } };
   } finally {
     await view.onClose();
     view.containerEl.remove();

@@ -1499,6 +1499,10 @@ export class ReaderView extends ItemView {
     window.removeEventListener("blur", this.clearPinchState);
   };
 
+  isPinching(): boolean {
+    return this.pinchState !== null || this.pinchSettling || this.pinchPointers.size >= 2;
+  }
+
   private onPinchPointerDown = (event: PointerEvent): void => {
     if (event.pointerType !== "touch" || !this.doc || this.destroyed) return;
     if (this.pinchPointers.size === 0 && (event.target as Element | null)?.closest("button,input,textarea,select,[contenteditable=true]")) return;
@@ -1512,6 +1516,7 @@ export class ReaderView extends ItemView {
     }
     event.preventDefault();
     event.stopPropagation();
+    event.stopImmediatePropagation();
     this.annController?.abortActiveGestures();
     this.extendNotes.cancelActiveGesture();
     if (this.pinchPointers.size >= 3) {
