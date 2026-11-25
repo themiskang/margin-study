@@ -161,6 +161,7 @@ export class ReaderView extends ItemView {
   private prevPageEl: HTMLButtonElement | null = null;
   private nextPageEl: HTMLButtonElement | null = null;
   private savePositionTimer: number | null = null;
+  private suppressScrollSave = false;
   private speech: ReadingSpeechControls | null = null;
   private notebook: NotebookMetadata | null = null;
   private notebookTools: HTMLElement | null = null;
@@ -1360,6 +1361,10 @@ export class ReaderView extends ItemView {
   private saveReadingPosition = (): void => {
     this.captureLocation();
     this.syncDisplayPageControls();
+    if (this.suppressScrollSave) {
+      this.suppressScrollSave = false;
+      return;
+    }
     if (this.savePositionTimer !== null) window.clearTimeout(this.savePositionTimer);
     this.savePositionTimer = window.setTimeout(() => { this.savePositionTimer = null; this.saveReadingState(); }, 250);
   };
@@ -1423,17 +1428,34 @@ export class ReaderView extends ItemView {
     if (anchorRec && this.isPageShown(anchorPage) && !this.folded.has(anchorPage)) {
       this.visiblePages.add(anchorPage);
     }
-    this.applyScale(clamped, true);
+    this.applyScale(clamped, false);
+    this.plugin.store.settings.scale = this.scale;
     this.updateExtendScrollSpace();
     if (anchorRec && this.isPageShown(anchorPage) && !this.folded.has(anchorPage)) {
       const bounds = anchorRec.wrapper.getBoundingClientRect();
       const dx = bounds.left + anchorU * bounds.width - clientX;
       const dy = bounds.top + anchorV * bounds.height - clientY;
-      if (Number.isFinite(dx) && Math.abs(dx) > 0.01) this.scrollEl.scrollLeft += dx;
-      if (Number.isFinite(dy) && Math.abs(dy) > 0.01) this.scrollEl.scrollTop += dy;
+      const moveX = Number.isFinite(dx) && Math.abs(dx) > 0.01;
+      const moveY = Number.isFinite(dy) && Math.abs(dy) > 0.01;
+      if (moveX || moveY) {
+        this.suppressScrollSave = true;
+        if (moveX) this.scrollEl.scrollLeft += dx;
+        if (moveY) this.scrollEl.scrollTop += dy;
+        requestAnimationFrame(() => { this.suppressScrollSave = false; });
+      }
+    }
+    if (this.savePositionTimer !== null) {
+      window.clearTimeout(this.savePositionTimer);
+      this.savePositionTimer = null;
     }
     this.captureLocation();
     this.syncDisplayPageControls();
+    if (this.workspaceChrome && this.readingStateListeners.size > 0) {
+      this.saveReadingState();
+    } else {
+      this.plugin.store.save();
+      this.app.workspace.requestSaveLayout();
+    }
   }
 
   private findPinchAnchor(cx: number, cy: number): { page: number; u: number; v: number } | null {

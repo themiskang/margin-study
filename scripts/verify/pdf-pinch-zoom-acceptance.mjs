@@ -27,8 +27,11 @@ import { ReaderView } from "${project}/src/pdf/readerView";
 import { StudyWorkspaceView } from "${project}/src/workspace/studyWorkspace";
 
 (HTMLElement.prototype as any).empty = function () { this.replaceChildren(); };
-Element.prototype.setPointerCapture = function () {};
-Element.prototype.releasePointerCapture = function () {};
+const nativeSetPointerCapture = Element.prototype.setPointerCapture;
+const nativeReleasePointerCapture = Element.prototype.releasePointerCapture;
+let useNativePointerCapture = false;
+Element.prototype.setPointerCapture = function (id: number) { if (useNativePointerCapture) return nativeSetPointerCapture.call(this, id); };
+Element.prototype.releasePointerCapture = function (id: number) { if (useNativePointerCapture) return nativeReleasePointerCapture.call(this, id); };
 
 const frame = () => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r())));
 const wait = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
@@ -738,21 +741,34 @@ async function openReader(filesMap: Record<string, object | string>, pdfPath: st
     const scrollEl = reader.getScrollContainer();
     const box = scrollEl.getBoundingClientRect();
     const sBefore = reader.getScale();
-    await pinchGesture(scrollEl, box.left + box.width / 2, box.top + box.height / 2, 80, 120);
+    let wsSaveCalls = 0;
+    let wsSaveDuringMove = -1;
+    const origWsSave = store.save.bind(store);
+    store.save = ((...args: any[]) => { wsSaveCalls++; return origWsSave(...args); }) as any;
+    await pinchGesture(scrollEl, box.left + box.width / 2, box.top + box.height / 2, 80, 120, {
+      onAfterMove: () => { wsSaveDuringMove = wsSaveCalls; },
+    });
     const sAfter = reader.getScale();
     await waitPagesRendered(reader, [1], sAfter);
+    // Wait past 250ms scroll debounce to ensure no duplicate Store.save() fires
+    await wait(350);
+    await frame();
+    const wsSaveAfterLift = wsSaveCalls;
+    store.save = origWsSave;
     const wsRoot = (ws.contentEl ?? ws.containerEl.children[1]) as HTMLElement;
     const cleanActive = wsRoot.classList.contains("is-clean-view") || !!ws.containerEl.querySelector(".is-clean-view");
     const handle = ws.containerEl.querySelector<HTMLElement>(".ms-clean-view-handle");
     const handleBox = handle?.getBoundingClientRect();
     assert(sAfter > sBefore, \`PZ-05 clean view pinch did not zoom: \${sBefore} -> \${sAfter}\`);
+    assert(wsSaveDuringMove === 0, \`PZ-05 Q2 clean view Store.save during pointermove expected 0, got \${wsSaveDuringMove}\`);
+    assert(wsSaveAfterLift === 1, \`PZ-05 Q2 clean view Store.save after lift expected 1, got \${wsSaveAfterLift}\`);
     assert(cleanActive, "PZ-05 clean view exited unexpectedly during pinch");
     assert(handle && handleBox && handleBox.width > 0 && handleBox.height > 0 && handleBox.top >= 0 && handleBox.left >= 0, "PZ-05 clean view handle obstructed/missing");
     return {
       passed: true,
       rotationResults,
       spreadResults,
-      cleanView: { scaleBefore: sBefore, scaleAfter: sAfter, cleanActive, handleVisible: true },
+      cleanView: { scaleBefore: sBefore, scaleAfter: sAfter, wsSaveDuringMove, wsSaveAfterLift, cleanActive, handleVisible: true },
     };
   } finally {
     await ws.onClose();
@@ -836,6 +852,67 @@ async function openReader(filesMap: Record<string, object | string>, pdfPath: st
   } finally {
     await view.onClose();
     view.containerEl.remove();
+  }
+};
+
+// ===== Q3: Native lostpointercapture (isTrusted=true) must NOT commit half-drawn stroke =====
+let q3Ctx: { view: ReaderView; store: Store; ov: Element; lostEvents: { isTrusted: boolean; pointerType: string }[]; undoBefore: number; canUndoBefore: boolean; inksBefore: number } | null = null;
+(window as any).setupQ3NativeLostCapture = async () => {
+  useNativePointerCapture = true;
+  const { view, store } = await openReader({ "q3-lost.pdf": { name: "q3", pages: 1 } }, "q3-lost.pdf");
+  await view.renderPage(1);
+  view.setHandwritingMode("pen");
+  await frame();
+  const rec1 = view.getPageRecord(1)!;
+  const ov = rec1.wrapper.querySelector(".ms-pen-overlay")!;
+  const lostEvents: { isTrusted: boolean; pointerType: string }[] = [];
+  ov.addEventListener("lostpointercapture", (ev: Event) => {
+    const pe = ev as PointerEvent;
+    lostEvents.push({ isTrusted: pe.isTrusted, pointerType: pe.pointerType });
+  }, true);
+  const box = rec1.wrapper.getBoundingClientRect();
+  const inksBefore = (await store.loadAnnotations("q3-lost.pdf")).filter((a: any) => a.type === "pen").length;
+  const undoBefore = (view as any).annController.editUndo.length;
+  const canUndoBefore = view.getEditHistoryState().canUndo;
+  q3Ctx = { view, store, ov, lostEvents, undoBefore, canUndoBefore, inksBefore };
+  return { x: Math.round(box.left + 120), y: Math.round(box.top + 120) };
+};
+(window as any).triggerQ3ReleaseCapture = () => {
+  if (!q3Ctx) throw new Error("No q3Ctx");
+  const pc = ((q3Ctx.view as any).annController.penControllers as Map<number, any>).get(1);
+  const pid = pc?.pointerId;
+  if (typeof pid !== "number") throw new Error("Q3 expected active pointerId on PenController, got " + String(pid));
+  nativeReleasePointerCapture.call(q3Ctx.ov, pid);
+  return { releasedPointerId: pid };
+};
+(window as any).finishQ3NativeLostCapture = async () => {
+  if (!q3Ctx) throw new Error("No q3Ctx");
+  const { view, store, ov, lostEvents, undoBefore, canUndoBefore, inksBefore } = q3Ctx;
+  try {
+    await frame();
+    const inksAfterLost = (await store.loadAnnotations("q3-lost.pdf")).filter((a: any) => a.type === "pen").length;
+    const undoAfterLost = (view as any).annController.editUndo.length;
+    const canUndoAfterLost = view.getEditHistoryState().canUndo;
+    const previewResidue = document.querySelectorAll(".ms-pen-preview").length;
+    assert(lostEvents.some(e => e.isTrusted), \`Q3 did not observe trusted native lostpointercapture: \${JSON.stringify(lostEvents)}\`);
+    assert(inksAfterLost === inksBefore && undoAfterLost === undoBefore && canUndoAfterLost === canUndoBefore,
+      \`Q3 nativeLostCapture committed half-drawn stroke: inks \${inksBefore}->\${inksAfterLost}, editUndo \${undoBefore}->\${undoAfterLost}, canUndo \${canUndoBefore}->\${canUndoAfterLost}\`);
+    assert(previewResidue === 0, \`Q3 nativeLostCapture left .ms-pen-preview: \${previewResidue}\`);
+    // Subsequent single-finger stroke still commits +1 cleanly
+    useNativePointerCapture = false;
+    const r = view.getPageRecord(1)!.wrapper.getBoundingClientRect();
+    sendPointer(ov, "pointerdown", 801, r.left + 100, r.top + 180, { pointerType: "pen", isPrimary: true, pressure: 0.5 });
+    sendPointer(ov, "pointermove", 801, r.left + 180, r.top + 200, { pointerType: "pen", isPrimary: true, pressure: 0.5 });
+    sendPointer(ov, "pointerup", 801, r.left + 210, r.top + 210, { pointerType: "pen", isPrimary: true, pressure: 0.5 });
+    await frame();
+    const inksAfterFollowup = (await store.loadAnnotations("q3-lost.pdf")).filter((a: any) => a.type === "pen").length;
+    assert(inksAfterFollowup === inksBefore + 1, \`Q3 follow-up single-finger stroke failed: \${inksBefore} -> \${inksAfterFollowup}\`);
+    return { passed: true, lostEvents, inksBefore, inksAfterLost, undoBefore, undoAfterLost, canUndoAfterLost, inksAfterFollowup };
+  } finally {
+    useNativePointerCapture = false;
+    await view.onClose();
+    view.containerEl.remove();
+    q3Ctx = null;
   }
 };
 
@@ -1040,6 +1117,51 @@ try {
       scaleElText: cdpDone.scaleElText,
     };
 
+    // Q3: Native trusted lostpointercapture (isTrusted=true) via CDP touchStart + touchMove + native releasePointerCapture
+    const q3Pos = await evalJson("window.setupQ3NativeLostCapture()");
+    await new Promise((resolveCdp, rejectCdp) => {
+      const ws = new WebSocket(target.webSocketDebuggerUrl);
+      let nextId = 1;
+      const sendCdp = (method, params) => new Promise((res, rej) => {
+        const id = nextId++;
+        const onMsg = ev => {
+          const msg = JSON.parse(ev.data);
+          if (msg.id !== id) return;
+          ws.removeEventListener("message", onMsg);
+          if (msg.error) rej(new Error(JSON.stringify(msg.error)));
+          else res(msg.result);
+        };
+        ws.addEventListener("message", onMsg);
+        ws.send(JSON.stringify({ id, method, params }));
+      });
+      ws.addEventListener("open", async () => {
+        try {
+          await sendCdp("Input.dispatchTouchEvent", {
+            type: "touchStart",
+            touchPoints: [{ id: 1, x: q3Pos.x, y: q3Pos.y }],
+          });
+          await sendCdp("Input.dispatchTouchEvent", {
+            type: "touchMove",
+            touchPoints: [{ id: 1, x: q3Pos.x + 40, y: q3Pos.y + 20 }],
+          });
+          await new Promise(r => setTimeout(r, 30));
+          await evalJson("window.triggerQ3ReleaseCapture()");
+          await new Promise(r => setTimeout(r, 30));
+          await sendCdp("Input.dispatchTouchEvent", {
+            type: "touchEnd",
+            touchPoints: [],
+          });
+          ws.close();
+          resolveCdp();
+        } catch (err) {
+          ws.close();
+          rejectCdp(err);
+        }
+      });
+      ws.addEventListener("error", () => rejectCdp(new Error("CDP WebSocket error in Q3")));
+    });
+    const q3NativeLostCapture = await evalJson("window.finishQ3NativeLostCapture()");
+
     // Re-test PZ-02 anchor accuracy in 768x1024 (portrait Pad / narrow split)
     await browser("set", "viewport", "768", "1024");
     const pz02Portrait = await evalJson("window.runPZ02()");
@@ -1059,6 +1181,7 @@ try {
       pz05,
       pz06,
       cdpTouchSmoke,
+      q3NativeLostCapture,
     };
 
     if (process.env.MARGINSTUDY_EVIDENCE_DIR) {

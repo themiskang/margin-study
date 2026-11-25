@@ -555,10 +555,19 @@ export class PenController {
     };
     const onLostCapture = (event: PointerEvent) => {
       this.palm.end(event, this.pointerType, this.pointerId);
-      if (event.pointerId === this.pointerId) this.flush();
+      if (event.pointerId !== this.pointerId) return;
+      if (this.pointerType === "touch" || event.isTrusted) this.abortActiveGesture();
+      else this.flush();
+    };
+    const onPointerLeave = (event: PointerEvent) => {
+      if (event.pointerId !== this.pointerId || event.buttons !== 0) return;
+      if (this.overlay.hasPointerCapture?.(event.pointerId)) return;
+      this.palm.end(event, this.pointerType, this.pointerId);
+      this.abortActiveGesture();
     };
     this.overlay.addEventListener("pointercancel", onPointerCancel);
     this.overlay.addEventListener("lostpointercapture", onLostCapture);
+    this.overlay.addEventListener("pointerleave", onPointerLeave);
     const handleKeydown = (event: KeyboardEvent) => {
       if (!this.active) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
