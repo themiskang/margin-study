@@ -681,7 +681,7 @@ export class ExtendNotes {
   }
   readonly onRegionStart = (event: PointerEvent): void => {
     this.consumePlaceClick = false;
-    if (!this.placing || this.reader.isPinching() || event.button !== 0 || event.isPrimary === false || (event.target as HTMLElement).closest(".ms-extend-layer,.ms-ann,.ms-page-bar,button,input,select,textarea,.ms-text-layer span")) return;
+    if (!this.placing || this.reader.isPinching() || event.button !== 0 || (event.target as HTMLElement).closest(".ms-extend-layer,.ms-ann,.ms-page-bar,button,input,select,textarea,.ms-text-layer span")) return;
     const wrapper = (event.target as HTMLElement).closest<HTMLElement>(".ms-page"); if (!wrapper) return;
     this.cancelDrag?.();
     const page = Number(wrapper.dataset.page), bounds = wrapper.getBoundingClientRect(), path = this.reader.getFilePath(), notebook = this.reader.getDocumentNotebookId();
