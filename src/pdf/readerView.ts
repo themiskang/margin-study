@@ -136,6 +136,9 @@ export class ReaderView extends ItemView {
   private destroyed = false;
   private navigationRevision = 0;
   private navigationPage: number | null = null;
+  private notebookSyncPending: Promise<void> = Promise.resolve();
+  private smoothNavigation: { page: number; targetTop: number; expiresAt: number } | null = null;
+  private pageVisibility = new Map<number, number>();
   // A restored last page can be visible below an earlier page when scrolling is
   // clamped at the document end. Keep its identity until the viewport moves.
   private locationAnchor: {page:number;top:number;left:number;width:number;height:number;location:PdfReadingLocation} | null = null;
@@ -838,8 +841,11 @@ export class ReaderView extends ItemView {
     this.register(this.annController.subscribeHandwritingModeChange(() => this.extendNotes.syncHandwriting()));
     this.speech = new ReadingSpeechControls({ owner: `pdf-${Math.random().toString(36).slice(2)}`,
       selectionRoot: () => this.scrollEl, documentSource: () => this.speechSource(), ready: () => !!this.doc });
-    this.scrollEl.addEventListener("pointerdown", () => { this.plugin.activeReader = this; this.locationAnchor = null; });
-    this.scrollEl.addEventListener("wheel", () => { this.locationAnchor = null; }, { passive: true });
+    this.scrollEl.addEventListener("pointerdown", () => { this.plugin.activeReader = this; this.locationAnchor = null; this.smoothNavigation = null; });
+    this.scrollEl.addEventListener("wheel", () => { this.locationAnchor = null; this.smoothNavigation = null; }, { passive: true });
+    this.scrollEl.addEventListener("scroll", () => {
+      if (this.smoothNavigation && Math.abs(this.scrollEl.scrollTop - this.smoothNavigation.targetTop) < 2) this.smoothNavigation = null;
+    }, { passive: true });
     this.scrollEl.addEventListener("focusin", () => { this.plugin.activeReader = this; });
 
     this.buildToolbar();
@@ -852,16 +858,30 @@ export class ReaderView extends ItemView {
           if (this.pages.get(num)?.wrapper !== e.target || this.destroyed || !this.isPageShown(num)) continue;
           if (e.isIntersecting) {
             this.visiblePages.add(num);
+            this.pageVisibility.set(num, e.intersectionRatio);
             void this.renderPage(num);
           } else {
             this.visiblePages.delete(num);
+            this.pageVisibility.delete(num);
           }
           if (e.isIntersecting && (!topMost || e.intersectionRatio > topMost.ratio)) {
             topMost = { num, ratio: e.intersectionRatio };
           }
         }
-        if (topMost && this.continuous && this.navigationPage === null && !this.hasLocationAnchor() &&
-          (!this.unitPages(topMost.num).includes(this.currentPage) || !this.visiblePages.has(this.currentPage))) this.setCurrentPage(topMost.num);
+        if (this.smoothNavigation && (Date.now() > this.smoothNavigation.expiresAt || Math.abs(this.scrollEl.scrollTop - this.smoothNavigation.targetTop) < 2)) {
+          this.smoothNavigation = null;
+        }
+        if (topMost && this.continuous && this.navigationPage === null && !this.smoothNavigation && !this.hasLocationAnchor()) {
+          let best = topMost;
+          for (const [num, ratio] of this.pageVisibility) {
+            if (!this.visiblePages.has(num) || !this.isPageShown(num)) continue;
+            if (ratio > best.ratio) best = { num, ratio };
+          }
+          const currentRatio = this.visiblePages.has(this.currentPage) ? (this.pageVisibility.get(this.currentPage) ?? 0) : -1;
+          if ((!this.unitPages(best.num).includes(this.currentPage) || !this.visiblePages.has(this.currentPage)) && best.ratio > currentRatio + 0.01) {
+            this.setCurrentPage(best.num);
+          }
+        }
         this.evictOffscreenPages();
       },
       { root: this.scrollEl, threshold: [0, 0.1, 0.5, 1] }
@@ -1266,7 +1286,7 @@ export class ReaderView extends ItemView {
   }
   private isPageShown(page: number): boolean { return !!this.pages.get(page) && !this.pageRows.get(page)?.hidden; }
   private reflowPages(page: number): void {
-    this.observer?.disconnect(); this.pageRows.clear(); this.visiblePages.clear();
+    this.observer?.disconnect(); this.pageRows.clear(); this.visiblePages.clear(); this.pageVisibility.clear();
     this.scrollEl.classList.toggle("ms-pdf-spread", this.layout === "spread");
     this.scrollEl.classList.toggle("ms-pdf-paged", !this.continuous);
     const fragment = document.createDocumentFragment();
@@ -1444,12 +1464,14 @@ export class ReaderView extends ItemView {
   /** Record the old view before expanding/rendering; return only after the destination is usable. */
   async navigateToReference(pageNum: number, rects: PdfRect[], coordinateSpace?: Annotation["pdfCoordinateSpace"], smooth = true): Promise<boolean> {
     if (!this.doc || !Number.isFinite(pageNum) || this.destroyed) return false;
+    const loadRevision = this.loadRevision;
+    await this.notebookSyncPending;
+    if (!this.doc || this.destroyed || loadRevision !== this.loadRevision) return false;
     const page = Math.max(1, Math.min(this.doc.numPages, Math.floor(pageNum)));
     const rec = this.pages.get(page);
     if (!rec) return false;
     this.pendingLocation = null;
     const revision = ++this.navigationRevision;
-    const loadRevision = this.loadRevision;
     this.navigationHistory.record(this.captureLocation());
     this.locationAnchor = null;
     this.updateHistoryButtons();
@@ -1463,10 +1485,14 @@ export class ReaderView extends ItemView {
       const scroll = this.scrollEl.getBoundingClientRect();
       const canvas = rec.canvas.getBoundingClientRect();
       const wrapper = rec.wrapper.getBoundingClientRect();
+      const targetTop = Math.max(0, Math.min(this.scrollEl.scrollHeight - this.scrollEl.clientHeight,
+        this.scrollEl.scrollTop + (bounds ? canvas.top + bounds.top + bounds.height / 2 - scroll.top - this.scrollEl.clientHeight / 2 : wrapper.top - scroll.top)));
+      const targetLeft = bounds && canvas.width > this.scrollEl.clientWidth
+        ? this.scrollEl.scrollLeft + canvas.left + bounds.left + bounds.width / 2 - scroll.left - this.scrollEl.clientWidth / 2 : this.scrollEl.scrollLeft;
+      this.smoothNavigation = smooth ? { page, targetTop, expiresAt: Date.now() + 1200 } : null;
       this.scrollEl.scrollTo({
-        top: this.scrollEl.scrollTop + (bounds ? canvas.top + bounds.top + bounds.height / 2 - scroll.top - this.scrollEl.clientHeight / 2 : wrapper.top - scroll.top),
-        left: bounds && canvas.width > this.scrollEl.clientWidth
-          ? this.scrollEl.scrollLeft + canvas.left + bounds.left + bounds.width / 2 - scroll.left - this.scrollEl.clientWidth / 2 : this.scrollEl.scrollLeft,
+        top: targetTop,
+        left: targetLeft,
         behavior: smooth ? "smooth" : "instant" as ScrollBehavior,
       });
       if(!smooth){
@@ -1521,7 +1547,11 @@ export class ReaderView extends ItemView {
       }
     }
     const text = unionCssRects(hits);
-    return text ? { ...reference, top: text.top, height: text.height } : reference;
+    // On 90°/270° rotated pages a single text span runs vertically, so a partial-line
+    // highlight is much shorter than the full span; only snap vertically when heights match.
+    return text && Math.abs(text.height - reference.height) <= Math.max(8, reference.height * 0.5)
+      ? { ...reference, top: text.top, height: text.height }
+      : reference;
   }
 
   private canMeasureLocation(): boolean {
@@ -1675,6 +1705,8 @@ export class ReaderView extends ItemView {
     if (!this.applyingPageEdits) { this.closePageEditor?.(); this.closePageEditor = null; }
     this.cropEditorRevision++; this.closeCropEditor?.(); this.closeCropEditor = null;
     this.locationAnchor = null;
+    this.smoothNavigation = null;
+    this.pageVisibility.clear();
     this.pendingLocation = null; this.lastLocation = { page: 1, pageOffset: 0, left: 0 };
     this.navigationRevision++;
     this.navigationPage = null;
@@ -2052,7 +2084,8 @@ export class ReaderView extends ItemView {
   }
 
   applyDocumentNotebookView(): void {
-    void this.finishExtendEditing().then(() => this.extendNotes.sync());
+    const sync = this.finishExtendEditing().then(() => this.extendNotes.sync()).catch(() => {});
+    this.notebookSyncPending = sync;
     if (!this.doc || !this.loadedPath) return; const meta = notebookMeta(this.plugin.store.getDocMeta(this.loadedPath));
     this.folded = new Set(meta.foldedPages ?? []); this.bookmarked = new Set(meta.bookmarks ?? []);
     this.continuous = this.plugin.store.settings.readingMode !== "paged"; this.layout = !this.continuous && this.plugin.store.settings.doublePage ? "spread" : "single";
