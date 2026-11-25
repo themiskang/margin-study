@@ -5,6 +5,7 @@
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 import { readFile, writeFile, mkdtemp, realpath, mkdir, rm } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
@@ -748,11 +749,16 @@ function measureSelectors(selectors: string[]) {
     notify: () => {},
   });
   await frame();
+  await wait(40);
 
   const syncModal = document.querySelector<HTMLElement>(".ms-modal.ms-sync-status");
   const syncRect = syncModal && syncModal.checkVisibility() ? rectObj(syncModal) : null;
   const syncRows = [...(syncModal?.querySelectorAll<HTMLElement>(".ms-sync-row") ?? [])].map((row) => row.textContent?.trim() ?? "");
-  const syncOverflowOk = !!syncModal && syncModal.scrollWidth <= syncModal.clientWidth + 1;
+  const syncScrollWidth = syncModal?.scrollWidth ?? 0;
+  const syncClientWidth = syncModal?.clientWidth ?? 0;
+  const syncScrollHeight = syncModal?.scrollHeight ?? 0;
+  const syncClientHeight = syncModal?.clientHeight ?? 0;
+  const syncOverflowOk = !!syncModal && syncClientWidth > 0 && syncScrollWidth <= syncClientWidth + 1;
   const r10Passed =
     !!syncModal &&
     inViewport(syncRect, 1) &&
@@ -780,13 +786,15 @@ function measureSelectors(selectors: string[]) {
     },
     r10: {
       geometryBaseline: null,
-      note: "D-04 自有增强，无 MN5 几何基线；核验容器非零、视口内不裁剪、状态行 >=5 且非空、scrollWidth <= clientWidth + 1",
+      note: "D-04 自有增强，无 MN5 几何基线；核验容器非零、视口内不裁剪、状态行 >=5 且非空、clientWidth > 0 且 scrollWidth <= clientWidth + 1",
       rect: syncRect,
       inViewport: inViewport(syncRect, 1),
       rowCount: syncRows.length,
       nonEmptyRows: syncRows.every((text) => text.length > 0),
-      scrollWidth: syncModal?.scrollWidth ?? null,
-      clientWidth: syncModal?.clientWidth ?? null,
+      scrollWidth: syncScrollWidth,
+      clientWidth: syncClientWidth,
+      scrollHeight: syncScrollHeight,
+      clientHeight: syncClientHeight,
       overflowOk: syncOverflowOk,
       passed: r10Passed,
     },
@@ -890,8 +898,10 @@ try {
 
   const evidenceDir = process.env.MARGINSTUDY_EVIDENCE_DIR ? resolve(process.env.MARGINSTUDY_EVIDENCE_DIR, "gap-10a") : null;
   if (evidenceDir) await mkdir(evidenceDir, { recursive: true });
+  let headSha = null;
+  try { headSha = execFileSync("git", ["rev-parse", "--short", "HEAD"], { cwd: project, encoding: "utf8" }).trim(); } catch {}
   const writeEvidence = async (filename, payload) => {
-    if (evidenceDir) await writeFile(join(evidenceDir, filename), JSON.stringify(payload, null, 2) + "\n");
+    if (evidenceDir) await writeFile(join(evidenceDir, filename), JSON.stringify({ head: headSha, generatedAt: new Date().toISOString(), ...payload }, null, 2) + "\n");
   };
 
   try {
