@@ -172,3 +172,18 @@ G10b-03 **3/3 次确定性失败**（切本后 `refreshExtendLayout` 打断导�
 **两条非阻断登记（建议另开小卡补断言）**：
 1. 批注侧 `excerptBlocks`（`store.ts:3503-3505`）未进公开套件，仅复核 Node 探针覆盖；
 2. `referenceBounds` 旋转局部行 hunk 无区分性断言（G10b-01 第 2 页为整行摘录）。
+
+## 2026-11-25 · GAP-EGO-01a 收口（合并 `2a69e04`，条件收口 + 异厂 PASS）
+
+新浏览器（ego）测试通道底座。默认后端仍 `agent-browser`；`verify:public` **110→111**、`px-gap` 295/298。
+关键成效：单会话只拉起 1 次浏览器（冷启 338ms → 进程内约 4ms，约 85×），`ego` 下 `px-gap` 首次跑通
+（295/298，与默认逐锚点 `maxAbsDeltaDiff=0.5px`，零状态不一致）。
+`scripts/px-gap.mjs` 仅 ego 分支等待上限 90s→300s / 180s→360s，默认后端不变，显式标注为 headed 环境差异。
+
+**诚实挂账**：GE1a-06 = 4/5 + `workspace` 348/352：
+- 1 项 **P**（跳页后立即开目录栏丢页码）→ 新卡 `GAP-READER-GOTO-01`；
+- 3 项 **E**（Pinch 纵向 60px / sepia 纸面被 60ms refresh 覆写 / 关侧栏段落位移）→ `GAP-EGO-01b`。
+
+**门禁稳定性实录（TEST-FLAKE-LOAD 复现）**：合入后首轮全量 `verify:public` 为 **110/111**，
+`word-hw-eraser` 在 **121.0s** 超时（上限 120s）；单跑该套件 **60.4s / 247/247 PASS**；同机第二轮全量 **111/111**。
+结论：负载下超时假红，非产品回退；该套件 120s 上限偏紧，已登记到 `TEST-FLAKE-LOAD` 待规划席裁决是否放宽（属基础设施时限，非判据）。
