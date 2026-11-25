@@ -159,3 +159,16 @@ R2–R10 九面锚点固化（YAN-01）。新增公开套件 `yan-r2-r10-surface
 **登记跟踪项 `TEST-FLAKE-LOAD`（非本卡）**：并发浏览器会话下 `pdf-hw-eraser`/`word-hw-eraser` 会出现 4 条 `null` DOM 假红
 （`null.querySelector`/`null.getBoundingClientRect`/`null.dispatchEvent`/`null.text`）；串行顺序跑不复现。
 判据：**2 个并发浏览器会话下连跑 3 次，必须 100% 绿**。
+
+## 2026-11-25 · GAP-10b 收口（合并 `a035b14`，执行 + 异厂复核 PASS）
+
+文档锚点生命周期：跨页回跳 / 改名移目录 / 工作区冷重开 / 缺源恢复重锚。
+门禁：`tsc` 0、`build` 0、`verify:public` **110/110**、`px-gap` **295/298**（8 条边际项 8/8 恰 3.00px，零回退）。
+
+复核独立性证据（GLM 异厂）：父提交 `f27d373` 同套件 **0/4**；候选导出副本**单独回退** `notebookSyncPending` 三处 hunk →
+G10b-03 **3/3 次确定性失败**（切本后 `refreshExtendLayout` 打断导航、`currentPage` 停 1、`annEls=0`），证明修复必要。
+冷重开四路证据：对象身份、`destroyed` 标志、DOM 脱离、数据来源（按 id 从盘取卡）。
+
+**两条非阻断登记（建议另开小卡补断言）**：
+1. 批注侧 `excerptBlocks`（`store.ts:3503-3505`）未进公开套件，仅复核 Node 探针覆盖；
+2. `referenceBounds` 旋转局部行 hunk 无区分性断言（G10b-01 第 2 页为整行摘录）。
