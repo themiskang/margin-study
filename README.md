@@ -14,6 +14,10 @@
 3. 数据全部在你自己的库里（Markdown/JSON），可导出、可跨库迁移，**不上传任何服务器**。
 
 <p align="center">
+  <img src="docs/assets/demo.gif" alt="MarginStudy 操作演示：工作区 → 阅读器选字摘录 → 摘录生成卡片入脑图" width="100%">
+</p>
+
+<p align="center">
   <img src="docs/assets/preview-handwriting.png" alt="手写分层与卡片" width="70%">
 </p>
 
