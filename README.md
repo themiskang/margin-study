@@ -1,22 +1,29 @@
 # MarginStudy
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![Latest release](https://img.shields.io/github/v/release/themiskang/margin-study?color=blue)](https://github.com/themiskang/margin-study/releases)
 
-MarginStudy 是面向 Obsidian 的 MarginNote 5 风格学习插件，集成文档阅读、批注、卡片、脑图与复习。当前目标为 MarginNote 5.0.2，主要验收平台为 macOS 桌面。项目仍处于开发阶段。
+
+<p align="center">
+  <img src="docs/assets/preview-workspace.png" alt="MarginStudy 工作区预览" width="100%">
+</p>
+
+**三句话认识它**
+
+1. 在 Obsidian 里做完整闭环：**阅读 → 摘录 → 卡片 → 脑图 → 复习**，不用在几个工具之间倒数据。
+2. PDF 和网页都能批注，**手写可分层、可跨页**；摘录与卡片双向联动，文档改名或换文件夹后关联不断。
+3. 数据全部在你自己的库里（Markdown/JSON），可导出、可跨库迁移，**不上传任何服务器**。
+
+<p align="center">
+  <img src="docs/assets/preview-handwriting.png" alt="手写分层与卡片" width="70%">
+</p>
 
 ## 安装
 
-**从 Release 安装（推荐）**
-
-1. 打开本仓库右侧 **Releases**，下载最新版本的 `main.js`、`manifest.json`、`styles.css`、`pdf.worker.js`（以及 `ocr.swift`，如提供）。
-2. 在你的 Obsidian 库中建立目录 `.obsidian/plugins/margin-study/`，把上述文件放进去。
+1. 打开 [Releases](https://github.com/themiskang/margin-study/releases)，下载最新版的 `main.js`、`manifest.json`、`styles.css`、`pdf.worker.js`。
+2. 在你的 Obsidian 库中建立目录 `.obsidian/plugins/margin-study/`，把 4 个文件放进去。
 3. 重启 Obsidian → 设置 → 第三方插件 → 关闭安全模式 → 启用 **MarginStudy**。
 
-**开发版（BRAT）**：在 BRAT 中添加本仓库地址即可自动跟踪最新预发布版本。
-
-**要求**：Obsidian 1.4.0 及以上；macOS 原生功能（相机/相册/语音转写）需要自行构建 `native/` 运行时。
-
-已知限制见 [已知限制](docs/known-issues.md)。
+要求 Obsidian 1.4.0 及以上。已知问题见 [已知问题](docs/known-issues.md)。
 
 ## 文档
 
