@@ -22,5 +22,6 @@
 - `annotation-refs/` 存放 GAP-07b-2 B4 孤儿 `inkLayerId`、B5 文档改名/移动（含 `invariant-r/` 不变量 R 磁盘级证明）与 GAP-07b-3 B6/B7 导出与跨库往返（`export-roundtrip/`）的 39 项复现回归夹具与共享支持。
 - `recovery-delete-guard.mjs` 基于 TypeScript AST 扫描 `src/**`（精确调用点三元组白名单，禁止方法级豁免）与运行时哨兵，强制所有批注恢复文件删除均经 `canDeleteRecovery` / `deleteRecoveryIfProved` 单一闸门。
 - `reference-opacity-guard.mjs` 基于 TypeScript AST 与 CSS 规则扫描，强制参考层 `0.35` 双轨校验（递归 `calc()` 规范化数值 + 精确形态白名单 + 生产者侧 token 常量引用），基线精确等于 `4`（1 TS 常量 + 2 CSS 回退 + 1 定义点），其余形态、不可判定 `calc()` 或基线计数偏离即 FAIL 并报 `文件:行号`。
+- `yan-r2-r10-surfaces-acceptance.mjs` 零私有夹具公开浏览器套件（GAP-10a / YAN-01），覆盖 R2–R10 九面三视口（R8 追加 380×700）基线几何、专属控件命中与零重叠、R4/R5 菜单契约、简洁态往返零残留与 R9/R10 防溢出。
 
 [PROTOCOL]: Update this header on change, then check AGENTS.md
