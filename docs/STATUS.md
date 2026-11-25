@@ -144,3 +144,18 @@
 
 **G6c-07 环境豁免**：异厂复核环境 `verify:public` 104/108 与 `px-gap` 超时，父提交 `4bda9aa`/`3581d6b` 同环境同样超时；
 主库与执行席隔离克隆均 108/108、295/298，判定环境差异、不构成回退。
+
+## 2026-11-25 · GAP-10a 收口（合并 `a6ef497`，执行 + 异厂复核 PASS）
+
+R2–R10 九面锚点固化（YAN-01）。新增公开套件 `yan-r2-r10-surfaces`（`verify:public` 108→**109/109**），`px-gap` 维持 **295/298**。
+两处最小 CSS 修复均由套件实测暴露（`756×427` 单选操作条换行、附件胶囊 `transition:none`），未改冻结基线。
+
+**证据有效性两处修正**（复核发现的非阻断项，值得记为流程约束）：
+1. R10 曾在 `openSyncStatusPanel()` 后立即读取，得到 `scrollWidth/clientWidth = 0/0` 的**空真读数**；
+   改为移除 `.ms-modal-bg` 前读取并 `wait(40)` 后，真实读数 `652×652`、`rowCount=7`。
+2. 5 份 JSON 曾在父提交生成（11:36 < 提交 11:44）；改为在提交 HEAD 上重生成，并在证据内标注 `head` / `generatedAt`。
+   → **约束：证据必须带 `head` 与生成时间，且与合入提交一致。**
+
+**登记跟踪项 `TEST-FLAKE-LOAD`（非本卡）**：并发浏览器会话下 `pdf-hw-eraser`/`word-hw-eraser` 会出现 4 条 `null` DOM 假红
+（`null.querySelector`/`null.getBoundingClientRect`/`null.dispatchEvent`/`null.text`）；串行顺序跑不复现。
+判据：**2 个并发浏览器会话下连跑 3 次，必须 100% 绿**。
