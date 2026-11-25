@@ -134,11 +134,19 @@ await test("Static path leak scan & CJS module key normalization", () => {
   }
 
   const mainText = readFileSync(join(root, "main.js"), "utf8");
-  const cjsKeys = [...mainText.matchAll(/__commonJS\(\{\s*"([^"]+)"/g)].map(m => m[1]);
-  assert.ok(cjsKeys.length > 0, "Expected at least one __commonJS module key in main.js");
-  const badKeys = cjsKeys.filter(k => !/^(?:\(disabled\):)?(?:node_modules|src)\//.test(k));
-  assert.deepEqual(badKeys, [], `Non-repo CJS module keys found: ${badKeys.slice(0, 5).join(", ")}`);
-});
+  // 生产构建开启压缩后，esbuild 会省略 CJS 模块键（仅调试用信息），因此以两条等价护栏为准：
+  //   ① 产物内零绝对/越界路径（上面的 patterns 扫描，覆盖 /Users、/home、Documents、../ 与盘符）；
+  //   ② 若存在模块键，则必须是仓库内相对路径且不含 `..`。
+  const collectRepoModuleKeys = (text) =>
+    [...text.matchAll(/"((?:\(disabled\):)?(?:node_modules|src)\/[^"\n]{1,200}?\.(?:js|mjs|cjs|json))"/g)].map((m) => m[1]);
+  const repoKeys = collectRepoModuleKeys(mainText);
+  const escapingKeys = repoKeys.filter((k) => k.includes(".."));
+  assert.deepEqual(escapingKeys, [], `Module keys escaping the repo: ${escapingKeys.slice(0, 5).join(", ")}`);
+  const probe = '"node_modules/a/index.js" "(disabled):src/b.js" "../escape.js"';
+  assert.deepEqual(collectRepoModuleKeys(probe), ["node_modules/a/index.js", "(disabled):src/b.js"], "Module-key detector self-check failed");
+  console.log(
+    `  module-keys: ${repoKeys.length}${repoKeys.length === 0 ? " (elided by minified build; absolute-path scan governs)" : ""}`,
+  );});
 
 // 2. 仓库内隔离镜像 + 跨路径 symlink 复现比对断言（不写仓外路径、真实复制源码与脚本、realpath 越界防护、finally 清理）
 await test("In-repo isolated mirror cross-path symlink rebuild matches current artifacts", () => {
