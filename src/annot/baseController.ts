@@ -1721,13 +1721,16 @@ export abstract class BaseAnnotationController {
   protected ensurePenRevision(): void {
     if (!this.penRevision) this.beginPenGesture();
   }
+  private activePenPointers = new WeakMap<SVGSVGElement, number>();
+  protected resetPenGestureWatch(): void {
+    this.activePenPointers = new WeakMap();
+  }
   protected watchPenGestures(overlay: SVGSVGElement): void {
-    let pointer: number | null = null;
     overlay.addEventListener("pointerdown", event => {
-      if (pointer !== null || event.button !== 0 || event.isPrimary === false) return;
-      pointer = event.pointerId; this.beginPenGesture();
+      if (this.activePenPointers.has(overlay) || event.button !== 0 || event.isPrimary === false) return;
+      this.activePenPointers.set(overlay, event.pointerId); this.beginPenGesture();
     }, true);
-    const finish = (event: PointerEvent) => { if (event.pointerId === pointer) pointer = null; };
+    const finish = (event: PointerEvent) => { if (this.activePenPointers.get(overlay) === event.pointerId) this.activePenPointers.delete(overlay); };
     overlay.addEventListener("pointerup", finish, true);
     overlay.addEventListener("pointercancel", finish, true);
     overlay.addEventListener("lostpointercapture", finish, true);

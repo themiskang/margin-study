@@ -161,11 +161,26 @@ export class ReaderView extends ItemView {
   private prevPageEl: HTMLButtonElement | null = null;
   private nextPageEl: HTMLButtonElement | null = null;
   private savePositionTimer: number | null = null;
+  private suppressScrollSave = false;
   private speech: ReadingSpeechControls | null = null;
   private notebook: NotebookMetadata | null = null;
   private notebookTools: HTMLElement | null = null;
   private workspaceChrome = false;
   private extendNotes = new ExtendNotes(this);
+  private pinchPointers = new Map<number, { x: number; y: number }>();
+  private pinchState: {
+    startDistance: number;
+    startCenter: { x: number; y: number };
+    lastCenter: { x: number; y: number };
+    startScale: number;
+    currentScale: number;
+    anchorPage: number;
+    anchorU: number;
+    anchorV: number;
+    rows: { el: HTMLElement; left: number; top: number }[];
+  } | null = null;
+  private pinchFrame = 0;
+  private pinchSettling = false;
 
   constructor(leaf: WorkspaceLeaf, plugin: MarginStudyPlugin) {
     super(leaf);
@@ -818,6 +833,7 @@ export class ReaderView extends ItemView {
       const box=canvas.getBoundingClientRect(),x=event.clientX-box.left,edge=Math.min(48,box.width*.08),page=Number(paper?.dataset.page);
       if(x<edge&&page>1)void this.gotoDisplayPage(page-1);else if(x>box.width-edge&&page<this.doc?.numPages)void this.gotoDisplayPage(page+1);
     });
+    this.scrollEl.addEventListener("pointerdown", this.onPinchPointerDown, true);
     this.scrollEl.addEventListener("pointerdown", this.extendNotes.onRegionStart, true);
     this.scrollEl.tabIndex = 0;
     this.scrollEl.setAttribute("aria-label", "PDF 正文；方向键和 PageUp / PageDown 翻页");
@@ -852,6 +868,7 @@ export class ReaderView extends ItemView {
 
     this.observer = new IntersectionObserver(
       (entries) => {
+        if (this.pinchState) return;
         let topMost: { num: number; ratio: number } | null = null;
         for (const e of entries) {
           const num = Number((e.target as HTMLElement).dataset.page);
@@ -905,7 +922,9 @@ export class ReaderView extends ItemView {
   async onClose(): Promise<void> {
     window.removeEventListener("marginstudy-reading-layout", this.onGlobalReadingLayout);
     await this.finishExtendEditing(); this.extendNotes.reset();
+    this.clearPinchState();
     this.scrollEl?.removeEventListener("click", this.extendNotes.onPlace, true);
+    this.scrollEl?.removeEventListener("pointerdown", this.onPinchPointerDown, true);
     this.scrollEl?.removeEventListener("pointerdown", this.extendNotes.onRegionStart, true);
     this.closePdfExport?.();this.closePdfExport=null;
     this.closePageEditor?.(); this.closePageEditor = null;
@@ -1342,8 +1361,16 @@ export class ReaderView extends ItemView {
   private saveReadingPosition = (): void => {
     this.captureLocation();
     this.syncDisplayPageControls();
+    if (this.suppressScrollSave) {
+      this.suppressScrollSave = false;
+      return;
+    }
+    if (this.isPinching()) return;
     if (this.savePositionTimer !== null) window.clearTimeout(this.savePositionTimer);
-    this.savePositionTimer = window.setTimeout(() => { this.savePositionTimer = null; this.saveReadingState(); }, 250);
+    this.savePositionTimer = window.setTimeout(() => {
+      this.savePositionTimer = null;
+      if (!this.isPinching()) this.saveReadingState();
+    }, 250);
   };
   private async applyRestoredState(): Promise<void> {
     const saved = this.restoredState;
@@ -1395,6 +1422,214 @@ export class ReaderView extends ItemView {
     }
     // 标注层随上面 renderPage 末尾统一渲染（页面已量好尺寸），此处无需重复调用
   }
+
+  setScaleAtPoint(scale: number, anchorPage: number, anchorU: number, anchorV: number, clientX: number, clientY: number): void {
+    if (!Number.isFinite(scale) || !this.doc) return;
+    this.locationAnchor = null;
+    this.smoothNavigation = null;
+    const clamped = Math.max(0.3, Math.min(4, Number(scale.toFixed(3))));
+    const anchorRec = this.pages.get(anchorPage);
+    if (anchorRec && this.isPageShown(anchorPage) && !this.folded.has(anchorPage)) {
+      this.visiblePages.add(anchorPage);
+    }
+    this.applyScale(clamped, false);
+    this.plugin.store.settings.scale = this.scale;
+    this.updateExtendScrollSpace();
+    if (anchorRec && this.isPageShown(anchorPage) && !this.folded.has(anchorPage)) {
+      const bounds = anchorRec.wrapper.getBoundingClientRect();
+      const dx = bounds.left + anchorU * bounds.width - clientX;
+      const dy = bounds.top + anchorV * bounds.height - clientY;
+      const moveX = Number.isFinite(dx) && Math.abs(dx) > 0.01;
+      const moveY = Number.isFinite(dy) && Math.abs(dy) > 0.01;
+      if (moveX || moveY) {
+        this.suppressScrollSave = true;
+        if (moveX) this.scrollEl.scrollLeft += dx;
+        if (moveY) this.scrollEl.scrollTop += dy;
+        requestAnimationFrame(() => { this.suppressScrollSave = false; });
+      }
+    }
+    if (this.savePositionTimer !== null) {
+      window.clearTimeout(this.savePositionTimer);
+      this.savePositionTimer = null;
+    }
+    this.captureLocation();
+    this.syncDisplayPageControls();
+    if (this.workspaceChrome && this.readingStateListeners.size > 0) {
+      this.saveReadingState();
+    } else {
+      this.plugin.store.save();
+      this.app.workspace.requestSaveLayout();
+    }
+  }
+
+  private findPinchAnchor(cx: number, cy: number): { page: number; u: number; v: number } | null {
+    let best: { page: number; rect: DOMRect; dist: number } | null = null;
+    for (const [num, rec] of this.pages) {
+      if (!this.isPageShown(num) || this.folded.has(num)) continue;
+      const rect = rec.wrapper.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) continue;
+      const dx = cx < rect.left ? rect.left - cx : cx > rect.right ? cx - rect.right : 0;
+      const dy = cy < rect.top ? rect.top - cy : cy > rect.bottom ? cy - rect.bottom : 0;
+      const dist = dx * dx + dy * dy;
+      if (dist === 0) {
+        return { page: num, u: (cx - rect.left) / rect.width, v: (cy - rect.top) / rect.height };
+      }
+      if (!best || dist < best.dist) best = { page: num, rect, dist };
+    }
+    if (!best) return null;
+    return {
+      page: best.page,
+      u: (cx - best.rect.left) / best.rect.width,
+      v: (cy - best.rect.top) / best.rect.height,
+    };
+  }
+
+  private applyPinchPreview(): void {
+    const state = this.pinchState;
+    if (!state) return;
+    const ratio = state.currentScale / Math.max(0.001, state.startScale);
+    const tx = state.lastCenter.x - state.startCenter.x;
+    const ty = state.lastCenter.y - state.startCenter.y;
+    for (const row of state.rows) {
+      row.el.style.transformOrigin = `${state.startCenter.x - row.left}px ${state.startCenter.y - row.top}px`;
+      row.el.style.transform = `translate3d(${tx}px, ${ty}px, 0) scale(${ratio})`;
+      row.el.style.willChange = "transform";
+    }
+  }
+
+  private clearPinchPreview(): void {
+    if (this.pinchFrame) {
+      cancelAnimationFrame(this.pinchFrame);
+      this.pinchFrame = 0;
+    }
+    if (this.pinchState) {
+      for (const row of this.pinchState.rows) {
+        row.el.style.transform = "";
+        row.el.style.transformOrigin = "";
+        row.el.style.willChange = "";
+      }
+    }
+  }
+
+  private clearPinchState = (): void => {
+    this.clearPinchPreview();
+    if (this.pinchState && this.scaleEl) {
+      this.scaleEl.textContent = Math.round(this.scale * 100) + "%";
+    }
+    this.pinchState = null;
+    this.pinchSettling = false;
+    this.pinchPointers.clear();
+    window.removeEventListener("pointermove", this.onPinchPointerMove, true);
+    window.removeEventListener("pointerup", this.onPinchPointerEnd, true);
+    window.removeEventListener("pointercancel", this.onPinchPointerEnd, true);
+    window.removeEventListener("blur", this.clearPinchState);
+  };
+
+  isPinching(): boolean {
+    return this.pinchState !== null || this.pinchSettling || this.pinchPointers.size >= 2;
+  }
+
+  private onPinchPointerDown = (event: PointerEvent): void => {
+    if (event.pointerType !== "touch" || !this.doc || this.destroyed) return;
+    if (this.pinchPointers.size === 0 && (event.target as Element | null)?.closest("button,input,textarea,select,[contenteditable=true]")) return;
+    this.pinchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (this.pinchPointers.size === 1) {
+      window.addEventListener("pointermove", this.onPinchPointerMove, true);
+      window.addEventListener("pointerup", this.onPinchPointerEnd, true);
+      window.addEventListener("pointercancel", this.onPinchPointerEnd, true);
+      window.addEventListener("blur", this.clearPinchState);
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    if (this.savePositionTimer !== null) {
+      window.clearTimeout(this.savePositionTimer);
+      this.savePositionTimer = null;
+    }
+    this.annController?.abortActiveGestures();
+    this.extendNotes.cancelActiveGesture();
+    if (this.pinchPointers.size >= 3) {
+      this.clearPinchPreview();
+      if (this.scaleEl) this.scaleEl.textContent = Math.round(this.scale * 100) + "%";
+      this.pinchState = null;
+      this.pinchSettling = true;
+      return;
+    }
+    if (this.pinchSettling) return;
+    const [a, b] = [...this.pinchPointers.values()];
+    const dist = Math.hypot(a.x - b.x, a.y - b.y);
+    const cx = (a.x + b.x) / 2;
+    const cy = (a.y + b.y) / 2;
+    const anchor = this.findPinchAnchor(cx, cy);
+    if (!anchor) return;
+    const rows: { el: HTMLElement; left: number; top: number }[] = [];
+    for (const row of new Set(this.pageRows.values())) {
+      if (row.hidden) continue;
+      const rect = row.getBoundingClientRect();
+      rows.push({ el: row, left: rect.left, top: rect.top });
+    }
+    this.locationAnchor = null;
+    this.smoothNavigation = null;
+    this.pinchState = {
+      startDistance: Math.max(1, dist),
+      startCenter: { x: cx, y: cy },
+      lastCenter: { x: cx, y: cy },
+      startScale: this.scale,
+      currentScale: this.scale,
+      anchorPage: anchor.page,
+      anchorU: anchor.u,
+      anchorV: anchor.v,
+      rows,
+    };
+  };
+
+  private onPinchPointerMove = (event: PointerEvent): void => {
+    if (!this.pinchPointers.has(event.pointerId)) return;
+    this.pinchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (this.pinchSettling) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    const state = this.pinchState;
+    if (!state || this.pinchPointers.size !== 2) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const [a, b] = [...this.pinchPointers.values()];
+    const dist = Math.hypot(a.x - b.x, a.y - b.y);
+    if (!Number.isFinite(dist) || dist <= 0) return;
+    const rawScale = state.startScale * (dist / state.startDistance);
+    if (!Number.isFinite(rawScale)) return;
+    state.currentScale = Math.max(0.3, Math.min(4, Number(rawScale.toFixed(3))));
+    state.lastCenter = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    if (this.scaleEl) this.scaleEl.textContent = Math.round(state.currentScale * 100) + "%";
+    if (!this.pinchFrame) {
+      this.pinchFrame = requestAnimationFrame(() => {
+        this.pinchFrame = 0;
+        this.applyPinchPreview();
+      });
+    }
+  };
+
+  private onPinchPointerEnd = (event: PointerEvent): void => {
+    if (!this.pinchPointers.has(event.pointerId)) return;
+    this.pinchPointers.delete(event.pointerId);
+    if (this.pinchState && this.pinchPointers.size < 2) {
+      const state = this.pinchState;
+      this.clearPinchPreview();
+      this.pinchState = null;
+      this.pinchSettling = this.pinchPointers.size > 0;
+      if (event.type !== "pointercancel" && Number.isFinite(state.currentScale)) {
+        this.setScaleAtPoint(state.currentScale, state.anchorPage, state.anchorU, state.anchorV, state.lastCenter.x, state.lastCenter.y);
+      } else if (this.scaleEl) {
+        this.scaleEl.textContent = Math.round(this.scale * 100) + "%";
+      }
+    }
+    if (this.pinchPointers.size === 0) {
+      this.clearPinchState();
+    }
+  };
 
   /** Includes the whole spread; a manually zoomed page keeps its scale on pane changes. */
   isFittedToWidth(): boolean {
@@ -1717,6 +1952,7 @@ export class ReaderView extends ItemView {
     for (const task of this.thumbTasks) { try { task.cancel(); } catch { /* noop */ } }
     this.thumbTasks.clear();
     for (const [num, rec] of this.pages) this.releasePage(num, rec);
+    this.clearPinchState();
     this.pages.clear();
     this.pageRows.clear();
     this.visiblePages.clear();
@@ -1857,6 +2093,7 @@ export class ReaderView extends ItemView {
     finally{canvas.width=canvas.height=0;}
   }
   renderPage(pageNum: number): Promise<void> {
+    if (this.pinchState) return Promise.resolve();
     const rec = this.pages.get(pageNum);
     const doc = this.doc;
     if (!rec || !doc || this.destroyed || this.folded.has(pageNum) || !this.isPageShown(pageNum)) return Promise.resolve();

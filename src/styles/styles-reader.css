@@ -76,7 +76,7 @@ body .ms-image-crop-modal button.ms-image-crop-handle { position:absolute; z-ind
 .ms-study-workspace .ms-extend-image.is-selected > button.ms-extend-image-resize,.ms-extend-image.is-selected > .ms-extend-image-resize { display: block; }
 .ms-extend-note .ms-extend-tools,.ms-extend-note .ms-extend-resize { z-index: 4; }
 .ms-page-folded > .ms-extend-layer { display: none; }
-.ms-reader-pdf > .ms-scroll { align-items: stretch; }
+.ms-reader-pdf > .ms-scroll { align-items: stretch; touch-action: pan-x pan-y; }
 .ms-recall-remaining { position: absolute; top: 52px; right: 12px; z-index: 8; padding: 4px 8px; border-radius: 6px; background: var(--background-secondary); color: var(--text-normal); font-size: 12px; pointer-events: none; }
 .ms-recall-remaining span { display:block; }
 .ms-reader-pdf > .ms-extend-scroll-tail::after { content: ""; display: block; flex: none; height: var(--ms-extend-scroll-tail, 0px); }

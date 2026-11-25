@@ -235,6 +235,7 @@ export class PenController {
   private palm = new PalmGuard();
   private snapshot: InkRecord[] = [];
   private selection: InkSelection[] = [];
+  private selectionBeforeGesture: InkSelection[] = [];
   private selectionRect: SVGRectElement | null = null;
   private toolbar: HTMLDivElement;
   private extraToolbar: HTMLDivElement | null = null;
@@ -245,6 +246,8 @@ export class PenController {
   private temporary = new Map<SVGGElement, number>();
   private perfStroke: PerfStroke | null = null;
   private docKeydownHandler: ((event: KeyboardEvent) => void) | null = null;
+  private winBlurHandler: ((event: Event) => void) | null = null;
+  private docVisibilityHandler: (() => void) | null = null;
   color = "#e53935";
 
   constructor(private container: HTMLElement, private opts: PenOptions) {
@@ -325,7 +328,34 @@ export class PenController {
       this.container.ownerDocument.removeEventListener("keydown", this.docKeydownHandler);
       this.docKeydownHandler = null;
     }
+    if (this.winBlurHandler) {
+      this.container.ownerDocument.defaultView?.removeEventListener("blur", this.winBlurHandler);
+      this.winBlurHandler = null;
+    }
+    if (this.docVisibilityHandler) {
+      this.container.ownerDocument.removeEventListener("visibilitychange", this.docVisibilityHandler);
+      this.docVisibilityHandler = null;
+    }
     this.overlay.remove(); this.toolbar.remove(); this.extraToolbar?.remove(); this.colorPalette.remove();
+  }
+
+  refreshSelection(): void {
+    this.drawSelection();
+  }
+
+  /** Cancel any in-flight gesture without committing and restore pre-gesture selection. */
+  abortActiveGesture(): void {
+    if (!this.gesture && this.pointerId === null) return;
+    const restored = this.selectionBeforeGesture.map((entry) => ({ id: entry.id, indexes: [...entry.indexes] }));
+    this.selectionBeforeGesture = [];
+    const hadBefore = restored.length > 0;
+    const hadNow = this.selection.length > 0;
+    this.flush(false);
+    if (hadBefore && !hadNow) {
+      this.selection = restored;
+      this.drawSelection();
+      this.opts.onSelectionChange?.(true);
+    }
   }
 
   /** Unfinished drawing is committed unless explicitly cancelled; edit gestures are cancelled. */
@@ -380,7 +410,7 @@ export class PenController {
         }
       }
     }
-    this.snapshot = []; this.delta = { x: 0, y: 0 }; this.drawSelection();
+    this.snapshot = []; this.delta = { x: 0, y: 0 }; this.selectionBeforeGesture = []; this.drawSelection();
     this.perfStroke = null;
   }
 
@@ -434,6 +464,7 @@ export class PenController {
       this.downTime = event.timeStamp; this.lastRawTime = -Infinity;
       this.predictionPoints = [{ x: event.clientX, y: event.clientY, time: event.timeStamp }];
       this.sampleCount = 0; this.previewCount = 0;
+      this.selectionBeforeGesture = this.selection.map((entry) => ({ id: entry.id, indexes: [...entry.indexes] }));
       if (this.tool === "draw" || this.tool === "highlight") { this.current = []; this.addSample(this.bounds, event); this.addPreviewSample(0); }
       else this.current = [normCoords(this.bounds, event)];
       this.snapshot = this.tool === "draw" || this.tool === "highlight" ? [] : this.records().map((record) => ({ id: record.id, strokes: cloneStrokes(record.strokes) }));
@@ -528,8 +559,25 @@ export class PenController {
       } else if (gesture === "move") this.opts.onChange?.(transformSelectedInk(this.snapshot, this.selection, this.delta));
       this.flush();
     });
-    const cancel = (event: PointerEvent) => { this.palm.end(event, this.pointerType, this.pointerId); if (event.pointerId === this.pointerId) this.flush(); };
-    this.overlay.addEventListener("pointercancel", cancel); this.overlay.addEventListener("lostpointercapture", cancel);
+    const onPointerCancel = (event: PointerEvent) => {
+      this.palm.end(event, this.pointerType, this.pointerId);
+      if (event.pointerId === this.pointerId) this.abortActiveGesture();
+    };
+    const onLostCapture = (event: PointerEvent) => {
+      this.palm.end(event, this.pointerType, this.pointerId);
+      if (event.pointerId !== this.pointerId) return;
+      if (this.pointerType === "touch" || event.isTrusted) this.abortActiveGesture();
+      else this.flush();
+    };
+    const onPointerLeave = (event: PointerEvent) => {
+      if (event.pointerId !== this.pointerId || event.buttons !== 0) return;
+      if (this.overlay.hasPointerCapture?.(event.pointerId)) return;
+      this.palm.end(event, this.pointerType, this.pointerId);
+      this.abortActiveGesture();
+    };
+    this.overlay.addEventListener("pointercancel", onPointerCancel);
+    this.overlay.addEventListener("lostpointercapture", onLostCapture);
+    this.overlay.addEventListener("pointerleave", onPointerLeave);
     const handleKeydown = (event: KeyboardEvent) => {
       if (!this.active) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
@@ -555,6 +603,14 @@ export class PenController {
       }
     };
     this.container.ownerDocument.addEventListener("keydown", this.docKeydownHandler);
+    this.winBlurHandler = (event: Event) => {
+      if (event.isTrusted && (this.gesture !== null || this.pointerId !== null)) this.abortActiveGesture();
+    };
+    this.docVisibilityHandler = () => {
+      if (this.container.ownerDocument.visibilityState === "hidden" && (this.gesture !== null || this.pointerId !== null)) this.abortActiveGesture();
+    };
+    this.container.ownerDocument.defaultView?.addEventListener("blur", this.winBlurHandler);
+    this.container.ownerDocument.addEventListener("visibilitychange", this.docVisibilityHandler);
   }
   private addDrawSample(bounds: DOMRect, event: PointerEvent): void {
     const context = this.prediction?.getContext("2d");

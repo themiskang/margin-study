@@ -125,6 +125,10 @@ export class ExtendNotes {
     for(const box of this.reader.getScrollContainer().querySelectorAll(".ms-extend-note"))box.classList.toggle("is-drawing",mode!=="off");
     for (const value of this.pens.values()) { value.controller.setTool(mode === "eraser" ? "erase" : mode === "lasso" ? "select" : mode === "highlight" ? "highlight" : "draw"); value.controller.setActive(mode !== "off"); }
   }
+  cancelActiveGesture(): void {
+    this.cancelDrag?.();
+    for (const value of this.pens.values()) value.controller.abortActiveGesture();
+  }
   begin(): void { this.placing = true; this.reader.setHandwritingMode("off"); this.reader.getScrollContainer().classList.add("ms-extend-placing"); }
   stop(): void { this.cancelDrag?.(); this.placing = false; this.reader.getScrollContainer().classList.remove("ms-extend-placing"); void this.finish(); }
   async finish(): Promise<void> { const close = this.closeEditor; this.closeEditor = null; close?.(); await this.editTask; }
@@ -677,7 +681,7 @@ export class ExtendNotes {
   }
   readonly onRegionStart = (event: PointerEvent): void => {
     this.consumePlaceClick = false;
-    if (!this.placing || event.button !== 0 || (event.target as HTMLElement).closest(".ms-extend-layer,.ms-ann,.ms-page-bar,button,input,select,textarea,.ms-text-layer span")) return;
+    if (!this.placing || this.reader.isPinching() || event.button !== 0 || (event.target as HTMLElement).closest(".ms-extend-layer,.ms-ann,.ms-page-bar,button,input,select,textarea,.ms-text-layer span")) return;
     const wrapper = (event.target as HTMLElement).closest<HTMLElement>(".ms-page"); if (!wrapper) return;
     this.cancelDrag?.();
     const page = Number(wrapper.dataset.page), bounds = wrapper.getBoundingClientRect(), path = this.reader.getFilePath(), notebook = this.reader.getDocumentNotebookId();
