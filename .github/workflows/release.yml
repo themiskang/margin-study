@@ -1,0 +1,37 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - '*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & attach plugin assets
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '26'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Collect plugin files
+        run: |
+          set -e
+          mkdir -p release
+          for f in manifest.json main.js styles.css pdf.worker.js; do
+            test -f "$f" && cp "$f" release/ || { echo "missing $f"; exit 1; }
+          done
+          if [ -f ocr.swift ]; then cp ocr.swift release/; fi
+          ls -l release
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true

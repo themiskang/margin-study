@@ -4,6 +4,20 @@
 
 MarginStudy 是面向 Obsidian 的 MarginNote 5 风格学习插件，集成文档阅读、批注、卡片、脑图与复习。当前目标为 MarginNote 5.0.2，主要验收平台为 macOS 桌面。项目仍处于开发阶段。
 
+## 安装
+
+**从 Release 安装（推荐）**
+
+1. 打开本仓库右侧 **Releases**，下载最新版本的 `main.js`、`manifest.json`、`styles.css`、`pdf.worker.js`（以及 `ocr.swift`，如提供）。
+2. 在你的 Obsidian 库中建立目录 `.obsidian/plugins/margin-study/`，把上述文件放进去。
+3. 重启 Obsidian → 设置 → 第三方插件 → 关闭安全模式 → 启用 **MarginStudy**。
+
+**开发版（BRAT）**：在 BRAT 中添加本仓库地址即可自动跟踪最新预发布版本。
+
+**要求**：Obsidian 1.4.0 及以上；macOS 原生功能（相机/相册/语音转写）需要自行构建 `native/` 运行时。
+
+已知限制见 [已知限制](docs/known-issues.md)。
+
 ## 文档
 
 - [使用教程](docs/guide/user-guide.zh-CN.md)
