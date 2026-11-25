@@ -104,6 +104,7 @@ const automatedSuites=[
   ["workspace-a26","src/workspace/a26-acceptance.mjs"],
   ["workspace-clean-view-template","scripts/verify/clean-view-template-acceptance.mjs"],
   ["workspace-clean-view","scripts/verify/clean-view-acceptance.mjs"],
+  ["yan-r2-r10-surfaces","scripts/verify/yan-r2-r10-surfaces-acceptance.mjs"],
   ["mindmap-layout","src/mindmap/layout-acceptance.mjs"],
   ["mindmap-a18","src/mindmap/a18-acceptance.mjs"],
   ["mindmap-a19","src/mindmap/a19-acceptance.mjs"],

@@ -217,6 +217,12 @@
   box-shadow: 0 12px 24px #0003, inset 0 0 0 1px #ffffff1a;
   scrollbar-width: thin;
 }
+/* 单选工具条在窄/矮分栏下自动折行，确保焦点/链接/添加复习/更多全部落视口内可命中；多选模式保留横向滚动。 */
+.ms-mindmap-root[data-selection-mode="single"] .ms-selection-actions {
+  flex-wrap: wrap;
+  overflow-x: visible;
+  border-radius: 18px;
+}
 .ms-mindmap-root .ms-selection-actions[data-selection]::before { content: none; display: none; }
 /* MN5 node bar: one compact row, icon cluster + four named actions. */
 .ms-mindmap-root .ms-selection-actions .ms-node-tb-item {
