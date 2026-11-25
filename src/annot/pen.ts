@@ -235,6 +235,7 @@ export class PenController {
   private palm = new PalmGuard();
   private snapshot: InkRecord[] = [];
   private selection: InkSelection[] = [];
+  private selectionBeforeGesture: InkSelection[] = [];
   private selectionRect: SVGRectElement | null = null;
   private toolbar: HTMLDivElement;
   private extraToolbar: HTMLDivElement | null = null;
@@ -328,6 +329,25 @@ export class PenController {
     this.overlay.remove(); this.toolbar.remove(); this.extraToolbar?.remove(); this.colorPalette.remove();
   }
 
+  refreshSelection(): void {
+    this.drawSelection();
+  }
+
+  /** Cancel any in-flight gesture without committing and restore pre-gesture selection. */
+  abortActiveGesture(): void {
+    if (!this.gesture && this.pointerId === null) return;
+    const restored = this.selectionBeforeGesture.map((entry) => ({ id: entry.id, indexes: [...entry.indexes] }));
+    this.selectionBeforeGesture = [];
+    const hadBefore = restored.length > 0;
+    const hadNow = this.selection.length > 0;
+    this.flush(false);
+    if (hadBefore && !hadNow) {
+      this.selection = restored;
+      this.drawSelection();
+      this.opts.onSelectionChange?.(true);
+    }
+  }
+
   /** Unfinished drawing is committed unless explicitly cancelled; edit gestures are cancelled. */
   flush(commitDrawing = true): void {
     const gesture = this.gesture;
@@ -380,7 +400,7 @@ export class PenController {
         }
       }
     }
-    this.snapshot = []; this.delta = { x: 0, y: 0 }; this.drawSelection();
+    this.snapshot = []; this.delta = { x: 0, y: 0 }; this.selectionBeforeGesture = []; this.drawSelection();
     this.perfStroke = null;
   }
 
@@ -434,6 +454,7 @@ export class PenController {
       this.downTime = event.timeStamp; this.lastRawTime = -Infinity;
       this.predictionPoints = [{ x: event.clientX, y: event.clientY, time: event.timeStamp }];
       this.sampleCount = 0; this.previewCount = 0;
+      this.selectionBeforeGesture = this.selection.map((entry) => ({ id: entry.id, indexes: [...entry.indexes] }));
       if (this.tool === "draw" || this.tool === "highlight") { this.current = []; this.addSample(this.bounds, event); this.addPreviewSample(0); }
       else this.current = [normCoords(this.bounds, event)];
       this.snapshot = this.tool === "draw" || this.tool === "highlight" ? [] : this.records().map((record) => ({ id: record.id, strokes: cloneStrokes(record.strokes) }));
@@ -528,8 +549,16 @@ export class PenController {
       } else if (gesture === "move") this.opts.onChange?.(transformSelectedInk(this.snapshot, this.selection, this.delta));
       this.flush();
     });
-    const cancel = (event: PointerEvent) => { this.palm.end(event, this.pointerType, this.pointerId); if (event.pointerId === this.pointerId) this.flush(); };
-    this.overlay.addEventListener("pointercancel", cancel); this.overlay.addEventListener("lostpointercapture", cancel);
+    const onPointerCancel = (event: PointerEvent) => {
+      this.palm.end(event, this.pointerType, this.pointerId);
+      if (event.pointerId === this.pointerId) this.abortActiveGesture();
+    };
+    const onLostCapture = (event: PointerEvent) => {
+      this.palm.end(event, this.pointerType, this.pointerId);
+      if (event.pointerId === this.pointerId) this.flush();
+    };
+    this.overlay.addEventListener("pointercancel", onPointerCancel);
+    this.overlay.addEventListener("lostpointercapture", onLostCapture);
     const handleKeydown = (event: KeyboardEvent) => {
       if (!this.active) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {

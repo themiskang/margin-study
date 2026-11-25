@@ -728,7 +728,7 @@ function runEgoSync(session, ...args) {
 
 export async function runBrowser(session, ...args) {
   if (process.env.MARGINSTUDY_BROWSER === "ego") return runEgo(session, ...args);
-  if (args[0] === "cdp" && args[1] === "Input.dispatchMouseEvent") {
+  if (args[0] === "cdp" && (args[1] === "Input.dispatchMouseEvent" || args[1] === "Input.dispatchTouchEvent")) {
     const browserUrl = (await exec("agent-browser", ["--session", session, "get", "cdp-url"])).stdout.trim();
     const pageUrl = (await exec("agent-browser", ["--session", session, "get", "url"])).stdout.trim();
     const address = new URL(browserUrl);

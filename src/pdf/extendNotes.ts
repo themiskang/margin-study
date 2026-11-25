@@ -125,6 +125,10 @@ export class ExtendNotes {
     for(const box of this.reader.getScrollContainer().querySelectorAll(".ms-extend-note"))box.classList.toggle("is-drawing",mode!=="off");
     for (const value of this.pens.values()) { value.controller.setTool(mode === "eraser" ? "erase" : mode === "lasso" ? "select" : mode === "highlight" ? "highlight" : "draw"); value.controller.setActive(mode !== "off"); }
   }
+  cancelActiveGesture(): void {
+    this.cancelDrag?.();
+    for (const value of this.pens.values()) value.controller.abortActiveGesture();
+  }
   begin(): void { this.placing = true; this.reader.setHandwritingMode("off"); this.reader.getScrollContainer().classList.add("ms-extend-placing"); }
   stop(): void { this.cancelDrag?.(); this.placing = false; this.reader.getScrollContainer().classList.remove("ms-extend-placing"); void this.finish(); }
   async finish(): Promise<void> { const close = this.closeEditor; this.closeEditor = null; close?.(); await this.editTask; }

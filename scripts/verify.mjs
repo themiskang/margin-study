@@ -24,6 +24,7 @@ const automatedSuites=[
   ["build-determinism","scripts/verify/build-determinism-acceptance.mjs"],
   ["ego-harness-parity","scripts/verify/ego-harness-parity-acceptance.mjs"],
   ["pdf-save","scripts/verify/pdf-save-acceptance.mjs"],
+  ["pdf-pinch-zoom","scripts/verify/pdf-pinch-zoom-acceptance.mjs"],
   ["pdf-hw-eraser","src/pdf/hw-eraser-acceptance.mjs"],
   ["word-hw-eraser","src/word/hw-eraser-acceptance.mjs"],
   ["review","src/review/acceptance.mjs","--audit"],

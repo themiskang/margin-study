@@ -125,6 +125,11 @@ export class AnnotationController extends BaseAnnotationController {
     this.lassoOverlay?.remove();
     this.lassoOverlay = null;
   }
+  abortActiveGestures(): void {
+    this.cancelRegionGesture();
+    this.resetPenGestureWatch();
+    for (const pen of this.penControllers.values()) pen.abortActiveGesture();
+  }
   protected onReleaseDocument(): void { this.cancelRegionGesture(); for (const page of this.inkRasters.keys()) this.releaseInkRaster(page); }
 
   async destroy(): Promise<void> {
@@ -821,6 +826,7 @@ export class AnnotationController extends BaseAnnotationController {
     const scale = this.reader.getScale();
     const inCache = this.getAnnotationsForDisplay().filter((a) => (a.type !== "pen" || this.isInkVisible(a)) && annotationGeometry(a).some((geometry) => geometry.page === pageNum));
     this.syncInkRaster(pageNum, inCache);
+    if (this.penMode) this.penControllers.get(pageNum)?.refreshSelection();
     const inCacheIds = new Set(inCache.map((a) => a.id));
     // 1. 移除本页已不存在的标注元素（增量删除，不再整页 clear——性能优化 D）
     for (const [id, entry] of this.elMap) {
