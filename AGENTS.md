@@ -163,6 +163,17 @@ orca orchestration send --to run:<统筹席 run id> --subject "<卡号> 第 N �
 - 需要业主决策时，只问一句，并给两个选项。
 - 详细技术证据留在 `docs/STATUS.md` 与证据目录，不在对话里展开。
 
+
+### 建 worktree 后必须立刻换 node_modules 软链（已 4 次踩坑）
+新建 worktree 时自动安装依赖会把 `/opt/homebrew/bin/agent-browser` 重链到 worktree 内，删除 worktree 后全局检查工具即失效。
+**每条执行席派单的第一步固定为：**
+```
+.agent-artifacts/seats/link-worktree.sh <worktree 路径>
+```
+该脚本会把 worktree 的 `node_modules` 换成指向主库的软链、修回被重链的全局 bin，并跑一次后端检查。
+- 禁止在 worktree 内执行 `npm ci` / `npm install`（会再次改坏全局 bin）。
+- 卡收口删除 worktree 后，再跑一次 `node scripts/verify/check-browser-backend.mjs` 复核。
+
 ## 旧卡与旧会话的删除
 
 **完成的卡**：收口（断言全过、证据齐、已提交）后立刻做三件事，不许留着等下轮：
