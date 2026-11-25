@@ -3467,7 +3467,11 @@ export class Store {
       const anns = this.annCache.get(oldPath) ?? (text !== null ? await this.loadAnnotations(newPath) : undefined);
       // Finish all I/O first. Cache, references and live readers then change in one synchronous step.
       this.mutate("移动文档", () => {
-        for (const c of this.cards) { if (c.docPath === oldPath) c.docPath = newPath; for (const s of c.sources ?? []) if (s.docPath === oldPath) s.docPath = newPath; }
+        for (const c of this.cards) {
+          if (c.docPath === oldPath) c.docPath = newPath;
+          for (const s of c.sources ?? []) if (s.docPath === oldPath) s.docPath = newPath;
+          for (const b of c.excerptBlocks ?? []) if (b.source?.docPath === oldPath) b.source.docPath = newPath;
+        }
         for (const n of this.nodes) if (n.docPath === oldPath) n.docPath = newPath;
         for (const set of this.studySets) {
           set.docPaths = set.docPaths.map(p => p === oldPath ? newPath : p);
@@ -3496,7 +3500,10 @@ export class Store {
         this.annCache.delete(oldPath); this.annBase.delete(oldPath); this.annDirty.delete(oldPath);
         this.bumpAnnotationsRevision(oldPath);
         this.annCache.set(newPath, anns); this.annBase.set(newPath, text);
-        for (const annotation of anns) annotation.docPath = newPath;
+        for (const annotation of anns) {
+          annotation.docPath = newPath;
+          for (const b of annotation.excerptBlocks ?? []) if (b.source?.docPath === oldPath) b.source.docPath = newPath;
+        }
         flushedNewAnns = clone(anns);
         this.saveAnnotationsDebounced(newPath, anns);
       }

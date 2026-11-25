@@ -1928,6 +1928,7 @@ export abstract class BaseAnnotationController {
     if (!state.notebooks.some((item) => item.id === id)) return;
     this.closeOverlayEditor?.();
     this.plugin.store.updateDocMeta(this.docPath, { activeDocumentNotebookId: id, overlayDocumentNotebookId: state.overlay === id ? undefined : state.overlay });
+    this.syncDocumentNotebooks();
   }
   createDocumentNotebook(name: string): boolean {
     if (!this.docPath || this.releasing || this.disposed) return false; const value = name.trim(), state = this.getDocumentNotebooks();
@@ -1935,7 +1936,9 @@ export abstract class BaseAnnotationController {
     const existing = state.notebooks.find((item) => item.name === value); if (existing) { this.selectDocumentNotebook(existing.id); return true; }
     if (!this.cache.some((ann) => annotationNotebook(ann) === state.active && !ann.overlay?.deleted && (ann.type !== "pen" || !!ann.strokes?.length))) { new Notice("当前笔记本为空，请先添加笔记"); return false; }
     this.closeOverlayEditor?.();
-    const item = { id: uid("notebook"), name: value }; this.plugin.store.updateDocMeta(this.docPath, { documentNotebooks: [...state.notebooks, item], activeDocumentNotebookId: item.id }); return true;
+    const item = { id: uid("notebook"), name: value }; this.plugin.store.updateDocMeta(this.docPath, { documentNotebooks: [...state.notebooks, item], activeDocumentNotebookId: item.id });
+    this.syncDocumentNotebooks();
+    return true;
   }
   renameDocumentNotebook(id: string, name: string): boolean {
     if (!this.docPath || this.releasing || this.disposed) return false; const value = name.trim(), state = this.getDocumentNotebooks();
