@@ -5,7 +5,9 @@
 - `fixtures.mjs` 解析公开夹具和私有证据路径。缺失私有夹具时返回跳过标记，严格模式下报错。
 - `public-baseline.json` 冻结公开通过数下限，记录计数依据。
 - `replay_support.py` 将 Python 回放的缺失输入路径交给验收入口，并将回放报告写到独立目录。
-- `ego-harness.mjs` 统一隔离浏览器会话与命令接口。
+- `ego-harness.mjs` 统一隔离浏览器会话与命令接口（含 `resolveBrowserExecutable`、会话级持久 `ego-browser nodejs` 单进程桥接、DPR=1/light/focus 仿真与全命令兼容层）。
+- `check-browser-backend.mjs` 复用 `ego-harness.mjs` 的 `resolveBrowserExecutable` 校验浏览器后端路径与稳定性。
+- `ego-harness-parity-acceptance.mjs` 零私有夹具公开契约套件（GAP-EGO-01a），在默认 `agent-browser` 与 `MARGINSTUDY_BROWSER=ego` 双后端校验仿真初始化、非严格选择器、`find role/label`、`check/uncheck`、`console/errors`、`snapshot -i`、跨调用鼠标拖拽、单进程复用与 `runBrowserSync` 零泄漏。
 - `regress.mjs` 运行验收并比对断言数和构建指纹。
 - `pdf-save-acceptance.mjs` 验证 PDF 保存行为。
 - `apkg-verify.py` 独立检查 APKG 文件与 SQLite 内容。
