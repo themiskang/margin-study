@@ -37,9 +37,9 @@ const page1Html = `<!doctype html>
   <button style="display:none" onclick="window.__hits.push('hidden-save')">保存</button>
   <button id="visible-save" onclick="window.__hits.push('visible-save')">保存</button>
 
-  <button id="outside-action" onclick="window.__hits.push('outside-action')">操作</button>
+  <button id="outside-action" onclick="window.__hits.push('outside-action');window.__lastActionHit={id:this.id,rect:this.getBoundingClientRect().toJSON()}">操作</button>
   <div class="ms-modal">
-    <button id="modal-action" onclick="window.__hits.push('modal-action')">操作</button>
+    <button id="modal-action" onclick="window.__hits.push('modal-action');window.__lastActionHit={id:this.id,rect:this.getBoundingClientRect().toJSON()}">操作</button>
   </div>
 
   <input aria-label="API 地址" id="aria-in" />
@@ -172,16 +172,33 @@ try {
     assert.equal(dupUnchecked, false);
   });
 
-  // 5. find role button with duplicate names (hidden+visible & modal-priority)
+  // 5. find role button with duplicate names (hidden+visible & DOM-order first visible match)
   await browser("find", "role", "button", "click", "--name", "保存", "--exact");
   await browser("find", "role", "button", "click", "--name", "操作", "--exact");
-  const roleHits = await evalJson("window.__hits");
-  check("find role button clicks visible target without ambiguity", () => {
-    assert.ok(roleHits.includes("visible-save"), JSON.stringify(roleHits));
-    assert.ok(!roleHits.includes("hidden-save"), JSON.stringify(roleHits));
-    assert.ok(
-      roleHits.includes("modal-action") || roleHits.includes("outside-action"),
-      JSON.stringify(roleHits),
+  const roleState = await evalJson(
+    "({hits: window.__hits, hit: window.__lastActionHit, expectedRect: document.getElementById('outside-action').getBoundingClientRect().toJSON()})",
+  );
+  check("find role button clicks DOM-first visible target identically on both backends", () => {
+    assert.ok(roleState.hits.includes("visible-save"), JSON.stringify(roleState.hits));
+    assert.ok(!roleState.hits.includes("hidden-save"), JSON.stringify(roleState.hits));
+    assert.equal(roleState.hit?.id, "outside-action", JSON.stringify(roleState));
+    assert.ok(!roleState.hits.includes("modal-action"), JSON.stringify(roleState.hits));
+    assert.deepEqual(
+      {
+        x: roleState.hit.rect.x,
+        y: roleState.hit.rect.y,
+        width: roleState.hit.rect.width,
+        height: roleState.hit.rect.height,
+      },
+      {
+        x: roleState.expectedRect.x,
+        y: roleState.expectedRect.y,
+        width: roleState.expectedRect.width,
+        height: roleState.expectedRect.height,
+      },
+    );
+    console.log(
+      `  find-role-hit: backend=${isEgo ? "ego" : "agent-browser"} id=${roleState.hit.id} rect=${JSON.stringify({ x: roleState.hit.rect.x, y: roleState.hit.rect.y, width: roleState.hit.rect.width, height: roleState.hit.rect.height })}`,
     );
   });
 

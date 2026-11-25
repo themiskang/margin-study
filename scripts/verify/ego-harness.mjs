@@ -200,12 +200,7 @@ async function tagRoleTarget(role, name, exact, tag) {
         const enabledVisible = visible.filter((el) => !el.disabled && el.getAttribute("aria-disabled") !== "true");
         return enabledVisible[0] || visible[0] || null;
       };
-      const modals = [...document.querySelectorAll('.ms-modal, [role="dialog"]')].filter(isVisible);
-      let target = null;
-      for (let i = modals.length - 1; i >= 0 && !target; i--) {
-        target = findInRoot(modals[i]);
-      }
-      if (!target) target = findInRoot(document);
+      const target = findInRoot(document);
       if (!target) return false;
       target.setAttribute("data-ms-ego-target", tag);
       return true;
