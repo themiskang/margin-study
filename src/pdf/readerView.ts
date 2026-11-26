@@ -1411,8 +1411,15 @@ export class ReaderView extends ItemView {
     for (const [num, rec] of this.pages) {
       const size = this.pageSizes.get(num);
       if (size) {
-        rec.wrapper.style.width = `${Math.floor(size.w * this.scale)}px`;
-        rec.wrapper.style.height = `${Math.floor(size.h * this.scale)}px`;
+        const nextW = Math.floor(size.w * this.scale);
+        const nextH = Math.floor(size.h * this.scale);
+        rec.wrapper.style.width = `${nextW}px`;
+        rec.wrapper.style.height = `${nextH}px`;
+        // 双缓冲过渡：旧位图按新尺寸 CSS 拉伸占位，避免新帧提交前露白边或跳动
+        if (this.visiblePages.has(num) && rec.canvas.width > 0 && rec.canvas.height > 0) {
+          rec.canvas.style.width = `${nextW}px`;
+          rec.canvas.style.height = `${nextH}px`;
+        }
       }
       if (this.visiblePages.has(num)) {
         if (rec.renderedScale !== this.scale) void this.renderPage(num);
@@ -2109,8 +2116,10 @@ export class ReaderView extends ItemView {
     const current = () => !this.destroyed && this.doc === doc && this.loadRevision === loadRevision &&
       this.pages.get(pageNum) === rec && rec.revision === revision;
     const promise = (async () => {
+      let bufferCanvas: HTMLCanvasElement | null = null;
+      let bufferCommitted = false;
       try {
-        // 同一 canvas 必须等旧 renderTask 完成取消，才可调整 backing store。
+        // 同一页串行渲染，确保双缓冲峰值严格控制在「1 在屏 + 1 离屏」。
         if (previous) await previous;
         if (!current()) return;
         const page = await doc.getPage(pageNum);
@@ -2119,25 +2128,20 @@ export class ReaderView extends ItemView {
         this.originalPageSizes.set(pageNum, { w: original.width, h: original.height });
         const baseViewport = this.getPageViewport(page, scale);
         const viewport = extendProjection(baseViewport, this.extendNotes.gaps(pageNum, baseViewport, scale), regionFoldBands(this,pageNum,baseViewport));
-        rec.baseViewport = baseViewport; rec.viewport = viewport;
-        this.pageSizes.set(pageNum, { w: viewport.width / scale, h: viewport.height / scale });
         const mobileLowRes = Platform.isMobile && this.plugin.store.settings.mobileLowRes !== false;
         const maxPagePixels = mobileLowRes ? 4_000_000 : MAX_PAGE_PIXELS;
         const dpr = Math.min(window.devicePixelRatio || 1, mobileLowRes ? 1.25 : Infinity, Math.sqrt(maxPagePixels / Math.max(1, viewport.width * viewport.height)));
-        rec.wrapper.style.width = `${Math.floor(viewport.width)}px`;
-        rec.wrapper.style.height = `${Math.floor(viewport.height)}px`;
-        rec.canvas.style.width = `${Math.floor(viewport.width)}px`;
-        rec.canvas.style.height = `${Math.floor(baseViewport.height)}px`;
-        rec.canvas.width = Math.max(1, Math.floor(viewport.width * dpr));
-        rec.canvas.height = Math.max(1, Math.floor(baseViewport.height * dpr));
-        rec.textLayer.style.width = `${Math.floor(viewport.width)}px`;
-        rec.textLayer.style.height = `${Math.floor(viewport.height)}px`;
-        rec.textLayer.style.setProperty("--scale-factor", String(viewport.scale));
-        rec.annLayer.style.width = `${Math.floor(viewport.width)}px`;
-        rec.annLayer.style.height = `${Math.floor(viewport.height)}px`;
-        rec.handlesLayer.style.width = `${Math.floor(viewport.width)}px`;
-        rec.handlesLayer.style.height = `${Math.floor(viewport.height)}px`;
-        const context = rec.canvas.getContext("2d");
+        // 双缓冲离屏渲染：不清空在屏 canvas，彻底消除缩放重渲期间的白闪帧
+        bufferCanvas = el("canvas", { class: "ms-page-canvas" }) as HTMLCanvasElement;
+        bufferCanvas.style.width = `${Math.floor(viewport.width)}px`;
+        bufferCanvas.style.height = `${Math.floor(baseViewport.height)}px`;
+        bufferCanvas.width = Math.max(1, Math.floor(viewport.width * dpr));
+        bufferCanvas.height = Math.max(1, Math.floor(baseViewport.height * dpr));
+        const bufferTextLayer = el("div", { class: "ms-text-layer" });
+        bufferTextLayer.style.width = `${Math.floor(viewport.width)}px`;
+        bufferTextLayer.style.height = `${Math.floor(viewport.height)}px`;
+        bufferTextLayer.style.setProperty("--scale-factor", String(viewport.scale));
+        const context = bufferCanvas.getContext("2d");
         if (!context) return;
         const task = page.render({ canvasContext: context, viewport: baseViewport,
           transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined });
@@ -2145,15 +2149,14 @@ export class ReaderView extends ItemView {
         await task.promise;
         if (!current()) return;
         rec.renderTask = null;
-        clear(rec.textLayer);
         try {
           const text = await page.getTextContent();
           if (!current()) return;
-          rec.textTask = pdfjsLib.renderTextLayer({ textContentSource: text, container: rec.textLayer, viewport: baseViewport });
+          rec.textTask = pdfjsLib.renderTextLayer({ textContentSource: text, container: bufferTextLayer, viewport: baseViewport });
           await rec.textTask.promise;
           const words=this.recognizedPages.get(pageNum);
-          if(current()&&!rec.textLayer.querySelector('span')&&words){
-            rec.textLayer.removeAttribute("data-main-rotation");
+          if(current()&&!bufferTextLayer.querySelector('span')&&words){
+            bufferTextLayer.removeAttribute("data-main-rotation");
             for(const word of words){
               const width=word.w*viewport.width,height=word.h*baseViewport.height;
               if(!word.text.trim()||width<=0||height<=0)continue;
@@ -2161,15 +2164,35 @@ export class ReaderView extends ItemView {
               span.style.cssText=`left:${word.x*viewport.width}px;top:${(1-word.y-word.h)*baseViewport.height}px;font-family:Helvetica,sans-serif;font-size:${fontSize}px;line-height:1;height:${height}px;transform-origin:0 0;`;
               context.font=`${fontSize}px Helvetica`;const measured=context.measureText(word.text).width;
               if(measured)span.style.transform=`scaleX(${width/measured})`;
-              rec.textLayer.append(span,document.createElement("br"));
+              bufferTextLayer.append(span,document.createElement("br"));
             }
             if(words.length)this.pageTextCache.set(pageNum,mergeOcrWords(words));
           }
-          if(current())orderTextColumns(rec.textLayer,baseViewport);
         } catch { /* 没有文字层的扫描 PDF 仍可阅读及区域摘录。 */ }
         if (!current()) return;
-        try{rec.imageRects=await pdfImageRegions(page);}catch{rec.imageRects=[];}
-        if(!current())return;
+        let imageRects: import("../types").PdfRect[] = [];
+        try { imageRects = await pdfImageRegions(page); } catch { imageRects = []; }
+        if (!current()) return;
+        // 单帧原子替换：一次性切换 DOM 节点并同步各层尺寸与叠加层
+        const prevCanvas = rec.canvas;
+        const prevTextLayer = rec.textLayer;
+        rec.baseViewport = baseViewport;
+        rec.viewport = viewport;
+        rec.imageRects = imageRects;
+        this.pageSizes.set(pageNum, { w: viewport.width / scale, h: viewport.height / scale });
+        rec.wrapper.style.width = `${Math.floor(viewport.width)}px`;
+        rec.wrapper.style.height = `${Math.floor(viewport.height)}px`;
+        rec.annLayer.style.width = `${Math.floor(viewport.width)}px`;
+        rec.annLayer.style.height = `${Math.floor(viewport.height)}px`;
+        rec.handlesLayer.style.width = `${Math.floor(viewport.width)}px`;
+        rec.handlesLayer.style.height = `${Math.floor(viewport.height)}px`;
+        prevCanvas.replaceWith(bufferCanvas);
+        prevTextLayer.replaceWith(bufferTextLayer);
+        rec.canvas = bufferCanvas;
+        rec.textLayer = bufferTextLayer;
+        prevCanvas.width = prevCanvas.height = 0;
+        bufferCommitted = true;
+        try { orderTextColumns(rec.textLayer, baseViewport); } catch { /* noop */ }
         this.extendNotes.paint(pageNum, baseViewport);
         this.extendNotes.render(pageNum);
         renderRegionFolds(this, pageNum);
@@ -2181,6 +2204,9 @@ export class ReaderView extends ItemView {
           console.error("MarginStudy render page:", error);
         }
       } finally {
+        if (bufferCanvas && !bufferCommitted) {
+          bufferCanvas.width = bufferCanvas.height = 0;
+        }
         if (rec.revision === revision) {
           rec.renderTask = null;
           rec.textTask = null;

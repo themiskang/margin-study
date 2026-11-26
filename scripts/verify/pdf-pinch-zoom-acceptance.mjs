@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 ReaderView、StudyWorkspaceView、PenController、Store、样式表与 ego-harness 浏览器后端，零私有夹具依赖。
- * [OUTPUT]: 执行 PZ-01~PZ-06 与原生 CDP 触控冒烟验收；若设置 MARGINSTUDY_EVIDENCE_DIR 则落盘带 head/generatedAt 的证据 JSON 至 $MARGINSTUDY_EVIDENCE_DIR/pdf-pinch-zoom/results.json。
- * [POS]: 公开浏览器验收套件 pdf-pinch-zoom，验证 PDF 双指缩放、两阶段提交、锚点保持、手写/套索零副作用、三指安全、旋转页/双页/简洁态与折叠页/批注保真。
+ * [OUTPUT]: 执行 PZ-01~PZ-07（含缩放无白闪 ~60Hz 采样）与原生 CDP 触控冒烟验收；若设置 MARGINSTUDY_EVIDENCE_DIR 则落盘带 head/generatedAt 的证据 JSON。
+ * [POS]: 公开浏览器验收套件 pdf-pinch-zoom，验证 PDF 双指缩放、两阶段提交、无白闪双缓冲、锚点保持、手写/套索零副作用、三指安全、旋转页/双页/简洁态与折叠页/批注保真。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 import { execFile } from "node:child_process";
@@ -24,6 +24,7 @@ const fixtureSource = `
 import { TFile } from "obsidian";
 import { Store } from "${project}/src/model/store";
 import { ReaderView } from "${project}/src/pdf/readerView";
+import { events as pdfEvents } from "${project}/src/pdf/pdfjs";
 import { StudyWorkspaceView } from "${project}/src/workspace/studyWorkspace";
 
 (HTMLElement.prototype as any).empty = function () { this.replaceChildren(); };
@@ -1024,6 +1025,153 @@ let cdpView: ReaderView | null = null;
   return { scaleAfter, scaleElText };
 };
 
+// ===== PZ-07: No white-flash frames (~60Hz sampling) on pinch commit & desktop zoom buttons =====
+(window as any).runPZ07NoWhiteFlash = async () => {
+  const { view } = await openReader(
+    { "flash.pdf": { name: "flash", pages: 3, renderDelay: 120, textDelay: 20, paintContent: true } },
+    "flash.pdf",
+  );
+  try {
+    await view.renderPage(1);
+    await frame();
+    const scrollEl = view.getScrollContainer();
+    const box = scrollEl.getBoundingClientRect();
+    const cx = box.left + box.width / 2;
+    const cy = box.top + box.height / 2;
+
+    const WHITE_FLASH_RATIO_THRESHOLD = 0.98;
+    const WHITE_FLASH_JUMP_THRESHOLD = 0.25;
+    const MAX_ALLOWED_WHITE_RATIO = 0.90;
+
+    const sampleCanvas = document.createElement("canvas");
+    sampleCanvas.width = 64;
+    sampleCanvas.height = 80;
+    const sampleCtx = sampleCanvas.getContext("2d", { willReadFrequently: true })!;
+
+    const measureWhiteRatio = (pageNum: number): number => {
+      const rec = view.getPageRecord(pageNum);
+      if (!rec) return 1;
+      const wRect = rec.wrapper.getBoundingClientRect();
+      const cRect = rec.canvas.getBoundingClientRect();
+      sampleCtx.fillStyle = "#ffffff";
+      sampleCtx.fillRect(0, 0, sampleCanvas.width, sampleCanvas.height);
+      if (rec.canvas.width > 0 && rec.canvas.height > 0 && wRect.width > 0 && wRect.height > 0 && cRect.width > 0 && cRect.height > 0) {
+        const dx = ((cRect.left - wRect.left) / wRect.width) * sampleCanvas.width;
+        const dy = ((cRect.top - wRect.top) / wRect.height) * sampleCanvas.height;
+        const dw = (cRect.width / wRect.width) * sampleCanvas.width;
+        const dh = (cRect.height / wRect.height) * sampleCanvas.height;
+        sampleCtx.drawImage(rec.canvas, 0, 0, rec.canvas.width, rec.canvas.height, dx, dy, dw, dh);
+      }
+      const data = sampleCtx.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height).data;
+      let white = 0;
+      const total = sampleCanvas.width * sampleCanvas.height;
+      for (let i = 0; i < data.length; i += 4) {
+        if (data[i] >= 245 && data[i + 1] >= 245 && data[i + 2] >= 245) white++;
+      }
+      return Number((white / total).toFixed(4));
+    };
+
+    const sampleTransition = async (label: string, trigger: () => Promise<number> | number) => {
+      const eventsBefore = pdfEvents.length;
+      const ratios: number[] = [];
+      let sampling = true;
+      const baselineWhiteRatio = measureWhiteRatio(1);
+      ratios.push(baselineWhiteRatio);
+      const tick = () => {
+        if (!sampling) return;
+        ratios.push(measureWhiteRatio(1));
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+      try {
+        const targetScale = await trigger();
+        await waitPagesRendered(view, [1], targetScale);
+        await frame();
+      } finally {
+        sampling = false;
+      }
+      const renderCount = pdfEvents.slice(eventsBefore).filter(e => e[0] === "render" && e[1] === "flash" && e[2] === 1).length;
+      let flashFrames = 0;
+      let maxJump = 0;
+      let maxWhiteRatio = 0;
+      let peakFlashRatio = 0;
+      for (let i = 0; i < ratios.length; i++) {
+        if (ratios[i] > maxWhiteRatio) maxWhiteRatio = ratios[i];
+        if (i > 0) {
+          const jump = Number((ratios[i] - ratios[i - 1]).toFixed(4));
+          if (jump > maxJump) maxJump = jump;
+          if (ratios[i] >= WHITE_FLASH_RATIO_THRESHOLD && jump >= WHITE_FLASH_JUMP_THRESHOLD) {
+            flashFrames++;
+            if (ratios[i] > peakFlashRatio) peakFlashRatio = ratios[i];
+          }
+        }
+      }
+      return {
+        label,
+        baselineWhiteRatio,
+        samples: ratios.length,
+        maxWhiteRatio,
+        maxJump,
+        flashFrames,
+        peakFlashRatio,
+        renderCount,
+        ratios: ratios.slice(0, 24),
+      };
+    };
+
+    const pinchOut = await sampleTransition("pinch-out", async () => {
+      await pinchGesture(scrollEl, cx, cy, 80, 136, { steps: 6, staggerMs: 20 });
+      return view.getScale();
+    });
+
+    const pinchIn = await sampleTransition("pinch-in", async () => {
+      await pinchGesture(scrollEl, cx, cy, 136, 80, { steps: 6, staggerMs: 20 });
+      return view.getScale();
+    });
+
+    const zoomInBtn = view.containerEl.querySelector('button[title="放大"]') as HTMLButtonElement | null;
+    const zoomOutBtn = view.containerEl.querySelector('button[title="缩小"]') as HTMLButtonElement | null;
+    assert(zoomInBtn && zoomOutBtn, "PZ-07 desktop zoom buttons not found");
+
+    const desktopZoomIn = await sampleTransition("desktop-zoom-in", () => {
+      zoomInBtn!.click();
+      return view.getScale();
+    });
+
+    const desktopZoomOut = await sampleTransition("desktop-zoom-out", () => {
+      zoomOutBtn!.click();
+      return view.getScale();
+    });
+
+    const transitions = [pinchOut, pinchIn, desktopZoomIn, desktopZoomOut];
+    for (const t of transitions) {
+      assert(t.baselineWhiteRatio < 0.75, \`PZ-07 [\${t.label}] baseline not textured enough: whiteRatio=\${t.baselineWhiteRatio}\`);
+      assert(t.samples >= 5, \`PZ-07 [\${t.label}] too few ~60Hz samples: \${t.samples}\`);
+      assert(t.renderCount === 1, \`PZ-07 [\${t.label}] expected 1 visible page render, got \${t.renderCount}\`);
+      assert(
+        t.flashFrames === 0 && t.maxWhiteRatio < MAX_ALLOWED_WHITE_RATIO,
+        \`PZ-07 [\${t.label}] white flash detected: flashFrames=\${t.flashFrames}, baseline=\${t.baselineWhiteRatio}, maxWhiteRatio=\${t.maxWhiteRatio}, maxJump=\${t.maxJump}\`,
+      );
+    }
+
+    return {
+      passed: true,
+      thresholds: {
+        whiteFlashRatioThreshold: WHITE_FLASH_RATIO_THRESHOLD,
+        whiteFlashJumpThreshold: WHITE_FLASH_JUMP_THRESHOLD,
+        maxAllowedWhiteRatio: MAX_ALLOWED_WHITE_RATIO,
+      },
+      pinchOut,
+      pinchIn,
+      desktopZoomIn,
+      desktopZoomOut,
+    };
+  } finally {
+    await view.onClose();
+    view.containerEl.remove();
+  }
+};
+
 (window as any).ready = true;
 (window as any).getErrors = () => errors;
 `;
@@ -1061,6 +1209,7 @@ try {
         }
       }\n` + src
         .replace("const config = JSON.parse(new TextDecoder().decode(data));", "const decoded = new TextDecoder().decode(data); const config = decoded.startsWith('%PDF-') ? { name: 'real-pdf', pages: 1 } : JSON.parse(decoded);")
+        .replace("canvasContext.fillStyle='#222';canvasContext.fillText(config.name+' page '+num,20,30);", "canvasContext.fillStyle='#222';if(config.paintContent){for(let r=0;r<8;r++){canvasContext.fillRect(viewport.width*0.08,viewport.height*(0.06+r*0.115),viewport.width*0.84,viewport.height*0.065);}}canvasContext.fillText(config.name+' page '+num,20,30);")
         .replace(/getViewport\(\{scale\}:\{scale:number\}\)\{[\s\S]*?return \{[\s\S]*?\};\s*\}/, `getViewport({scale}:{scale:number}){ const viewBox=config.crop||[0,0,600,800]; const rotation=config.rotations?.[num-1]??config.rotation??0; return new FakeViewport({viewBox,scale,rotation}); }`);
     }
     await writeFile(join(temporary, name + ".ts"), src);
@@ -1130,6 +1279,7 @@ try {
     const pz04 = await evalJson("window.runPZ04()");
     const pz05 = await evalJson("window.runPZ05()");
     const pz06 = await evalJson("window.runPZ06()");
+    const pz07 = await evalJson("window.runPZ07NoWhiteFlash()");
 
     // Native CDP Input.dispatchTouchEvent smoke test
     const cdpInit = await evalJson("window.setupCdpTouchSmoke()");
@@ -1317,6 +1467,7 @@ try {
       pz04,
       pz05,
       pz06,
+      pz07,
       cdpTouchSmoke,
       q3NativeLostCapture,
       q3bTrustedBlur,
@@ -1326,9 +1477,19 @@ try {
       const evidenceDir = resolve(process.env.MARGINSTUDY_EVIDENCE_DIR, "pdf-pinch-zoom");
       await mkdir(evidenceDir, { recursive: true });
       await writeFile(join(evidenceDir, "results.json"), JSON.stringify(summary, null, 2) + "\n");
+      const flashEvidenceDir = resolve(process.env.MARGINSTUDY_EVIDENCE_DIR, "pdf-pinch-flash");
+      await mkdir(flashEvidenceDir, { recursive: true });
+      await writeFile(join(flashEvidenceDir, "results.json"), JSON.stringify({
+        head,
+        generatedAt: summary.generatedAt,
+        suite: "pdf-pinch-zoom",
+        passed: true,
+        pz01,
+        pz07,
+      }, null, 2) + "\n");
     }
 
-    console.log("PASS pdf-pinch-zoom: PZ-01, PZ-02 (1024x768 + 768x1024), PZ-03, PZ-04, PZ-05, PZ-06, cdpTouchSmoke all passed (7/7)");
+    console.log("PASS pdf-pinch-zoom: PZ-01, PZ-02 (1024x768 + 768x1024), PZ-03, PZ-04, PZ-05, PZ-06, PZ-07 (no white flash), cdpTouchSmoke all passed (8/8)");
   } finally {
     await browser("close").catch(() => {});
     await new Promise(done => server.close(done));
