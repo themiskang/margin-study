@@ -2939,9 +2939,16 @@ export class Store {
     if (options.open === false) return;
     this.activeStudySetId = id;
     if (!set) { this.activeCanvasId = undefined; this.save(); return; }
-    const candidates = this.canvases.filter(c => c.studySetId === id && c.kind !== "review" && this.canvasHasNotes(c.id));
-    candidates.sort((a,b) => (b.lastVisitedAt ?? "").localeCompare(a.lastVisitedAt ?? ""));
-    const canvas = candidates[0] ?? this.createCanvas(set.id, set.name);
+    const allOwned = this.canvases.filter(c => c.studySetId === id && c.kind !== "review");
+    const withNotes = allOwned.filter(c => this.canvasHasNotes(c.id));
+    const pool = withNotes.length ? withNotes : allOwned;
+    pool.sort((a, b) => (b.lastVisitedAt ?? "").localeCompare(a.lastVisitedAt ?? ""));
+    let canvas = pool[0];
+    if (!canvas) {
+      // Study-set switching is a view navigation; silently initialize a blank canvas if none exists without touching undo/redo history.
+      canvas = { id: uid("canvas"), studySetId: set.id, name: set.name.trim() || "未命名脑图", createdAt: new Date().toISOString() };
+      this.canvases.push(canvas);
+    }
     this.setActiveCanvas(canvas.id, options.documentPath);
   }
   createCanvas(studySetId: string, name: string): MindCanvas { return this.mutate("创建脑图", () => {

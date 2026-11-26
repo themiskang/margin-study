@@ -6,7 +6,7 @@
       "passed": true
     },
     {
-      "name": "mount without opening does not restore navigation; an empty set creates a named canvas",
+      "name": "mount without opening does not restore navigation; existing empty canvas is reused and canvasless set silently initializes one without undo history",
       "passed": true
     },
     {

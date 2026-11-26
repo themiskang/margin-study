@@ -783,8 +783,55 @@ let activeHarness: Awaited<ReturnType<typeof createHarness>> | null = null;
     crossSceneHistory.push({ scene: sc.scene, moveX: xAfterMove, undoX: xAfterUndo, sceneAfterUndo, redoX: xAfterRedo, sceneAfterRedo });
   }
   await h.selectScene("excerpt");
-  mark(6, "撤销", false, "bottom:undo(5-scene cross-scene verified)");
-  mark(7, "重做", false, "bottom:redo(5-scene cross-scene verified)");
+  // Study-set switch (empty canvas / non-empty canvas / zero canvases) must preserve redo stack and never push undo history
+  const studySetSwitchCases: any[] = [];
+  {
+    const setEmpty = { id: "set-empty-canvas", name: "空脑图学习集", docPaths: [], createdAt: stamp };
+    const setNonEmpty = { id: "set-nonempty-canvas", name: "非空脑图学习集", docPaths: [], createdAt: stamp };
+    const setNoCanvas = { id: "set-no-canvas", name: "无脑图学习集", docPaths: [], createdAt: stamp };
+    h.store.studySets.push(setEmpty as any, setNonEmpty as any, setNoCanvas as any);
+    h.store.canvases.push(
+      { id: "canvas-empty", studySetId: setEmpty.id, name: "空白主脑图", createdAt: stamp } as any,
+      { id: "canvas-nonempty", studySetId: setNonEmpty.id, name: "已有内容脑图", createdAt: stamp } as any,
+    );
+    h.store.nodes.push({ id: "node-nonempty", canvasId: "canvas-nonempty", parentId: null, title: "Existing Note", collapsed: false, x: 60, y: 60 } as any);
+
+    for (const [kind, targetSetId, expectedBefore, expectedAfter] of [
+      ["empty-canvas", setEmpty.id, 1, 1],
+      ["nonempty-canvas", setNonEmpty.id, 1, 1],
+      ["zero-canvas", setNoCanvas.id, 0, 1],
+    ] as const) {
+      h.store.setActiveStudySet("set-1");
+      h.store.moveNode("n1", 170, 120);
+      h.store.undoLibraryChange();
+      await frame();
+      const histBefore = h.store.getLibraryHistoryState();
+      assert(h.store.getNode("n1")!.x === 120 && histBefore.canRedo === true && histBefore.redoLabel === "移动节点", \`[\${kind}] setup redo state invalid\`);
+      const canvasesBefore = h.store.canvases.filter(c => c.studySetId === targetSetId).length;
+      assert(canvasesBefore === expectedBefore, \`[\${kind}] expected \${expectedBefore} canvases before switch, got \${canvasesBefore}\`);
+
+      h.store.setActiveStudySet(targetSetId);
+      await frame();
+      const canvasesAfter = h.store.canvases.filter(c => c.studySetId === targetSetId).length;
+      const histAfter = h.store.getLibraryHistoryState();
+      assert(canvasesAfter === expectedAfter, \`[\${kind}] expected \${expectedAfter} canvases after switch, got \${canvasesAfter}\`);
+      assert(histAfter.revision === histBefore.revision, \`[\${kind}] setActiveStudySet polluted history revision \${histBefore.revision}->\${histAfter.revision}\`);
+      assert(histAfter.canRedo === true && histAfter.redoLabel === "移动节点", \`[\${kind}] setActiveStudySet wiped redo stack\`);
+
+      h.store.redoLibraryChange();
+      await frame();
+      assert(h.store.getNode("n1")!.x === 170, \`[\${kind}] redo after study-set switch did not restore x 120->170\`);
+      h.store.undoLibraryChange();
+      await frame();
+      assert(h.store.getNode("n1")!.x === 120, \`[\${kind}] cleanup undo failed\`);
+      studySetSwitchCases.push({ kind, canvasesBefore, canvasesAfter, revisionUnchanged: true, redoRestoredX: 170 });
+    }
+    h.store.setActiveStudySet("set-1");
+    (h.view as any).drawToolbar();
+    await frame();
+  }
+  mark(6, "撤销", false, "bottom:undo(5-scene cross-scene + study-set switch verified)");
+  mark(7, "重做", false, "bottom:redo(5-scene cross-scene + study-set switch verified)");
 
   // #8 house -> study home
   const homeBtn = h.root.querySelector<HTMLButtonElement>('.ms-workspace-context [aria-label="打开学习集与文档"]')!;
