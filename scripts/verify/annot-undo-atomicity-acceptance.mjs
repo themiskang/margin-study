@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 ReaderView、Store 与默认 agent-browser 后端，零私有夹具依赖。
- * [OUTPUT]: 执行 ANNOT-02 统一标注撤销模型验收（B1~B8：5类标注原子撤重、跨页、连续摘录、与笔迹交错、文档根共享、编辑/合并/FSRS保护、并发拒绝、手动建卡单事务、store.history 零污染）。
+ * [OUTPUT]: 执行 ANNOT-02 统一标注撤销模型验收（B1~B9：5类标注原子撤重、跨页、连续摘录、与笔迹交错、文档根共享、编辑/合并/FSRS保护、并发拒绝、手动建卡单事务、撤销后外部改卡重做保护与未改卡复原、自动复习初始快照撤重、store.history 零污染）。
  * [POS]: 公开浏览器验收套件 annot-undo-atomicity，固化 ANNOT-02 全部二值断言。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
@@ -370,6 +370,154 @@ function historySnapshot(store: any) {
       assert(store.cards.length === 0 && store.nodes.length === 0, "B8 1x library undo did not remove card and nodes");
       report.B8 = { historyAdded: 1, undoneInOneStep: true };
     } finally { await view.onClose(); }
+  }
+
+  // ===== B9: 撤销连续摘录后编辑卡片再重做（两条路径）不得覆盖用户编辑 + autoReview 原子撤重 =====
+  {
+    const mkTarget = (y: number) => ({ kind: "pdf", pageNum: 1, rects: [{ x: 80, y, w: 150, h: 18 }], pdfGeometry: [{ page: 1, rects: [{ x: 80, y, w: 150, h: 18 }] }], pdfCoordinateSpace: "pdf" });
+    // Path 1: same-session append -> undo -> edit card front & sources -> redo refused, user edit preserved
+    const path1 = "b9-same-session-redo.pdf";
+    const env1 = await openPdf(path1, 1);
+    try {
+      env1.ctrl.setContinuousExcerpt(true);
+      env1.ctrl.commitAnnotation(mkTarget(600), "highlight", "#ffd54f", "摘录原文内容");
+      env1.ctrl.commitAnnotation(mkTarget(560), "highlight", "#ffd54f", "将被撤回的追加");
+      await env1.view.undoLastEdit();
+      const card1 = env1.store.cards[0];
+      const extSource = { docPath: "external.pdf", page: 9, text: "外部来源片段" };
+      env1.store.updateCard(card1.id, { front: "卡片视图写入的独立正文", sources: [...(card1.sources ?? []), extSource] });
+      await env1.view.redoLastEdit();
+      const live1 = env1.store.getCard(card1.id)!;
+      assert(live1.front === "卡片视图写入的独立正文" && live1.sources?.some((s: any) => s.docPath === "external.pdf"),
+        "B9 path1 redo overwrote user-edited card: " + JSON.stringify({ front: live1.front, sources: live1.sources }));
+      assert(!env1.view.getEditHistoryState().canRedo, "B9 path1 redo stack not cleared on conflict");
+    } finally { await env1.view.onClose(); }
+
+    // Path 2: continueExcerptInCard -> undo -> edit card front & sources -> redo refused, user edit preserved
+    const path2 = "b9-old-card-redo.pdf";
+    const env2 = await openPdf(path2, 1);
+    try {
+      env2.ctrl.commitAnnotation(mkTarget(600), "highlight", "#ffd54f", "旧卡原始摘录");
+      const oldCardId = env2.store.cards[0].id;
+      assert(env2.ctrl.continueExcerptInCard(oldCardId) === true, "B9 path2 continueExcerptInCard failed");
+      env2.ctrl.commitAnnotation(mkTarget(560), "highlight", "#ffd54f", "追加到旧卡的片段");
+      await env2.view.undoLastEdit();
+      const card2 = env2.store.getCard(oldCardId)!;
+      const extSource2 = { docPath: "external-2.pdf", page: 3, text: "旧卡外部来源" };
+      env2.store.updateCard(card2.id, { front: "旧卡独立编辑正文", sources: [...(card2.sources ?? []), extSource2] });
+      await env2.view.redoLastEdit();
+      const live2 = env2.store.getCard(oldCardId)!;
+      assert(live2.front === "旧卡独立编辑正文" && live2.sources?.some((s: any) => s.docPath === "external-2.pdf"),
+        "B9 path2 redo overwrote user-edited old card: " + JSON.stringify({ front: live2.front, sources: live2.sources }));
+      assert((await env2.store.loadAnnotations(path2)).length === 1, "B9 path2 redo recreated conflicting annotation");
+    } finally { await env2.view.onClose(); }
+
+    // Path 1b & 2b: unmodified card redo MUST still 100% restore (same-session + old-card)
+    const path1b = "b9-unmodified-redo.pdf";
+    const env1b = await openPdf(path1b, 1);
+    try {
+      env1b.ctrl.setContinuousExcerpt(true);
+      env1b.ctrl.commitAnnotation(mkTarget(600), "highlight", "#ffd54f", "未改卡片原文");
+      env1b.ctrl.commitAnnotation(mkTarget(560), "highlight", "#ffd54f", "未改卡片追加");
+      const snapAfterAppend = {
+        front: env1b.store.cards[0].front,
+        sources: structuredClone(env1b.store.cards[0].sources),
+        count: env1b.ctrl.getContinuousExcerpt().count,
+      };
+      await env1b.view.undoLastEdit();
+      assert(env1b.store.cards[0].front === "未改卡片原文", "B9 unmodified same-session undo failed");
+      await env1b.view.redoLastEdit();
+      assert(env1b.store.cards[0].front === snapAfterAppend.front
+        && JSON.stringify(env1b.store.cards[0].sources) === JSON.stringify(snapAfterAppend.sources)
+        && env1b.ctrl.getContinuousExcerpt().count === snapAfterAppend.count,
+        "B9 unmodified same-session redo did not 100% restore");
+    } finally { await env1b.view.onClose(); }
+
+    const path2b = "b9-unmodified-old-card-redo.pdf";
+    const env2b = await openPdf(path2b, 1);
+    try {
+      env2b.ctrl.commitAnnotation(mkTarget(600), "highlight", "#ffd54f", "未改旧卡原文");
+      const oldId = env2b.store.cards[0].id;
+      assert(env2b.ctrl.continueExcerptInCard(oldId) === true, "B9 path2b continueExcerptInCard failed");
+      env2b.ctrl.commitAnnotation(mkTarget(560), "highlight", "#ffd54f", "未改旧卡追加");
+      const snap2b = {
+        front: env2b.store.getCard(oldId)!.front,
+        sources: structuredClone(env2b.store.getCard(oldId)!.sources),
+        anns: (await env2b.store.loadAnnotations(path2b)).length,
+      };
+      await env2b.view.undoLastEdit();
+      assert(env2b.store.getCard(oldId)!.front === "未改旧卡原文" && (await env2b.store.loadAnnotations(path2b)).length === 1,
+        "B9 unmodified old-card undo failed");
+      await env2b.view.redoLastEdit();
+      assert(env2b.store.getCard(oldId)!.front === snap2b.front
+        && JSON.stringify(env2b.store.getCard(oldId)!.sources) === JSON.stringify(snap2b.sources)
+        && (await env2b.store.loadAnnotations(path2b)).length === snap2b.anns,
+        "B9 unmodified old-card redo did not 100% restore");
+    } finally { await env2b.view.onClose(); }
+
+    // autoReview=true: brand-new auto-enqueued card must still undo cleanly to 0/0/0/0 and redo back to 1/1/2/1
+    const path3 = "b9-auto-review.pdf";
+    const env3 = await openPdf(path3, 1);
+    try {
+      const set3 = env3.store.createStudySet("自动复习集", [path3]);
+      const deck = env3.store.createReviewDeck("自动复习测试卡组", set3.id);
+      env3.store.settings.autoReview = true;
+      env3.ctrl.commitAnnotation(mkTarget(600), "highlight", "#ffd54f", "自动复习入队撤重测试");
+      assert((await env3.store.loadAnnotations(path3)).length === 1 && env3.store.cards.length === 1
+        && env3.store.nodes.length === 2 && env3.store.reviewPending.length === 1
+        && Object.keys(env3.store.srs).length === 1 && env3.store.reviewLogs.length === 1
+        && env3.store.getReviewDeck(deck.id)!.cardIds.length === 1,
+        "B9 autoReview initial create failed");
+      await env3.view.undoLastEdit();
+      assert((await env3.store.loadAnnotations(path3)).length === 0 && env3.store.cards.length === 0
+        && env3.store.nodes.length === 0 && env3.store.reviewPending.length === 0
+        && Object.keys(env3.store.srs).length === 0 && env3.store.reviewLogs.length === 0
+        && env3.store.getReviewDeck(deck.id)!.cardIds.length === 0,
+        "B9 autoReview undo left remnants");
+      await env3.view.redoLastEdit();
+      assert((await env3.store.loadAnnotations(path3)).length === 1 && env3.store.cards.length === 1
+        && env3.store.nodes.length === 2 && env3.store.reviewPending.length === 1
+        && Object.keys(env3.store.srs).length === 1 && env3.store.reviewLogs.length === 1
+        && env3.store.getReviewDeck(deck.id)!.cardIds.length === 1,
+        "B9 autoReview redo failed");
+      // Real user review after auto-enqueue MUST still trigger review protection
+      const reviewedCardId = env3.store.cards[0].id;
+      env3.store.gradeCard(reviewedCardId, 3, { deckId: deck.id, now: new Date("2026-04-06T10:00:00Z") });
+      await env3.view.undoLastEdit();
+      assert((await env3.store.loadAnnotations(path3)).length === 0 && env3.store.cards.length === 1
+        && env3.store.nodes.length === 2 && env3.store.reviewPending.length === 1,
+        "B9 autoReview real user review was not protected on undo");
+    } finally { await env3.view.onClose(); }
+
+    // autoReview=false: undo/redo quad 1/1/2/0 -> 0/0/0/0 -> 1/1/2/0
+    const path4 = "b9-no-auto-review.pdf";
+    const env4 = await openPdf(path4, 1);
+    try {
+      const set4 = env4.store.createStudySet("非自动复习集", [path4]);
+      env4.store.createReviewDeck("非自动复习卡组", set4.id);
+      env4.store.settings.autoReview = false;
+      env4.ctrl.commitAnnotation(mkTarget(600), "highlight", "#ffd54f", "关闭自动复习撤重测试");
+      assert((await env4.store.loadAnnotations(path4)).length === 1 && env4.store.cards.length === 1
+        && env4.store.nodes.length === 2 && env4.store.reviewPending.length === 0,
+        "B9 autoReview=false create failed");
+      await env4.view.undoLastEdit();
+      assert((await env4.store.loadAnnotations(path4)).length === 0 && env4.store.cards.length === 0
+        && env4.store.nodes.length === 0 && env4.store.reviewPending.length === 0,
+        "B9 autoReview=false undo failed");
+      await env4.view.redoLastEdit();
+      assert((await env4.store.loadAnnotations(path4)).length === 1 && env4.store.cards.length === 1
+        && env4.store.nodes.length === 2 && env4.store.reviewPending.length === 0,
+        "B9 autoReview=false redo failed");
+    } finally { await env4.view.onClose(); }
+
+    report.B9 = {
+      sameSessionRedoProtected: true,
+      oldCardRedoProtected: true,
+      unmodifiedRedoRestored: true,
+      autoReviewAtomicUndoRedo: true,
+      autoReviewRealProgressProtected: true,
+      noAutoReviewAtomicUndoRedo: true,
+    };
   }
 
   return report;

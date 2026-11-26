@@ -67,6 +67,10 @@ type LinkedCardCreationRecord = {
   nodes: MindNode[];
   auxiliaryNodeIds: string[];
   reviewPendingIds: string[];
+  initialSrs?: Record<string, unknown>;
+  initialReviewLogs?: unknown[];
+  initialReviewPending?: unknown[];
+  initialDeckIds?: string[];
 };
 type ReaderExcerptChange =
   | {
@@ -1832,12 +1836,15 @@ export abstract class BaseAnnotationController {
     if (cardContentFingerprint(liveCard) !== record.fingerprint) return true;
     if (liveCard.groupId || liveCard.mergedCards?.length) return true;
     const store = this.plugin.store;
+    const initialSrs = record.initialSrs ?? {};
     for (const [key, state] of Object.entries(store.srs ?? {})) {
       if ((key === liveCard.id || key.startsWith(liveCard.id + "::")) && state && ((state.reps ?? 0) > 0 || (state.lapses ?? 0) > 0 || !!state.lastReviewed)) {
+        if (key in initialSrs && JSON.stringify(state) === JSON.stringify(initialSrs[key])) continue;
         return true;
       }
     }
-    if ((store.reviewLogs ?? []).some(log => log.cardId === liveCard.id && !log.undoneAt)) return true;
+    const initialLogIds = new Set((record.initialReviewLogs ?? []).map((log: any) => log.id));
+    if ((store.reviewLogs ?? []).some(log => log.cardId === liveCard.id && !log.undoneAt && !initialLogIds.has(log.id))) return true;
     const createdNodeIds = new Set(record.nodes.map(n => n.id));
     const cardNodeIds = new Set(store.nodes.filter(n => n.cardId === liveCard.id).map(n => n.id));
     if (store.nodes.some(n => n.parentId && cardNodeIds.has(n.parentId) && !createdNodeIds.has(n.id))) return true;
@@ -1855,7 +1862,11 @@ export abstract class BaseAnnotationController {
       if (!redo) {
         const liveIdx = this.cache.findIndex(item => item.id === change.annotation.id);
         const liveAnn = liveIdx >= 0 ? this.cache[liveIdx] : undefined;
-        if (!liveAnn || annotationContentFingerprint(liveAnn) !== annotationContentFingerprint(change.annotation)) {
+        const linkedLiveCard = change.linkedCard ? store.getCard(change.linkedCard.card.id) : undefined;
+        const annComparable = liveAnn && linkedLiveCard?.groupId && liveAnn.cardId === linkedLiveCard.groupId
+          ? { ...liveAnn, cardId: change.annotation.cardId }
+          : liveAnn;
+        if (!annComparable || annotationContentFingerprint(annComparable) !== annotationContentFingerprint(change.annotation)) {
           this.clearEditHistory();
           new Notice("标注已被其他视图修改，已拒绝覆盖并清空撤销栈");
           return false;
@@ -1879,6 +1890,10 @@ export abstract class BaseAnnotationController {
                 if (change.linkedCard.reviewPendingIds.length) {
                   const pendingSet = new Set(change.linkedCard.reviewPendingIds);
                   store.reviewPending = store.reviewPending.filter(entry => !pendingSet.has(entry.id));
+                }
+                if (change.linkedCard.initialReviewLogs?.length) {
+                  const logIdSet = new Set(change.linkedCard.initialReviewLogs.map((log: any) => log.id));
+                  store.reviewLogs = store.reviewLogs.filter(log => !logIdSet.has(log.id));
                 }
                 for (let i = change.linkedCard.auxiliaryNodeIds.length - 1; i >= 0; i--) {
                   const auxId = change.linkedCard.auxiliaryNodeIds[i];
@@ -1908,13 +1923,41 @@ export abstract class BaseAnnotationController {
         if (change.linkedCard) {
           const existingCard = store.getCard(change.linkedCard.card.id);
           if (existingCard) {
-            if (!existingCard.anchorAnnId) existingCard.anchorAnnId = restored.id;
-            restored.cardId = existingCard.id;
+            const boundCard = existingCard.groupId ? (store.getCard(existingCard.groupId) ?? existingCard) : existingCard;
+            if (!boundCard.anchorAnnId) boundCard.anchorAnnId = restored.id;
+            restored.cardId = boundCard.id;
           } else {
             store.addCard(structuredClone(change.linkedCard.card));
             for (const node of change.linkedCard.nodes) {
               if (!store.nodes.some(existing => existing.id === node.id)) {
                 store.addNode(structuredClone(node));
+              }
+            }
+            if (change.linkedCard.initialSrs) {
+              for (const [k, v] of Object.entries(change.linkedCard.initialSrs)) {
+                if (!(k in store.srs)) store.srs[k] = structuredClone(v) as any;
+              }
+            }
+            if (change.linkedCard.initialReviewLogs?.length) {
+              for (const log of change.linkedCard.initialReviewLogs as any[]) {
+                if (!store.reviewLogs.some(existing => existing.id === log.id)) {
+                  store.reviewLogs.push(structuredClone(log));
+                }
+              }
+            }
+            if (change.linkedCard.initialReviewPending?.length) {
+              for (const entry of change.linkedCard.initialReviewPending as any[]) {
+                if (!store.reviewPending.some(existing => existing.id === entry.id)) {
+                  store.reviewPending.push(structuredClone(entry));
+                }
+              }
+            }
+            if (change.linkedCard.initialDeckIds?.length) {
+              for (const deckId of change.linkedCard.initialDeckIds) {
+                const deck = store.reviewDecks.find(d => d.id === deckId);
+                if (deck && !deck.cardIds.includes(change.linkedCard.card.id)) {
+                  deck.cardIds.push(change.linkedCard.card.id);
+                }
               }
             }
           }
@@ -1982,6 +2025,14 @@ export abstract class BaseAnnotationController {
       this.plugin.refreshMindmap();
       return true;
     }
+    if (change.cardId && change.cardBefore) {
+      const liveCard = store.getCard(change.cardId);
+      if (!liveCard || cardContentFingerprint(liveCard) !== cardContentFingerprint(change.cardBefore)) {
+        this.clearEditHistory();
+        new Notice("卡片已被外部修改，已拒绝重做连续摘录以保护最新编辑");
+        return false;
+      }
+    }
     if (change.createdAnn) {
       if (!this.cache.some(item => item.id === change.createdAnn!.annotation.id)) {
         const restored = structuredClone(change.createdAnn.annotation);
@@ -1990,8 +2041,9 @@ export abstract class BaseAnnotationController {
       }
     } else {
       const liveAnn = this.cache.find(item => item.id === change.targetAnnId);
-      if (!liveAnn) {
+      if (!liveAnn || annotationContentFingerprint(liveAnn) !== annotationContentFingerprint(change.annBefore)) {
         this.clearEditHistory();
+        new Notice("连续摘录标注已被外部修改，已拒绝重做并清空撤销栈");
         return false;
       }
       const nextAnn = structuredClone(change.annAfter);
@@ -2924,6 +2976,9 @@ export abstract class BaseAnnotationController {
     const store = this.plugin.store;
     const beforeNodeIds = new Set((store.nodes ?? []).map(n => n.id));
     const beforePendingIds = new Set((store.reviewPending ?? []).map(p => p.id));
+    const beforeSrsKeys = new Set(Object.keys(store.srs ?? {}));
+    const beforeLogIds = new Set((store.reviewLogs ?? []).map(l => l.id));
+    const beforeDeckMembership = new Map((store.reviewDecks ?? []).map(d => [d.id, d.cardIds.includes(card.id)]));
     let autoReviewNotice = "";
     const run = () => {
       store.addCard(card);
@@ -2947,7 +3002,14 @@ export abstract class BaseAnnotationController {
     this.plugin.refreshSidebar();
     const createdNodes = (store.nodes ?? []).filter(n => !beforeNodeIds.has(n.id)).map(n => structuredClone(n));
     const auxiliaryNodeIds = createdNodes.filter(n => n.cardId !== card.id).map(n => n.id);
-    const reviewPendingIds = (store.reviewPending ?? []).filter(p => !beforePendingIds.has(p.id)).map(p => p.id);
+    const createdPending = (store.reviewPending ?? []).filter(p => !beforePendingIds.has(p.id)).map(p => structuredClone(p));
+    const reviewPendingIds = createdPending.map(p => p.id);
+    const initialSrs: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(store.srs ?? {})) {
+      if (!beforeSrsKeys.has(k)) initialSrs[k] = structuredClone(v);
+    }
+    const initialReviewLogs = (store.reviewLogs ?? []).filter(l => !beforeLogIds.has(l.id)).map(l => structuredClone(l));
+    const initialDeckIds = (store.reviewDecks ?? []).filter(d => !beforeDeckMembership.get(d.id) && d.cardIds.includes(card.id)).map(d => d.id);
     if (type === "excerpt") {
       // 5.0.2：摘录提示带「定位」动作；不自动切换视图。
       showExcerptNotice(this.plugin, card.id);
@@ -2966,6 +3028,10 @@ export abstract class BaseAnnotationController {
       nodes: createdNodes,
       auxiliaryNodeIds,
       reviewPendingIds,
+      initialSrs: Object.keys(initialSrs).length ? initialSrs : undefined,
+      initialReviewLogs: initialReviewLogs.length ? initialReviewLogs : undefined,
+      initialReviewPending: createdPending.length ? createdPending : undefined,
+      initialDeckIds: initialDeckIds.length ? initialDeckIds : undefined,
     };
   }
 
