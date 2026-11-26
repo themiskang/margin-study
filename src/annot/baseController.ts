@@ -866,13 +866,23 @@ export abstract class BaseAnnotationController {
   private pointerSelecting = false;
   private pendingSelection = false;
   private selectionPointerId: number | null = null;
-  private selectionDragStart: { x: number; y: number; detail: number } | null = null;
+  private selectionGestureSeq = 0;
+  private selectionDragStart: { token: number; x: number; y: number; detail: number } | null = null;
   private lastSelectionDrag: {
+    token: number;
     start: { x: number; y: number };
     end: { x: number; y: number };
     detail: number;
     selectionText: string;
     timestamp: number;
+    committed: boolean;
+    committedRange?: {
+      startContainer: Node;
+      startOffset: number;
+      endContainer: Node;
+      endOffset: number;
+      targetKey: string;
+    };
   } | null = null;
 
   private bindSelectionPointerWindowListeners(): void {
@@ -892,10 +902,11 @@ export abstract class BaseAnnotationController {
     if (event.button !== 0 || event.isPrimary === false) return;
     if (this.popEl && this.popEl.contains(event.target as Node)) return;
     if (!this.pointerSelecting) this.bindSelectionPointerWindowListeners();
+    const token = ++this.selectionGestureSeq;
     this.pointerSelecting = true;
     this.pendingSelection = false;
     this.selectionPointerId = event.pointerId;
-    this.selectionDragStart = { x: event.clientX, y: event.clientY, detail: event.detail || 1 };
+    this.selectionDragStart = { token, x: event.clientX, y: event.clientY, detail: event.detail || 1 };
     this.lastSelectionDrag = null;
     if (this.selTimer !== null) {
       window.clearTimeout(this.selTimer);
@@ -923,11 +934,13 @@ export abstract class BaseAnnotationController {
     if (start) {
       const detail = Math.max(start.detail, event.detail || 1);
       this.lastSelectionDrag = {
+        token: start.token,
         start: { x: start.x, y: start.y },
         end: { x: event.clientX, y: event.clientY },
         detail,
         selectionText: selText,
         timestamp: Date.now(),
+        committed: false,
       };
     }
     const hadPending = this.pendingSelection;
@@ -975,11 +988,22 @@ export abstract class BaseAnnotationController {
     const selectedText = sel.toString();
     if (!fromBlock && this.lastSelectionDrag) {
       const drag = this.lastSelectionDrag;
+      if (drag.committed && drag.committedRange) {
+        const cr = drag.committedRange;
+        if (
+          cr.startContainer === range.startContainer &&
+          cr.startOffset === range.startOffset &&
+          cr.endContainer === range.endContainer &&
+          cr.endOffset === range.endOffset
+        ) {
+          return;
+        }
+      }
       const fresh = Date.now() - drag.timestamp < 500;
       const sameSelection = !drag.selectionText || drag.selectionText === selectedText;
-      if (!fresh || !sameSelection) {
+      if (!drag.committed && (!fresh || !sameSelection)) {
         this.lastSelectionDrag = null;
-      } else if (isPointerMicroDrag(drag.start, drag.end, drag.detail)) {
+      } else if (!drag.committed && isPointerMicroDrag(drag.start, drag.end, drag.detail)) {
         this.removePop();
         return;
       }
@@ -996,6 +1020,12 @@ export abstract class BaseAnnotationController {
       return;
     }
     const targetKey = JSON.stringify(target), last = this.lastAutomaticSelection;
+    if (!fromBlock && this.lastSelectionDrag?.committed) {
+      if (this.lastSelectionDrag.committedRange?.targetKey === targetKey) {
+        return;
+      }
+      this.lastSelectionDrag = null;
+    }
     const meetsMinLength = meetsExcerptMinLength(selectedText, this.plugin.store.settings.autoExcerptMinChars);
     if (this.automaticTextExcerpt && !fromBlock && !this.pointerSelecting && (this.continuousExcerpt || meetsMinLength)) {
       const unchanged = last && last.revision === this.documentRevision && last.text === selectedText && last.target === targetKey && last.range.startContainer === range.startContainer && last.range.startOffset === range.startOffset && last.range.endContainer === range.endContainer && last.range.endOffset === range.endOffset && this.cache.some(ann => ann.id === last.annotationId);
@@ -1007,8 +1037,21 @@ export abstract class BaseAnnotationController {
           const before = new Set(this.cache.map(ann => ann.id));
           this.commitAnnotation(target, "highlight", this.color, selectedText);
           const created = this.cache.find(ann => !before.has(ann.id));
-          if (created) this.lastAutomaticSelection = { range:range.cloneRange(), target:targetKey, text:selectedText, annotationId:created.id, revision:this.documentRevision };
+          const committedAnnId = created?.id ?? this.continuousExcerpt?.annotationId;
+          if (committedAnnId) {
+            this.lastAutomaticSelection = { range:range.cloneRange(), target:targetKey, text:selectedText, annotationId:committedAnnId, revision:this.documentRevision };
+          }
         }
+      }
+      if (this.lastSelectionDrag) {
+        this.lastSelectionDrag.committed = true;
+        this.lastSelectionDrag.committedRange = {
+          startContainer: range.startContainer,
+          startOffset: range.startOffset,
+          endContainer: range.endContainer,
+          endOffset: range.endOffset,
+          targetKey,
+        };
       }
     }
     this.currentTarget = target;

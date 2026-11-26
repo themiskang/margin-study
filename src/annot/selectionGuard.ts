@@ -66,11 +66,12 @@ export function isValidSelectionRect(
   return rect.width >= minPx || rect.height >= minPx;
 }
 
-/** 判定区域摘录框尺寸是否达到最小像素硬下限。 */
+/** 判定区域摘录框尺寸是否同时满足短边最小值（width >= minPx && height >= minPx，即隐含面积 >= minPx²）硬下限。 */
 export function isValidRegionSize(
   width: number,
   height: number,
   minPx = REGION_MIN_SIZE_PX,
 ): boolean {
+  if (!Number.isFinite(minPx) || minPx < 0) return false;
   return Number.isFinite(width) && Number.isFinite(height) && width >= minPx && height >= minPx;
 }

@@ -314,7 +314,21 @@ export class HtmlAnnotationController extends BaseAnnotationController {
       onActionBegin: () => this.ensurePenRevision(),
       onCommit: (strokes, brush, width, opacity) => this.createPenAnnotation(strokes, layerId, notebookId, brush, width, opacity),
       onPaste: (entries) => this.pastePenAnnotations(entries, layerId, notebookId),
-      onExcerpt: (_selection, bounds, image) => this.excerptLassoSelection(bounds, image),
+      onExcerpt: (selection, bounds, image) => {
+        const rect = this.getBodyEl().getBoundingClientRect();
+        let next = bounds;
+        if (selection.length && rect.width > 0 && rect.height > 0) {
+          const w = bounds.width * rect.width, h = bounds.height * rect.height;
+          if (h === 0 && w >= REGION_MIN_SIZE_PX) {
+            const pad = Math.min(1, 16 / rect.height);
+            next = { ...bounds, y: Math.max(0, bounds.y - pad / 2), height: pad };
+          } else if (w === 0 && h >= REGION_MIN_SIZE_PX) {
+            const pad = Math.min(1, 16 / rect.width);
+            next = { ...bounds, x: Math.max(0, bounds.x - pad / 2), width: pad };
+          }
+        }
+        this.excerptLassoSelection(next, image);
+      },
       onUnbind: (ids) => this.unbindInkAnnotations(ids),
       getInk: () => this.getPenRecords(undefined, layerId),
       onChange: (changes) => this.commitPenChanges(changes),
@@ -392,7 +406,7 @@ export class HtmlAnnotationController extends BaseAnnotationController {
     const body = this.getBodyEl(), rect = body.getBoundingClientRect();
     const rawWidth = bounds.width * rect.width;
     const rawHeight = bounds.height * rect.height;
-    if (!Number.isFinite(rawWidth) || !Number.isFinite(rawHeight) || Math.max(rawWidth, rawHeight) < REGION_MIN_SIZE_PX) return;
+    if (!isValidRegionSize(rawWidth, rawHeight, REGION_MIN_SIZE_PX)) return;
     const selRect = {
       left: bounds.x * rect.width,
       top: bounds.y * rect.height,

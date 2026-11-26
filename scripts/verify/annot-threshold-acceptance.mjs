@@ -189,6 +189,7 @@ const sampleTextItems = [
   assert(isValidSelectionRect({ width: 5, height: 5 }) === false, "5x5 rect invalid");
   assert(isValidSelectionRect({ width: 5, height: 14 }) === true, "5x14 line rect valid");
   assert(isValidRegionSize(2, 2, 12) === false && isValidRegionSize(12, 12, 12) === true, "region size threshold");
+  assert(isValidRegionSize(40, 2, 12) === false && isValidRegionSize(2, 30, 12) === false, "thin region must fail short-side check");
 
   // ===== A1: 6px 微拖 0 产物且无浮层 =====
   {
@@ -367,7 +368,7 @@ const sampleTextItems = [
       const afterDblClick = { annotations: (await store.loadAnnotations("a5.pdf")).length, cards: store.cards.length, nodes: store.nodes.length };
       assert(afterDblClick.annotations === 3 && afterDblClick.cards === 3 && afterDblClick.nodes >= 3, "A5 double-click failed: " + JSON.stringify(afterDblClick));
 
-      // Cross-page highlight merge
+      // Cross-page highlight merge (wait 320ms after pointerup so native delayed selectionchange cannot double-commit)
       const startSpan = findSpan(p1, "这是八个中文字符");
       const endSpan = findSpan(p2, "四个汉字");
       const crossRange = document.createRange();
@@ -377,9 +378,9 @@ const sampleTextItems = [
       const sel = window.getSelection()!;
       sel.removeAllRanges();
       sel.addRange(crossRange);
-      document.dispatchEvent(new Event("selectionchange"));
       dispatchPtr(window, "pointerup", 220, 400, { detail: 1 });
-      await frame();
+      document.dispatchEvent(new Event("selectionchange"));
+      await wait(320);
       const anns = await store.loadAnnotations("a5.pdf");
       const crossAnn = anns[anns.length - 1];
       const crossPages = crossAnn?.pdfGeometry?.length ?? 0;
@@ -399,31 +400,31 @@ const sampleTextItems = [
       const pageEl = view.getPageRecord(1)!.wrapper;
       const box = pageEl.getBoundingClientRect();
 
-      // 1) PDF onLassoPointerUp 2x2 & 5x5
+      // 1) PDF onLassoPointerUp 2x2, 5x5, 40x2, 2x30
       ctrl.setRegionMode(true);
-      for (const sz of [2, 5]) {
+      for (const [w, h] of [[2, 2], [5, 5], [40, 2], [2, 30]]) {
         dispatchPtr(pageEl, "pointerdown", box.left + 100, box.top + 100);
-        dispatchPtr(window, "pointermove", box.left + 100 + sz, box.top + 100 + sz);
-        dispatchPtr(window, "pointerup", box.left + 100 + sz, box.top + 100 + sz);
+        dispatchPtr(window, "pointermove", box.left + 100 + w, box.top + 100 + h);
+        dispatchPtr(window, "pointerup", box.left + 100 + w, box.top + 100 + h);
         await frame();
       }
       ctrl.setRegionMode(false);
       const afterPdfLassoMicro = { annotations: (await store.loadAnnotations("a6.pdf")).length, cards: store.cards.length };
-      assert(afterPdfLassoMicro.annotations === 0 && afterPdfLassoMicro.cards === 0, "A6 PDF lasso micro failed");
+      assert(afterPdfLassoMicro.annotations === 0 && afterPdfLassoMicro.cards === 0, "A6 PDF lasso micro/thin failed");
 
-      // 2) PDF createRegionExtend 2x2 & 5x5
-      for (const sz of [2, 5]) {
-        await ctrl.createRegionExtend(1, new DOMRect(box.left + 100, box.top + 100, sz, sz));
+      // 2) PDF createRegionExtend 2x2, 5x5, 40x2, 2x30
+      for (const [w, h] of [[2, 2], [5, 5], [40, 2], [2, 30]]) {
+        await ctrl.createRegionExtend(1, new DOMRect(box.left + 100, box.top + 100, w, h));
       }
       const afterPdfExtendMicro = { annotations: (await store.loadAnnotations("a6.pdf")).length, cards: store.cards.length };
-      assert(afterPdfExtendMicro.annotations === 0 && afterPdfExtendMicro.cards === 0, "A6 PDF createRegionExtend micro failed");
+      assert(afterPdfExtendMicro.annotations === 0 && afterPdfExtendMicro.cards === 0, "A6 PDF createRegionExtend micro/thin failed");
 
-      // 3) PDF excerptLassoSelection 2x2 & 5x5
-      for (const sz of [2, 5]) {
-        (ctrl as any).excerptLassoSelection(1, { x: 0.2, y: 0.2, width: sz / box.width, height: sz / box.height }, "data:image/png;base64,AA==");
+      // 3) PDF excerptLassoSelection 2x2, 5x5, 40x2, 2x30
+      for (const [w, h] of [[2, 2], [5, 5], [40, 2], [2, 30]]) {
+        (ctrl as any).excerptLassoSelection(1, { x: 0.2, y: 0.2, width: w / box.width, height: h / box.height }, "data:image/png;base64,AA==");
       }
       const afterPdfExcerptLassoMicro = { annotations: (await store.loadAnnotations("a6.pdf")).length, cards: store.cards.length };
-      assert(afterPdfExcerptLassoMicro.annotations === 0 && afterPdfExcerptLassoMicro.cards === 0, "A6 PDF excerptLassoSelection micro failed");
+      assert(afterPdfExcerptLassoMicro.annotations === 0 && afterPdfExcerptLassoMicro.cards === 0, "A6 PDF excerptLassoSelection micro/thin failed");
 
       // 4) Valid 40x30 px on PDF onLassoPointerUp & excerptLassoSelection
       ctrl.setRegionMode(true);
@@ -439,7 +440,7 @@ const sampleTextItems = [
       const afterPdfExcerptLassoValid = { annotations: (await store.loadAnnotations("a6.pdf")).length, cards: store.cards.length };
       assert(afterPdfExcerptLassoValid.annotations === 2 && afterPdfExcerptLassoValid.cards === 2, "A6 PDF valid 40x30 excerptLasso failed");
 
-      // 5) HTML onLassoPointerUp & excerptLassoSelection 2x2 & 5x5 + valid 40x30
+      // 5) HTML onLassoPointerUp & excerptLassoSelection 2x2, 5x5, 40x2, 2x30 + valid 40x30
       const htmlEnv = makeEnv({ "a6.html": "<p>HTML region test paragraph content</p>" });
       await htmlEnv.store.load();
       const sc = document.createElement("div");
@@ -457,18 +458,18 @@ const sampleTextItems = [
       await htmlCtrl.loadForDoc("a6.html");
       const hBox = body.getBoundingClientRect();
       htmlCtrl.setRegionMode(true);
-      for (const sz of [2, 5]) {
+      for (const [w, h] of [[2, 2], [5, 5], [40, 2], [2, 30]]) {
         dispatchPtr(body, "pointerdown", hBox.left + 20, hBox.top + 20);
-        dispatchPtr(window, "pointermove", hBox.left + 20 + sz, hBox.top + 20 + sz);
-        dispatchPtr(window, "pointerup", hBox.left + 20 + sz, hBox.top + 20 + sz);
+        dispatchPtr(window, "pointermove", hBox.left + 20 + w, hBox.top + 20 + h);
+        dispatchPtr(window, "pointerup", hBox.left + 20 + w, hBox.top + 20 + h);
         await frame();
       }
       htmlCtrl.setRegionMode(false);
-      for (const sz of [2, 5]) {
-        (htmlCtrl as any).excerptLassoSelection({ x: 0.1, y: 0.1, width: sz / hBox.width, height: sz / hBox.height }, "data:image/png;base64,AA==");
+      for (const [w, h] of [[2, 2], [5, 5], [40, 2], [2, 30]]) {
+        (htmlCtrl as any).excerptLassoSelection({ x: 0.1, y: 0.1, width: w / hBox.width, height: h / hBox.height }, "data:image/png;base64,AA==");
       }
       const afterHtmlMicro = { annotations: (await htmlEnv.store.loadAnnotations("a6.html")).length, cards: htmlEnv.store.cards.length };
-      assert(afterHtmlMicro.annotations === 0 && afterHtmlMicro.cards === 0, "A6 HTML micro failed: " + JSON.stringify(afterHtmlMicro));
+      assert(afterHtmlMicro.annotations === 0 && afterHtmlMicro.cards === 0, "A6 HTML micro/thin failed: " + JSON.stringify(afterHtmlMicro));
 
       (htmlCtrl as any).excerptLassoSelection({ x: 0.1, y: 0.1, width: 40 / hBox.width, height: 30 / hBox.height }, "data:image/png;base64,AA==");
       const afterHtmlValid = { annotations: (await htmlEnv.store.loadAnnotations("a6.html")).length, cards: htmlEnv.store.cards.length };
@@ -505,18 +506,18 @@ const sampleTextItems = [
       dispatchPtr(window, "pointerup", 220, 100, { detail: 1 });
       await frame();
 
-      // 2nd excerpt in continuous session: 2 CJK ("二字")
+      // 2nd excerpt in continuous session: 2 CJK ("二字"), wait 320ms after delayed selectionchange to verify no duplicate append
       dispatchPtr(scroll, "pointerdown", 100, 120, { detail: 1 });
       selectSpanText(findSpan(scroll, "二字"));
-      document.dispatchEvent(new Event("selectionchange"));
       dispatchPtr(window, "pointerup", 220, 120, { detail: 1 });
-      await frame();
+      document.dispatchEvent(new Event("selectionchange"));
+      await wait(320);
 
       const annsCont = await store.loadAnnotations("a7.pdf");
       const contSession = ctrl.getContinuousExcerpt();
       const mergedText = annsCont[0]?.text ?? "";
       const mergedCardFront = store.cards[0]?.front ?? "";
-      assert(annsCont.length === 1 && store.cards.length === 1 && contSession.count === 2 && mergedText.includes("二字") && mergedCardFront.includes("二字"),
+      assert(annsCont.length === 1 && store.cards.length === 1 && contSession.count === 2 && mergedText === "四个汉字\\n\\n二字" && mergedCardFront === "四个汉字\\n\\n二字",
         "A7 continuous short append failed: " + JSON.stringify({ anns: annsCont.length, cards: store.cards.length, contSession, mergedText, mergedCardFront }));
 
       // Turn off continuousExcerpt, set autoExcerptMinChars = 0, select "三个字"

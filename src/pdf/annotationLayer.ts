@@ -386,7 +386,22 @@ export class AnnotationController extends BaseAnnotationController {
       onInputActivity: change => this.plugin.store.noteInputActivity?.(change),
       onCommit: (strokes, brush, width, opacity) => this.createPenAnnotation(num, strokes, layerId, notebookId, brush, width, opacity, undefined, source),
       onPaste: (entries) => this.pastePenAnnotations(num, entries, layerId, notebookId, source),
-      onExcerpt: (_selection, bounds, image) => this.excerptLassoSelection(num, bounds, image),
+      onExcerpt: (selection, bounds, image) => {
+        const rec = this.reader.getPageRecord(num);
+        const wr = rec?.wrapper.getBoundingClientRect();
+        let next = bounds;
+        if (selection.length && wr && wr.width > 0 && wr.height > 0) {
+          const w = bounds.width * wr.width, h = bounds.height * wr.height;
+          if (h === 0 && w >= REGION_MIN_SIZE_PX) {
+            const pad = Math.min(1, 16 / wr.height);
+            next = { ...bounds, y: Math.max(0, bounds.y - pad / 2), height: pad };
+          } else if (w === 0 && h >= REGION_MIN_SIZE_PX) {
+            const pad = Math.min(1, 16 / wr.width);
+            next = { ...bounds, x: Math.max(0, bounds.x - pad / 2), width: pad };
+          }
+        }
+        this.excerptLassoSelection(num, next, image);
+      },
       onUnbind: (ids) => this.unbindInkAnnotations(ids),
       onSelectionChange: (hasSelection) => {
         if (hasSelection) {
@@ -475,14 +490,14 @@ export class AnnotationController extends BaseAnnotationController {
     const canvasRect = rec.canvas.getBoundingClientRect();
     const rawWidth = bounds.width * wrapperRect.width;
     const rawHeight = bounds.height * wrapperRect.height;
-    if (!Number.isFinite(rawWidth) || !Number.isFinite(rawHeight) || Math.max(rawWidth, rawHeight) < REGION_MIN_SIZE_PX) return;
+    if (!isValidRegionSize(rawWidth, rawHeight, REGION_MIN_SIZE_PX)) return;
     const client = {
       left: wrapperRect.left + bounds.x * wrapperRect.width,
       top: wrapperRect.top + bounds.y * wrapperRect.height,
       right: wrapperRect.left + (bounds.x + bounds.width) * wrapperRect.width,
       bottom: wrapperRect.top + (bounds.y + bounds.height) * wrapperRect.height,
-      width: Math.max(1, rawWidth),
-      height: Math.max(1, rawHeight),
+      width: rawWidth,
+      height: rawHeight,
     };
     const pdfRect = clientRectToPdfRect(client, canvasRect, rec.viewport) ?? { x: bounds.x, y: bounds.y, w: Math.max(0.01, bounds.width), h: Math.max(0.01, bounds.height) };
     const ix1 = Math.max(client.left, canvasRect.left), iy1 = Math.max(client.top, canvasRect.top);
