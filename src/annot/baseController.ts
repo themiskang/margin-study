@@ -28,6 +28,7 @@ import { cloneStrokes } from "./penGeometry";
 import { measurePenCommit } from "./pen";
 import type { HandwritingMode, InkChange, InkRecord, PenTool } from "./penGeometry";
 import { annotationInkLayer, INK_REFERENCE_OPACITY, inkLayerOpacity, inkLayerState, InkLayerControls, isInkLayerBound, isOrphanInkLayer } from "./inkLayers";
+import { isPointerMicroDrag, isValidSelectionRect, meetsExcerptMinLength } from "./selectionGuard";
 import type { InkLayerState } from "./inkLayers";
 import { annotationNotebook, documentNotebookState, DocumentNotebookControls, notebookMeta, updateNotebookMeta } from "./documentNotebooks";
 import type { DocumentNotebookState } from "./documentNotebooks";
@@ -368,6 +369,8 @@ export abstract class BaseAnnotationController {
     this.getScrollContainer().addEventListener("scroll", this.onInputScroll, { passive: true });
     this.getScrollContainer().addEventListener("wheel", this.onInputScroll, { passive: true });
     this.getScrollContainer().addEventListener("pointerdown", this.onInputPointerDown, true);
+    this.getScrollContainer().addEventListener("pointerdown", this.onSelectionPointerDown, true);
+    this.getScrollContainer().addEventListener("mousedown", this.onSelectionMouseDown, true);
     this.getScrollContainer().addEventListener("ms-recognize-ink", this.onRecognizeInk);
     document.addEventListener("mousedown", this.onDocMouseDown);
     document.addEventListener("selectionchange", this.onSelectionChange);
@@ -696,6 +699,10 @@ export abstract class BaseAnnotationController {
     this.getScrollContainer().removeEventListener("scroll", this.onInputScroll);
     this.getScrollContainer().removeEventListener("wheel", this.onInputScroll);
     this.getScrollContainer().removeEventListener("pointerdown", this.onInputPointerDown, true);
+    this.getScrollContainer().removeEventListener("pointerdown", this.onSelectionPointerDown, true);
+    this.getScrollContainer().removeEventListener("mousedown", this.onSelectionMouseDown, true);
+    this.onSelectionPointerCancel();
+    this.lastSelectionDrag = null;
     this.onInputBlur();
     this.getScrollContainer().removeEventListener("ms-recognize-ink", this.onRecognizeInk);
     document.removeEventListener("mousedown", this.onDocMouseDown);
@@ -856,9 +863,96 @@ export abstract class BaseAnnotationController {
     if (this.popEl && !this.popEl.contains(e.target as Node)) this.removePop();
   };
 
+  private pointerSelecting = false;
+  private pendingSelection = false;
+  private selectionPointerId: number | null = null;
+  private selectionDragStart: { x: number; y: number; detail: number } | null = null;
+  private lastSelectionDrag: {
+    start: { x: number; y: number };
+    end: { x: number; y: number };
+    detail: number;
+    selectionText: string;
+    timestamp: number;
+  } | null = null;
+
+  private bindSelectionPointerWindowListeners(): void {
+    window.addEventListener("pointerup", this.onSelectionPointerUp, true);
+    window.addEventListener("pointercancel", this.onSelectionPointerCancel, true);
+    window.addEventListener("blur", this.onSelectionPointerCancel);
+  }
+
+  private unbindSelectionPointerWindowListeners(): void {
+    window.removeEventListener("pointerup", this.onSelectionPointerUp, true);
+    window.removeEventListener("pointercancel", this.onSelectionPointerCancel, true);
+    window.removeEventListener("blur", this.onSelectionPointerCancel);
+  }
+
+  private onSelectionPointerDown = (event: PointerEvent): void => {
+    if (this.disposed || this.releasing || this.voicePlacing || this.penMode || this.lassoMode || this.assistiveMode === "block") return;
+    if (event.button !== 0 || event.isPrimary === false) return;
+    if (this.popEl && this.popEl.contains(event.target as Node)) return;
+    if (!this.pointerSelecting) this.bindSelectionPointerWindowListeners();
+    this.pointerSelecting = true;
+    this.pendingSelection = false;
+    this.selectionPointerId = event.pointerId;
+    this.selectionDragStart = { x: event.clientX, y: event.clientY, detail: event.detail || 1 };
+    this.lastSelectionDrag = null;
+    if (this.selTimer !== null) {
+      window.clearTimeout(this.selTimer);
+      this.selTimer = null;
+    }
+  };
+
+  private onSelectionMouseDown = (event: MouseEvent): void => {
+    if (!this.pointerSelecting || !this.selectionDragStart) return;
+    if (event.detail > this.selectionDragStart.detail) {
+      this.selectionDragStart.detail = event.detail;
+    }
+  };
+
+  private onSelectionPointerUp = (event: PointerEvent): void => {
+    if (!this.pointerSelecting) return;
+    if (this.selectionPointerId !== null && event.pointerId !== this.selectionPointerId) return;
+    const start = this.selectionDragStart;
+    this.pointerSelecting = false;
+    this.selectionPointerId = null;
+    this.selectionDragStart = null;
+    this.unbindSelectionPointerWindowListeners();
+    const sel = window.getSelection();
+    const selText = sel && !sel.isCollapsed ? sel.toString() : "";
+    if (start) {
+      const detail = Math.max(start.detail, event.detail || 1);
+      this.lastSelectionDrag = {
+        start: { x: start.x, y: start.y },
+        end: { x: event.clientX, y: event.clientY },
+        detail,
+        selectionText: selText,
+        timestamp: Date.now(),
+      };
+    }
+    const hadPending = this.pendingSelection;
+    this.pendingSelection = false;
+    if (hadPending || !!selText.trim()) {
+      if (this.selTimer !== null) {
+        window.clearTimeout(this.selTimer);
+        this.selTimer = null;
+      }
+      this.handleSelection();
+    }
+  };
+
+  private onSelectionPointerCancel = (): void => {
+    this.pointerSelecting = false;
+    this.pendingSelection = false;
+    this.selectionPointerId = null;
+    this.selectionDragStart = null;
+    this.unbindSelectionPointerWindowListeners();
+  };
+
   // 选区变化（鼠标与平板触摸通用）触发选区捕获，200ms 防抖（体验增强 M）
   private onSelectionChange = (): void => {
     if (this.disposed || this.releasing || this.voicePlacing || this.penMode || this.lassoMode || this.assistiveMode === 'block') return;
+    if (this.pointerSelecting) this.pendingSelection = true;
     if (this.selTimer !== null) window.clearTimeout(this.selTimer);
     const revision = this.documentRevision, path = this.docPath, session = this.selectionSession, view = this.getScrollContainer();
     this.selTimer = window.setTimeout(() => {
@@ -878,15 +972,32 @@ export abstract class BaseAnnotationController {
     }
     const range = sel.getRangeAt(0);
     if (!range.startContainer.isConnected || !range.endContainer.isConnected || !this.getScrollContainer().contains(range.commonAncestorContainer)) return;
+    const selectedText = sel.toString();
+    if (!fromBlock && this.lastSelectionDrag) {
+      const drag = this.lastSelectionDrag;
+      const fresh = Date.now() - drag.timestamp < 500;
+      const sameSelection = !drag.selectionText || drag.selectionText === selectedText;
+      if (!fresh || !sameSelection) {
+        this.lastSelectionDrag = null;
+      } else if (isPointerMicroDrag(drag.start, drag.end, drag.detail)) {
+        this.removePop();
+        return;
+      }
+    }
     const rb = range.getBoundingClientRect();
+    if (!fromBlock && (rb.width || rb.height) && !isValidSelectionRect(rb)) {
+      this.removePop();
+      return;
+    }
     if (rb.width || rb.height) this.lastPoint = { x: rb.left + rb.width / 2, y: rb.bottom + 8 };
     const target = this.resolveSelection(range);
     if (!target) {
       this.removePop();
       return;
     }
-    const selectedText = sel.toString(), targetKey = JSON.stringify(target), last = this.lastAutomaticSelection;
-    if (this.automaticTextExcerpt && !fromBlock) {
+    const targetKey = JSON.stringify(target), last = this.lastAutomaticSelection;
+    const meetsMinLength = meetsExcerptMinLength(selectedText, this.plugin.store.settings.autoExcerptMinChars);
+    if (this.automaticTextExcerpt && !fromBlock && !this.pointerSelecting && (this.continuousExcerpt || meetsMinLength)) {
       const unchanged = last && last.revision === this.documentRevision && last.text === selectedText && last.target === targetKey && last.range.startContainer === range.startContainer && last.range.startOffset === range.startOffset && last.range.endContainer === range.endContainer && last.range.endOffset === range.endOffset && this.cache.some(ann => ann.id === last.annotationId);
       if (!unchanged) {
         const existing = this.cache.find(ann => ann.type === "highlight" && ann.text === selectedText && (ann.documentNotebookId ?? "default") === this.getDocumentNotebookId() && (target.kind === "pdf" ? ann.docKind === "pdf" && ann.page === target.pageNum && JSON.stringify(ann.pdfGeometry ?? [{page:ann.page,rects:ann.rects}]) === JSON.stringify(target.pdfGeometry ?? [{page:target.pageNum,rects:target.rects}]) : ann.docKind === "html" && JSON.stringify(ann.range) === JSON.stringify(target.range)));
@@ -1079,7 +1190,8 @@ export abstract class BaseAnnotationController {
     if (
       (ann.type === "highlight" || ann.type === "underline") &&
       !ann.cardId &&
-      this.plugin.store.settings.autoCardOnHighlight
+      this.plugin.store.settings.autoCardOnHighlight &&
+      meetsExcerptMinLength(ann.text ?? "", this.plugin.store.settings.autoExcerptMinChars)
     ) {
       this.makeCard(ann, "excerpt", true);
       new Notice("已自动生成摘录卡（可在卡片管理中查看）");

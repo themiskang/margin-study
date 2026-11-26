@@ -131,6 +131,7 @@ const automatedSuites=[
   ["lasso-ui-workflow","scripts/verify/lasso-ui-workflow-acceptance.mjs"],
   ["merge-annotation-parity","scripts/verify/merge-annotation-parity-acceptance.mjs"],
   ["merge-document-undo","scripts/verify/merge-document-undo-acceptance.mjs"],
+  ["annot-threshold","scripts/verify/annot-threshold-acceptance.mjs"],
 ];
 const replaySuites=[
   ["document-more","scripts/verify/compare-document-more-evidence.py"],

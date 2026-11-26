@@ -92,6 +92,7 @@ export const FEATURE_INDEX: FeatureEntry[] = [
   setting("settings.theme", "界面主题", "切换亮色、暗色或跟随系统", ["主题", "亮色", "暗色", "theme"]),
   setting("settings.accent", "主题色", "选择插件主色（按钮、高亮、强调）", ["主题色", "强调色", "accent"]),
   setting("settings.auto-card-highlight", "高亮后自动成卡", "高亮或下划线时自动生成摘录卡", ["自动成卡", "高亮成卡"]),
+  setting("settings.auto-excerpt-min-chars", "自动摘录与成卡最短字数", "自动摘录与自动成卡的最短有效字数（中文，英文按 2 倍折算；0 关闭）", ["最短字数", "防误触", "autoExcerptMinChars"]),
   setting("settings.auto-card-region", "区域摘录自动成卡", "套索框选区域时自动生成摘录卡", ["区域摘录", "套索成卡"]),
   setting("settings.auto-node", "生成卡片自动进脑图", "生成卡片时自动在脑图同步创建节点", ["自动进脑图", "摘录即节点"]),
   setting("settings.tag-colors", "标签配色", "为标签指定展示颜色", ["标签配色", "标签颜色"]),

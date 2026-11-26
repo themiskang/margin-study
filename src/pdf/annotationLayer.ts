@@ -16,6 +16,7 @@ import { PenController, inkHitTest, measurePenCommit, paintInkStrokes } from "..
 import { inkLayerOpacity } from "../annot/inkLayers";
 import { handwritingPresetWidth } from "../annot/handwritingPresets";
 import { BaseAnnotationController, SelTarget, VoiceTarget } from "../annot/baseController";
+import { isValidRegionSize, LASSO_MIN_SIZE_PX, REGION_MIN_SIZE_PX } from "../annot/selectionGuard";
 import { recognizeImage, mergeOcrWords } from "../ocr/ocr";
 import { annotationGeometry, clientRectToPdfRect, uniquePdfRects } from "../anchors/pdfGeometry";
 import { PageCollectionDocument, mapCollectionAnnotation } from "../documents/pageCollection";
@@ -288,6 +289,7 @@ export class AnnotationController extends BaseAnnotationController {
     return ann.cardId?this.plugin.store.getCard(ann.cardId):undefined;
   }
   async createRegionExtend(page: number, client: DOMRect): Promise<void> {
+    if (!isValidRegionSize(client.width, client.height, REGION_MIN_SIZE_PX)) return;
     const rec = this.reader.getPageRecord(page);
     if (!this.docPath || !rec?.viewport) return;
     const rect = clientRectToPdfRect(client, rec.canvas.getBoundingClientRect(), rec.viewport);
@@ -471,13 +473,16 @@ export class AnnotationController extends BaseAnnotationController {
     if (!rec?.viewport) return;
     const wrapperRect = rec.wrapper.getBoundingClientRect();
     const canvasRect = rec.canvas.getBoundingClientRect();
+    const rawWidth = bounds.width * wrapperRect.width;
+    const rawHeight = bounds.height * wrapperRect.height;
+    if (!Number.isFinite(rawWidth) || !Number.isFinite(rawHeight) || Math.max(rawWidth, rawHeight) < REGION_MIN_SIZE_PX) return;
     const client = {
       left: wrapperRect.left + bounds.x * wrapperRect.width,
       top: wrapperRect.top + bounds.y * wrapperRect.height,
       right: wrapperRect.left + (bounds.x + bounds.width) * wrapperRect.width,
       bottom: wrapperRect.top + (bounds.y + bounds.height) * wrapperRect.height,
-      width: Math.max(4, bounds.width * wrapperRect.width),
-      height: Math.max(4, bounds.height * wrapperRect.height),
+      width: Math.max(1, rawWidth),
+      height: Math.max(1, rawHeight),
     };
     const pdfRect = clientRectToPdfRect(client, canvasRect, rec.viewport) ?? { x: bounds.x, y: bounds.y, w: Math.max(0.01, bounds.width), h: Math.max(0.01, bounds.height) };
     const ix1 = Math.max(client.left, canvasRect.left), iy1 = Math.max(client.top, canvasRect.top);
@@ -570,7 +575,7 @@ export class AnnotationController extends BaseAnnotationController {
     const top = Math.min(this.lassoStart.y, y);
     const width = Math.abs(x - this.lassoStart.x);
     const height = Math.abs(y - this.lassoStart.y);
-    if (width < 20 || height < 20) return;
+    if (!isValidRegionSize(width, height, LASSO_MIN_SIZE_PX)) return;
 
     const pageNum = this.lassoStart.page;
     const rec = this.reader.getPageRecord(pageNum);

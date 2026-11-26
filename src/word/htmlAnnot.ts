@@ -9,6 +9,7 @@ import { PenController } from "../annot/pen";
 import { cloneStrokes } from "../annot/penGeometry";
 import { handwritingPresetWidth } from "../annot/handwritingPresets";
 import { BaseAnnotationController, SelTarget, VoiceTarget } from "../annot/baseController";
+import { isValidRegionSize, LASSO_MIN_SIZE_PX, REGION_MIN_SIZE_PX } from "../annot/selectionGuard";
 import { NavigationHistory } from "../anchors/navigationHistory";
 import { unionCssRects } from "../anchors/pdfGeometry";
 import { boundedOverlayBox, positionOverlay } from "../annot/overlay";
@@ -389,6 +390,9 @@ export class HtmlAnnotationController extends BaseAnnotationController {
   private excerptLassoSelection(bounds: { x: number; y: number; width: number; height: number }, image: string): void {
     if (!this.docPath) return;
     const body = this.getBodyEl(), rect = body.getBoundingClientRect();
+    const rawWidth = bounds.width * rect.width;
+    const rawHeight = bounds.height * rect.height;
+    if (!Number.isFinite(rawWidth) || !Number.isFinite(rawHeight) || Math.max(rawWidth, rawHeight) < REGION_MIN_SIZE_PX) return;
     const selRect = {
       left: bounds.x * rect.width,
       top: bounds.y * rect.height,
@@ -493,7 +497,7 @@ export class HtmlAnnotationController extends BaseAnnotationController {
     const top = Math.min(this.lassoStart.y, y);
     const width = Math.abs(x - this.lassoStart.x);
     const height = Math.abs(y - this.lassoStart.y);
-    if (width < 20 || height < 20) return;
+    if (!isValidRegionSize(width, height, LASSO_MIN_SIZE_PX)) return;
 
     // 提取区域内的文本与图片
     const selRect = { left, top, right: left + width, bottom: top + height };

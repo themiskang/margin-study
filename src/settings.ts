@@ -207,6 +207,25 @@ export class MarginStudySettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
+      .setName("自动摘录与成卡最短字数")
+      .setDesc("自动摘录与自动成卡最短字数（中文，英文自动按 2 倍折算；填 0 关闭）。")
+      .addText((tb) => {
+        const cur = s.autoExcerptMinChars ?? 4;
+        tb.setValue(String(cur));
+        tb.inputEl.placeholder = "4";
+        tb.inputEl.type = "number";
+        tb.inputEl.min = "0";
+        tb.inputEl.max = "50";
+        tb.inputEl.step = "1";
+        tb.onChange((v) => {
+          const parsed = Number.parseInt(v.trim(), 10);
+          if (!Number.isFinite(parsed) || parsed < 0) return;
+          s.autoExcerptMinChars = Math.min(50, parsed);
+          this.plugin.store.save();
+        });
+      });
+
+    new Setting(containerEl)
       .setName("区域摘录自动成卡")
       .setDesc("用套索框选区域生成摘录时，自动生成一张摘录卡（关闭后仅保留区域标注，需手动「摘录卡」）。")
       .addToggle((tg) => {
