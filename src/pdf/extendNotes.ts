@@ -325,49 +325,71 @@ export class ExtendNotes {
   hasComposite(page: number, base: any): boolean {
     return this.gaps(page, base).length > 0 || regionFoldBands(this.reader, page, base).length > 0;
   }
-  composeCanvas(page: number, base: any, viewport: any, sourceCanvas: HTMLCanvasElement): HTMLCanvasElement {
+  composeCanvas(page: number, base: any, viewport: any, sourceCanvas: HTMLCanvasElement): HTMLCanvasElement | null {
     const gaps = this.gaps(page, base), folds = regionFoldBands(this.reader, page, base), fold = foldCoordinates(folds);
     if (!gaps.length && !folds.length) return sourceCanvas;
     const ratio = sourceCanvas.height / Math.max(1, base.height);
     const height = Math.max(1, viewport.height);
+    const targetW = sourceCanvas.width;
+    const targetH = Math.max(1, Math.floor(height * ratio));
     const target = el("canvas", { class: "ms-page-canvas" }) as HTMLCanvasElement;
-    target.width = sourceCanvas.width;
-    target.height = Math.max(1, Math.floor(height * ratio));
+    try {
+      target.width = 0;
+      target.height = 0;
+      target.width = targetW;
+      target.height = targetH;
+    } catch {
+      try { target.width = target.height = 0; } catch { /* noop */ }
+      return null;
+    }
+    if (target.width !== targetW || target.height !== targetH) {
+      try { target.width = target.height = 0; } catch { /* noop */ }
+      return null;
+    }
     target.style.width = `${Math.floor(viewport.width)}px`;
     target.style.height = `${Math.floor(height)}px`;
-    const context = target.getContext("2d")!;
-    context.fillStyle = "#ffffff";
-    context.fillRect(0, 0, target.width, target.height);
-    // 单趟分段映射：直接把源画布非折叠区段按 gap 切分绘入目标画布，零中间 canvas 拷贝
-    const gapOffsetAt = (foldedY: number): number => {
-      let offset = 0;
-      for (const gap of gaps) {
-        if (gap.y <= foldedY + 1e-6) offset += gap.height;
-        else break;
-      }
-      return offset;
-    };
-    let from = 0;
-    for (const band of [...folds, { top: base.height, bottom: base.height, height: 0, ids: [] }]) {
-      if (band.top > from) {
-        const foldedStart = fold.down(from);
-        const foldedEnd = fold.down(band.top);
-        const cuts = [foldedStart, ...gaps.map(g => g.y).filter(y => y > foldedStart && y < foldedEnd), foldedEnd];
-        for (let i = 0; i < cuts.length - 1; i++) {
-          const segStart = cuts[i], segEnd = cuts[i + 1];
-          const srcY0 = from + (segStart - foldedStart);
-          const srcY1 = from + (segEnd - foldedStart);
-          const sy = Math.round(srcY0 * ratio);
-          const sh = Math.round(srcY1 * ratio) - sy;
-          if (sh > 0) {
-            const dy = Math.round((segStart + gapOffsetAt(segStart)) * ratio);
-            context.drawImage(sourceCanvas, 0, sy, sourceCanvas.width, sh, 0, dy, sourceCanvas.width, sh);
+    const context = target.getContext("2d");
+    if (!context) {
+      try { target.width = target.height = 0; } catch { /* noop */ }
+      return null;
+    }
+    try {
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, target.width, target.height);
+      // 单趟分段映射：直接把源画布非折叠区段按 gap 切分绘入目标画布，零中间 canvas 拷贝
+      const gapOffsetAt = (foldedY: number): number => {
+        let offset = 0;
+        for (const gap of gaps) {
+          if (gap.y <= foldedY + 1e-6) offset += gap.height;
+          else break;
+        }
+        return offset;
+      };
+      let from = 0;
+      for (const band of [...folds, { top: base.height, bottom: base.height, height: 0, ids: [] }]) {
+        if (band.top > from) {
+          const foldedStart = fold.down(from);
+          const foldedEnd = fold.down(band.top);
+          const cuts = [foldedStart, ...gaps.map(g => g.y).filter(y => y > foldedStart && y < foldedEnd), foldedEnd];
+          for (let i = 0; i < cuts.length - 1; i++) {
+            const segStart = cuts[i], segEnd = cuts[i + 1];
+            const srcY0 = from + (segStart - foldedStart);
+            const srcY1 = from + (segEnd - foldedStart);
+            const sy = Math.round(srcY0 * ratio);
+            const sh = Math.round(srcY1 * ratio) - sy;
+            if (sh > 0) {
+              const dy = Math.round((segStart + gapOffsetAt(segStart)) * ratio);
+              context.drawImage(sourceCanvas, 0, sy, sourceCanvas.width, sh, 0, dy, sourceCanvas.width, sh);
+            }
           }
         }
+        from = band.bottom;
       }
-      from = band.bottom;
+      return target;
+    } catch {
+      try { target.width = target.height = 0; } catch { /* noop */ }
+      return null;
     }
-    return target;
   }
   paint(page: number, base: any): void {
     const rec = this.reader.getPageRecord(page); if (!rec) return;

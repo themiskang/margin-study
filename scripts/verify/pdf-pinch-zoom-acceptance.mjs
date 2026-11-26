@@ -1345,6 +1345,325 @@ let cdpView: ReaderView | null = null;
   }
 };
 
+// ===== PZ-09: True canvas pixel audit (A4 spread DPR=3 & mobile 14000pt@400%) + 3 allocation failure injections =====
+(window as any).runPZ09BudgetAuditAndAllocFailures = async () => {
+  const origIsMobile = Platform.isMobile;
+  const origDprDesc = Object.getOwnPropertyDescriptor(window, "devicePixelRatio");
+  const origCreateElement = document.createElement.bind(document);
+  const origWidthDesc = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, "width")!;
+  const origHeightDesc = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, "height")!;
+  const origGetContext = HTMLCanvasElement.prototype.getContext;
+
+  const sampleCanvas = origCreateElement("canvas");
+  sampleCanvas.width = 64;
+  sampleCanvas.height = 80;
+  const sampleCtx = origGetContext.call(sampleCanvas, "2d", { willReadFrequently: true }) as CanvasRenderingContext2D;
+
+  const WHITE_FLASH_RATIO_THRESHOLD = 0.98;
+  const WHITE_FLASH_JUMP_THRESHOLD = 0.25;
+  const MAX_ALLOWED_WHITE_RATIO = 0.90;
+
+  const measureWhiteRatio = (view: ReaderView, pageNum: number): number => {
+    const rec = view.getPageRecord(pageNum);
+    if (!rec) return 1;
+    const wRect = rec.wrapper.getBoundingClientRect();
+    const cRect = rec.canvas.getBoundingClientRect();
+    sampleCtx.fillStyle = "#ffffff";
+    sampleCtx.fillRect(0, 0, sampleCanvas.width, sampleCanvas.height);
+    if (rec.canvas.width > 0 && rec.canvas.height > 0 && wRect.width > 0 && wRect.height > 0 && cRect.width > 0 && cRect.height > 0) {
+      const dx = ((cRect.left - wRect.left) / wRect.width) * sampleCanvas.width;
+      const dy = ((cRect.top - wRect.top) / wRect.height) * sampleCanvas.height;
+      const dw = (cRect.width / wRect.width) * sampleCanvas.width;
+      const dh = (cRect.height / wRect.height) * sampleCanvas.height;
+      sampleCtx.drawImage(rec.canvas, 0, 0, rec.canvas.width, rec.canvas.height, dx, dy, dw, dh);
+    }
+    const data = sampleCtx.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height).data;
+    let white = 0;
+    const total = sampleCanvas.width * sampleCanvas.height;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i] >= 245 && data[i + 1] >= 245 && data[i + 2] >= 245) white++;
+    }
+    return Number((white / total).toFixed(4));
+  };
+
+  // Independent live canvas pixel tracker: intercepts all non-sampler canvases created during each audit
+  let trackedCanvases = new Set<HTMLCanvasElement>();
+  let measuredPeakPixels = 0;
+  let trackingActive = false;
+  const updateMeasuredPeak = () => {
+    if (!trackingActive) return;
+    let sum = 0;
+    for (const c of trackedCanvases) {
+      if (c.classList.contains("ms-ink-raster")) continue;
+      const w = origWidthDesc.get!.call(c);
+      const h = origHeightDesc.get!.call(c);
+      if (w > 0 && h > 0) sum += w * h;
+    }
+    if (sum > measuredPeakPixels) measuredPeakPixels = sum;
+  };
+
+  // Injection modes for negative allocation failure tests
+  let failMode: "none" | "getContext-null" | "size-silent-fail" | "size-throw" = "none";
+  let failTriggered = 0;
+
+  (document as any).createElement = function (tag: string, options?: any) {
+    const el = origCreateElement(tag, options);
+    if (trackingActive && tag.toLowerCase() === "canvas") trackedCanvases.add(el as HTMLCanvasElement);
+    return el;
+  };
+  Object.defineProperty(HTMLCanvasElement.prototype, "width", {
+    configurable: true,
+    get() { return origWidthDesc.get!.call(this); },
+    set(v: number) {
+      if (this !== sampleCanvas && v > 0) {
+        if (failMode === "size-throw") { failTriggered++; throw new RangeError("Injected canvas width allocation error"); }
+        if (failMode === "size-silent-fail") { failTriggered++; origWidthDesc.set!.call(this, 0); updateMeasuredPeak(); return; }
+      }
+      origWidthDesc.set!.call(this, v);
+      updateMeasuredPeak();
+    },
+  });
+  Object.defineProperty(HTMLCanvasElement.prototype, "height", {
+    configurable: true,
+    get() { return origHeightDesc.get!.call(this); },
+    set(v: number) {
+      if (this !== sampleCanvas && v > 0) {
+        if (failMode === "size-throw") { failTriggered++; throw new RangeError("Injected canvas height allocation error"); }
+        if (failMode === "size-silent-fail") { failTriggered++; origHeightDesc.set!.call(this, 0); updateMeasuredPeak(); return; }
+      }
+      origHeightDesc.set!.call(this, v);
+      updateMeasuredPeak();
+    },
+  });
+  HTMLCanvasElement.prototype.getContext = function (type: any, attrs?: any) {
+    if (this !== sampleCanvas && type === "2d" && failMode === "getContext-null") {
+      failTriggered++;
+      return null;
+    }
+    return origGetContext.call(this, type, attrs);
+  } as any;
+
+  const toMB = (px: number) => Number(((px * 4) / (1024 * 1024)).toFixed(2));
+
+  try {
+    // --- Audit A: Real A4 spread at DPR=3 (hard budget 16M px) ---
+    Platform.isMobile = false;
+    Object.defineProperty(window, "devicePixelRatio", { configurable: true, get: () => 3 });
+    trackedCanvases = new Set();
+    measuredPeakPixels = 0;
+    trackingActive = true;
+    const spreadAudit = await (async () => {
+      const pdfPath = "pz09-spread-dpr3.pdf";
+      const { view } = await openReader(
+        { [pdfPath]: { name: "spread-dpr3", pages: 4, crop: [0, 0, 595, 842], renderDelay: 60, textDelay: 10, paintContent: true } },
+        pdfPath,
+      );
+      try {
+        await view.setPageLayout("spread", false);
+        await waitPagesRendered(view, [1, 2], view.getScale());
+        (view as any).visiblePages.add(1);
+        (view as any).visiblePages.add(2);
+        // Reset both product peak & external measured peak right before extreme zoom
+        view.resetMemoryPeak();
+        measuredPeakPixels = 0;
+        updateMeasuredPeak();
+        // Zoom to 4.0 then to 3.5 to stress consecutive spread re-renders under tight budget
+        view.setScale(4.0);
+        await waitPagesRendered(view, [1, 2], 4.0);
+        view.setScale(3.5);
+        await waitPagesRendered(view, [1, 2], 3.5);
+        await frame();
+        const stats = view.getMemoryStats();
+        return {
+          scenario: "desktop-spread-a4-dpr3",
+          reportedPeakPixels: stats.peakTotalPixels,
+          measuredPeakPixels,
+          deltaPixels: measuredPeakPixels - stats.peakTotalPixels,
+          reportedPeakMB: toMB(stats.peakTotalPixels),
+          measuredPeakMB: toMB(measuredPeakPixels),
+          hardBudgetPixels: stats.hardBudgetPixels,
+          hardBudgetMB: toMB(stats.hardBudgetPixels),
+          withinBudget: measuredPeakPixels <= stats.hardBudgetPixels && stats.peakTotalPixels <= stats.hardBudgetPixels,
+          noUnderreport: stats.peakTotalPixels >= measuredPeakPixels,
+        };
+      } finally {
+        await view.onClose();
+        view.containerEl.remove();
+      }
+    })();
+    trackingActive = false;
+
+    // --- Audit B: Mobile 14000pt x 14000pt square page @ 400% (hard budget 4M px) ---
+    Platform.isMobile = true;
+    Object.defineProperty(window, "devicePixelRatio", { configurable: true, get: () => 2 });
+    trackedCanvases = new Set();
+    measuredPeakPixels = 0;
+    trackingActive = true;
+    const hugeSquareAudit = await (async () => {
+      const pdfPath = "pz09-mobile-14000pt.pdf";
+      const { view } = await openReader(
+        { [pdfPath]: { name: "mobile-14000pt", pages: 2, crop: [0, 0, 14000, 14000], renderDelay: 60, textDelay: 10, paintContent: true } },
+        pdfPath,
+      );
+      try {
+        await view.renderPage(1);
+        await frame();
+        (view as any).visiblePages.add(1);
+        view.resetMemoryPeak();
+        measuredPeakPixels = 0;
+        updateMeasuredPeak();
+        const ratios: number[] = [];
+        let sampling = true;
+        ratios.push(measureWhiteRatio(view, 1));
+        const tick = () => { if (!sampling) return; ratios.push(measureWhiteRatio(view, 1)); requestAnimationFrame(tick); };
+        requestAnimationFrame(tick);
+        try {
+          view.setScale(4.0);
+          await wait(200);
+          await frame();
+        } finally {
+          sampling = false;
+        }
+        let flashFrames = 0, maxWhiteRatio = 0, maxJump = 0;
+        for (let i = 0; i < ratios.length; i++) {
+          if (ratios[i] > maxWhiteRatio) maxWhiteRatio = ratios[i];
+          if (i > 0) {
+            const j = Number((ratios[i] - ratios[i - 1]).toFixed(4));
+            if (j > maxJump) maxJump = j;
+            if (ratios[i] >= WHITE_FLASH_RATIO_THRESHOLD && j >= WHITE_FLASH_JUMP_THRESHOLD) flashFrames++;
+          }
+        }
+        const stats = view.getMemoryStats();
+        const p1 = stats.pages[1];
+        return {
+          scenario: "mobile-14000pt-400pct",
+          reportedPeakPixels: stats.peakTotalPixels,
+          measuredPeakPixels,
+          deltaPixels: measuredPeakPixels - stats.peakTotalPixels,
+          reportedPeakMB: toMB(stats.peakTotalPixels),
+          measuredPeakMB: toMB(measuredPeakPixels),
+          hardBudgetPixels: stats.hardBudgetPixels,
+          hardBudgetMB: toMB(stats.hardBudgetPixels),
+          skippedDoubleBuffer: Boolean((p1 as any)?.skippedDoubleBuffer),
+          dpr: p1 ? Number(p1.dpr.toFixed(5)) : 0,
+          flashFrames,
+          maxWhiteRatio,
+          maxJump,
+          withinBudget: measuredPeakPixels <= stats.hardBudgetPixels && stats.peakTotalPixels <= stats.hardBudgetPixels,
+          noUnderreport: stats.peakTotalPixels >= measuredPeakPixels,
+        };
+      } finally {
+        await view.onClose();
+        view.containerEl.remove();
+      }
+    })();
+    trackingActive = false;
+
+    // --- Audit C: 3 Allocation Failure Injections (getContext=null, size-silent-fail, size-throw) ---
+    // Use tight budget pressure (mobile + 2 visible pages at max scale so placeholder downsample is also exercised)
+    const runAllocFailureCase = async (mode: "getContext-null" | "size-silent-fail" | "size-throw") => {
+      Platform.isMobile = true;
+      Object.defineProperty(window, "devicePixelRatio", { configurable: true, get: () => 2 });
+      const pdfPath = \`pz09-fail-\${mode}.pdf\`;
+      const { view } = await openReader(
+        { [pdfPath]: { name: \`fail-\${mode}\`, pages: 2, crop: [0, 0, 595, 842], renderDelay: 60, textDelay: 10, paintContent: true } },
+        pdfPath,
+      );
+      try {
+        await view.setPageLayout("spread", false);
+        await waitPagesRendered(view, [1, 2], view.getScale());
+        (view as any).visiblePages.add(1);
+        (view as any).visiblePages.add(2);
+        // First zoom to 4.0 so both pages fill the mobile budget (triggering placeholder downsample path on next zoom)
+        view.setScale(4.0);
+        await waitPagesRendered(view, [1, 2], 4.0);
+        await frame();
+
+        const prevCanvas = view.getPageRecord(1)!.canvas;
+        const prevScale = view.getPageRecord(1)!.renderedScale;
+        const baselineWhiteRatio = measureWhiteRatio(view, 1);
+
+        failTriggered = 0;
+        failMode = mode;
+        const ratios: number[] = [baselineWhiteRatio];
+        let sampling = true;
+        const tick = () => { if (!sampling) return; ratios.push(measureWhiteRatio(view, 1)); requestAnimationFrame(tick); };
+        requestAnimationFrame(tick);
+        try {
+          view.setScale(3.2);
+          await wait(160);
+          await frame();
+        } finally {
+          sampling = false;
+          failMode = "none";
+        }
+
+        let flashFrames = 0, maxWhiteRatio = 0, maxJump = 0;
+        for (let i = 0; i < ratios.length; i++) {
+          if (ratios[i] > maxWhiteRatio) maxWhiteRatio = ratios[i];
+          if (i > 0) {
+            const j = Number((ratios[i] - ratios[i - 1]).toFixed(4));
+            if (j > maxJump) maxJump = j;
+            if (ratios[i] >= WHITE_FLASH_RATIO_THRESHOLD && j >= WHITE_FLASH_JUMP_THRESHOLD) flashFrames++;
+          }
+        }
+        const recAfter = view.getPageRecord(1)!;
+        const domPreserved = recAfter.canvas === prevCanvas && recAfter.canvas.width > 0 && recAfter.canvas.height > 0;
+        const pendingRerender = recAfter.renderedScale === prevScale && recAfter.renderedScale !== 3.2;
+
+        return {
+          mode,
+          failTriggered,
+          baselineWhiteRatio,
+          maxWhiteRatio,
+          maxJump,
+          flashFrames,
+          samples: ratios.length,
+          domPreserved,
+          pendingRerender,
+        };
+      } finally {
+        failMode = "none";
+        await view.onClose();
+        view.containerEl.remove();
+      }
+    };
+
+    const failGetContext = await runAllocFailureCase("getContext-null");
+    const failSilentSize = await runAllocFailureCase("size-silent-fail");
+    const failThrowSize = await runAllocFailureCase("size-throw");
+
+    const failures: string[] = [];
+    if (!spreadAudit.withinBudget) failures.push(\`[spread-dpr3] exceeded hard budget: measured=\${spreadAudit.measuredPeakPixels}px (\${spreadAudit.measuredPeakMB}MB), reported=\${spreadAudit.reportedPeakPixels}px, hard=\${spreadAudit.hardBudgetPixels}px\`);
+    if (!spreadAudit.noUnderreport) failures.push(\`[spread-dpr3] reported peak underreported: reported=\${spreadAudit.reportedPeakPixels}px < measured=\${spreadAudit.measuredPeakPixels}px (delta=\${spreadAudit.deltaPixels}px)\`);
+    if (!hugeSquareAudit.withinBudget) failures.push(\`[mobile-14000pt] exceeded hard budget: measured=\${hugeSquareAudit.measuredPeakPixels}px (\${hugeSquareAudit.measuredPeakMB}MB), reported=\${hugeSquareAudit.reportedPeakPixels}px, hard=\${hugeSquareAudit.hardBudgetPixels}px\`);
+    if (!hugeSquareAudit.noUnderreport) failures.push(\`[mobile-14000pt] reported peak underreported: reported=\${hugeSquareAudit.reportedPeakPixels}px < measured=\${hugeSquareAudit.measuredPeakPixels}px\`);
+    if (!(hugeSquareAudit.flashFrames === 0 && hugeSquareAudit.maxWhiteRatio < MAX_ALLOWED_WHITE_RATIO)) failures.push(\`[mobile-14000pt] white flash: flashFrames=\${hugeSquareAudit.flashFrames}, maxWhiteRatio=\${hugeSquareAudit.maxWhiteRatio}\`);
+    for (const f of [failGetContext, failSilentSize, failThrowSize]) {
+      if (!(f.failTriggered > 0)) failures.push(\`[\${f.mode}] failure injection was not triggered\`);
+      if (!(f.flashFrames === 0 && f.maxWhiteRatio < MAX_ALLOWED_WHITE_RATIO)) failures.push(\`[\${f.mode}] white flash on alloc fail: flashFrames=\${f.flashFrames}, baseline=\${f.baselineWhiteRatio}, maxWhiteRatio=\${f.maxWhiteRatio}, maxJump=\${f.maxJump}\`);
+      if (!f.domPreserved) failures.push(\`[\${f.mode}] old canvas replaced/cleared\`);
+      if (!f.pendingRerender) failures.push(\`[\${f.mode}] page not kept pending re-render\`);
+    }
+    if (failures.length) throw new Error("PZ-09 failed:\\n  - " + failures.join("\\n  - "));
+
+    return {
+      passed: true,
+      reconciliation: [spreadAudit, hugeSquareAudit],
+      allocationFailures: [failGetContext, failSilentSize, failThrowSize],
+    };
+  } finally {
+    trackingActive = false;
+    failMode = "none";
+    (document as any).createElement = origCreateElement;
+    Object.defineProperty(HTMLCanvasElement.prototype, "width", origWidthDesc);
+    Object.defineProperty(HTMLCanvasElement.prototype, "height", origHeightDesc);
+    HTMLCanvasElement.prototype.getContext = origGetContext;
+    Platform.isMobile = origIsMobile;
+    if (origDprDesc) Object.defineProperty(window, "devicePixelRatio", origDprDesc);
+  }
+};
+
 (window as any).ready = true;
 (window as any).getErrors = () => errors;
 `;
@@ -1455,6 +1774,7 @@ try {
     const pz06 = await evalJson("window.runPZ06()");
     const pz07 = await evalJson("window.runPZ07NoWhiteFlash()");
     const pz08 = await evalJson("window.runPZ08MemoryBudgetMatrix()");
+    const pz09 = await evalJson("window.runPZ09BudgetAuditAndAllocFailures()");
 
     // Native CDP Input.dispatchTouchEvent smoke test
     const cdpInit = await evalJson("window.setupCdpTouchSmoke()");
@@ -1644,6 +1964,7 @@ try {
       pz06,
       pz07,
       pz08,
+      pz09,
       cdpTouchSmoke,
       q3NativeLostCapture,
       q3bTrustedBlur,
@@ -1663,10 +1984,11 @@ try {
         pz01,
         pz07,
         pz08,
+        pz09,
       }, null, 2) + "\n");
     }
 
-    console.log("PASS pdf-pinch-zoom: PZ-01, PZ-02 (1024x768 + 768x1024), PZ-03, PZ-04, PZ-05, PZ-06, PZ-07 (no white flash), PZ-08 (memory budget 4x2), cdpTouchSmoke all passed (9/9)");
+    console.log("PASS pdf-pinch-zoom: PZ-01, PZ-02 (1024x768 + 768x1024), PZ-03, PZ-04, PZ-05, PZ-06, PZ-07 (no white flash), PZ-08 (memory budget 4x2), PZ-09 (audit & alloc failure), cdpTouchSmoke all passed (10/10)");
   } finally {
     await browser("close").catch(() => {});
     await new Promise(done => server.close(done));

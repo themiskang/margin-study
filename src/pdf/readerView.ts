@@ -80,6 +80,7 @@ const DESKTOP_MAX_PAGE_PIXELS = 8_000_000;    // 32 MB 单页画布硬上限（�
 const MOBILE_MAX_PAGE_PIXELS = 2_000_000;     // 8 MB 移动低清单页硬上限（单页双缓冲峰值 <= 16 MB）
 const MAX_PAGE_PIXELS = DESKTOP_MAX_PAGE_PIXELS;
 const MIN_DEGRADED_DPR = 0.25;
+const MIN_DOUBLE_BUFFER_DPR = 0.05; // 仅作放弃双缓冲阈值，绝不强制抬高突破硬预算
 const PLACEHOLDER_SHRINK_THRESHOLD_PIXELS = 262_144; // 1 MB 以上旧画布在极端压力下可同步降采样占位
 
 export class ReaderView extends ItemView {
@@ -96,12 +97,15 @@ export class ReaderView extends ItemView {
   private widthFitted = false;
   private fitRevision = 0;
   private activeOffscreenPixels = new Map<number, number>();
+  private activeTempPixels = 0;
   private peakTotalPixels = 0;
   private lastRenderBudget = new Map<number, {
     dpr: number;
     targetDpr: number;
     degraded: boolean;
     downsampledPlaceholder: boolean;
+    skippedDoubleBuffer: boolean;
+    allocationFailed: boolean;
     allocatedPixels: number;
     hardBudgetPixels: number;
   }>();
@@ -2165,31 +2169,67 @@ export class ReaderView extends ItemView {
         this.evictOffscreenPages(desiredPeakPixels, pageNum);
         let availablePixels = Math.max(0, budget.hardTotalPixels - this.getTotalActivePixels());
         let downsampledPlaceholder = false;
-        // 极端内存压力兜底：旧画布占满预算时先同步降采样占位（保持 0 白闪）再腾出离屏空间
+        const hasOldBitmap = rec.canvas.width > 0 && rec.canvas.height > 0;
+        // 极端内存压力兜底：旧画布占满预算时先尝试在剩余硬预算内同步降采样占位（保持 0 白闪、绝不超预算）
         const minNeededPixels = Math.ceil(compositePeakArea * MIN_DEGRADED_DPR * MIN_DEGRADED_DPR);
-        if (availablePixels < minNeededPixels && rec.canvas.width * rec.canvas.height > PLACEHOLDER_SHRINK_THRESHOLD_PIXELS) {
-          this.downsampleOnscreenPlaceholder(rec);
-          downsampledPlaceholder = true;
+        if (hasOldBitmap && availablePixels < minNeededPixels && rec.canvas.width * rec.canvas.height > PLACEHOLDER_SHRINK_THRESHOLD_PIXELS) {
+          downsampledPlaceholder = this.downsampleOnscreenPlaceholder(rec, budget.hardTotalPixels);
           availablePixels = Math.max(0, budget.hardTotalPixels - this.getTotalActivePixels());
         }
         const allowedPixels = Math.min(perPageShare, availablePixels);
-        const dpr = Math.max(0.05, Math.min(targetDpr, Math.sqrt(Math.max(1, allowedPixels) / compositePeakArea)));
+        // 严禁任何下限突破预算：dpr 严格受 allowedPixels / compositePeakArea 上界约束
+        const dpr = allowedPixels > 0 ? Math.min(targetDpr, Math.sqrt(allowedPixels / compositePeakArea)) : 0;
+        const bufW = Math.floor(srcW * dpr);
+        const bufH = Math.floor(srcH * dpr);
+        const dstHpx = hasComposite && bufH > 0 ? Math.max(1, Math.floor(dstH * (bufH / Math.max(1, srcH)))) : 0;
+        const exactNeedPixels = bufW >= 1 && bufH >= 1 ? (hasComposite ? bufW * bufH + bufW * dstHpx : bufW * bufH) : Infinity;
+
+        // 若下限仍超预算或剩余预算不足：有旧位图时放弃该页双缓冲（保留旧位图 CSS 拉伸占位，0 白闪、待重渲）
+        if (
+          (hasOldBitmap && dpr < MIN_DOUBLE_BUFFER_DPR) ||
+          bufW < 1 ||
+          bufH < 1 ||
+          this.getTotalActivePixels() + exactNeedPixels > budget.hardTotalPixels
+        ) {
+          this.lastRenderBudget.set(pageNum, {
+            dpr: 0,
+            targetDpr: nativeDpr,
+            degraded: true,
+            downsampledPlaceholder,
+            skippedDoubleBuffer: true,
+            allocationFailed: false,
+            allocatedPixels: 0,
+            hardBudgetPixels: budget.hardTotalPixels,
+          });
+          this.recordPeakPixels();
+          return;
+        }
         const degraded = dpr < nativeDpr - 1e-4 || downsampledPlaceholder;
 
-        // 双缓冲离屏渲染：不清空在屏 canvas，彻底消除缩放重渲期间的白闪帧
-        bufferCanvas = el("canvas", { class: "ms-page-canvas" }) as HTMLCanvasElement;
-        bufferCanvas.style.width = `${Math.floor(viewport.width)}px`;
-        bufferCanvas.style.height = `${Math.floor(baseViewport.height)}px`;
-        bufferCanvas.width = Math.max(1, Math.floor(srcW * dpr));
-        bufferCanvas.height = Math.max(1, Math.floor(srcH * dpr));
+        // 双缓冲离屏渲染：安全分配并校验尺寸与 2D 上下文，失败一律保留旧位图不替换 DOM
+        const alloc = this.allocateOffscreenCanvas(bufW, bufH, budget.hardTotalPixels, viewport.width, baseViewport.height);
+        if (!alloc) {
+          this.lastRenderBudget.set(pageNum, {
+            dpr,
+            targetDpr: nativeDpr,
+            degraded: true,
+            downsampledPlaceholder,
+            skippedDoubleBuffer: false,
+            allocationFailed: true,
+            allocatedPixels: 0,
+            hardBudgetPixels: budget.hardTotalPixels,
+          });
+          this.recordPeakPixels();
+          return;
+        }
+        bufferCanvas = alloc.canvas;
+        const context = alloc.ctx;
         this.trackOffscreenPixels(pageNum, bufferCanvas.width * bufferCanvas.height);
 
         const bufferTextLayer = el("div", { class: "ms-text-layer" });
         bufferTextLayer.style.width = `${Math.floor(viewport.width)}px`;
         bufferTextLayer.style.height = `${Math.floor(viewport.height)}px`;
         bufferTextLayer.style.setProperty("--scale-factor", String(viewport.scale));
-        const context = bufferCanvas.getContext("2d");
-        if (!context) return;
         const task = page.render({ canvasContext: context, viewport: baseViewport,
           transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined });
         rec.renderTask = task;
@@ -2221,17 +2261,48 @@ export class ReaderView extends ItemView {
         try { imageRects = await pdfImageRegions(page); } catch { imageRects = []; }
         if (!current()) return;
 
-        // 离屏完成折叠/留白合成（零中间拷贝），合成后立刻归零释放源画布
+        // 离屏完成折叠/留白合成（零中间拷贝），合成前校验硬预算、失败保留旧位图
         let finalCanvas = bufferCanvas;
         if (hasComposite) {
           const srcPixels = bufferCanvas.width * bufferCanvas.height;
+          const ratio = bufferCanvas.height / Math.max(1, baseViewport.height);
+          const expectedTargetPixels = bufferCanvas.width * Math.max(1, Math.floor(Math.max(1, viewport.height) * ratio));
+          if (this.getTotalActivePixels() + expectedTargetPixels > budget.hardTotalPixels) {
+            this.lastRenderBudget.set(pageNum, {
+              dpr,
+              targetDpr: nativeDpr,
+              degraded: true,
+              downsampledPlaceholder,
+              skippedDoubleBuffer: true,
+              allocationFailed: false,
+              allocatedPixels: 0,
+              hardBudgetPixels: budget.hardTotalPixels,
+            });
+            return;
+          }
+          this.trackOffscreenPixels(pageNum, srcPixels + expectedTargetPixels);
           composedCanvas = this.extendNotes.composeCanvas(pageNum, baseViewport, viewport, bufferCanvas);
+          if (!composedCanvas) {
+            this.lastRenderBudget.set(pageNum, {
+              dpr,
+              targetDpr: nativeDpr,
+              degraded: true,
+              downsampledPlaceholder,
+              skippedDoubleBuffer: false,
+              allocationFailed: true,
+              allocatedPixels: 0,
+              hardBudgetPixels: budget.hardTotalPixels,
+            });
+            return;
+          }
           if (composedCanvas !== bufferCanvas) {
             this.trackOffscreenPixels(pageNum, srcPixels + composedCanvas.width * composedCanvas.height);
             bufferCanvas.width = bufferCanvas.height = 0;
             bufferCanvas = null;
             finalCanvas = composedCanvas;
             this.trackOffscreenPixels(pageNum, finalCanvas.width * finalCanvas.height);
+          } else {
+            this.trackOffscreenPixels(pageNum, srcPixels);
           }
         }
         const finalAllocatedPixels = finalCanvas.width * finalCanvas.height;
@@ -2240,6 +2311,8 @@ export class ReaderView extends ItemView {
           targetDpr: nativeDpr,
           degraded,
           downsampledPlaceholder,
+          skippedDoubleBuffer: false,
+          allocationFailed: false,
           allocatedPixels: finalAllocatedPixels,
           hardBudgetPixels: budget.hardTotalPixels,
         });
@@ -2278,8 +2351,8 @@ export class ReaderView extends ItemView {
         }
       } finally {
         if (!bufferCommitted) {
-          if (bufferCanvas) bufferCanvas.width = bufferCanvas.height = 0;
-          if (composedCanvas && composedCanvas !== bufferCanvas) composedCanvas.width = composedCanvas.height = 0;
+          if (bufferCanvas) { try { bufferCanvas.width = bufferCanvas.height = 0; } catch { /* noop */ } }
+          if (composedCanvas && composedCanvas !== bufferCanvas) { try { composedCanvas.width = composedCanvas.height = 0; } catch { /* noop */ } }
           this.activeOffscreenPixels.delete(pageNum);
         }
         if (rec.revision === revision) {
@@ -2314,7 +2387,7 @@ export class ReaderView extends ItemView {
   }
 
   private getTotalActivePixels(): number {
-    let total = this.getTotalCachedPixels();
+    let total = this.getTotalCachedPixels() + this.activeTempPixels;
     for (const px of this.activeOffscreenPixels.values()) total += px;
     return total;
   }
@@ -2329,23 +2402,86 @@ export class ReaderView extends ItemView {
     this.recordPeakPixels();
   }
 
-  private downsampleOnscreenPlaceholder(rec: PageRecord): void {
+  private allocateOffscreenCanvas(
+    width: number,
+    height: number,
+    hardBudgetPixels: number,
+    cssWidth: number,
+    cssHeight: number,
+  ): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null {
+    const w = Math.max(1, Math.floor(width));
+    const h = Math.max(1, Math.floor(height));
+    const pixels = w * h;
+    if (this.getTotalActivePixels() + pixels > hardBudgetPixels) return null;
+    const canvas = el("canvas", { class: "ms-page-canvas" }) as HTMLCanvasElement;
+    canvas.style.width = `${Math.floor(cssWidth)}px`;
+    canvas.style.height = `${Math.floor(cssHeight)}px`;
+    try {
+      canvas.width = 0;
+      canvas.height = 0;
+      canvas.width = w;
+      canvas.height = h;
+    } catch {
+      try { canvas.width = canvas.height = 0; } catch { /* noop */ }
+      return null;
+    }
+    if (canvas.width !== w || canvas.height !== h) {
+      try { canvas.width = canvas.height = 0; } catch { /* noop */ }
+      return null;
+    }
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      try { canvas.width = canvas.height = 0; } catch { /* noop */ }
+      return null;
+    }
+    return { canvas, ctx };
+  }
+
+  private downsampleOnscreenPlaceholder(rec: PageRecord, hardBudgetPixels: number): boolean {
     const oldW = rec.canvas.width, oldH = rec.canvas.height;
-    if (oldW <= 0 || oldH <= 0) return;
-    const shrink = Math.min(0.25, Math.sqrt(PLACEHOLDER_SHRINK_THRESHOLD_PIXELS / (oldW * oldH)));
+    const oldPixels = oldW * oldH;
+    if (oldW <= 0 || oldH <= 0) return false;
+    const remaining = hardBudgetPixels - this.getTotalActivePixels();
+    const maxPlaceholderPixels = Math.min(PLACEHOLDER_SHRINK_THRESHOLD_PIXELS, remaining);
+    if (maxPlaceholderPixels < 1 || oldPixels <= maxPlaceholderPixels) return false;
+    const shrink = Math.min(0.25, Math.sqrt(maxPlaceholderPixels / oldPixels));
     const nextW = Math.max(1, Math.floor(oldW * shrink));
     const nextH = Math.max(1, Math.floor(oldH * shrink));
+    const nextPixels = nextW * nextH;
+    if (nextPixels > remaining || nextPixels >= oldPixels) return false;
     const placeholder = el("canvas", { class: "ms-page-canvas" }) as HTMLCanvasElement;
-    placeholder.width = nextW;
-    placeholder.height = nextH;
     placeholder.style.width = rec.canvas.style.width;
     placeholder.style.height = rec.canvas.style.height;
-    const ctx = placeholder.getContext("2d");
-    if (ctx) ctx.drawImage(rec.canvas, 0, 0, oldW, oldH, 0, 0, nextW, nextH);
-    const prev = rec.canvas;
-    prev.replaceWith(placeholder);
-    rec.canvas = placeholder;
-    prev.width = prev.height = 0;
+    let tracked = false;
+    try {
+      placeholder.width = 0;
+      placeholder.height = 0;
+      placeholder.width = nextW;
+      placeholder.height = nextH;
+      if (placeholder.width !== nextW || placeholder.height !== nextH) {
+        try { placeholder.width = placeholder.height = 0; } catch { /* noop */ }
+        return false;
+      }
+      this.activeTempPixels += nextPixels;
+      tracked = true;
+      this.recordPeakPixels();
+      const ctx = placeholder.getContext("2d");
+      if (!ctx) {
+        try { placeholder.width = placeholder.height = 0; } catch { /* noop */ }
+        return false;
+      }
+      ctx.drawImage(rec.canvas, 0, 0, oldW, oldH, 0, 0, nextW, nextH);
+      const prev = rec.canvas;
+      prev.replaceWith(placeholder);
+      rec.canvas = placeholder;
+      prev.width = prev.height = 0;
+      return true;
+    } catch {
+      try { placeholder.width = placeholder.height = 0; } catch { /* noop */ }
+      return false;
+    } finally {
+      if (tracked) this.activeTempPixels = Math.max(0, this.activeTempPixels - nextPixels);
+    }
   }
 
   resetMemoryPeak(): void {
@@ -2360,11 +2496,11 @@ export class ReaderView extends ItemView {
     hardBudgetPixels: number;
     maxPagePixels: number;
     cachedPages: number;
-    pages: Record<number, { dpr: number; targetDpr: number; degraded: boolean; downsampledPlaceholder: boolean; allocatedPixels: number; hardBudgetPixels: number }>;
+    pages: Record<number, { dpr: number; targetDpr: number; degraded: boolean; downsampledPlaceholder: boolean; skippedDoubleBuffer: boolean; allocationFailed: boolean; allocatedPixels: number; hardBudgetPixels: number }>;
   } {
     const budget = this.getMemoryBudget();
     const cachedPixels = this.getTotalCachedPixels();
-    let offscreen = 0;
+    let offscreen = this.activeTempPixels;
     for (const px of this.activeOffscreenPixels.values()) offscreen += px;
     let cachedPages = 0;
     for (const rec of this.pages.values()) if (rec.canvas.width > 0 && rec.canvas.height > 0) cachedPages++;
