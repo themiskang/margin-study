@@ -41,7 +41,7 @@
 | `PDF裁边阶段回退说明.md` | [p1-pdf-crop-rollback-note.md](acceptance/p1-pdf-crop-rollback-note.md) |
 | `PROGRESS.md` | [progress-legacy-202611.md](progress/progress-legacy-202611.md) |
 | `ROUTE-A-PLAN.md` | [route-a-plan-20261107.md](plans/route-a-plan-20261107.md) |
-| `使用教程.md` | [user-guide.zh-CN.md](../guide/user-guide.zh-CN.md) |
+| `使用教程.md` | [使用教程](../使用教程.md) |
 | `分阶段任务/00-总控与交接规则.md` | [00-coordination-handoff-rules.md](phased-tasks/00-coordination-handoff-rules.md) |
 | `分阶段任务/01-Extend完整闭环.md` | [01-extend-workflow.md](phased-tasks/01-extend-workflow.md) |
 | `分阶段任务/02-PDF页编辑与导出收尾.md` | [02-pdf-page-editing-and-export.md](phased-tasks/02-pdf-page-editing-and-export.md) |
