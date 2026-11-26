@@ -603,6 +603,379 @@ let activeHarness: Awaited<ReturnType<typeof createHarness>> | null = null;
   return { viewport: \`\${w}x\${hSize}\`, overflowed, hasToggle: !!toggle, scrollDiff, clearance, passed: true };
 };
 
+(window as any).measureU201Viewport = async (w: number, hSize: number) => {
+  const h = activeHarness!;
+  document.body.classList.remove("is-mobile");
+  h.store.setStudyInterface("set-1", "scenes");
+  (h.view as any).state.bottomCollapsed = false;
+  (h.view as any).state.cleanView = false;
+  (h.view as any).applyLayout();
+  (h.view as any).drawToolbar();
+  await h.openDoc("pdf");
+  await h.selectScene("excerpt");
+  await frame(); await frame();
+
+  const oldToggle = h.root.querySelector(".ms-workspace-extra-tools-toggle");
+  const oldControls = h.root.querySelector(".ms-workspace-toolbar-controls");
+  assert(oldToggle === null, \`[U2-01 \${w}x\${hSize}] legacy .ms-workspace-extra-tools-toggle still in DOM\`);
+  assert(oldControls === null, \`[U2-01 \${w}x\${hSize}] legacy .ms-workspace-toolbar-controls still in DOM\`);
+
+  const header = h.root.querySelector<HTMLElement>(".ms-workspace-toolbar.has-scene-header")!;
+  const headerHeight = Number(header.getBoundingClientRect().height.toFixed(2));
+  assert(headerHeight <= 46, \`[U2-01 \${w}x\${hSize}] scene header height \${headerHeight} > 46\`);
+
+  const context = h.root.querySelector<HTMLElement>(".ms-workspace-context")!;
+  const ctxRect = context.getBoundingClientRect();
+  const ctxButtons = [...context.querySelectorAll<HTMLButtonElement>("button")];
+  assert(ctxButtons.length === 7, \`[U2-01 \${w}x\${hSize}] expected 7 context buttons, got \${ctxButtons.length}\`);
+  let hitContextButtons = 0;
+  for (const btn of ctxButtons) {
+    const r = btn.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) continue;
+    if (r.right <= ctxRect.left + 1 || r.left >= ctxRect.right - 1) continue;
+    const cx = Math.max(ctxRect.left + 2, Math.min(ctxRect.right - 2, r.left + r.width / 2));
+    const cy = r.top + r.height / 2;
+    assert(isHit(btn, cx, cy), \`[U2-01 \${w}x\${hSize}] context button "\${btn.getAttribute("aria-label")}" covered at (\${cx},\${cy})\`);
+    hitContextButtons++;
+  }
+  assert(hitContextButtons > 0, \`[U2-01 \${w}x\${hSize}] no context buttons hit\`);
+
+  const follow = h.root.querySelector<HTMLButtonElement>(".ms-workspace-follow-selection");
+  let followHit = true;
+  if (follow && follow.checkVisibility()) {
+    const fr = follow.getBoundingClientRect();
+    followHit = isHit(follow, fr.left + fr.width / 2, fr.top + fr.height / 2);
+    assert(followHit, \`[U2-01 \${w}x\${hSize}] .ms-workspace-follow-selection covered\`);
+  }
+
+  return { viewport: \`\${w}x\${hSize}\`, oldToggle: false, oldControls: false, headerHeight, hitContextButtons, followHit, passed: true };
+};
+
+(window as any).measureU202Matrix = async () => {
+  const h = activeHarness!;
+  document.body.classList.remove("is-mobile");
+  h.store.setStudyInterface("set-1", "scenes");
+  (h.view as any).state.library = false;
+  (h.view as any).state.mindmap = true;
+  (h.view as any).state.auxiliary = "none";
+  (h.view as any).state.bottomCollapsed = false;
+  (h.view as any).state.cleanView = false;
+  (h.view as any).applyLayout();
+  await h.openDoc("pdf");
+  await h.selectScene("excerpt");
+  await frame(); await frame();
+
+  const openUnifiedMore = async () => {
+    (h.view as any).dismissPopup?.();
+    await frame();
+    const moreBtn = h.root.querySelector<HTMLButtonElement>('[data-ms-tool="excerpt.more"], [data-ms-tool="scene.more"]')!;
+    assert(moreBtn && moreBtn.checkVisibility(), "bottom unified more button missing or hidden");
+    moreBtn.scrollIntoView({ inline: "nearest", block: "nearest" });
+    await frame();
+    const r = moreBtn.getBoundingClientRect();
+    assert(isHit(moreBtn, r.left + r.width / 2, r.top + r.height / 2), "bottom unified more button not hit");
+    moreBtn.click();
+    await frame();
+    const pane = h.root.querySelector<HTMLElement>(".ms-document-more")!;
+    assert(pane && pane.checkVisibility(), ".ms-document-more did not open");
+    return pane;
+  };
+
+  const clickMoreRow = async (label: string) => {
+    const pane = await openUnifiedMore();
+    const row = [...pane.querySelectorAll<HTMLButtonElement>(".ms-document-more-row")].find(
+      b => b.getAttribute("aria-label") === label || b.textContent?.trim() === label,
+    );
+    assert(row, \`missing row "\${label}" in bottom unified more\`);
+    row.scrollIntoView({ block: "nearest" });
+    await frame();
+    const r = row.getBoundingClientRect();
+    assert(r.width > 0 && r.height > 0 && isHit(row, r.left + r.width / 2, r.top + r.height / 2), \`row "\${label}" not hit\`);
+    return { pane, row };
+  };
+
+  const checked: any[] = [];
+  const mark = (id: number, name: string, unique: boolean, entry: string) => checked.push({ id, name, unique, entry, passed: true });
+
+  // #1-#3, #5-#7 bottom excerpt bar tools
+  const clickBottom = async (tool: string) => {
+    const btn = h.root.querySelector<HTMLButtonElement>(\`.ms-bottom-scene-tools [data-ms-tool="\${tool}"]\`)!;
+    assert(btn && btn.checkVisibility(), \`missing bottom tool \${tool}\`);
+    const r = btn.getBoundingClientRect();
+    assert(isHit(btn, r.left + r.width / 2, r.top + r.height / 2), \`bottom tool \${tool} not hit\`);
+    btn.click();
+    await frame();
+    return btn;
+  };
+
+  await clickBottom("excerpt.hand");
+  assert(h.root.dataset.readerTool === "hand", "#1 hand did not activate");
+  mark(1, "移动与选择", false, "bottom:excerpt.hand");
+
+  await clickBottom("excerpt.text");
+  assert(h.root.dataset.readerTool === "text", "#2 text did not activate");
+  mark(2, "文本摘录", false, "bottom:excerpt.text");
+
+  await clickBottom("excerpt.rectangle");
+  assert(h.root.dataset.readerTool === "region", "#3 region did not activate");
+  mark(3, "区域摘录", false, "bottom:excerpt.rectangle");
+
+  const extBtn = h.root.querySelector<HTMLButtonElement>('.ms-bottom-scene-tools [data-ms-tool="excerpt.extend"]')!;
+  assert(extBtn && extBtn.checkVisibility(), "#4 extend missing");
+  const extR = extBtn.getBoundingClientRect();
+  assert(isHit(extBtn, extR.left + extR.width / 2, extR.top + extR.height / 2), "#4 extend not hit");
+  mark(4, "留白", false, "bottom:excerpt.extend");
+
+  await clickBottom("ink");
+  assert(h.root.dataset.readerTool === "pen", "#5 pen did not activate");
+  mark(5, "手写画笔与设置", false, "bottom:ink");
+
+  for (const [id, name, tool] of [[6, "撤销", "undo"], [7, "重做", "redo"]] as const) {
+    const b = h.root.querySelector<HTMLButtonElement>(\`.ms-bottom-scene-tools [data-ms-tool="\${tool}"]\`)!;
+    assert(b && b.checkVisibility(), \`#\${id} \${tool} missing\`);
+    const br = b.getBoundingClientRect();
+    assert(isHit(b, br.left + br.width / 2, br.top + br.height / 2), \`#\${id} \${tool} not hit\`);
+    mark(id, name, false, "bottom:" + tool);
+  }
+
+  // #8 house -> study home
+  const homeBtn = h.root.querySelector<HTMLButtonElement>('.ms-workspace-context [aria-label="打开学习集与文档"]')!;
+  const hr = homeBtn.getBoundingClientRect();
+  assert(isHit(homeBtn, hr.left + hr.width / 2, hr.top + hr.height / 2), "#8 home not hit");
+  homeBtn.click(); await frame();
+  assert(!!h.root.querySelector(".ms-study-home-screen"), "#8 study home did not open");
+  (h.view as any).dismissPopup(); await frame();
+  mark(8, "学习集与文档", false, "top-capsule:house");
+
+  // #9 docs nav floating action
+  const docsBtn = h.root.querySelector<HTMLButtonElement>('.ms-workspace-floating-actions [aria-label="immersiveDocs"]')!;
+  const dr = docsBtn.getBoundingClientRect();
+  assert(isHit(docsBtn, dr.left + dr.width / 2, dr.top + dr.height / 2), "#9 immersiveDocs not hit");
+  docsBtn.click(); await frame();
+  assert(!!h.root.querySelector(".ms-document-navigation"), "#9 document navigation did not open");
+  docsBtn.click(); await frame();
+  mark(9, "文档目录与书签", false, "floating:immersiveDocs");
+
+  // #10 AI floating action
+  const aiBtn = h.root.querySelector<HTMLButtonElement>('.ms-workspace-floating-actions [aria-label="immersiveAI"]')!;
+  const ar = aiBtn.getBoundingClientRect();
+  assert(isHit(aiBtn, ar.left + ar.width / 2, ar.top + ar.height / 2), "#10 immersiveAI not hit");
+  aiBtn.click(); await frame();
+  assert(h.root.dataset.auxiliary === "ai", "#10 AI panel did not open");
+  (h.view as any).selectAuxiliary("none"); await frame();
+  mark(10, "AI 学习助手", false, "floating:immersiveAI");
+
+  // #11 双文对照
+  {
+    const { row } = await clickMoreRow("双文对照");
+    assert(!row.disabled, "#11 双文对照 disabled on PDF");
+    (h.view as any).dismissPopup(); await frame();
+    mark(11, "双文对照", false, "bottom-more:双文对照");
+  }
+
+  // #12 卡片, #13 复习, #14 研究 via bottom-more -> 学习集更多设置…
+  for (const [id, name, rowText, auxVal] of [
+    [12, "卡片面板", "卡片", "cards"],
+    [13, "复习面板", "复习", "review"],
+    [14, "研究浏览器", "研究", "research"],
+  ] as const) {
+    const { row } = await clickMoreRow("学习集更多设置…");
+    row.click(); await frame();
+    const studyMore = h.root.querySelector<HTMLElement>(".ms-native-study-more")!;
+    assert(studyMore && studyMore.checkVisibility(), \`#\${id} study more did not open\`);
+    const sub = [...studyMore.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.trim() === rowText)!;
+    assert(sub, \`#\${id} missing \${rowText} in study more\`);
+    sub.click(); await frame();
+    assert(h.root.dataset.auxiliary === auxVal, \`#\${id} auxiliary did not become \${auxVal}\`);
+    (h.view as any).selectAuxiliary("none"); await frame();
+    mark(id, name, false, "bottom-more->study-more:" + rowText);
+  }
+
+  // #15 专注工作区（沉浸模式）
+  {
+    const { row } = await clickMoreRow("专注工作区");
+    row.click(); await frame();
+    assert(h.root.classList.contains("is-focused-stage"), "#15 focus stage did not activate");
+    (h.view as any).toggleFocus(false); await frame();
+    mark(15, "专注工作区", false, "bottom-more:专注工作区");
+  }
+
+  // #16 文字批注 (unique cross-scene)
+  {
+    const { row } = await clickMoreRow("文字批注");
+    assert(!row.disabled, "#16 文字批注 disabled");
+    row.click(); await frame();
+    mark(16, "文字批注", true, "bottom-more:文字批注");
+  }
+
+  // #17 插入图片批注 (unique cross-scene)
+  {
+    const { row } = await clickMoreRow("插入图片批注");
+    assert(!row.disabled, "#17 插入图片批注 disabled");
+    (h.view as any).dismissPopup(); await frame();
+    mark(17, "插入图片批注", true, "bottom-more:插入图片批注");
+  }
+
+  // #18 显示/隐藏学习集侧栏 (unique)
+  {
+    const beforeLib = h.root.dataset.library;
+    const { row } = await clickMoreRow("显示/隐藏学习集侧栏");
+    row.click(); await frame();
+    assert(h.root.dataset.library !== beforeLib, "#18 library sidebar did not toggle");
+    (h.view as any).dismissPopup(); await frame();
+    const { row: row2 } = await clickMoreRow("显示/隐藏学习集侧栏");
+    row2.click(); await frame();
+    assert(h.root.dataset.library === beforeLib, "#18 library sidebar did not restore");
+    (h.view as any).dismissPopup(); await frame();
+    mark(18, "显示/隐藏学习集侧栏", true, "bottom-more:显示/隐藏学习集侧栏");
+  }
+
+  // #19 显示/隐藏脑图 (unique)
+  {
+    const beforeMap = h.root.dataset.mindmap;
+    const { row } = await clickMoreRow("显示/隐藏脑图");
+    row.click(); await frame();
+    assert(h.root.dataset.mindmap !== beforeMap, "#19 mindmap did not toggle");
+    (h.view as any).dismissPopup(); await frame();
+    const { row: row2 } = await clickMoreRow("显示/隐藏脑图");
+    row2.click(); await frame();
+    assert(h.root.dataset.mindmap === beforeMap, "#19 mindmap did not restore");
+    (h.view as any).dismissPopup(); await frame();
+    mark(19, "显示/隐藏脑图", true, "bottom-more:显示/隐藏脑图");
+  }
+
+  // #20 文档与脑图联动设置 (unique)
+  {
+    const beforeLink = h.root.dataset.link;
+    const { row } = await clickMoreRow("文档与脑图联动设置");
+    row.click(); await frame();
+    assert(h.root.dataset.link !== beforeLink, "#20 linkMode did not cycle");
+    while (h.root.dataset.link !== beforeLink) (h.view as any).cycleLinkMode();
+    await frame();
+    mark(20, "文档与脑图联动设置", true, "bottom-more:文档与脑图联动设置");
+  }
+
+  // #21 文档内搜索 (unique - critical for Pad without Cmd+F)
+  {
+    const { row } = await clickMoreRow("文档内搜索");
+    assert(!row.disabled, "#21 文档内搜索 disabled");
+    row.click(); await frame(); await wait(30); await frame();
+    const searchInput = h.root.querySelector<HTMLInputElement>('.ms-search-input[aria-label="搜索本文档"]');
+    assert(searchInput && searchInput.checkVisibility(), "#21 reader search UI did not open");
+    h.root.querySelector<HTMLButtonElement>('[aria-label="关闭文档搜索"]')?.click();
+    await frame();
+    mark(21, "文档内搜索", true, "bottom-more:文档内搜索");
+  }
+
+  // #22 识别当前扫描页 OCR (unique)
+  {
+    const { row } = await clickMoreRow("识别当前扫描页");
+    assert(!row.disabled, "#22 识别当前扫描页 disabled on PDF");
+    (h.view as any).dismissPopup(); await frame();
+    mark(22, "识别当前扫描页", true, "bottom-more:识别当前扫描页");
+  }
+
+  // #23 文档与工作区设置 across non-excerpt scenes
+  for (const sceneId of ["handwriting", "organize", "recall"]) {
+    await h.selectScene(sceneId);
+    const pane = await openUnifiedMore();
+    assert(!!pane.querySelector('[aria-label="文档内搜索"]') && !!pane.querySelector('[aria-label="学习集更多设置…"]'), \`#23 unified more incomplete in \${sceneId}\`);
+    (h.view as any).dismissPopup(); await frame();
+  }
+  await h.selectScene("excerpt");
+  mark(23, "文档与工作区设置", true, "bottom:excerpt.more+scene.more");
+
+  // #24 学习集更多设置…
+  {
+    const { row } = await clickMoreRow("学习集更多设置…");
+    row.click(); await frame();
+    const studyMore = h.root.querySelector<HTMLElement>(".ms-native-study-more")!;
+    assert(studyMore && studyMore.checkVisibility(), "#24 study more did not open");
+    const labels = [...studyMore.querySelectorAll<HTMLButtonElement>("button")].map(b => b.textContent?.trim() ?? "");
+    for (const req of ["进入沉浸模式", "显示/隐藏学习集侧栏", "显示/隐藏脑图", "卡片", "复习", "研究", "AI", "全局搜索…", "切换界面模式", "工作区设置…"]) {
+      assert(labels.includes(req), \`#24 missing study more item: \${req}\`);
+    }
+    (h.view as any).dismissPopup(); await frame();
+    mark(24, "学习集更多设置…", true, "bottom-more:学习集更多设置…");
+  }
+
+  assert(checked.length === 24, \`expected 24 matrix items, got \${checked.length}\`);
+  return { passed: true, total: checked.length, uniqueCount: checked.filter(c => c.unique).length, items: checked };
+};
+
+(window as any).measureU203TraditionalAndPopups = async (w: number, hSize: number, checkTraditional: boolean) => {
+  const h = activeHarness!;
+  document.body.classList.remove("is-mobile");
+  await h.openDoc("pdf");
+
+  let traditionalOk = true;
+  if (checkTraditional) {
+    h.store.setStudyInterface("set-1", "traditional");
+    (h.view as any).drawToolbar();
+    await frame(); await frame();
+    const tb = h.root.querySelector<HTMLElement>(".ms-workspace-toolbar")!;
+    const controls = h.root.querySelector<HTMLElement>(".ms-workspace-toolbar-controls")!;
+    const body = h.root.querySelector<HTMLElement>(".ms-workspace-body")!;
+    assert(!tb.classList.contains("has-scene-header"), "traditional toolbar kept has-scene-header");
+    assert(controls && controls.checkVisibility(), "traditional controls not visible");
+    assert(tb.getBoundingClientRect().bottom <= body.getBoundingClientRect().top + 1, "traditional toolbar overlaps body");
+
+    h.store.setStudyInterface("set-1", "scenes");
+    (h.view as any).drawToolbar();
+    await frame(); await frame();
+    assert(!h.root.querySelector(".ms-workspace-extra-tools-toggle"), "scene return left extra toggle");
+    assert(!h.root.querySelector(".ms-workspace-toolbar-controls"), "scene return left toolbar controls");
+  } else {
+    h.store.setStudyInterface("set-1", "scenes");
+    (h.view as any).drawToolbar();
+    await frame(); await frame();
+  }
+
+  // Open 文档 - 更多 from bottom (or overflow menu on 380x700)
+  const overflowToggle = h.root.querySelector<HTMLButtonElement>(".ms-bottom-overflow-toggle");
+  if (overflowToggle) {
+    overflowToggle.click();
+    await frame();
+    const moreItem = h.root.querySelector<HTMLButtonElement>('.ms-bottom-overflow-menu [data-ms-tool="excerpt.more"]')!;
+    assert(moreItem, \`[U2-03 \${w}x\${hSize}] excerpt.more not in overflow menu\`);
+    moreItem.click();
+  } else {
+    h.root.querySelector<HTMLButtonElement>('[data-ms-tool="excerpt.more"]')!.click();
+  }
+  await frame();
+  const docMore = h.root.querySelector<HTMLElement>(".ms-document-more")!;
+  assert(docMore && docMore.checkVisibility(), \`[U2-03 \${w}x\${hSize}] .ms-document-more not visible\`);
+  const dmRect = docMore.getBoundingClientRect();
+  const ctxRect = h.root.querySelector<HTMLElement>(".ms-workspace-context")!.getBoundingClientRect();
+  assert(
+    dmRect.left >= -1 && dmRect.top >= -1 && dmRect.right <= window.innerWidth + 1 && dmRect.bottom <= window.innerHeight + 1,
+    \`[U2-03 \${w}x\${hSize}] .ms-document-more out of viewport: \${JSON.stringify(dmRect.toJSON())}\`,
+  );
+  assert(dmRect.top >= ctxRect.bottom - 1 || dmRect.bottom <= ctxRect.top + 1, \`[U2-03 \${w}x\${hSize}] .ms-document-more overlaps top context capsule\`);
+
+  // Open 阅读设置 from inside 文档 - 更多
+  const readSettingsRow = [...docMore.querySelectorAll<HTMLButtonElement>(".ms-document-more-row")].find(b => b.getAttribute("aria-label") === "阅读设置")!;
+  readSettingsRow.click();
+  await frame();
+  const readSettings = h.root.querySelector<HTMLElement>(".ms-read-settings")!;
+  assert(readSettings && readSettings.checkVisibility(), \`[U2-03 \${w}x\${hSize}] .ms-read-settings not visible\`);
+  const rsRect = readSettings.getBoundingClientRect();
+  assert(
+    rsRect.left >= -1 && rsRect.top >= -1 && rsRect.right <= window.innerWidth + 1 && rsRect.bottom <= window.innerHeight + 1,
+    \`[U2-03 \${w}x\${hSize}] .ms-read-settings out of viewport: \${JSON.stringify(rsRect.toJSON())}\`,
+  );
+  (h.view as any).dismissPopup();
+  await frame();
+
+  return {
+    viewport: \`\${w}x\${hSize}\`,
+    traditionalOk,
+    docMoreRect: dmRect.toJSON(),
+    readSettingsRect: rsRect.toJSON(),
+    passed: true,
+  };
+};
+
 (window as any).ready = true;
 `;
 
@@ -669,19 +1042,22 @@ try {
   const session = `marginstudy-pad-toolbar-${process.pid}`;
   const browser = (...args) => runBrowser(session, ...args);
 
-  const report = {
-    meta: {
-      suite: "pad-toolbar-layout",
-      card: "UI-01",
-      a30PhysicalResolution: "3392x2400",
-      a30EquivalentViewport: "1131x800@DPR3",
-      deviceOffline: true,
-    },
-    u101: [],
-    u102: null,
-    u103: [],
-    u104: [],
-  };
+    const report = {
+      meta: {
+        suite: "pad-toolbar-layout",
+        cards: ["UI-01", "UI-02"],
+        a30PhysicalResolution: "3392x2400",
+        a30EquivalentViewport: "1131x800@DPR3",
+        deviceOffline: true,
+      },
+      u101: [],
+      u102: null,
+      u103: [],
+      u104: [],
+      u201: [],
+      u202: null,
+      u203: [],
+    };
 
   try {
     await browser("open", "about:blank");
@@ -737,6 +1113,22 @@ try {
       report.u104.push(await evalJson(`window.measureU104Viewport(${w}, ${hSize})`));
     }
 
+    // U2-01: legacy top extra-tools toggle & controls completely removed, top capsule 100% unobstructed
+    for (const [w, hSize, dpr] of [[1131, 800, 3], [1512, 851, 1], [756, 851, 1], [380, 700, 1]]) {
+      await browser("set", "viewport", String(w), String(hSize), String(dpr));
+      report.u201.push(await evalJson(`window.measureU201Viewport(${w}, ${hSize})`));
+    }
+
+    // U2-02: 24-item capability matrix (including all 9 unique capabilities) 100% reachable & functional
+    await browser("set", "viewport", "1131", "800", "3");
+    report.u202 = await evalJson("window.measureU202Matrix()");
+
+    // U2-03: traditional mode intact + bottom-anchored Document More & Read Settings stay inside viewport
+    for (const [w, hSize, dpr, checkTrad] of [[1131, 800, 3, true], [756, 427, 1, false], [380, 700, 1, false]]) {
+      await browser("set", "viewport", String(w), String(hSize), String(dpr));
+      report.u203.push(await evalJson(`window.measureU203TraditionalAndPopups(${w}, ${hSize}, ${checkTrad})`));
+    }
+
     const done = await evalJson("window.disposeHarness()");
     if (done.runtimeErrors.length > 0) {
       throw new Error("Runtime errors: " + JSON.stringify(done.runtimeErrors));
@@ -750,7 +1142,7 @@ try {
     const totalU101Checks = report.u101.reduce((s, r) => s + r.checkedCount, 0);
     const totalU103Items = report.u103.reduce((s, r) => s + r.scenes.reduce((a, b) => a + b.clickedCount, 0), 0);
     console.log(
-      `PASS pad-toolbar-layout: U1-01 (${totalU101Checks}/${totalU101Checks} checks, maxOverlapArea=0), U1-02 (3/3 zero+restore), U1-03 (${totalU103Items}/${totalU103Items} overflow items clicked), U1-04 (3/3 wide zero-overflow)`,
+      `PASS pad-toolbar-layout: U1-01 (${totalU101Checks}/${totalU101Checks}, maxOverlapArea=0), U1-02 (3/3), U1-03 (${totalU103Items}/${totalU103Items}), U1-04 (3/3), U2-01 (4/4 no legacy overlay), U2-02 (${report.u202.total}/24 matrix, ${report.u202.uniqueCount}/9 unique), U2-03 (3/3 popups in viewport)`,
     );
   } finally {
     await browser("close").catch(() => {});

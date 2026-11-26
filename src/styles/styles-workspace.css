@@ -484,10 +484,7 @@ body.ms-study-host-space .claudian-container.claudian-zen {display:none!importan
 .ms-study-workspace .ms-workspace-toolbar.has-scene-header {box-sizing:border-box;position:relative;flex-direction:row;align-items:center;justify-content:center;height:44px;min-height:44px;padding:4px 8px;gap:4px;}
 .has-scene-header .ms-workspace-context {flex:0 1 auto;overflow-x:auto;scrollbar-width:none;}
 .has-scene-header .ms-workspace-context::-webkit-scrollbar {display:none;}
-.ms-workspace-extra-tools-toggle {flex:none;}
 .ms-study-workspace .ms-excerpt-destination {flex:0 1 auto;min-width:0;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:0;border-radius:7px;background:#e3e3e5;padding:5px 8px;}
-.has-scene-header .ms-workspace-toolbar-controls {box-sizing:border-box;position:absolute;z-index:30;top:100%;left:0;width:100%;padding:2px 8px;background:var(--background-primary,#fff);border-bottom:1px solid var(--ms-workspace-border);box-shadow:0 3px 6px #0002;}
-.has-scene-header .ms-workspace-toolbar-controls[hidden] {display:none;}
 .ms-native-popover[aria-label="编辑场景模板"],.ms-native-popover[aria-label="场景模板管理"] {box-sizing:border-box;max-height:calc(100% - 85px);overflow:auto;}
 .ms-native-popover[aria-label="编辑场景模板"] fieldset {display:flex;flex-wrap:wrap;gap:6px;margin:8px 0;padding:8px;border:1px solid var(--ms-workspace-border);}
 .ms-native-popover[aria-label="编辑场景模板"] fieldset label {display:inline-flex;align-items:center;gap:3px;}
@@ -606,7 +603,6 @@ body.ms-study-host-space .claudian-container.claudian-zen {display:none!importan
   .has-scene-header .ms-workspace-follow-selection { display:none; }
 }
 .ms-study-workspace:not(.has-scene-header) .ms-workspace-follow-selection { align-self:center;margin-left:auto;height:30px;padding:0 10px;font-size:12px; }
-.has-scene-header .ms-workspace-extra-tools-toggle { position:absolute;left:0;top:7px;z-index:3;box-sizing:border-box;width:30px;height:30px;padding:0; }
 .ms-study-workspace .has-scene-header .ms-excerpt-destination { position:absolute;right:92px;top:7px;z-index:3;box-sizing:border-box;width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;font-size:0; }
 .ms-study-workspace .has-scene-header .ms-excerpt-destination::before { content:"⌖";font-size:17px;line-height:1; }
 .has-scene-header .ms-workspace-context button.ms-workspace-context-icon { flex:0 0 44px;width:44px;height:40px;padding:7px; }
