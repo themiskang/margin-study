@@ -873,6 +873,7 @@ export class ReaderView extends ItemView {
         const location = this.pendingLocation ?? (resized ? anchor.location : null);
         if (location && !this.fitPending && this.navigationPage===null) void this.restoreHistoryLocation(location, false);
       }
+      this.enqueueEligibleVisibleUpgrades(80, true);
     });
     this.positionObserver.observe(this.scrollEl);
 
@@ -884,7 +885,9 @@ export class ReaderView extends ItemView {
     this.scrollEl.addEventListener("wheel", () => { this.locationAnchor = null; this.smoothNavigation = null; }, { passive: true });
     this.scrollEl.addEventListener("scroll", () => {
       if (this.smoothNavigation && Math.abs(this.scrollEl.scrollTop - this.smoothNavigation.targetTop) < 2) this.smoothNavigation = null;
+      this.enqueueEligibleVisibleUpgrades(100, true);
     }, { passive: true });
+    document.addEventListener("visibilitychange", this.onVisibilityChange);
     this.scrollEl.addEventListener("focusin", () => { this.plugin.activeReader = this; });
 
     this.buildToolbar();
@@ -923,6 +926,7 @@ export class ReaderView extends ItemView {
           }
         }
         this.evictOffscreenPages();
+        this.enqueueEligibleVisibleUpgrades(80, false);
       },
       { root: this.scrollEl, threshold: [0, 0.1, 0.5, 1] }
     );
@@ -962,6 +966,7 @@ export class ReaderView extends ItemView {
     if (this.idleUpgradeTimer !== null) window.clearTimeout(this.idleUpgradeTimer);
     this.idleUpgradeTimer = null;
     this.pendingUpgradePages.clear();
+    document.removeEventListener("visibilitychange", this.onVisibilityChange);
     this.scrollEl?.removeEventListener("keydown", this.onPageKey);
     this.scrollEl?.removeEventListener("scroll", this.saveReadingPosition);
     this.destroyed = true;
@@ -1360,6 +1365,7 @@ export class ReaderView extends ItemView {
       this.unitPages(page).forEach((number) => this.visiblePages.add(number));
     }
     this.setCurrentPage(page);
+    this.enqueueEligibleVisibleUpgrades(80, false);
   }
   private async renderPageUnit(page: number): Promise<void> {
     await Promise.all(this.unitPages(page).map((number) => this.renderPage(number)));
@@ -1453,6 +1459,7 @@ export class ReaderView extends ItemView {
         this.releasePage(num, rec);
       }
     }
+    this.enqueueEligibleVisibleUpgrades(80, false);
     // 标注层随上面 renderPage 末尾统一渲染（页面已量好尺寸），此处无需重复调用
   }
 
@@ -2402,18 +2409,54 @@ export class ReaderView extends ItemView {
     return promise;
   }
 
-  private scheduleIdleUpgrade(): void {
-    if (this.destroyed || this.idleUpgradeTimer !== null) return;
+  private onVisibilityChange = (): void => {
+    if (!document.hidden) this.enqueueEligibleVisibleUpgrades(80, false);
+  };
+
+  private canPageUpgrade(pageNum: number, rec: PageRecord, curShare: number): boolean {
+    const prevBudget = this.lastRenderBudget.get(pageNum);
+    if (!prevBudget) return false;
+    if (prevBudget.skippedDoubleBuffer || prevBudget.allocationFailed) return true;
+    return prevBudget.degraded && rec.canvas.width * rec.canvas.height < curShare * 0.85;
+  }
+
+  private enqueueEligibleVisibleUpgrades(delayMs = 80, debounce = false): void {
+    if (this.destroyed || !this.doc || this.pinchState) return;
+    const budget = this.getMemoryBudget();
+    const visibleCount = Math.max(1, this.visiblePages.size);
+    const curShare = Math.min(budget.maxPagePixels, Math.floor(budget.hardTotalPixels / Math.max(2, visibleCount * 2)));
+    let enqueued = false;
+    for (const num of this.visiblePages) {
+      if (!this.isPageShown(num) || this.folded.has(num)) continue;
+      const rec = this.pages.get(num);
+      if (!rec || rec.renderPromise) continue;
+      if (this.canPageUpgrade(num, rec, curShare)) {
+        this.pendingUpgradePages.add(num);
+        enqueued = true;
+      }
+    }
+    if (enqueued || this.pendingUpgradePages.size > 0) {
+      this.scheduleIdleUpgrade(delayMs, debounce);
+    }
+  }
+
+  private scheduleIdleUpgrade(delayMs = 80, debounce = false): void {
+    if (this.destroyed) return;
+    if (this.idleUpgradeTimer !== null) {
+      if (!debounce) return;
+      window.clearTimeout(this.idleUpgradeTimer);
+      this.idleUpgradeTimer = null;
+    }
     this.idleUpgradeTimer = window.setTimeout(() => {
       this.idleUpgradeTimer = null;
       void this.runIdleUpgrade();
-    }, 80);
+    }, delayMs);
   }
 
   private async runIdleUpgrade(): Promise<void> {
     if (this.destroyed || !this.doc || this.pendingUpgradePages.size === 0) return;
     if (this.pinchState) {
-      this.scheduleIdleUpgrade();
+      this.scheduleIdleUpgrade(80, false);
       return;
     }
     const budget = this.getMemoryBudget();
@@ -2653,6 +2696,7 @@ export class ReaderView extends ItemView {
     if (pending) void pending.finally(() => {
       if (rec.renderPromise === pending) rec.renderPromise = null;
     });
+    this.enqueueEligibleVisibleUpgrades(80, false);
   }
 
   private evictOffscreenPages(reservePixels = 0, keepPage?: number): void {
@@ -2791,6 +2835,7 @@ export class ReaderView extends ItemView {
     this.thumbPanel
       ?.querySelector(`.ms-thumb-item[data-page="${pageNum}"]`)
       ?.classList.toggle("is-folded", folded);
+    this.enqueueEligibleVisibleUpgrades(80, false);
   }
 
   // ===== 书签 =====

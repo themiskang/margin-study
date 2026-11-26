@@ -1854,7 +1854,7 @@ let cdpView: ReaderView | null = null;
       }
     })();
 
-    // --- Part C: Idle auto-upgrade within <=500ms after budget pressure clears (same scale, no scale change) ---
+    // --- Part C: TRUE automatic idle upgrade within <=500ms (NO explicit renderPage / internal upgrade calls!) ---
     Platform.isMobile = true;
     Object.defineProperty(window, "devicePixelRatio", { configurable: true, get: () => 2 });
     const idleUpgradeAudit = await (async () => {
@@ -1866,20 +1866,24 @@ let cdpView: ReaderView | null = null;
       try {
         await view.setPageLayout("spread", false);
         await waitPagesRendered(view, [1, 2], view.getScale());
-        (view as any).visiblePages.add(1);
-        (view as any).visiblePages.add(2);
-        // Zoom spread to 4.0 under tight mobile 4M budget: page 1 & 2 degrade to ~0.35 DPR (target single-page DPR at 4.0 is ~0.50)
+        const scrollEl = view.getScrollContainer();
+
+        // Position scroll at the seam between page 1 and page 2 so real IntersectionObserver sees BOTH [1, 2]
         view.setScale(4.0);
+        const rec1 = view.getPageRecord(1)!;
+        const seamLeft = Math.max(0, rec1.wrapper.offsetLeft + rec1.wrapper.offsetWidth - scrollEl.clientWidth / 2);
+        scrollEl.scrollLeft = seamLeft;
         await waitPagesRendered(view, [1, 2], 4.0);
+        await frame();
         const dprDuringSpread = view.getMemoryStats().pages[1]?.dpr ?? 0;
 
-        // Now free page 2 from visibility (simulating single-page focus / scroll settling) without changing scale (still 4.0!)
+        // Real user horizontal scroll left to bring only page 1 into viewport (pushes page 2 out of viewport)
+        // STRICT RULE: Do NOT call renderPage(), runIdleUpgrade(), or mutate visiblePages manually!
         const eventsBefore = pdfEvents.length;
         const t0 = performance.now();
-        (view as any).visiblePages.clear();
-        (view as any).visiblePages.add(1);
-        // Trigger same-scale renderPage(1) or wait for idle upgrade timer (<= 500ms)
-        void view.renderPage(1);
+        scrollEl.scrollLeft = 0;
+        scrollEl.dispatchEvent(new Event("scroll"));
+
         let upgradedAtMs = -1;
         let finalDpr = dprDuringSpread;
         const targetSingleDpr = Math.min(1.25, Math.sqrt(2_000_000 / (595 * 4 * 842 * 4)));
@@ -1894,10 +1898,11 @@ let cdpView: ReaderView | null = null;
         const qualityAfterUpgrade = measureCanvasQuality(view.getPageRecord(1)!.canvas);
         const upgradeRenderCount = pdfEvents.slice(eventsBefore).filter(e => e[0] === "render" && e[1] === "idle-upgrade" && e[2] === 1).length;
         return {
+          trigger: "real-horizontal-scroll-spread-to-single-visible",
           dprDuringSpread: Number(dprDuringSpread.toFixed(4)),
           targetSingleDpr: Number(targetSingleDpr.toFixed(4)),
           finalDpr: Number(finalDpr.toFixed(4)),
-          upgradedWithin500ms: upgradedAtMs >= 0 && upgradedAtMs <= 500,
+          upgradedWithin500ms: upgradedAtMs >= 0 && upgradedAtMs <= 500 && upgradeRenderCount >= 1,
           upgradedAtMs,
           upgradeRenderCount,
           afterUpgradeWidth: qualityAfterUpgrade.width,
@@ -1915,7 +1920,7 @@ let cdpView: ReaderView | null = null;
     if (!evictionAudit.noUnderreport) failures.push(\`[eviction-order] writeoff before release underreported: reported=\${evictionAudit.reportedPeakPixels}px < measured=\${evictionAudit.measuredPeakPixels}px (delta=\${evictionAudit.deltaPixels}px)\`);
     if (!readabilityAudit.preservedResolution) failures.push(\`[readability-14000pt] old canvas destroyed: \${readabilityAudit.beforeWidth}x\${readabilityAudit.beforeHeight} -> \${readabilityAudit.afterWidth}x\${readabilityAudit.afterHeight}\`);
     if (!readabilityAudit.readableEdgeEnergy) failures.push(\`[readability-14000pt] text smudged: edgeEnergy=\${readabilityAudit.afterEdgeEnergy} < 8.0\`);
-    if (!idleUpgradeAudit.upgradedWithin500ms) failures.push(\`[idle-upgrade] did not upgrade within 500ms: spreadDpr=\${idleUpgradeAudit.dprDuringSpread}, finalDpr=\${idleUpgradeAudit.finalDpr}, target=\${idleUpgradeAudit.targetSingleDpr}\`);
+    if (!idleUpgradeAudit.upgradedWithin500ms) failures.push(\`[idle-upgrade-auto] did not auto-upgrade within 500ms: renders=\${idleUpgradeAudit.upgradeRenderCount}, spreadDpr=\${idleUpgradeAudit.dprDuringSpread}, finalDpr=\${idleUpgradeAudit.finalDpr}, target=\${idleUpgradeAudit.targetSingleDpr}\`);
     if (failures.length) throw new Error("PZ-10 failed:\\n  - " + failures.join("\\n  - "));
 
     return { passed: true, evictionAudit, readabilityAudit, idleUpgradeAudit };
