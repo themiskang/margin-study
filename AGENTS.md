@@ -132,6 +132,8 @@ orca orchestration send --to run:<统筹席 run id> --subject "<卡号> 第 N �
 
 - **跨会话待办与推送红线**：见 `.agent-artifacts/backlog.md`；其中「推送策略」为业主 2026-11-26 决定（改完先不 push，等统一指令）。
 
+- **派单前先查重**：`orca orchestration worker-list` 看是否已有同任务 `ready/live` 会话；有就等它，**禁止并行派第二份**。`send` 到已 `succeeded` 的 dispatch 会**新开一条会话**，等于重复派单——发前必须确认目标会话状态。
+
 - 禁止把已完成会话的标签长期堆在侧栏：侧栏只应出现「正在做」与「当前轮需回看」的会话。
 
 ### 席位驻留：判定席常驻、产出席临时（Orca 原语）
