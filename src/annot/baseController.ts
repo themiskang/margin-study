@@ -72,6 +72,11 @@ type LinkedCardCreationRecord = {
   initialReviewPending?: unknown[];
   initialDeckIds?: string[];
 };
+type ClearedAnchorRecord = {
+  cardId: string;
+  hadCardAnchor: boolean;
+  sourceIndices: number[];
+};
 type ReaderExcerptChange =
   | {
       kind: "excerpt";
@@ -81,6 +86,7 @@ type ReaderExcerptChange =
       annotation: Annotation;
       insertIndex: number;
       linkedCard?: LinkedCardCreationRecord;
+      clearedAnchors?: ClearedAnchorRecord[];
       continuous?: { before: ContinuousSessionSnapshot; after: ContinuousSessionSnapshot };
     }
   | {
@@ -1851,6 +1857,46 @@ export abstract class BaseAnnotationController {
     return false;
   }
 
+  private restoreProtectedCardAnchors(
+    existingCard: Card,
+    boundCard: Card,
+    restored: Annotation,
+    clearedAnchors?: ClearedAnchorRecord[],
+  ): void {
+    const isMergedMember = boundCard.id !== existingCard.id;
+    const headCleared = clearedAnchors?.find(r => r.cardId === boundCard.id);
+    // Reconcile boundCard.anchorAnnId with consistency check instead of blindly skipping existing anchors
+    if (!boundCard.anchorAnnId) {
+      boundCard.anchorAnnId = restored.id;
+    } else if (boundCard.anchorAnnId !== restored.id) {
+      if (headCleared?.hadCardAnchor || (boundCard.id === existingCard.id && boundCard.docPath === restored.docPath)) {
+        boundCard.anchorAnnId = restored.id;
+      }
+    }
+    if (!isMergedMember) return;
+    // Restore member card's own anchor so unmergeCard -> restoreCardAnchors rebinds the annotation back to the member
+    if (existingCard.anchorAnnId !== restored.id) {
+      existingCard.anchorAnnId = restored.id;
+    }
+    // Restore merge head's source entry anchor for this member's document
+    const sources = boundCard.sources ?? [];
+    if (headCleared?.sourceIndices.length) {
+      for (const idx of headCleared.sourceIndices) {
+        const src = sources[idx];
+        if (src && src.docPath === restored.docPath && src.anchorAnnId !== restored.id) {
+          src.anchorAnnId = restored.id;
+        }
+      }
+    } else {
+      const match = sources.find(s => s.docPath === restored.docPath && !s.anchorAnnId && (s.page === restored.page || s.text === restored.text));
+      if (match) match.anchorAnnId = restored.id;
+    }
+    const archivedMember = boundCard.mergedCards?.find(c => c.id === existingCard.id);
+    if (archivedMember && archivedMember.anchorAnnId !== restored.id) {
+      archivedMember.anchorAnnId = restored.id;
+    }
+  }
+
   private applyExcerptChange(change: ReaderExcerptChange, redo: boolean): boolean {
     if (this.docPath !== change.docPath || this.documentRevision !== change.docRevision) {
       this.clearEditHistory();
@@ -1874,6 +1920,17 @@ export abstract class BaseAnnotationController {
         this.cache.splice(liveIdx, 1);
         let protectedNotice = false;
         store.applyLinkedSilentMutation(() => {
+          const clearedAnchors: ClearedAnchorRecord[] = [];
+          for (const c of store.cards) {
+            const hadCardAnchor = c.docPath === change.annotation.docPath && c.anchorAnnId === change.annotation.id;
+            const sourceIndices: number[] = [];
+            for (let i = 0; i < (c.sources?.length ?? 0); i++) {
+              const s = c.sources![i];
+              if (s.docPath === change.annotation.docPath && s.anchorAnnId === change.annotation.id) sourceIndices.push(i);
+            }
+            if (hadCardAnchor || sourceIndices.length) clearedAnchors.push({ cardId: c.id, hadCardAnchor, sourceIndices });
+          }
+          change.clearedAnchors = clearedAnchors.length ? clearedAnchors : undefined;
           store.removeAnnotationLinks(change.annotation.docPath, change.annotation.id);
           if (change.linkedCard) {
             const liveCard = store.getCard(change.linkedCard.card.id);
@@ -1924,8 +1981,8 @@ export abstract class BaseAnnotationController {
           const existingCard = store.getCard(change.linkedCard.card.id);
           if (existingCard) {
             const boundCard = existingCard.groupId ? (store.getCard(existingCard.groupId) ?? existingCard) : existingCard;
-            if (!boundCard.anchorAnnId) boundCard.anchorAnnId = restored.id;
             restored.cardId = boundCard.id;
+            this.restoreProtectedCardAnchors(existingCard, boundCard, restored, change.clearedAnchors);
           } else {
             store.addCard(structuredClone(change.linkedCard.card));
             for (const node of change.linkedCard.nodes) {

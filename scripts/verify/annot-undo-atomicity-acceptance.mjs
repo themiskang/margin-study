@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 ReaderView、Store 与默认 agent-browser 后端，零私有夹具依赖。
- * [OUTPUT]: 执行 ANNOT-02 统一标注撤销模型验收（B1~B9：5类标注原子撤重、跨页、连续摘录、与笔迹交错、文档根共享、编辑/合并/FSRS保护、并发拒绝、手动建卡单事务、撤销后外部改卡重做保护与未改卡复原、自动复习初始快照撤重、store.history 零污染）。
+ * [OUTPUT]: 执行 ANNOT-02 统一标注撤销模型验收（B1~B10：5类标注原子撤重、跨页、连续摘录、与笔迹交错、文档根共享、编辑/合并/FSRS保护、并发拒绝、手动建卡单事务、撤销后外部改卡重做保护与未改卡复原、自动复习初始快照撤重、跨文档合并组员撤重锚点与解除合并归属、store.history 零污染）。
  * [POS]: 公开浏览器验收套件 annot-undo-atomicity，固化 ANNOT-02 全部二值断言。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
@@ -518,6 +518,66 @@ function historySnapshot(store: any) {
       autoReviewRealProgressProtected: true,
       noAutoReviewAtomicUndoRedo: true,
     };
+  }
+
+  // ===== B10: 跨文档合并组员撤重后保留组首来源锚点、组员原锚点与解除合并归属 =====
+  {
+    const docA = "b10-member.pdf";
+    const docB = "b10-head.pdf";
+    const mkRect = (y: number) => ({ kind: "pdf", pageNum: 1, rects: [{ x: 80, y, w: 150, h: 18 }], pdfGeometry: [{ page: 1, rects: [{ x: 80, y, w: 150, h: 18 }] }], pdfCoordinateSpace: "pdf" });
+    fixturesHost.replaceChildren();
+    const env = makeEnv({ [docA]: { name: docA, pages: 1 }, [docB]: { name: docB, pages: 1 } });
+    await env.store.load();
+    const openDoc = async (docPath: string) => {
+      const leaf: any = { app: env.app, view: null, containerEl: document.createElement("div") };
+      const view = new ReaderView(leaf, env.plugin);
+      leaf.view = view;
+      view.containerEl.style.cssText = "position:relative;width:820px;height:760px;";
+      fixturesHost.append(view.containerEl);
+      await view.onOpen();
+      await view.loadFileByPath(docPath);
+      view.setScale(1);
+      await view.renderPage(1);
+      await frame();
+      return { view, ctrl: (view as any).annController };
+    };
+    const rA = await openDoc(docA);
+    const rB = await openDoc(docB);
+    try {
+      rB.ctrl.commitAnnotation(mkRect(600), "highlight", "#ffd54f", "组首文档摘录");
+      const headId = env.store.cards[0].id;
+      const headAnnId = (await env.store.loadAnnotations(docB))[0].id;
+      rA.ctrl.commitAnnotation(mkRect(560), "highlight", "#ffd54f", "组员文档摘录");
+      const memberId = env.store.cards[1].id;
+      const memberAnnId = (await env.store.loadAnnotations(docA))[0].id;
+      env.store.mergeCards(headId, [memberId]);
+      await env.store.flush();
+      assert((await env.store.loadAnnotations(docA))[0].cardId === headId, "B10 setup member ann not bound to head");
+      await rA.view.undoLastEdit();
+      await env.store.flush();
+      assert((await env.store.loadAnnotations(docA)).length === 0, "B10 undo did not remove member ann");
+      assert(!env.store.getCard(memberId)?.anchorAnnId, "B10 undo left member anchorAnnId");
+      assert(!env.store.getCard(headId)?.sources?.find((s: any) => s.docPath === docA)?.anchorAnnId, "B10 undo left head source anchorAnnId");
+      await rA.view.redoLastEdit();
+      await env.store.flush();
+      const redoneAnn = (await env.store.loadAnnotations(docA))[0];
+      const redoneHead = env.store.getCard(headId)!;
+      const redoneMember = env.store.getCard(memberId)!;
+      assert(redoneAnn?.id === memberAnnId && redoneAnn?.cardId === headId, "B10 redo member ann binding wrong");
+      assert(redoneHead.anchorAnnId === headAnnId, "B10 redo overwrote head own anchorAnnId");
+      assert(redoneHead.sources?.find((s: any) => s.docPath === docA)?.anchorAnnId === memberAnnId, "B10 redo missing head source anchorAnnId");
+      assert(redoneMember.anchorAnnId === memberAnnId, "B10 redo missing member anchorAnnId");
+      env.store.unmergeCard(headId);
+      await env.store.flush();
+      const unmergedAnnA = (await env.store.loadAnnotations(docA))[0];
+      const unmergedAnnB = (await env.store.loadAnnotations(docB))[0];
+      assert(unmergedAnnA?.cardId === memberId && env.store.getCard(memberId)?.anchorAnnId === memberAnnId && unmergedAnnB?.cardId === headId,
+        "B10 unmerge did not restore member annotation ownership");
+      report.B10 = { crossDocMergeMemberRedoAndUnmerge: true };
+    } finally {
+      await rA.view.onClose();
+      await rB.view.onClose();
+    }
   }
 
   return report;
