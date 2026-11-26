@@ -1664,6 +1664,271 @@ let cdpView: ReaderView | null = null;
   }
 };
 
+// ===== PZ-10: Cross-page eviction release-before-writeoff + Readability floor & <=500ms idle auto-upgrade =====
+(window as any).runPZ10EvictionOrderAndIdleUpgrade = async () => {
+  const origIsMobile = Platform.isMobile;
+  const origDprDesc = Object.getOwnPropertyDescriptor(window, "devicePixelRatio");
+  const origCreateElement = document.createElement.bind(document);
+  const origWidthDesc = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, "width")!;
+  const origHeightDesc = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, "height")!;
+  const origGetContext = HTMLCanvasElement.prototype.getContext;
+
+  const sampleCanvas = origCreateElement("canvas");
+  sampleCanvas.width = 160;
+  sampleCanvas.height = 160;
+  const sampleCtx = origGetContext.call(sampleCanvas, "2d", { willReadFrequently: true }) as CanvasRenderingContext2D;
+
+  // Measure both white ratio and high-frequency edge gradient (mean horizontal+vertical luma delta) of rendered canvas
+  const measureCanvasQuality = (canvas: HTMLCanvasElement): { width: number; height: number; whiteRatio: number; edgeEnergy: number } => {
+    const w = origWidthDesc.get!.call(canvas);
+    const h = origHeightDesc.get!.call(canvas);
+    if (w <= 0 || h <= 0) return { width: 0, height: 0, whiteRatio: 1, edgeEnergy: 0 };
+    sampleCtx.fillStyle = "#ffffff";
+    sampleCtx.fillRect(0, 0, sampleCanvas.width, sampleCanvas.height);
+    sampleCtx.drawImage(canvas, 0, 0, w, h, 0, 0, sampleCanvas.width, sampleCanvas.height);
+    const data = sampleCtx.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height).data;
+    const sw = sampleCanvas.width, sh = sampleCanvas.height;
+    let white = 0;
+    let gradSum = 0;
+    let gradCount = 0;
+    const luma = (idx: number) => 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+    for (let y = 0; y < sh; y++) {
+      for (let x = 0; x < sw; x++) {
+        const idx = (y * sw + x) * 4;
+        if (data[idx] >= 245 && data[idx + 1] >= 245 && data[idx + 2] >= 245) white++;
+        if (x + 1 < sw && y + 1 < sh) {
+          const l0 = luma(idx);
+          const lx = luma(idx + 4);
+          const ly = luma(idx + sw * 4);
+          gradSum += Math.abs(l0 - lx) + Math.abs(l0 - ly);
+          gradCount++;
+        }
+      }
+    }
+    return {
+      width: w,
+      height: h,
+      whiteRatio: Number((white / (sw * sh)).toFixed(4)),
+      edgeEnergy: Number((gradSum / Math.max(1, gradCount)).toFixed(2)),
+    };
+  };
+
+  let trackedCanvases = new Set<HTMLCanvasElement>();
+  let measuredPeakPixels = 0;
+  let trackingActive = false;
+  const computeLivePixels = () => {
+    let sum = 0;
+    for (const c of trackedCanvases) {
+      if (c.classList.contains("ms-ink-raster")) continue;
+      const w = origWidthDesc.get!.call(c);
+      const h = origHeightDesc.get!.call(c);
+      if (w > 0 && h > 0) sum += w * h;
+    }
+    return sum;
+  };
+  const updateMeasuredPeak = () => {
+    if (!trackingActive) return;
+    const sum = computeLivePixels();
+    if (sum > measuredPeakPixels) measuredPeakPixels = sum;
+  };
+
+  (document as any).createElement = function (tag: string, options?: any) {
+    const el = origCreateElement(tag, options);
+    if (trackingActive && tag.toLowerCase() === "canvas") trackedCanvases.add(el as HTMLCanvasElement);
+    return el;
+  };
+  Object.defineProperty(HTMLCanvasElement.prototype, "width", {
+    configurable: true,
+    get() { return origWidthDesc.get!.call(this); },
+    set(v: number) { origWidthDesc.set!.call(this, v); updateMeasuredPeak(); },
+  });
+  Object.defineProperty(HTMLCanvasElement.prototype, "height", {
+    configurable: true,
+    get() { return origHeightDesc.get!.call(this); },
+    set(v: number) { origHeightDesc.set!.call(this, v); updateMeasuredPeak(); },
+  });
+
+  try {
+    // --- Part A: Cross-page eviction of 3+ pages while page 4 has an in-flight offscreen buffer (Mobile 4M hard cap) ---
+    Platform.isMobile = true;
+    Object.defineProperty(window, "devicePixelRatio", { configurable: true, get: () => 2 });
+    trackedCanvases = new Set();
+    measuredPeakPixels = 0;
+    trackingActive = true;
+    const evictionAudit = await (async () => {
+      const pdfPath = "pz10-eviction-order.pdf";
+      const { view } = await openReader(
+        { [pdfPath]: { name: "evict-order", pages: 6, crop: [0, 0, 595, 842], renderDelay: 90, textDelay: 10, paintContent: true } },
+        pdfPath,
+      );
+      try {
+        // Pre-render pages 1, 2, 3 at scale 1.4 (~1.5M px each under mobile budget -> fills 4M hard cap)
+        (view as any).visiblePages.clear();
+        for (const p of [1, 2, 3]) {
+          (view as any).visiblePages.add(p);
+          await view.renderPage(p);
+        }
+        view.resetMemoryPeak();
+        measuredPeakPixels = computeLivePixels();
+
+        const frameTrace: { step: string; livePixels: number; reportedPixels: number }[] = [];
+        const recordStep = (step: string) => {
+          frameTrace.push({
+            step,
+            livePixels: computeLivePixels(),
+            reportedPixels: view.getMemoryStats().currentTotalPixels,
+          });
+        };
+        recordStep("before-inflight-p4");
+
+        // Start in-flight offscreen render on page 4 (~1M+ px allocated), then immediately evict pages 1, 2, 3, 4 by jumping to page 5 & 6
+        (view as any).visiblePages.clear();
+        (view as any).visiblePages.add(4);
+        const p4Promise = view.renderPage(4);
+        await wait(25); // allow page 4 to allocate its offscreen bufferCanvas while page.render is still pending
+        recordStep("p4-inflight-allocated");
+
+        // Now switch visibility to page 5 (triggers cross-page eviction of pages 1, 2, 3, 4 including in-flight page 4!)
+        (view as any).visiblePages.clear();
+        (view as any).visiblePages.add(5);
+        const p5Promise = view.renderPage(5);
+        await wait(25);
+        recordStep("p5-allocated-after-evict");
+
+        (view as any).visiblePages.clear();
+        (view as any).visiblePages.add(6);
+        const p6Promise = view.renderPage(6);
+        await Promise.allSettled([p4Promise, p5Promise, p6Promise]);
+        await frame();
+        recordStep("after-all-settled");
+
+        const stats = view.getMemoryStats();
+        return {
+          hardBudgetPixels: stats.hardBudgetPixels,
+          measuredPeakPixels,
+          reportedPeakPixels: stats.peakTotalPixels,
+          deltaPixels: measuredPeakPixels - stats.peakTotalPixels,
+          withinBudget: measuredPeakPixels <= stats.hardBudgetPixels && stats.peakTotalPixels <= stats.hardBudgetPixels,
+          noUnderreport: stats.peakTotalPixels >= measuredPeakPixels,
+          frameTrace,
+        };
+      } finally {
+        await view.onClose();
+        view.containerEl.remove();
+      }
+    })();
+    trackingActive = false;
+
+    // --- Part B: Readability floor (14000pt@400% must NOT destroy old 1414x1414 into 353x353 smudge) ---
+    Platform.isMobile = true;
+    Object.defineProperty(window, "devicePixelRatio", { configurable: true, get: () => 2 });
+    const readabilityAudit = await (async () => {
+      const pdfPath = "pz10-readability-14000pt.pdf";
+      const { view } = await openReader(
+        { [pdfPath]: { name: "readability-14000", pages: 2, crop: [0, 0, 14000, 14000], renderDelay: 50, textDelay: 10, paintContent: true } },
+        pdfPath,
+      );
+      try {
+        await view.renderPage(1);
+        await frame();
+        (view as any).visiblePages.add(1);
+        const before = measureCanvasQuality(view.getPageRecord(1)!.canvas);
+        view.setScale(4.0);
+        await wait(160);
+        await frame();
+        const after = measureCanvasQuality(view.getPageRecord(1)!.canvas);
+        return {
+          beforeWidth: before.width,
+          beforeHeight: before.height,
+          beforeEdgeEnergy: before.edgeEnergy,
+          afterWidth: after.width,
+          afterHeight: after.height,
+          afterEdgeEnergy: after.edgeEnergy,
+          afterWhiteRatio: after.whiteRatio,
+          preservedResolution: after.width >= Math.floor(before.width * 0.8) && after.height >= Math.floor(before.height * 0.8),
+          readableEdgeEnergy: after.edgeEnergy >= 8.0,
+        };
+      } finally {
+        await view.onClose();
+        view.containerEl.remove();
+      }
+    })();
+
+    // --- Part C: Idle auto-upgrade within <=500ms after budget pressure clears (same scale, no scale change) ---
+    Platform.isMobile = true;
+    Object.defineProperty(window, "devicePixelRatio", { configurable: true, get: () => 2 });
+    const idleUpgradeAudit = await (async () => {
+      const pdfPath = "pz10-idle-upgrade.pdf";
+      const { view } = await openReader(
+        { [pdfPath]: { name: "idle-upgrade", pages: 4, crop: [0, 0, 595, 842], renderDelay: 50, textDelay: 10, paintContent: true } },
+        pdfPath,
+      );
+      try {
+        await view.setPageLayout("spread", false);
+        await waitPagesRendered(view, [1, 2], view.getScale());
+        (view as any).visiblePages.add(1);
+        (view as any).visiblePages.add(2);
+        // Zoom spread to 4.0 under tight mobile 4M budget: page 1 & 2 degrade to ~0.35 DPR (target single-page DPR at 4.0 is ~0.50)
+        view.setScale(4.0);
+        await waitPagesRendered(view, [1, 2], 4.0);
+        const dprDuringSpread = view.getMemoryStats().pages[1]?.dpr ?? 0;
+
+        // Now free page 2 from visibility (simulating single-page focus / scroll settling) without changing scale (still 4.0!)
+        const eventsBefore = pdfEvents.length;
+        const t0 = performance.now();
+        (view as any).visiblePages.clear();
+        (view as any).visiblePages.add(1);
+        // Trigger same-scale renderPage(1) or wait for idle upgrade timer (<= 500ms)
+        void view.renderPage(1);
+        let upgradedAtMs = -1;
+        let finalDpr = dprDuringSpread;
+        const targetSingleDpr = Math.min(1.25, Math.sqrt(2_000_000 / (595 * 4 * 842 * 4)));
+        while (performance.now() - t0 <= 500) {
+          finalDpr = view.getMemoryStats().pages[1]?.dpr ?? 0;
+          if (finalDpr >= targetSingleDpr - 0.02 && !view.getPageRecord(1)?.renderPromise) {
+            upgradedAtMs = Math.round(performance.now() - t0);
+            break;
+          }
+          await wait(20);
+        }
+        const qualityAfterUpgrade = measureCanvasQuality(view.getPageRecord(1)!.canvas);
+        const upgradeRenderCount = pdfEvents.slice(eventsBefore).filter(e => e[0] === "render" && e[1] === "idle-upgrade" && e[2] === 1).length;
+        return {
+          dprDuringSpread: Number(dprDuringSpread.toFixed(4)),
+          targetSingleDpr: Number(targetSingleDpr.toFixed(4)),
+          finalDpr: Number(finalDpr.toFixed(4)),
+          upgradedWithin500ms: upgradedAtMs >= 0 && upgradedAtMs <= 500,
+          upgradedAtMs,
+          upgradeRenderCount,
+          afterUpgradeWidth: qualityAfterUpgrade.width,
+          afterUpgradeHeight: qualityAfterUpgrade.height,
+          afterUpgradeEdgeEnergy: qualityAfterUpgrade.edgeEnergy,
+        };
+      } finally {
+        await view.onClose();
+        view.containerEl.remove();
+      }
+    })();
+
+    const failures: string[] = [];
+    if (!evictionAudit.withinBudget) failures.push(\`[eviction-order] exceeded 4M hard budget: measured=\${evictionAudit.measuredPeakPixels}px, reported=\${evictionAudit.reportedPeakPixels}px, hard=\${evictionAudit.hardBudgetPixels}px\`);
+    if (!evictionAudit.noUnderreport) failures.push(\`[eviction-order] writeoff before release underreported: reported=\${evictionAudit.reportedPeakPixels}px < measured=\${evictionAudit.measuredPeakPixels}px (delta=\${evictionAudit.deltaPixels}px)\`);
+    if (!readabilityAudit.preservedResolution) failures.push(\`[readability-14000pt] old canvas destroyed: \${readabilityAudit.beforeWidth}x\${readabilityAudit.beforeHeight} -> \${readabilityAudit.afterWidth}x\${readabilityAudit.afterHeight}\`);
+    if (!readabilityAudit.readableEdgeEnergy) failures.push(\`[readability-14000pt] text smudged: edgeEnergy=\${readabilityAudit.afterEdgeEnergy} < 8.0\`);
+    if (!idleUpgradeAudit.upgradedWithin500ms) failures.push(\`[idle-upgrade] did not upgrade within 500ms: spreadDpr=\${idleUpgradeAudit.dprDuringSpread}, finalDpr=\${idleUpgradeAudit.finalDpr}, target=\${idleUpgradeAudit.targetSingleDpr}\`);
+    if (failures.length) throw new Error("PZ-10 failed:\\n  - " + failures.join("\\n  - "));
+
+    return { passed: true, evictionAudit, readabilityAudit, idleUpgradeAudit };
+  } finally {
+    trackingActive = false;
+    (document as any).createElement = origCreateElement;
+    Object.defineProperty(HTMLCanvasElement.prototype, "width", origWidthDesc);
+    Object.defineProperty(HTMLCanvasElement.prototype, "height", origHeightDesc);
+    Platform.isMobile = origIsMobile;
+    if (origDprDesc) Object.defineProperty(window, "devicePixelRatio", origDprDesc);
+  }
+};
+
 (window as any).ready = true;
 (window as any).getErrors = () => errors;
 `;
@@ -1775,6 +2040,7 @@ try {
     const pz07 = await evalJson("window.runPZ07NoWhiteFlash()");
     const pz08 = await evalJson("window.runPZ08MemoryBudgetMatrix()");
     const pz09 = await evalJson("window.runPZ09BudgetAuditAndAllocFailures()");
+    const pz10 = await evalJson("window.runPZ10EvictionOrderAndIdleUpgrade()");
 
     // Native CDP Input.dispatchTouchEvent smoke test
     const cdpInit = await evalJson("window.setupCdpTouchSmoke()");
@@ -1965,6 +2231,7 @@ try {
       pz07,
       pz08,
       pz09,
+      pz10,
       cdpTouchSmoke,
       q3NativeLostCapture,
       q3bTrustedBlur,
@@ -1985,10 +2252,11 @@ try {
         pz07,
         pz08,
         pz09,
+        pz10,
       }, null, 2) + "\n");
     }
 
-    console.log("PASS pdf-pinch-zoom: PZ-01, PZ-02 (1024x768 + 768x1024), PZ-03, PZ-04, PZ-05, PZ-06, PZ-07 (no white flash), PZ-08 (memory budget 4x2), PZ-09 (audit & alloc failure), cdpTouchSmoke all passed (10/10)");
+    console.log("PASS pdf-pinch-zoom: PZ-01..PZ-10 (pinch, no-flash, 4x2 budget, audit/alloc-fail, eviction-order & idle-upgrade), cdpTouchSmoke all passed (11/11)");
   } finally {
     await browser("close").catch(() => {});
     await new Promise(done => server.close(done));
