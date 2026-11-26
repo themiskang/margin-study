@@ -1915,15 +1915,118 @@ let cdpView: ReaderView | null = null;
       }
     })();
 
+    // --- Part D: Folding page 2 in spread auto-upgrades page 1 within <=500ms (NO explicit renderPage!) ---
+    Platform.isMobile = true;
+    Object.defineProperty(window, "devicePixelRatio", { configurable: true, get: () => 2 });
+    const foldUpgradeAudit = await (async () => {
+      const pdfPath = "pz10-fold-upgrade.pdf";
+      const { view } = await openReader(
+        { [pdfPath]: { name: "fold-upgrade", pages: 2, crop: [0, 0, 595, 842], renderDelay: 40, textDelay: 10, paintContent: true } },
+        pdfPath,
+      );
+      try {
+        await view.setPageLayout("spread", false);
+        await waitPagesRendered(view, [1, 2], view.getScale());
+        const scrollEl = view.getScrollContainer();
+        view.setScale(4.0);
+        const rec1 = view.getPageRecord(1)!;
+        const rec2 = view.getPageRecord(2)!;
+        scrollEl.scrollLeft = Math.max(0, rec1.wrapper.offsetLeft + rec1.wrapper.offsetWidth - scrollEl.clientWidth / 2);
+        await waitPagesRendered(view, [1, 2], 4.0);
+        await frame();
+        const dprBefore = view.getMemoryStats().pages[1]?.dpr ?? 0;
+        const widthBefore = rec1.canvas.width;
+
+        const eventsBefore = pdfEvents.length;
+        const t0 = performance.now();
+        // Real UI click on page 2's fold button (page 2 remains in viewport as a folded bar, so visiblePages still contains 2)
+        rec2.wrapper.querySelector<HTMLButtonElement>(".ms-page-btn")!.click();
+
+        let upgradedAtMs = -1;
+        let finalDpr = dprBefore;
+        const targetSingleDpr = Math.min(1.25, Math.sqrt(2_000_000 / (595 * 4 * 842 * 4)));
+        while (performance.now() - t0 <= 500) {
+          finalDpr = view.getMemoryStats().pages[1]?.dpr ?? 0;
+          if (finalDpr >= targetSingleDpr - 0.02 && !rec1.renderPromise) {
+            upgradedAtMs = Math.round(performance.now() - t0);
+            break;
+          }
+          await wait(20);
+        }
+        const renderCount = pdfEvents.slice(eventsBefore).filter(e => e[0] === "render" && e[1] === "fold-upgrade" && e[2] === 1).length;
+        return {
+          widthBefore,
+          widthAfter: rec1.canvas.width,
+          dprBefore: Number(dprBefore.toFixed(4)),
+          finalDpr: Number(finalDpr.toFixed(4)),
+          targetSingleDpr: Number(targetSingleDpr.toFixed(4)),
+          upgradedWithin500ms: upgradedAtMs >= 0 && upgradedAtMs <= 500 && renderCount === 1,
+          upgradedAtMs,
+          renderCount,
+        };
+      } finally {
+        await view.onClose();
+        view.containerEl.remove();
+      }
+    })();
+
+    // --- Part E: Already-at-cap folded A4 page must NOT redundantly re-render on scroll / visibilitychange ---
+    Platform.isMobile = true;
+    Object.defineProperty(window, "devicePixelRatio", { configurable: true, get: () => 2 });
+    const noRedundantFoldRenderAudit = await (async () => {
+      const pdfPath = "pz10-folded-no-redundancy.pdf";
+      const { view, store } = await openReader(
+        { [pdfPath]: { name: "folded-cap", pages: 1, crop: [0, 0, 595, 842], renderDelay: 30, textDelay: 5, paintContent: true } },
+        pdfPath,
+      );
+      try {
+        store.updateDocMeta(pdfPath, {
+          pdfRegionFolds: [{ id: "fold-cap-1", pageId: view.getPdfPageId(1), rects: [{ x: 0, y: 120, w: 595, h: 600 }] }],
+        });
+        await view.refreshExtendLayout();
+        view.setScale(4.0);
+        await waitPagesRendered(view, [1], 4.0);
+        await wait(160);
+        const rec1 = view.getPageRecord(1)!;
+        const canvasBefore = rec1.canvas;
+        const dprBefore = view.getMemoryStats().pages[1]?.dpr ?? 0;
+        const scrollEl = view.getScrollContainer();
+
+        const eventsBefore = pdfEvents.length;
+        for (let i = 1; i <= 4; i++) {
+          scrollEl.scrollTop = i * 8;
+          scrollEl.dispatchEvent(new Event("scroll"));
+          await wait(15);
+        }
+        await wait(220);
+        for (let i = 0; i < 3; i++) {
+          document.dispatchEvent(new Event("visibilitychange"));
+          await wait(160);
+        }
+        const redundantRenders = pdfEvents.slice(eventsBefore).filter(e => e[0] === "render" && e[1] === "folded-cap" && e[2] === 1).length;
+        return {
+          dprBefore: Number(dprBefore.toFixed(4)),
+          dprAfter: Number((view.getMemoryStats().pages[1]?.dpr ?? 0).toFixed(4)),
+          canvasSwapped: rec1.canvas !== canvasBefore,
+          redundantRenders,
+        };
+      } finally {
+        await view.onClose();
+        view.containerEl.remove();
+      }
+    })();
+
     const failures: string[] = [];
     if (!evictionAudit.withinBudget) failures.push(\`[eviction-order] exceeded 4M hard budget: measured=\${evictionAudit.measuredPeakPixels}px, reported=\${evictionAudit.reportedPeakPixels}px, hard=\${evictionAudit.hardBudgetPixels}px\`);
     if (!evictionAudit.noUnderreport) failures.push(\`[eviction-order] writeoff before release underreported: reported=\${evictionAudit.reportedPeakPixels}px < measured=\${evictionAudit.measuredPeakPixels}px (delta=\${evictionAudit.deltaPixels}px)\`);
     if (!readabilityAudit.preservedResolution) failures.push(\`[readability-14000pt] old canvas destroyed: \${readabilityAudit.beforeWidth}x\${readabilityAudit.beforeHeight} -> \${readabilityAudit.afterWidth}x\${readabilityAudit.afterHeight}\`);
     if (!readabilityAudit.readableEdgeEnergy) failures.push(\`[readability-14000pt] text smudged: edgeEnergy=\${readabilityAudit.afterEdgeEnergy} < 8.0\`);
     if (!idleUpgradeAudit.upgradedWithin500ms) failures.push(\`[idle-upgrade-auto] did not auto-upgrade within 500ms: renders=\${idleUpgradeAudit.upgradeRenderCount}, spreadDpr=\${idleUpgradeAudit.dprDuringSpread}, finalDpr=\${idleUpgradeAudit.finalDpr}, target=\${idleUpgradeAudit.targetSingleDpr}\`);
+    if (!foldUpgradeAudit.upgradedWithin500ms) failures.push(\`[fold-upgrade-auto] folding page 2 did not auto-upgrade page 1 within 500ms: renders=\${foldUpgradeAudit.renderCount}, dpr=\${foldUpgradeAudit.dprBefore}->\${foldUpgradeAudit.finalDpr}, target=\${foldUpgradeAudit.targetSingleDpr}\`);
+    if (noRedundantFoldRenderAudit.redundantRenders !== 0 || noRedundantFoldRenderAudit.canvasSwapped) failures.push(\`[folded-no-redundancy] at-cap folded page redundantly re-rendered: renders=\${noRedundantFoldRenderAudit.redundantRenders}, swapped=\${noRedundantFoldRenderAudit.canvasSwapped}\`);
     if (failures.length) throw new Error("PZ-10 failed:\\n  - " + failures.join("\\n  - "));
 
-    return { passed: true, evictionAudit, readabilityAudit, idleUpgradeAudit };
+    return { passed: true, evictionAudit, readabilityAudit, idleUpgradeAudit, foldUpgradeAudit, noRedundantFoldRenderAudit };
   } finally {
     trackingActive = false;
     (document as any).createElement = origCreateElement;

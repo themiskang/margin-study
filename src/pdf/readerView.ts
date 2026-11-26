@@ -98,12 +98,14 @@ export class ReaderView extends ItemView {
   private fitRevision = 0;
   private activeOffscreenCanvases = new Map<number, Set<HTMLCanvasElement>>();
   private activeTempCanvases = new Set<HTMLCanvasElement>();
-  private pendingUpgradePages = new Set<number>();
+  private pendingUpgradePages = new Map<number, number>();
   private idleUpgradeTimer: number | null = null;
+  private idleUpgradeRunning = false;
   private peakTotalPixels = 0;
   private lastRenderBudget = new Map<number, {
     dpr: number;
     targetDpr: number;
+    compositePeakArea: number;
     degraded: boolean;
     downsampledPlaceholder: boolean;
     skippedDoubleBuffer: boolean;
@@ -2139,13 +2141,10 @@ export class ReaderView extends ItemView {
     if (!rec || !doc || this.destroyed || this.folded.has(pageNum) || !this.isPageShown(pageNum)) return Promise.resolve();
     rec.lastUsed = Date.now();
     const scale = this.scale;
-    const prevBudget = this.lastRenderBudget.get(pageNum);
     const budgetSnap = this.getMemoryBudget();
-    const curShare = Math.min(budgetSnap.maxPagePixels, Math.floor(budgetSnap.hardTotalPixels / Math.max(2, Math.max(1, this.visiblePages.size) * 2)));
-    const canUpgradeResolution = Boolean(
-      prevBudget &&
-      (prevBudget.skippedDoubleBuffer || prevBudget.allocationFailed || (prevBudget.degraded && rec.canvas.width * rec.canvas.height < curShare * 0.85)),
-    );
+    const curShare = Math.min(budgetSnap.maxPagePixels, Math.floor(budgetSnap.hardTotalPixels / Math.max(2, this.getRenderableVisiblePageCount() * 2)));
+    const curNativeDpr = Math.min(window.devicePixelRatio || 1, budgetSnap.mobileLowRes ? 1.25 : Infinity);
+    const canUpgradeResolution = this.canPageUpgrade(pageNum, rec, curShare, curNativeDpr);
     const needsUpgrade = this.pendingUpgradePages.has(pageNum) || canUpgradeResolution;
     if (rec.renderPromise && rec.renderingScale === scale) return rec.renderPromise;
     if (rec.renderedScale === scale && !rec.renderPromise && !needsUpgrade) return Promise.resolve();
@@ -2179,11 +2178,11 @@ export class ReaderView extends ItemView {
         const dstH = Math.max(1, viewport.height);
         const srcArea = srcW * srcH;
         const compositePeakArea = hasComposite ? srcArea + dstW * dstH : srcArea;
-        const visibleCount = Math.max(1, this.visiblePages.size);
+        const visibleCount = this.getRenderableVisiblePageCount();
         const perPageShare = Math.min(budget.maxPagePixels, Math.floor(budget.hardTotalPixels / Math.max(2, visibleCount * 2)));
         const nativeDpr = Math.min(window.devicePixelRatio || 1, budget.mobileLowRes ? 1.25 : Infinity);
-        const soloTargetDpr = Math.min(nativeDpr, Math.sqrt(Math.max(1, budget.maxPagePixels) / compositePeakArea));
-        const targetDpr = Math.min(nativeDpr, Math.sqrt(Math.max(1, perPageShare) / compositePeakArea));
+        const soloTargetDpr = this.computeTargetDpr(compositePeakArea, budget.maxPagePixels, nativeDpr);
+        const targetDpr = this.computeTargetDpr(compositePeakArea, perPageShare, nativeDpr);
 
         // 硬预算回收：分配离屏画布前先驱逐非可见页并同步物理归零
         const desiredPeakPixels = Math.ceil(compositePeakArea * targetDpr * targetDpr);
@@ -2222,6 +2221,7 @@ export class ReaderView extends ItemView {
           this.lastRenderBudget.set(pageNum, {
             dpr: 0,
             targetDpr: nativeDpr,
+            compositePeakArea,
             degraded: true,
             downsampledPlaceholder,
             skippedDoubleBuffer: true,
@@ -2230,7 +2230,7 @@ export class ReaderView extends ItemView {
             hardBudgetPixels: budget.hardTotalPixels,
           });
           if (soloTargetDpr >= MIN_DOUBLE_BUFFER_DPR) {
-            this.pendingUpgradePages.add(pageNum);
+            this.queuePageUpgrade(pageNum, soloTargetDpr);
             this.scheduleIdleUpgrade();
           }
           this.recordPeakPixels();
@@ -2244,6 +2244,7 @@ export class ReaderView extends ItemView {
           this.lastRenderBudget.set(pageNum, {
             dpr,
             targetDpr: nativeDpr,
+            compositePeakArea,
             degraded: true,
             downsampledPlaceholder,
             skippedDoubleBuffer: false,
@@ -2251,7 +2252,7 @@ export class ReaderView extends ItemView {
             allocatedPixels: 0,
             hardBudgetPixels: budget.hardTotalPixels,
           });
-          this.pendingUpgradePages.add(pageNum);
+          this.queuePageUpgrade(pageNum, targetDpr);
           this.scheduleIdleUpgrade();
           this.recordPeakPixels();
           return;
@@ -2304,6 +2305,7 @@ export class ReaderView extends ItemView {
             this.lastRenderBudget.set(pageNum, {
               dpr,
               targetDpr: nativeDpr,
+              compositePeakArea,
               degraded: true,
               downsampledPlaceholder,
               skippedDoubleBuffer: true,
@@ -2311,7 +2313,7 @@ export class ReaderView extends ItemView {
               allocatedPixels: 0,
               hardBudgetPixels: budget.hardTotalPixels,
             });
-            this.pendingUpgradePages.add(pageNum);
+            this.queuePageUpgrade(pageNum, targetDpr);
             this.scheduleIdleUpgrade();
             return;
           }
@@ -2320,6 +2322,7 @@ export class ReaderView extends ItemView {
             this.lastRenderBudget.set(pageNum, {
               dpr,
               targetDpr: nativeDpr,
+              compositePeakArea,
               degraded: true,
               downsampledPlaceholder,
               skippedDoubleBuffer: false,
@@ -2327,7 +2330,7 @@ export class ReaderView extends ItemView {
               allocatedPixels: 0,
               hardBudgetPixels: budget.hardTotalPixels,
             });
-            this.pendingUpgradePages.add(pageNum);
+            this.queuePageUpgrade(pageNum, targetDpr);
             this.scheduleIdleUpgrade();
             return;
           }
@@ -2342,6 +2345,7 @@ export class ReaderView extends ItemView {
         this.lastRenderBudget.set(pageNum, {
           dpr,
           targetDpr: nativeDpr,
+          compositePeakArea,
           degraded,
           downsampledPlaceholder,
           skippedDoubleBuffer: false,
@@ -2352,7 +2356,7 @@ export class ReaderView extends ItemView {
 
         // 若因并发/跨页压力低于当前布局目标清晰度，登记空闲自动升级；达到目标清晰度则清除升级标记
         if (dpr < targetDpr - 0.01) {
-          this.pendingUpgradePages.add(pageNum);
+          this.queuePageUpgrade(pageNum, targetDpr);
           this.scheduleIdleUpgrade();
         } else {
           this.pendingUpgradePages.delete(pageNum);
@@ -2413,26 +2417,60 @@ export class ReaderView extends ItemView {
     if (!document.hidden) this.enqueueEligibleVisibleUpgrades(80, false);
   };
 
-  private canPageUpgrade(pageNum: number, rec: PageRecord, curShare: number): boolean {
+  private getRenderableVisiblePageCount(): number {
+    let count = 0;
+    for (const num of this.visiblePages) {
+      if (!this.isPageShown(num) || this.folded.has(num)) continue;
+      const size = this.pageSizes.get(num);
+      if (size && (size.w <= 0 || size.h <= 0)) continue;
+      count++;
+    }
+    return Math.max(1, count);
+  }
+
+  private computeTargetDpr(compositePeakArea: number, sharePixels: number, nativeDpr: number): number {
+    return Math.min(nativeDpr, Math.sqrt(Math.max(1, sharePixels) / Math.max(1, compositePeakArea)));
+  }
+
+  private queuePageUpgrade(pageNum: number, targetDpr: number): boolean {
+    const quantized = Number(targetDpr.toFixed(4));
+    const existing = this.pendingUpgradePages.get(pageNum);
+    if (existing !== undefined && Math.abs(existing - quantized) < 1e-4) return false;
+    this.pendingUpgradePages.set(pageNum, quantized);
+    return true;
+  }
+
+  private targetDprForUpgrade(pageNum: number, curShare: number, nativeDpr: number): number | null {
     const prevBudget = this.lastRenderBudget.get(pageNum);
-    if (!prevBudget) return false;
-    if (prevBudget.skippedDoubleBuffer || prevBudget.allocationFailed) return true;
-    return prevBudget.degraded && rec.canvas.width * rec.canvas.height < curShare * 0.85;
+    if (!prevBudget) return null;
+    const nextTargetDpr = this.computeTargetDpr(prevBudget.compositePeakArea, curShare, nativeDpr);
+    if (prevBudget.allocationFailed) return nextTargetDpr;
+    if (prevBudget.skippedDoubleBuffer) {
+      return nextTargetDpr >= MIN_DOUBLE_BUFFER_DPR ? nextTargetDpr : null;
+    }
+    return prevBudget.dpr < nextTargetDpr - 0.01 ? nextTargetDpr : null;
+  }
+
+  private canPageUpgrade(pageNum: number, _rec: PageRecord, curShare: number, nativeDpr: number): boolean {
+    return this.targetDprForUpgrade(pageNum, curShare, nativeDpr) !== null;
   }
 
   private enqueueEligibleVisibleUpgrades(delayMs = 80, debounce = false): void {
     if (this.destroyed || !this.doc || this.pinchState) return;
     const budget = this.getMemoryBudget();
-    const visibleCount = Math.max(1, this.visiblePages.size);
+    const visibleCount = this.getRenderableVisiblePageCount();
     const curShare = Math.min(budget.maxPagePixels, Math.floor(budget.hardTotalPixels / Math.max(2, visibleCount * 2)));
+    const nativeDpr = Math.min(window.devicePixelRatio || 1, budget.mobileLowRes ? 1.25 : Infinity);
     let enqueued = false;
     for (const num of this.visiblePages) {
       if (!this.isPageShown(num) || this.folded.has(num)) continue;
       const rec = this.pages.get(num);
       if (!rec || rec.renderPromise) continue;
-      if (this.canPageUpgrade(num, rec, curShare)) {
-        this.pendingUpgradePages.add(num);
-        enqueued = true;
+      const nextTarget = this.targetDprForUpgrade(num, curShare, nativeDpr);
+      if (nextTarget !== null) {
+        if (this.queuePageUpgrade(num, nextTarget)) enqueued = true;
+      } else {
+        this.pendingUpgradePages.delete(num);
       }
     }
     if (enqueued || this.pendingUpgradePages.size > 0) {
@@ -2441,7 +2479,7 @@ export class ReaderView extends ItemView {
   }
 
   private scheduleIdleUpgrade(delayMs = 80, debounce = false): void {
-    if (this.destroyed) return;
+    if (this.destroyed || this.idleUpgradeRunning) return;
     if (this.idleUpgradeTimer !== null) {
       if (!debounce) return;
       window.clearTimeout(this.idleUpgradeTimer);
@@ -2454,20 +2492,35 @@ export class ReaderView extends ItemView {
   }
 
   private async runIdleUpgrade(): Promise<void> {
-    if (this.destroyed || !this.doc || this.pendingUpgradePages.size === 0) return;
+    if (this.destroyed || !this.doc || this.idleUpgradeRunning || this.pendingUpgradePages.size === 0) return;
     if (this.pinchState) {
       this.scheduleIdleUpgrade(80, false);
       return;
     }
-    const budget = this.getMemoryBudget();
-    const candidates = [...this.pendingUpgradePages].filter(p => this.visiblePages.has(p) && this.isPageShown(p) && !this.folded.has(p));
-    for (const pageNum of candidates) {
-      if (this.destroyed || !this.doc || this.pinchState) return;
-      const rec = this.pages.get(pageNum);
-      if (!rec || rec.renderPromise) continue;
-      // 先同步驱逐并物理释放所有非可见页，腾出完整单页预算后再升级清晰度
-      this.evictOffscreenPages(budget.hardTotalPixels, pageNum);
-      await this.renderPage(pageNum);
+    this.idleUpgradeRunning = true;
+    try {
+      const budget = this.getMemoryBudget();
+      const candidates = [...this.pendingUpgradePages.keys()].filter(p => this.visiblePages.has(p) && this.isPageShown(p) && !this.folded.has(p));
+      for (const pageNum of candidates) {
+        if (this.destroyed || !this.doc || this.pinchState) return;
+        const rec = this.pages.get(pageNum);
+        if (!rec || rec.renderPromise) continue;
+        // 二次核验：仅当此刻仍低于目标清晰度时才执行升级，避免无收益重绘
+        const curShare = Math.min(budget.maxPagePixels, Math.floor(budget.hardTotalPixels / Math.max(2, this.getRenderableVisiblePageCount() * 2)));
+        const nativeDpr = Math.min(window.devicePixelRatio || 1, budget.mobileLowRes ? 1.25 : Infinity);
+        if (!this.canPageUpgrade(pageNum, rec, curShare, nativeDpr)) {
+          this.pendingUpgradePages.delete(pageNum);
+          continue;
+        }
+        // 先同步驱逐并物理释放所有非可见页，腾出完整单页预算后再升级清晰度
+        this.evictOffscreenPages(budget.hardTotalPixels, pageNum);
+        await this.renderPage(pageNum);
+      }
+    } finally {
+      this.idleUpgradeRunning = false;
+      if (!this.destroyed && this.doc && this.pendingUpgradePages.size > 0) {
+        this.scheduleIdleUpgrade(80, false);
+      }
     }
   }
 
