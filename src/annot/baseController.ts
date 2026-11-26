@@ -57,11 +57,74 @@ type ReaderPenChange = InkChange & {
   hostMeta?: { beforeLayer?: string; afterLayer?: string; beforeBind?: boolean; afterBind?: boolean };
 };
 type BoundInkChange = { id: string; hostId: string; before: Stroke[][]; after: Stroke[][]; beforeWidth?: number; afterWidth?: number };
+type ContinuousSessionSnapshot = {
+  key: string;
+  state: { cardId?: string; annotationId?: string; count: number } | null;
+};
+type LinkedCardCreationRecord = {
+  card: Card;
+  fingerprint: string;
+  nodes: MindNode[];
+  auxiliaryNodeIds: string[];
+  reviewPendingIds: string[];
+};
+type ReaderExcerptChange =
+  | {
+      kind: "excerpt";
+      mode: "create";
+      docPath: string;
+      docRevision: number;
+      annotation: Annotation;
+      insertIndex: number;
+      linkedCard?: LinkedCardCreationRecord;
+      continuous?: { before: ContinuousSessionSnapshot; after: ContinuousSessionSnapshot };
+    }
+  | {
+      kind: "excerpt";
+      mode: "append-continuous";
+      docPath: string;
+      docRevision: number;
+      targetAnnId: string;
+      annBefore: Annotation;
+      annAfter: Annotation;
+      createdAnn?: { annotation: Annotation; insertIndex: number };
+      cardId?: string;
+      cardBefore?: Card;
+      cardAfter?: Card;
+      continuous: { before: ContinuousSessionSnapshot; after: ContinuousSessionSnapshot };
+    };
 type ReaderEditChange = { sequence: number; label: string } & (
   | { kind: "pen"; changes: ReaderPenChange[] }
   | { kind: "overlay"; before: Annotation; after: Annotation; boundInk?: BoundInkChange[] }
+  | ReaderExcerptChange
   | { kind: "document"; apply: (redo: boolean) => Promise<void> }
 );
+function cardContentFingerprint(card: Card): string {
+  return JSON.stringify({
+    front: card.front,
+    back: card.back ?? "",
+    title: card.title ?? "",
+    tags: card.tags ?? [],
+    links: card.links ?? [],
+    sources: card.sources ?? [],
+    color: card.color ?? "",
+    mergedCards: card.mergedCards ?? [],
+    groupId: card.groupId ?? "",
+  });
+}
+function annotationContentFingerprint(ann: Annotation): string {
+  return JSON.stringify({
+    text: ann.text ?? "",
+    rects: ann.rects ?? [],
+    pdfGeometry: ann.pdfGeometry ?? null,
+    color: ann.color ?? "",
+    noteText: ann.noteText ?? "",
+    cardId: ann.cardId ?? "",
+    range: ann.range ?? null,
+    image: ann.image ?? "",
+    images: ann.images ?? [],
+  });
+}
 type PenRevision = { path: string; revision: number };
 function sameStrokeEnds(first: Stroke[], second: Stroke[]): boolean {
   if (first === second) return true;
@@ -1161,6 +1224,18 @@ export abstract class BaseAnnotationController {
     reposition();
   }
 
+  private snapshotContinuousSession(): ContinuousSessionSnapshot {
+    return {
+      key: this.continuousExcerptKey,
+      state: this.continuousExcerpt ? { ...this.continuousExcerpt } : null,
+    };
+  }
+  private restoreContinuousSession(snapshot: ContinuousSessionSnapshot): void {
+    if (snapshot.state) this.continuousExcerpts.set(snapshot.key, { ...snapshot.state });
+    else this.continuousExcerpts.delete(snapshot.key);
+    this.continuousExcerptListener?.();
+  }
+
   /** 构造标注 + 推入缓存 + 持久化 + 增量渲染 + 提示（子类 commitAnnotation 复用） */
   protected pushAnnotation(ann: Annotation): void {
     if (ann.type === "pen") {
@@ -1173,6 +1248,10 @@ export abstract class BaseAnnotationController {
     const previous = session?.annotationId && ann.docKind === "pdf" && (ann.type === "highlight" || ann.type === "underline" || ann.type === "region")
       ? this.cache.find(item => item.id === session.annotationId) : undefined;
     if (previous && session) {
+      const beforeSession = this.snapshotContinuousSession();
+      const annBefore = structuredClone(previous);
+      const card = session.cardId ? this.plugin.store.getCard(session.cardId) : undefined;
+      const cardBefore = card ? structuredClone(card) : undefined;
       const geometry = [...(previous.pdfGeometry?.length ? previous.pdfGeometry : [{ page: previous.page, rects: previous.rects }])];
       for (const part of ann.pdfGeometry?.length ? ann.pdfGeometry : [{ page: ann.page, rects: ann.rects }]) {
         const existing = geometry.find(item => item.page === part.page);
@@ -1183,19 +1262,42 @@ export abstract class BaseAnnotationController {
       previous.rects = geometry.find(item => item.page === previous.page)?.rects ?? previous.rects;
       previous.text = [previous.text, ann.text].filter(Boolean).join("\n\n");
       previous.images = [...new Set([...(previous.images ?? (previous.image ? [previous.image] : [])), ...(ann.image ? [ann.image] : []), ...(ann.images ?? [])])];
-      const card = session.cardId ? this.plugin.store.getCard(session.cardId) : undefined;
       if (card) {
         const sources = card.sources?.length ? card.sources : [{ docPath:card.docPath, anchorAnnId:card.anchorAnnId, page:card.page, text:card.front, image:card.image }];
         const source = { docPath:ann.docPath, documentNotebookId:ann.documentNotebookId, anchorAnnId:previous.id, page:ann.page, text:ann.text, image:ann.image };
-        this.plugin.store.updateCard(card.id, { sources:[...sources, source], front:[card.front, ann.text || (ann.type === "region" ? "[区域摘录]" : "")].filter(Boolean).join("\n\n"), images:previous.images });
+        const update = () => {
+          this.plugin.store.updateCard(card.id, { sources:[...sources, source], front:[card.front, ann.text || (ann.type === "region" ? "[区域摘录]" : "")].filter(Boolean).join("\n\n"), images:previous.images });
+        };
+        if (typeof this.plugin.store.applyLinkedSilentMutation === "function") this.plugin.store.applyLinkedSilentMutation(update);
+        else update();
         this.plugin.refreshSidebar();
       }
       this.persist();
       this.onAnnotationsChanged();
       session.count++;
       this.continuousExcerptListener?.();
+      const afterSession = this.snapshotContinuousSession();
+      const liveCardAfter = card ? this.plugin.store.getCard(card.id) : undefined;
+      if (this.docPath) {
+        this.recordEditChange({
+          kind: "excerpt",
+          mode: "append-continuous",
+          sequence: ++this.editSequence,
+          label: "追加连续摘录",
+          docPath: this.docPath,
+          docRevision: this.documentRevision,
+          targetAnnId: previous.id,
+          annBefore,
+          annAfter: structuredClone(previous),
+          cardId: card?.id,
+          cardBefore,
+          cardAfter: liveCardAfter ? structuredClone(liveCardAfter) : undefined,
+          continuous: { before: beforeSession, after: afterSession },
+        });
+      }
       return;
     }
+    const beforeSession = session ? this.snapshotContinuousSession() : undefined;
     measurePenCommit("applyMs", () => {
       this.cache.push(ann);
       if (ann.type === "pen" && ann.strokes?.length) this.recordPenChange([{ id: ann.id, before: [], after: ann.strokes }], [ann]);
@@ -1214,30 +1316,89 @@ export abstract class BaseAnnotationController {
     if (ann.type !== "pen") new Notice("已添加" + this.typeLabel(ann.type));
     // 高亮/下划线后自动成卡（设置开启且尚未关联卡片时）
     if (this.continuousExcerpt && ann.docKind === "pdf" && (ann.type === "highlight" || ann.type === "underline" || ann.type === "region")) {
-      const session = this.continuousExcerpt;
-      session.annotationId = ann.id;
-      let card = session.cardId ? this.plugin.store.getCard(session.cardId) : undefined;
+      const activeSession = this.continuousExcerpt;
+      activeSession.annotationId = ann.id;
+      let card = activeSession.cardId ? this.plugin.store.getCard(activeSession.cardId) : undefined;
       if (!card) {
-        this.makeCard(ann, "excerpt", true);
+        const linkedCard = this.makeCard(ann, "excerpt", true, true);
         card = ann.cardId ? this.plugin.store.getCard(ann.cardId) : undefined;
-        session.cardId = card?.id;
+        activeSession.cardId = card?.id;
+        if (card) { activeSession.count++; this.continuousExcerptListener?.(); }
+        const afterSession = this.snapshotContinuousSession();
+        if (this.docPath && beforeSession) {
+          this.recordEditChange({
+            kind: "excerpt",
+            mode: "create",
+            sequence: ++this.editSequence,
+            label: "添加" + this.typeLabel(ann.type),
+            docPath: this.docPath,
+            docRevision: this.documentRevision,
+            annotation: structuredClone(ann),
+            insertIndex: this.cache.indexOf(ann),
+            linkedCard,
+            continuous: { before: beforeSession, after: afterSession },
+          });
+        }
       } else {
+        const cardBefore = structuredClone(card);
         const sources = card.sources?.length ? card.sources : [{ docPath:card.docPath, anchorAnnId:card.anchorAnnId, page:card.page, text:card.front, image:card.image }];
         const source = { docPath:ann.docPath, documentNotebookId:ann.documentNotebookId, anchorAnnId:ann.id, page:ann.page, text:ann.text, image:ann.image };
-        this.plugin.store.updateCard(card.id, { sources:[...sources, source], front:[card.front, ann.text || (ann.type === "region" ? "[区域摘录]" : "")].filter(Boolean).join("\n\n"), images:[...new Set([...(card.images ?? (card.image ? [card.image] : [])), ...(ann.image ? [ann.image] : [])])] });
+        const update = () => {
+          this.plugin.store.updateCard(card!.id, { sources:[...sources, source], front:[card!.front, ann.text || (ann.type === "region" ? "[区域摘录]" : "")].filter(Boolean).join("\n\n"), images:[...new Set([...(card!.images ?? (card!.image ? [card!.image] : [])), ...(ann.image ? [ann.image] : [])])] });
+        };
+        if (typeof this.plugin.store.applyLinkedSilentMutation === "function") this.plugin.store.applyLinkedSilentMutation(update);
+        else update();
         ann.cardId = card.id; this.persist(); this.plugin.refreshSidebar();
+        activeSession.count++; this.continuousExcerptListener?.();
+        const afterSession = this.snapshotContinuousSession();
+        const liveCardAfter = this.plugin.store.getCard(card.id);
+        if (this.docPath && beforeSession) {
+          this.recordEditChange({
+            kind: "excerpt",
+            mode: "append-continuous",
+            sequence: ++this.editSequence,
+            label: "追加连续摘录",
+            docPath: this.docPath,
+            docRevision: this.documentRevision,
+            targetAnnId: ann.id,
+            annBefore: structuredClone(ann),
+            annAfter: structuredClone(ann),
+            createdAnn: { annotation: structuredClone(ann), insertIndex: this.cache.indexOf(ann) },
+            cardId: card.id,
+            cardBefore,
+            cardAfter: liveCardAfter ? structuredClone(liveCardAfter) : undefined,
+            continuous: { before: beforeSession, after: afterSession },
+          });
+        }
       }
-      if (card) { session.count++; this.continuousExcerptListener?.(); }
       return;
     }
+    let linkedCard: LinkedCardCreationRecord | undefined;
     if (
       (ann.type === "highlight" || ann.type === "underline") &&
       !ann.cardId &&
       this.plugin.store.settings.autoCardOnHighlight &&
       meetsExcerptMinLength(ann.text ?? "", this.plugin.store.settings.autoExcerptMinChars)
     ) {
-      this.makeCard(ann, "excerpt", true);
+      linkedCard = this.makeCard(ann, "excerpt", true, true);
       new Notice("已自动生成摘录卡（可在卡片管理中查看）");
+    }
+    if (
+      this.docPath &&
+      !ann.overlay &&
+      (ann.type === "highlight" || ann.type === "underline" || ann.type === "strike" || ann.type === "note")
+    ) {
+      this.recordEditChange({
+        kind: "excerpt",
+        mode: "create",
+        sequence: ++this.editSequence,
+        label: "添加" + this.typeLabel(ann.type),
+        docPath: this.docPath,
+        docRevision: this.documentRevision,
+        annotation: structuredClone(ann),
+        insertIndex: this.cache.indexOf(ann),
+        linkedCard,
+      });
     }
   }
 
@@ -1603,6 +1764,7 @@ export abstract class BaseAnnotationController {
     this.recordEditChange({ kind: "document", sequence: ++this.editSequence, label, apply });
   }
   private recordEditChange(change: ReaderEditChange): void {
+    if (!this.editUndo || !this.editHistorySizes) return;
     this.editUndo.push(change);
     if (change.kind === "pen") {
       const encoder = new TextEncoder();
@@ -1655,12 +1817,207 @@ export abstract class BaseAnnotationController {
       }).catch(error => { this.clearEditHistory(); new Notice(error instanceof Error ? error.message : String(error)); })
         .finally(() => { this.applyingEditHistory = false; this.publishEditHistory(); });
     }
-    const applied = change.kind === "pen" ? this.applyPenChanges(change.changes,!redo) : this.applyOverlayChange(change,redo);
+    const applied =
+      change.kind === "pen" ? this.applyPenChanges(change.changes, !redo)
+      : change.kind === "overlay" ? this.applyOverlayChange(change, redo)
+      : this.applyExcerptChange(change, redo);
     if (!applied) return;
     source.splice(index,1); target.push(change);
     // A selective legacy redo is now the most recent edit in the shared journal.
     if (redo) change.sequence = ++this.editSequence;
     this.publishEditHistory();
+  }
+
+  private isLinkedCardProtected(liveCard: Card, record: LinkedCardCreationRecord): boolean {
+    if (cardContentFingerprint(liveCard) !== record.fingerprint) return true;
+    if (liveCard.groupId || liveCard.mergedCards?.length) return true;
+    const store = this.plugin.store;
+    for (const [key, state] of Object.entries(store.srs ?? {})) {
+      if ((key === liveCard.id || key.startsWith(liveCard.id + "::")) && state && ((state.reps ?? 0) > 0 || (state.lapses ?? 0) > 0 || !!state.lastReviewed)) {
+        return true;
+      }
+    }
+    if ((store.reviewLogs ?? []).some(log => log.cardId === liveCard.id && !log.undoneAt)) return true;
+    const createdNodeIds = new Set(record.nodes.map(n => n.id));
+    const cardNodeIds = new Set(store.nodes.filter(n => n.cardId === liveCard.id).map(n => n.id));
+    if (store.nodes.some(n => n.parentId && cardNodeIds.has(n.parentId) && !createdNodeIds.has(n.id))) return true;
+    return false;
+  }
+
+  private applyExcerptChange(change: ReaderExcerptChange, redo: boolean): boolean {
+    if (this.docPath !== change.docPath || this.documentRevision !== change.docRevision) {
+      this.clearEditHistory();
+      new Notice("文档已切换或发生外部变更，标注撤销栈已清空");
+      return false;
+    }
+    const store = this.plugin.store;
+    if (change.mode === "create") {
+      if (!redo) {
+        const liveIdx = this.cache.findIndex(item => item.id === change.annotation.id);
+        const liveAnn = liveIdx >= 0 ? this.cache[liveIdx] : undefined;
+        if (!liveAnn || annotationContentFingerprint(liveAnn) !== annotationContentFingerprint(change.annotation)) {
+          this.clearEditHistory();
+          new Notice("标注已被其他视图修改，已拒绝覆盖并清空撤销栈");
+          return false;
+        }
+        this.cache.splice(liveIdx, 1);
+        let protectedNotice = false;
+        store.applyLinkedSilentMutation(() => {
+          store.removeAnnotationLinks(change.annotation.docPath, change.annotation.id);
+          if (change.linkedCard) {
+            const liveCard = store.getCard(change.linkedCard.card.id);
+            if (liveCard) {
+              if (this.isLinkedCardProtected(liveCard, change.linkedCard)) {
+                protectedNotice = true;
+              } else {
+                const removedCardNodeIds = new Set(store.nodes.filter(n => n.cardId === liveCard.id).map(n => n.id));
+                if (removedCardNodeIds.size) {
+                  store.nodes = store.nodes.filter(n => !removedCardNodeIds.has(n.id));
+                  store.edges = store.edges.filter(e => !removedCardNodeIds.has(e.from) && !removedCardNodeIds.has(e.to));
+                }
+                store.removeCard(liveCard.id);
+                if (change.linkedCard.reviewPendingIds.length) {
+                  const pendingSet = new Set(change.linkedCard.reviewPendingIds);
+                  store.reviewPending = store.reviewPending.filter(entry => !pendingSet.has(entry.id));
+                }
+                for (let i = change.linkedCard.auxiliaryNodeIds.length - 1; i >= 0; i--) {
+                  const auxId = change.linkedCard.auxiliaryNodeIds[i];
+                  if (!store.nodes.some(n => n.parentId === auxId)) {
+                    store.nodes = store.nodes.filter(n => n.id !== auxId);
+                    store.edges = store.edges.filter(e => e.from !== auxId && e.to !== auxId);
+                  }
+                }
+              }
+            }
+          }
+        });
+        if (protectedNotice) new Notice("卡片已修改/合并或存在复习记录，已保留卡片与复习进度，仅撤销文档标注");
+        if (change.continuous) this.restoreContinuousSession(change.continuous.before);
+        this.persist();
+        this.onAnnotationsChanged();
+        this.plugin.refreshSidebar();
+        this.plugin.refreshMindmap();
+        return true;
+      }
+      const restored = structuredClone(change.annotation);
+      restored.docPath = this.docPath;
+      if (!this.cache.some(item => item.id === restored.id)) {
+        this.cache.splice(Math.min(Math.max(0, change.insertIndex), this.cache.length), 0, restored);
+      }
+      store.applyLinkedSilentMutation(() => {
+        if (change.linkedCard) {
+          const existingCard = store.getCard(change.linkedCard.card.id);
+          if (existingCard) {
+            if (!existingCard.anchorAnnId) existingCard.anchorAnnId = restored.id;
+            restored.cardId = existingCard.id;
+          } else {
+            store.addCard(structuredClone(change.linkedCard.card));
+            for (const node of change.linkedCard.nodes) {
+              if (!store.nodes.some(existing => existing.id === node.id)) {
+                store.addNode(structuredClone(node));
+              }
+            }
+          }
+        }
+      });
+      if (change.continuous) this.restoreContinuousSession(change.continuous.after);
+      this.persist();
+      this.onAnnotationsChanged();
+      this.plugin.refreshSidebar();
+      this.plugin.refreshMindmap();
+      return true;
+    }
+    // mode === "append-continuous"
+    if (!redo) {
+      if (change.createdAnn) {
+        const liveIdx = this.cache.findIndex(item => item.id === change.createdAnn!.annotation.id);
+        const liveAnn = liveIdx >= 0 ? this.cache[liveIdx] : undefined;
+        if (!liveAnn || annotationContentFingerprint(liveAnn) !== annotationContentFingerprint(change.createdAnn.annotation)) {
+          this.clearEditHistory();
+          new Notice("连续摘录标注已被外部修改，撤销栈已清空");
+          return false;
+        }
+        this.cache.splice(liveIdx, 1);
+        store.applyLinkedSilentMutation(() => {
+          store.removeAnnotationLinks(change.createdAnn!.annotation.docPath, change.createdAnn!.annotation.id);
+          if (change.cardId && change.cardBefore) {
+            const liveCard = store.getCard(change.cardId);
+            if (liveCard) {
+              const prev = structuredClone(change.cardBefore);
+              liveCard.front = prev.front;
+              liveCard.sources = prev.sources;
+              liveCard.images = prev.images;
+            }
+          }
+        });
+      } else {
+        const liveAnn = this.cache.find(item => item.id === change.targetAnnId);
+        if (!liveAnn || annotationContentFingerprint(liveAnn) !== annotationContentFingerprint(change.annAfter)) {
+          this.clearEditHistory();
+          new Notice("连续摘录标注已被外部修改，撤销栈已清空");
+          return false;
+        }
+        const prevAnn = structuredClone(change.annBefore);
+        liveAnn.text = prevAnn.text;
+        liveAnn.rects = prevAnn.rects;
+        liveAnn.pdfGeometry = prevAnn.pdfGeometry;
+        liveAnn.image = prevAnn.image;
+        liveAnn.images = prevAnn.images;
+        store.applyLinkedSilentMutation(() => {
+          if (change.cardId && change.cardBefore) {
+            const liveCard = store.getCard(change.cardId);
+            if (liveCard) {
+              const prev = structuredClone(change.cardBefore);
+              liveCard.front = prev.front;
+              liveCard.sources = prev.sources;
+              liveCard.images = prev.images;
+            }
+          }
+        });
+      }
+      this.restoreContinuousSession(change.continuous.before);
+      this.persist();
+      this.onAnnotationsChanged();
+      this.plugin.refreshSidebar();
+      this.plugin.refreshMindmap();
+      return true;
+    }
+    if (change.createdAnn) {
+      if (!this.cache.some(item => item.id === change.createdAnn!.annotation.id)) {
+        const restored = structuredClone(change.createdAnn.annotation);
+        restored.docPath = this.docPath;
+        this.cache.splice(Math.min(Math.max(0, change.createdAnn.insertIndex), this.cache.length), 0, restored);
+      }
+    } else {
+      const liveAnn = this.cache.find(item => item.id === change.targetAnnId);
+      if (!liveAnn) {
+        this.clearEditHistory();
+        return false;
+      }
+      const nextAnn = structuredClone(change.annAfter);
+      liveAnn.text = nextAnn.text;
+      liveAnn.rects = nextAnn.rects;
+      liveAnn.pdfGeometry = nextAnn.pdfGeometry;
+      liveAnn.image = nextAnn.image;
+      liveAnn.images = nextAnn.images;
+    }
+    store.applyLinkedSilentMutation(() => {
+      if (change.cardId && change.cardAfter) {
+        const liveCard = store.getCard(change.cardId);
+        if (liveCard) {
+          const next = structuredClone(change.cardAfter);
+          liveCard.front = next.front;
+          liveCard.sources = next.sources;
+          liveCard.images = next.images;
+        }
+      }
+    });
+    this.restoreContinuousSession(change.continuous.after);
+    this.persist();
+    this.onAnnotationsChanged();
+    this.plugin.refreshSidebar();
+    this.plugin.refreshMindmap();
+    return true;
   }
 
   // ===== 语音批注 =====
@@ -2314,19 +2671,33 @@ export abstract class BaseAnnotationController {
       createdAt: todayStr(),
     };
     const countBefore = this.cache.length;
+    const wasContinuousPdf = !!this.continuousExcerpt && ann.docKind === "pdf";
     this.pushAnnotation(ann);
     const added = this.cache.length > countBefore && this.cache.some(item => item.id === ann.id);
     this.showExcerptMenu(ann);
     // 区域摘录后默认直接生成摘录卡（可被「区域摘录自动成卡」开关关闭），方便拖到脑图
-    if (!this.continuousExcerpt && this.plugin.store.settings.autoCardOnRegion) this.makeCard(ann, "excerpt");
-    if (added) {
-      const savedAnn = structuredClone(ann);
-      const savedCard = ann.cardId ? this.plugin.store.getCard(ann.cardId) : undefined;
-      const savedCardClone = savedCard ? structuredClone(savedCard) : undefined;
-      const savedNodes = savedCard ? structuredClone(this.plugin.store.nodes.filter(n => n.cardId === savedCard.id)) : [];
-      this.recordRegionLifecycleEdit("添加区域摘录", savedAnn, this.cache.indexOf(ann), true, savedCardClone, savedNodes);
+    let linkedCard: LinkedCardCreationRecord | undefined;
+    if (!wasContinuousPdf && this.plugin.store.settings.autoCardOnRegion) {
+      linkedCard = this.makeCard(ann, "excerpt", false, true);
+    }
+    if (added && !wasContinuousPdf) {
+      this.recordRegionExcerptCreate(ann, linkedCard);
     }
     if (this.penMode && this.penTool === "select") this.beginPenGesture();
+  }
+  protected recordRegionExcerptCreate(ann: Annotation, linkedCard?: LinkedCardCreationRecord): void {
+    if (!this.docPath) return;
+    this.recordEditChange({
+      kind: "excerpt",
+      mode: "create",
+      sequence: ++this.editSequence,
+      label: "添加区域摘录",
+      docPath: this.docPath,
+      docRevision: this.documentRevision,
+      annotation: structuredClone(ann),
+      insertIndex: this.cache.indexOf(ann),
+      linkedCard,
+    });
   }
   private recordRegionLifecycleEdit(label: string, savedAnn: Annotation, savedIndex: number, created: boolean, savedCard?: Card, savedNodes: MindNode[] = []): void {
     const path = this.docPath, revision = this.documentRevision;
@@ -2523,7 +2894,7 @@ export abstract class BaseAnnotationController {
     pop.style.top = `${Math.max(8, y)}px`;
   }
 
-  protected makeCard(ann: Annotation, type: CardType, silent = false): void {
+  protected makeCard(ann: Annotation, type: CardType, silent = false, linkedToReaderEdit = false): LinkedCardCreationRecord | undefined {
     const front =
       ann.overlay?.kind === "image" ? ann.text || "[图片批注]" : ann.overlay?.kind === "text" ? ann.text : ann.type === "voice"
         ? "[语音批注]"
@@ -2550,34 +2921,52 @@ export abstract class BaseAnnotationController {
       excerptBlocks: ann.excerptBlocks,
       createdAt: todayStr(),
     };
-    this.plugin.store.addCard(card);
-    ann.cardId = card.id;
+    const store = this.plugin.store;
+    const beforeNodeIds = new Set((store.nodes ?? []).map(n => n.id));
+    const beforePendingIds = new Set((store.reviewPending ?? []).map(p => p.id));
+    let autoReviewNotice = "";
+    const run = () => {
+      store.addCard(card);
+      ann.cardId = card.id;
+      const destinationMode = store.studySets?.find(item => item.id === store.activeStudySetId)?.excerptDestination?.mode;
+      if (destinationMode === "mindmap" || destinationMode !== "document" && store.settings?.autoNodeOnCard) this.addCardToMindmap(card);
+      if (store.settings?.autoReview) {
+        const deck = store.reviewDeckForStudySet();
+        if (deck) {
+          try {
+            const rows = store.enqueueReviewInDeck([card.id], deck.id, store.activeCanvasId);
+            autoReviewNotice = rows.length ? `已加入复习卡组「${deck.name}」` : "未加入复习：当前卡组不可用";
+          } catch (error) { autoReviewNotice = `未加入复习：${String(error)}`; }
+        } else autoReviewNotice = "未加入复习：当前学习集没有可用复习卡组";
+      }
+    };
+    if (linkedToReaderEdit && typeof store.applyLinkedSilentMutation === "function") store.applyLinkedSilentMutation(run);
+    else if (!linkedToReaderEdit && typeof store.libraryTransaction === "function") store.libraryTransaction("生成卡片", run);
+    else run();
     this.persist();
     this.plugin.refreshSidebar();
-    const destinationMode = this.plugin.store.studySets.find(item => item.id === this.plugin.store.activeStudySetId)?.excerptDestination?.mode;
-    if (destinationMode === "mindmap" || destinationMode !== "document" && this.plugin.store.settings.autoNodeOnCard) this.addCardToMindmap(card);
-    let autoReviewNotice="";
-    if(this.plugin.store.settings.autoReview){
-      const deck=this.plugin.store.reviewDeckForStudySet();
-      if(deck){
-        try{
-          const rows=this.plugin.store.enqueueReviewInDeck([card.id],deck.id,this.plugin.store.activeCanvasId);
-          autoReviewNotice=rows.length?`已加入复习卡组「${deck.name}」`:"未加入复习：当前卡组不可用";
-        }catch(error){autoReviewNotice=`未加入复习：${String(error)}`;}
-      }else autoReviewNotice="未加入复习：当前学习集没有可用复习卡组";
-    }
+    const createdNodes = (store.nodes ?? []).filter(n => !beforeNodeIds.has(n.id)).map(n => structuredClone(n));
+    const auxiliaryNodeIds = createdNodes.filter(n => n.cardId !== card.id).map(n => n.id);
+    const reviewPendingIds = (store.reviewPending ?? []).filter(p => !beforePendingIds.has(p.id)).map(p => p.id);
     if (type === "excerpt") {
       // 5.0.2：摘录提示带「定位」动作；不自动切换视图。
       showExcerptNotice(this.plugin, card.id);
       if (autoReviewNotice) new Notice(autoReviewNotice);
     } else if (!silent) {
       const label = type === "comment" ? "评论卡" : "闪卡";
-      new Notice(`已生成${label}，可在侧边栏「卡片」或脑图拖拽使用${autoReviewNotice?`；${autoReviewNotice}`:""}`);
-    }else{
+      new Notice(`已生成${label}，可在侧边栏「卡片」或脑图拖拽使用${autoReviewNotice ? `；${autoReviewNotice}` : ""}`);
+    } else {
       // 5.0.2：自动摘录只给“可定位”的提示，不抢阅读视图。
       showExcerptNotice(this.plugin, card.id);
-      if(autoReviewNotice.startsWith("未加入复习"))new Notice(`已生成卡片；${autoReviewNotice}`);
+      if (autoReviewNotice.startsWith("未加入复习")) new Notice(`已生成卡片；${autoReviewNotice}`);
     }
+    return {
+      card: structuredClone(card),
+      fingerprint: cardContentFingerprint(card),
+      nodes: createdNodes,
+      auxiliaryNodeIds,
+      reviewPendingIds,
+    };
   }
 
   protected editNote(ann: Annotation): void {

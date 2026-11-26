@@ -132,6 +132,7 @@ const automatedSuites=[
   ["merge-annotation-parity","scripts/verify/merge-annotation-parity-acceptance.mjs"],
   ["merge-document-undo","scripts/verify/merge-document-undo-acceptance.mjs"],
   ["annot-threshold","scripts/verify/annot-threshold-acceptance.mjs"],
+  ["annot-undo-atomicity","scripts/verify/annot-undo-atomicity-acceptance.mjs"],
 ];
 const replaySuites=[
   ["document-more","scripts/verify/compare-document-more-evidence.py"],

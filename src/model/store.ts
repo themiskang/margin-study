@@ -2230,6 +2230,32 @@ export class Store {
   getRevision(): number { return this.revision; }
   undoLibraryChange(): boolean { if (this.documentCommitPending) throw new Error("文档操作正在保存，请稍后重试。"); const item = this.history.pop(); if (!item) return false; this.future.push(item); this.libraryHistoryRevision++; if ('readOnly' in item) this.changed(); else if ('nodeMove' in item) { const node=this.getNode(item.nodeMove.id); if(node) Object.assign(node,item.nodeMove.before); this.save(); } else { this.restoreSnapshot(item.before, item.after); this.restoreCardAnchors(); } return true; }
   libraryTransaction<T>(label: string, action: () => T): T { return this.mutate(label, action); }
+  /**
+   * 受控内部原子变更：专供阅读器 editUndo 全程托管撤销/重做的伴生卡片与脑图节点创建/回滚调用。
+   * 在 transactionDepth 保护下一次性执行 action -> repairGraph -> save，不推 store.history、不递增 libraryHistoryRevision。
+   */
+  applyLinkedSilentMutation<T>(action: () => T): T {
+    if (this.documentCommitPending && !this.documentCommitOwner && !this.transactionDepth) {
+      throw new Error("文档操作正在保存，请稍后重试。");
+    }
+    if (this.transactionDepth) return action();
+    const before = this.snapshot();
+    this.transactionDepth++;
+    try {
+      const result = action();
+      this.repairGraph();
+      const after = this.snapshot();
+      if (!same(before, after)) {
+        this.save();
+      }
+      return result;
+    } catch (e) {
+      this.restoreSnapshot(before);
+      throw e;
+    } finally {
+      this.transactionDepth--;
+    }
+  }
   async commitStudySetImport<T>(canvasId: string, action: () => T): Promise<T> {
     this.assertNoDesktopMainConflict();
     if (this.documentCommitPending || this.settings.diagnosticNoPersist) throw new Error("当前无法保存学习集导入。");

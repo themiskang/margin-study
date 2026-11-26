@@ -297,8 +297,12 @@ export class AnnotationController extends BaseAnnotationController {
     const bounds = rec.canvas.getBoundingClientRect();
     const image = this.captureRegion(page, client.left - bounds.left, client.top - bounds.top, client.width, client.height);
     const ann: Annotation = { id: uid("ann"), docPath: this.docPath, docKind: "pdf", page, type: "region", rects: [rect], pdfGeometry: [{page,rects:[rect]}], pdfCoordinateSpace: "pdf", text: "", image, color: this.color, createdAt: todayStr() };
+    const wasContinuous = this.getContinuousExcerpt().active;
     this.pushAnnotation(ann);
-    if (this.plugin.store.settings.autoCardOnRegion) this.makeCard(ann,"excerpt",true);
+    if (!wasContinuous) {
+      const linkedCard = this.plugin.store.settings.autoCardOnRegion ? this.makeCard(ann, "excerpt", true, true) : undefined;
+      this.recordRegionExcerptCreate(ann, linkedCard);
+    }
     await this.extendAnnotation(ann.id);
   }
 
