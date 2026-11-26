@@ -1266,7 +1266,7 @@ export class StudyWorkspaceView extends ItemView {
     sceneNav.append(el("span",{class:"ms-bottom-divider",role:"separator","aria-hidden":"true"}));
     const tools=el("div",{class:"ms-bottom-scene-tools",role:"toolbar","aria-label":template.scenes.find(scene=>scene.id===selection.sceneId)?.label+"工具","data-scene-id":selection.sceneId});
     const hasReader=!!this.reader;
-    const toolKeys:Record<string,string>=selection.sceneId==="reading"?{"主题":"theme","标题链接":"title-links","块选择":"block-selection","更多":"scene.more"}:selection.sceneId==="excerpt"?{"手型（摘录笔盒）":"excerpt.hand","文本":"excerpt.text","矩形":"excerpt.rectangle","留白":"excerpt.extend","套索":"lasso","连续摘录":"continuous-excerpt","铅笔笔尖":"ink","撤销":"undo","重做":"redo","标题链接":"title-links","块选择":"block-selection","文档笔记本":"document-notebook","更多":"excerpt.more"}:selection.sceneId==="handwriting"?{"普通笔 1":"pen.1","普通笔 2":"pen.2","荧光笔":"highlighter","铅笔":"pencil","套索":"lasso","橡皮擦":"eraser","手形工具":"hand","文本框":"text-box","图片框":"image-box","撤销":"undo","重做":"redo","手写层":"ink-layers","更多":"scene.more"}:selection.sceneId==="writing"?{"文本":"excerpt.text","矩形":"excerpt.rectangle","留白":"excerpt.extend","连续摘录":"continuous-excerpt","普通笔 1":"pen.1","普通笔 2":"pen.2","荧光笔":"highlighter","更多":"pen.more","套索":"lasso","橡皮擦":"eraser","手形工具":"hand","撤销":"undo","重做":"redo","工作区与文档更多":"scene.more"}:selection.sceneId==="organize"?{"卡片分组看板":"board","层级":"hierarchy","复制移动":"copy-move","链接":"links","选择":"selection","铅笔笔尖":"ink","撤销":"undo","重做":"redo","更多":"scene.more"}: {"层级":"hierarchy","重置":"recall-reset","AI提示":"ai-hint","回忆设置":"recall-settings","手写":"ink","自动加入复习":"auto-review","复习":"review","更多":"scene.more"};
+    const toolKeys:Record<string,string>=selection.sceneId==="reading"?{"主题":"theme","标题链接":"title-links","块选择":"block-selection","撤销":"undo","重做":"redo","更多":"scene.more"}:selection.sceneId==="excerpt"?{"手型（摘录笔盒）":"excerpt.hand","文本":"excerpt.text","矩形":"excerpt.rectangle","留白":"excerpt.extend","套索":"lasso","连续摘录":"continuous-excerpt","铅笔笔尖":"ink","撤销":"undo","重做":"redo","标题链接":"title-links","块选择":"block-selection","文档笔记本":"document-notebook","更多":"excerpt.more"}:selection.sceneId==="handwriting"?{"普通笔 1":"pen.1","普通笔 2":"pen.2","荧光笔":"highlighter","铅笔":"pencil","套索":"lasso","橡皮擦":"eraser","手形工具":"hand","文本框":"text-box","图片框":"image-box","撤销":"undo","重做":"redo","手写层":"ink-layers","更多":"scene.more"}:selection.sceneId==="writing"?{"文本":"excerpt.text","矩形":"excerpt.rectangle","留白":"excerpt.extend","连续摘录":"continuous-excerpt","普通笔 1":"pen.1","普通笔 2":"pen.2","荧光笔":"highlighter","更多":"pen.more","套索":"lasso","橡皮擦":"eraser","手形工具":"hand","撤销":"undo","重做":"redo","工作区与文档更多":"scene.more"}:selection.sceneId==="organize"?{"卡片分组看板":"board","层级":"hierarchy","复制移动":"copy-move","链接":"links","选择":"selection","铅笔笔尖":"ink","撤销":"undo","重做":"redo","更多":"scene.more"}: {"层级":"hierarchy","重置":"recall-reset","AI提示":"ai-hint","回忆设置":"recall-settings","手写":"ink","自动加入复习":"auto-review","复习":"review","撤销":"undo","重做":"redo","更多":"scene.more"};
     const add=(icon:string,label:string,callback:(button?:HTMLButtonElement)=>void,active?:boolean,disabled=false)=>{const item=action(icon,label,button=>callback(button),active,disabled);const key=toolKeys[label];if(key)item.dataset.msTool=key;if(key==="undo"||key==="redo")item.dataset.bottomAction=key;if((selection.sceneId==="excerpt"||selection.sceneId==="writing")&&(key==="excerpt.text"||key==="excerpt.rectangle"))item.setAttribute("aria-current",String(!!active));tools.append(item);return item;};
     if(selection.sceneId==="excerpt"){
       add("hand","手型（摘录笔盒）",()=>this.useReaderTool("hand"),this.readerTool==="hand",!hasReader);
@@ -1335,6 +1335,8 @@ export class StudyWorkspaceView extends ItemView {
         if(store.settings.autoReview&&!currentDeck)openReviewDecks(this.plugin);
       },this.plugin.store.settings.autoReview,!hasReader);
       add("clipboard-list","复习",()=>this.selectAuxiliary("review"),false,!hasReader);
+      add("undo-2","撤销",()=>this.applyHistory(false),false,!this.currentHistoryState()?.canUndo);
+      add("redo-2","重做",()=>this.applyHistory(true),false,!this.currentHistoryState()?.canRedo);
       add("chevron-right","更多",button=>this.openLayoutMenu(button),false,false);
     }else if(selection.sceneId!=="reading"){
       for(const scene of template.scenes.filter(scene=>scene.id===selection.sceneId))for(const tool of scene.tools)tools.append(el("span",{class:"ms-bottom-scene-capability",text:tool,"aria-label":tool}));
@@ -1343,6 +1345,8 @@ export class StudyWorkspaceView extends ItemView {
       add("circle-half","主题",()=>this.cycleReadingTheme());
       add("character-bubble","标题链接",()=>{const on=!this.reader?.getTitleLinksEnabled?.();this.reader?.setTitleLinksEnabled?.(on);this.drawToolbar();},this.reader?.getTitleLinksEnabled?.()??false,!hasReader);
       add("bottom-blocks","块选择",()=>this.toggleBlockSelection(),this.reader?.getBlockSelectionMode()??false,!hasReader);
+      add("undo-2","撤销",()=>this.applyHistory(false),false,!this.currentHistoryState()?.canUndo);
+      add("redo-2","重做",()=>this.applyHistory(true),false,!this.currentHistoryState()?.canRedo);
       add("chevron-right","更多",button=>this.openLayoutMenu(button),false,false);
     }
     if(!["standard","read-write-recall"].includes(template.id)){

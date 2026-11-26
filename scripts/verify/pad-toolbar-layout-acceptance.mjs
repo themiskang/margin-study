@@ -730,13 +730,39 @@ let activeHarness: Awaited<ReturnType<typeof createHarness>> | null = null;
   assert(h.root.dataset.readerTool === "pen", "#5 pen did not activate");
   mark(5, "手写画笔与设置", false, "bottom:ink");
 
-  for (const [id, name, tool] of [[6, "撤销", "undo"], [7, "重做", "redo"]] as const) {
-    const b = h.root.querySelector<HTMLButtonElement>(\`.ms-bottom-scene-tools [data-ms-tool="\${tool}"]\`)!;
-    assert(b && b.checkVisibility(), \`#\${id} \${tool} missing\`);
-    const br = b.getBoundingClientRect();
-    assert(isHit(b, br.left + br.width / 2, br.top + br.height / 2), \`#\${id} \${tool} not hit\`);
-    mark(id, name, false, "bottom:" + tool);
+  // #6 & #7 撤销/重做 across all 4 scenes (excerpt/handwriting/organize/recall) with real node move 120->170->120->170
+  const crossSceneHistory: any[] = [];
+  for (const sceneId of ["excerpt", "handwriting", "organize", "recall"]) {
+    await h.selectScene(sceneId);
+    h.store.moveNode("n1", 170, 120);
+    await frame();
+    const xAfterMove = h.store.getNode("n1")!.x;
+    assert(xAfterMove === 170, \`#6/#7 [\${sceneId}] moveNode did not set x=170 (got \${xAfterMove})\`);
+    const undoBtn = h.root.querySelector<HTMLButtonElement>('.ms-bottom-scene-tools [data-bottom-action="undo"]')!;
+    const redoBtn = h.root.querySelector<HTMLButtonElement>('.ms-bottom-scene-tools [data-bottom-action="redo"]')!;
+    assert(undoBtn && undoBtn.checkVisibility() && !undoBtn.disabled, \`#6 [\${sceneId}] bottom undo missing or disabled\`);
+    const ur = undoBtn.getBoundingClientRect();
+    assert(isHit(undoBtn, ur.left + ur.width / 2, ur.top + ur.height / 2), \`#6 [\${sceneId}] undo not hit\`);
+    undoBtn.click();
+    await frame();
+    const xAfterUndo = h.store.getNode("n1")!.x;
+    assert(xAfterUndo === 120, \`#6 [\${sceneId}] undo did not revert x 170->120 (got \${xAfterUndo})\`);
+    assert(redoBtn && redoBtn.checkVisibility() && !redoBtn.disabled, \`#7 [\${sceneId}] bottom redo not enabled after undo\`);
+    const rr = redoBtn.getBoundingClientRect();
+    assert(isHit(redoBtn, rr.left + rr.width / 2, rr.top + rr.height / 2), \`#7 [\${sceneId}] redo not hit\`);
+    redoBtn.click();
+    await frame();
+    const xAfterRedo = h.store.getNode("n1")!.x;
+    assert(xAfterRedo === 170, \`#7 [\${sceneId}] redo did not restore x 120->170 (got \${xAfterRedo})\`);
+    // Revert back to 120 so next scene starts clean
+    undoBtn.click();
+    await frame();
+    assert(h.store.getNode("n1")!.x === 120, \`#6 [\${sceneId}] cleanup undo failed\`);
+    crossSceneHistory.push({ sceneId, moveX: xAfterMove, undoX: xAfterUndo, redoX: xAfterRedo });
   }
+  await h.selectScene("excerpt");
+  mark(6, "撤销", false, "bottom:undo(excerpt+handwriting+organize+recall)");
+  mark(7, "重做", false, "bottom:redo(excerpt+handwriting+organize+recall)");
 
   // #8 house -> study home
   const homeBtn = h.root.querySelector<HTMLButtonElement>('.ms-workspace-context [aria-label="打开学习集与文档"]')!;
