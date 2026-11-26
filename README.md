@@ -31,6 +31,7 @@
 
 ## 文档
 
+- [用户使用教程](docs/使用教程.md)
 - [使用教程](docs/guide/user-guide.zh-CN.md)
 - [当前状态](docs/STATUS.md) · [路线图](docs/ROADMAP.md) · [MN5 差距](docs/MN5-PARITY-GAP.md)
 - [架构决策](docs/architecture/decisions-mn502.md) · [实现差异](docs/architecture/implementation-deltas.md) · [技术评审](docs/architecture/optimization-review.md)
