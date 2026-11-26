@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 ReaderView、StudyWorkspaceView、PenController、Store、样式表与 ego-harness 浏览器后端，零私有夹具依赖。
- * [OUTPUT]: 执行 PZ-01~PZ-06 与原生 CDP 触控冒烟验收；若设置 MARGINSTUDY_EVIDENCE_DIR 则落盘带 head/generatedAt 的证据 JSON 至 $MARGINSTUDY_EVIDENCE_DIR/pdf-pinch-zoom/results.json。
- * [POS]: 公开浏览器验收套件 pdf-pinch-zoom，验证 PDF 双指缩放、两阶段提交、锚点保持、手写/套索零副作用、三指安全、旋转页/双页/简洁态与折叠页/批注保真。
+ * [OUTPUT]: 执行 PZ-01~PZ-07（含缩放无白闪 ~60Hz 采样）与原生 CDP 触控冒烟验收；若设置 MARGINSTUDY_EVIDENCE_DIR 则落盘带 head/generatedAt 的证据 JSON。
+ * [POS]: 公开浏览器验收套件 pdf-pinch-zoom，验证 PDF 双指缩放、两阶段提交、无白闪双缓冲、锚点保持、手写/套索零副作用、三指安全、旋转页/双页/简洁态与折叠页/批注保真。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 import { execFile } from "node:child_process";
@@ -21,9 +21,10 @@ const docFixtures = join(project, "src/documents/acceptance-fixtures");
 const temporary = await realpath(await mkdtemp(join(tmpdir(), "marginstudy-pdf-pinch-")));
 
 const fixtureSource = `
-import { TFile } from "obsidian";
+import { TFile, Platform } from "obsidian";
 import { Store } from "${project}/src/model/store";
 import { ReaderView } from "${project}/src/pdf/readerView";
+import { events as pdfEvents } from "${project}/src/pdf/pdfjs";
 import { StudyWorkspaceView } from "${project}/src/workspace/studyWorkspace";
 
 (HTMLElement.prototype as any).empty = function () { this.replaceChildren(); };
@@ -1024,6 +1025,1018 @@ let cdpView: ReaderView | null = null;
   return { scaleAfter, scaleElText };
 };
 
+// ===== PZ-07: No white-flash frames (~60Hz sampling) on pinch commit & desktop zoom buttons =====
+(window as any).runPZ07NoWhiteFlash = async () => {
+  const { view } = await openReader(
+    { "flash.pdf": { name: "flash", pages: 3, renderDelay: 120, textDelay: 20, paintContent: true } },
+    "flash.pdf",
+  );
+  try {
+    await view.renderPage(1);
+    await frame();
+    const scrollEl = view.getScrollContainer();
+    const box = scrollEl.getBoundingClientRect();
+    const cx = box.left + box.width / 2;
+    const cy = box.top + box.height / 2;
+
+    const WHITE_FLASH_RATIO_THRESHOLD = 0.98;
+    const WHITE_FLASH_JUMP_THRESHOLD = 0.25;
+    const MAX_ALLOWED_WHITE_RATIO = 0.90;
+
+    const sampleCanvas = document.createElement("canvas");
+    sampleCanvas.width = 64;
+    sampleCanvas.height = 80;
+    const sampleCtx = sampleCanvas.getContext("2d", { willReadFrequently: true })!;
+
+    const measureWhiteRatio = (pageNum: number): number => {
+      const rec = view.getPageRecord(pageNum);
+      if (!rec) return 1;
+      const wRect = rec.wrapper.getBoundingClientRect();
+      const cRect = rec.canvas.getBoundingClientRect();
+      sampleCtx.fillStyle = "#ffffff";
+      sampleCtx.fillRect(0, 0, sampleCanvas.width, sampleCanvas.height);
+      if (rec.canvas.width > 0 && rec.canvas.height > 0 && wRect.width > 0 && wRect.height > 0 && cRect.width > 0 && cRect.height > 0) {
+        const dx = ((cRect.left - wRect.left) / wRect.width) * sampleCanvas.width;
+        const dy = ((cRect.top - wRect.top) / wRect.height) * sampleCanvas.height;
+        const dw = (cRect.width / wRect.width) * sampleCanvas.width;
+        const dh = (cRect.height / wRect.height) * sampleCanvas.height;
+        sampleCtx.drawImage(rec.canvas, 0, 0, rec.canvas.width, rec.canvas.height, dx, dy, dw, dh);
+      }
+      const data = sampleCtx.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height).data;
+      let white = 0;
+      const total = sampleCanvas.width * sampleCanvas.height;
+      for (let i = 0; i < data.length; i += 4) {
+        if (data[i] >= 245 && data[i + 1] >= 245 && data[i + 2] >= 245) white++;
+      }
+      return Number((white / total).toFixed(4));
+    };
+
+    const sampleTransition = async (label: string, trigger: () => Promise<number> | number) => {
+      const eventsBefore = pdfEvents.length;
+      const ratios: number[] = [];
+      let sampling = true;
+      const baselineWhiteRatio = measureWhiteRatio(1);
+      ratios.push(baselineWhiteRatio);
+      const tick = () => {
+        if (!sampling) return;
+        ratios.push(measureWhiteRatio(1));
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+      try {
+        const targetScale = await trigger();
+        await waitPagesRendered(view, [1], targetScale);
+        await frame();
+      } finally {
+        sampling = false;
+      }
+      const renderCount = pdfEvents.slice(eventsBefore).filter(e => e[0] === "render" && e[1] === "flash" && e[2] === 1).length;
+      let flashFrames = 0;
+      let maxJump = 0;
+      let maxWhiteRatio = 0;
+      let peakFlashRatio = 0;
+      for (let i = 0; i < ratios.length; i++) {
+        if (ratios[i] > maxWhiteRatio) maxWhiteRatio = ratios[i];
+        if (i > 0) {
+          const jump = Number((ratios[i] - ratios[i - 1]).toFixed(4));
+          if (jump > maxJump) maxJump = jump;
+          if (ratios[i] >= WHITE_FLASH_RATIO_THRESHOLD && jump >= WHITE_FLASH_JUMP_THRESHOLD) {
+            flashFrames++;
+            if (ratios[i] > peakFlashRatio) peakFlashRatio = ratios[i];
+          }
+        }
+      }
+      return {
+        label,
+        baselineWhiteRatio,
+        samples: ratios.length,
+        maxWhiteRatio,
+        maxJump,
+        flashFrames,
+        peakFlashRatio,
+        renderCount,
+        ratios: ratios.slice(0, 24),
+      };
+    };
+
+    const pinchOut = await sampleTransition("pinch-out", async () => {
+      await pinchGesture(scrollEl, cx, cy, 80, 136, { steps: 6, staggerMs: 20 });
+      return view.getScale();
+    });
+
+    const pinchIn = await sampleTransition("pinch-in", async () => {
+      await pinchGesture(scrollEl, cx, cy, 136, 80, { steps: 6, staggerMs: 20 });
+      return view.getScale();
+    });
+
+    const zoomInBtn = view.containerEl.querySelector('button[title="放大"]') as HTMLButtonElement | null;
+    const zoomOutBtn = view.containerEl.querySelector('button[title="缩小"]') as HTMLButtonElement | null;
+    assert(zoomInBtn && zoomOutBtn, "PZ-07 desktop zoom buttons not found");
+
+    const desktopZoomIn = await sampleTransition("desktop-zoom-in", () => {
+      zoomInBtn!.click();
+      return view.getScale();
+    });
+
+    const desktopZoomOut = await sampleTransition("desktop-zoom-out", () => {
+      zoomOutBtn!.click();
+      return view.getScale();
+    });
+
+    const transitions = [pinchOut, pinchIn, desktopZoomIn, desktopZoomOut];
+    for (const t of transitions) {
+      assert(t.baselineWhiteRatio < 0.75, \`PZ-07 [\${t.label}] baseline not textured enough: whiteRatio=\${t.baselineWhiteRatio}\`);
+      assert(t.samples >= 5, \`PZ-07 [\${t.label}] too few ~60Hz samples: \${t.samples}\`);
+      assert(t.renderCount === 1, \`PZ-07 [\${t.label}] expected 1 visible page render, got \${t.renderCount}\`);
+      assert(
+        t.flashFrames === 0 && t.maxWhiteRatio < MAX_ALLOWED_WHITE_RATIO,
+        \`PZ-07 [\${t.label}] white flash detected: flashFrames=\${t.flashFrames}, baseline=\${t.baselineWhiteRatio}, maxWhiteRatio=\${t.maxWhiteRatio}, maxJump=\${t.maxJump}\`,
+      );
+    }
+
+    return {
+      passed: true,
+      thresholds: {
+        whiteFlashRatioThreshold: WHITE_FLASH_RATIO_THRESHOLD,
+        whiteFlashJumpThreshold: WHITE_FLASH_JUMP_THRESHOLD,
+        maxAllowedWhiteRatio: MAX_ALLOWED_WHITE_RATIO,
+      },
+      pinchOut,
+      pinchIn,
+      desktopZoomIn,
+      desktopZoomOut,
+    };
+  } finally {
+    await view.onClose();
+    view.containerEl.remove();
+  }
+};
+
+// ===== PZ-08: Hard memory budget matrix (4 page types x Desktop/Mobile) + 0 white-flash under degradation =====
+(window as any).runPZ08MemoryBudgetMatrix = async () => {
+  const origIsMobile = Platform.isMobile;
+  const origDprDesc = Object.getOwnPropertyDescriptor(window, "devicePixelRatio");
+  Object.defineProperty(window, "devicePixelRatio", { configurable: true, get: () => 2 });
+
+  const WHITE_FLASH_RATIO_THRESHOLD = 0.98;
+  const WHITE_FLASH_JUMP_THRESHOLD = 0.25;
+  const MAX_ALLOWED_WHITE_RATIO = 0.90;
+  const sampleCanvas = document.createElement("canvas");
+  sampleCanvas.width = 64;
+  sampleCanvas.height = 80;
+  const sampleCtx = sampleCanvas.getContext("2d", { willReadFrequently: true })!;
+
+  const measureWhiteRatio = (view: ReaderView, pageNum: number): number => {
+    const rec = view.getPageRecord(pageNum);
+    if (!rec) return 1;
+    const wRect = rec.wrapper.getBoundingClientRect();
+    const cRect = rec.canvas.getBoundingClientRect();
+    sampleCtx.fillStyle = "#ffffff";
+    sampleCtx.fillRect(0, 0, sampleCanvas.width, sampleCanvas.height);
+    if (rec.canvas.width > 0 && rec.canvas.height > 0 && wRect.width > 0 && wRect.height > 0 && cRect.width > 0 && cRect.height > 0) {
+      const dx = ((cRect.left - wRect.left) / wRect.width) * sampleCanvas.width;
+      const dy = ((cRect.top - wRect.top) / wRect.height) * sampleCanvas.height;
+      const dw = (cRect.width / wRect.width) * sampleCanvas.width;
+      const dh = (cRect.height / wRect.height) * sampleCanvas.height;
+      sampleCtx.drawImage(rec.canvas, 0, 0, rec.canvas.width, rec.canvas.height, dx, dy, dw, dh);
+    }
+    const data = sampleCtx.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height).data;
+    let white = 0;
+    const total = sampleCanvas.width * sampleCanvas.height;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i] >= 245 && data[i + 1] >= 245 && data[i + 2] >= 245) white++;
+    }
+    return Number((white / total).toFixed(4));
+  };
+
+  const toMB = (pixels: number) => Number(((pixels * 4) / (1024 * 1024)).toFixed(2));
+
+  const runCase = async (
+    tier: "desktop" | "mobile",
+    pageType: "normal-a4" | "folded-a4" | "rotated-a4" | "spread-a4",
+  ) => {
+    Platform.isMobile = tier === "mobile";
+    const pdfPath = \`mem-\${tier}-\${pageType}.pdf\`;
+    const cfg: any = {
+      name: \`\${tier}-\${pageType}\`,
+      pages: 6,
+      crop: [0, 0, 595, 842],
+      renderDelay: 80,
+      textDelay: 10,
+      paintContent: true,
+    };
+    if (pageType === "rotated-a4") cfg.rotation = 90;
+    const { view, store } = await openReader({ [pdfPath]: cfg }, pdfPath);
+    try {
+      if (pageType === "spread-a4") {
+        await view.setPageLayout("spread", false);
+        await waitPagesRendered(view, [1, 2], view.getScale());
+      } else if (pageType === "folded-a4") {
+        // Fold ~75% of A4 height (leaving top & bottom dark content bands visible)
+        store.updateDocMeta(pdfPath, {
+          pdfRegionFolds: [{ id: "fold-a4-1", pageId: view.getPdfPageId(1), rects: [{ x: 0, y: 120, w: 595, h: 600 }] }],
+        });
+        await view.refreshExtendLayout();
+        await waitPagesRendered(view, [1], view.getScale());
+        await frame();
+      } else {
+        await view.renderPage(1);
+        await frame();
+      }
+
+      const targetPages = pageType === "spread-a4" ? [1, 2] : [1];
+      for (const p of targetPages) (view as any).visiblePages.add(p);
+      view.resetMemoryPeak();
+
+      // Zoom from 1.4 -> 4.0 (extreme scale at DPR=2) while sampling at ~60Hz
+      const ratios: number[] = [];
+      let sampling = true;
+      ratios.push(measureWhiteRatio(view, 1));
+      const tick = () => {
+        if (!sampling) return;
+        ratios.push(measureWhiteRatio(view, 1));
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+      try {
+        view.setScale(4.0);
+        await waitPagesRendered(view, targetPages, 4.0);
+        await frame();
+      } finally {
+        sampling = false;
+      }
+
+      let flashFrames = 0;
+      let maxWhiteRatio = 0;
+      let maxJump = 0;
+      for (let i = 0; i < ratios.length; i++) {
+        if (ratios[i] > maxWhiteRatio) maxWhiteRatio = ratios[i];
+        if (i > 0) {
+          const jump = Number((ratios[i] - ratios[i - 1]).toFixed(4));
+          if (jump > maxJump) maxJump = jump;
+          if (ratios[i] >= WHITE_FLASH_RATIO_THRESHOLD && jump >= WHITE_FLASH_JUMP_THRESHOLD) {
+            flashFrames++;
+          }
+        }
+      }
+
+      const stats = view.getMemoryStats();
+      const page1 = stats.pages[1];
+      const peakMB = toMB(stats.peakTotalPixels);
+      const hardBudgetMB = toMB(stats.hardBudgetPixels);
+
+      assert(
+        stats.peakTotalPixels <= stats.hardBudgetPixels,
+        \`PZ-08 [\${tier}/\${pageType}] exceeded hard budget: peak=\${peakMB}MB (\${stats.peakTotalPixels}px) > hard=\${hardBudgetMB}MB (\${stats.hardBudgetPixels}px)\`,
+      );
+      assert(
+        flashFrames === 0 && maxWhiteRatio < MAX_ALLOWED_WHITE_RATIO,
+        \`PZ-08 [\${tier}/\${pageType}] white flash under budget: flashFrames=\${flashFrames}, maxWhiteRatio=\${maxWhiteRatio}, maxJump=\${maxJump}\`,
+      );
+
+      // Verify offscreen cache hard cap by rendering all 6 pages sequentially while only page 6 stays visible
+      for (let p = 2; p <= 6; p++) {
+        (view as any).visiblePages.clear();
+        (view as any).visiblePages.add(p);
+        await view.renderPage(p);
+      }
+      const afterScroll = view.getMemoryStats();
+      const maxCachedPages = tier === "mobile" ? 3 : 4;
+      assert(
+        afterScroll.cachedPages <= maxCachedPages && afterScroll.currentTotalPixels <= afterScroll.hardBudgetPixels,
+        \`PZ-08 [\${tier}/\${pageType}] offscreen cache cap exceeded: cachedPages=\${afterScroll.cachedPages} (max \${maxCachedPages}), total=\${toMB(afterScroll.currentTotalPixels)}MB (hard \${hardBudgetMB}MB)\`,
+      );
+
+      return {
+        tier,
+        pageType,
+        peakPixels: stats.peakTotalPixels,
+        peakMB,
+        hardBudgetPixels: stats.hardBudgetPixels,
+        hardBudgetMB,
+        degraded: Boolean(page1?.degraded),
+        downsampledPlaceholder: Boolean(page1?.downsampledPlaceholder),
+        dpr: page1 ? Number(page1.dpr.toFixed(4)) : 0,
+        targetDpr: page1 ? Number(page1.targetDpr.toFixed(4)) : 0,
+        flashFrames,
+        maxWhiteRatio,
+        maxJump,
+        samples: ratios.length,
+        afterScrollCachedPages: afterScroll.cachedPages,
+        afterScrollMB: toMB(afterScroll.currentTotalPixels),
+      };
+    } finally {
+      await view.onClose();
+      view.containerEl.remove();
+    }
+  };
+
+  try {
+    const matrix: any[] = [];
+    for (const tier of ["desktop", "mobile"] as const) {
+      for (const pageType of ["normal-a4", "folded-a4", "rotated-a4", "spread-a4"] as const) {
+        matrix.push(await runCase(tier, pageType));
+      }
+    }
+    return { passed: true, dprSimulated: 2, matrix };
+  } finally {
+    Platform.isMobile = origIsMobile;
+    if (origDprDesc) Object.defineProperty(window, "devicePixelRatio", origDprDesc);
+  }
+};
+
+// ===== PZ-09: True canvas pixel audit (A4 spread DPR=3 & mobile 14000pt@400%) + 3 allocation failure injections =====
+(window as any).runPZ09BudgetAuditAndAllocFailures = async () => {
+  const origIsMobile = Platform.isMobile;
+  const origDprDesc = Object.getOwnPropertyDescriptor(window, "devicePixelRatio");
+  const origCreateElement = document.createElement.bind(document);
+  const origWidthDesc = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, "width")!;
+  const origHeightDesc = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, "height")!;
+  const origGetContext = HTMLCanvasElement.prototype.getContext;
+
+  const sampleCanvas = origCreateElement("canvas");
+  sampleCanvas.width = 64;
+  sampleCanvas.height = 80;
+  const sampleCtx = origGetContext.call(sampleCanvas, "2d", { willReadFrequently: true }) as CanvasRenderingContext2D;
+
+  const WHITE_FLASH_RATIO_THRESHOLD = 0.98;
+  const WHITE_FLASH_JUMP_THRESHOLD = 0.25;
+  const MAX_ALLOWED_WHITE_RATIO = 0.90;
+
+  const measureWhiteRatio = (view: ReaderView, pageNum: number): number => {
+    const rec = view.getPageRecord(pageNum);
+    if (!rec) return 1;
+    const wRect = rec.wrapper.getBoundingClientRect();
+    const cRect = rec.canvas.getBoundingClientRect();
+    sampleCtx.fillStyle = "#ffffff";
+    sampleCtx.fillRect(0, 0, sampleCanvas.width, sampleCanvas.height);
+    if (rec.canvas.width > 0 && rec.canvas.height > 0 && wRect.width > 0 && wRect.height > 0 && cRect.width > 0 && cRect.height > 0) {
+      const dx = ((cRect.left - wRect.left) / wRect.width) * sampleCanvas.width;
+      const dy = ((cRect.top - wRect.top) / wRect.height) * sampleCanvas.height;
+      const dw = (cRect.width / wRect.width) * sampleCanvas.width;
+      const dh = (cRect.height / wRect.height) * sampleCanvas.height;
+      sampleCtx.drawImage(rec.canvas, 0, 0, rec.canvas.width, rec.canvas.height, dx, dy, dw, dh);
+    }
+    const data = sampleCtx.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height).data;
+    let white = 0;
+    const total = sampleCanvas.width * sampleCanvas.height;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i] >= 245 && data[i + 1] >= 245 && data[i + 2] >= 245) white++;
+    }
+    return Number((white / total).toFixed(4));
+  };
+
+  // Independent live canvas pixel tracker: intercepts all non-sampler canvases created during each audit
+  let trackedCanvases = new Set<HTMLCanvasElement>();
+  let measuredPeakPixels = 0;
+  let trackingActive = false;
+  const updateMeasuredPeak = () => {
+    if (!trackingActive) return;
+    let sum = 0;
+    for (const c of trackedCanvases) {
+      if (c.classList.contains("ms-ink-raster")) continue;
+      const w = origWidthDesc.get!.call(c);
+      const h = origHeightDesc.get!.call(c);
+      if (w > 0 && h > 0) sum += w * h;
+    }
+    if (sum > measuredPeakPixels) measuredPeakPixels = sum;
+  };
+
+  // Injection modes for negative allocation failure tests
+  let failMode: "none" | "getContext-null" | "size-silent-fail" | "size-throw" = "none";
+  let failTriggered = 0;
+
+  (document as any).createElement = function (tag: string, options?: any) {
+    const el = origCreateElement(tag, options);
+    if (trackingActive && tag.toLowerCase() === "canvas") trackedCanvases.add(el as HTMLCanvasElement);
+    return el;
+  };
+  Object.defineProperty(HTMLCanvasElement.prototype, "width", {
+    configurable: true,
+    get() { return origWidthDesc.get!.call(this); },
+    set(v: number) {
+      if (this !== sampleCanvas && v > 0) {
+        if (failMode === "size-throw") { failTriggered++; throw new RangeError("Injected canvas width allocation error"); }
+        if (failMode === "size-silent-fail") { failTriggered++; origWidthDesc.set!.call(this, 0); updateMeasuredPeak(); return; }
+      }
+      origWidthDesc.set!.call(this, v);
+      updateMeasuredPeak();
+    },
+  });
+  Object.defineProperty(HTMLCanvasElement.prototype, "height", {
+    configurable: true,
+    get() { return origHeightDesc.get!.call(this); },
+    set(v: number) {
+      if (this !== sampleCanvas && v > 0) {
+        if (failMode === "size-throw") { failTriggered++; throw new RangeError("Injected canvas height allocation error"); }
+        if (failMode === "size-silent-fail") { failTriggered++; origHeightDesc.set!.call(this, 0); updateMeasuredPeak(); return; }
+      }
+      origHeightDesc.set!.call(this, v);
+      updateMeasuredPeak();
+    },
+  });
+  HTMLCanvasElement.prototype.getContext = function (type: any, attrs?: any) {
+    if (this !== sampleCanvas && type === "2d" && failMode === "getContext-null") {
+      failTriggered++;
+      return null;
+    }
+    return origGetContext.call(this, type, attrs);
+  } as any;
+
+  const toMB = (px: number) => Number(((px * 4) / (1024 * 1024)).toFixed(2));
+
+  try {
+    // --- Audit A: Real A4 spread at DPR=3 (hard budget 16M px) ---
+    Platform.isMobile = false;
+    Object.defineProperty(window, "devicePixelRatio", { configurable: true, get: () => 3 });
+    trackedCanvases = new Set();
+    measuredPeakPixels = 0;
+    trackingActive = true;
+    const spreadAudit = await (async () => {
+      const pdfPath = "pz09-spread-dpr3.pdf";
+      const { view } = await openReader(
+        { [pdfPath]: { name: "spread-dpr3", pages: 4, crop: [0, 0, 595, 842], renderDelay: 60, textDelay: 10, paintContent: true } },
+        pdfPath,
+      );
+      try {
+        await view.setPageLayout("spread", false);
+        await waitPagesRendered(view, [1, 2], view.getScale());
+        (view as any).visiblePages.add(1);
+        (view as any).visiblePages.add(2);
+        // Reset both product peak & external measured peak right before extreme zoom
+        view.resetMemoryPeak();
+        measuredPeakPixels = 0;
+        updateMeasuredPeak();
+        // Zoom to 4.0 then to 3.5 to stress consecutive spread re-renders under tight budget
+        view.setScale(4.0);
+        await waitPagesRendered(view, [1, 2], 4.0);
+        view.setScale(3.5);
+        await waitPagesRendered(view, [1, 2], 3.5);
+        await frame();
+        const stats = view.getMemoryStats();
+        return {
+          scenario: "desktop-spread-a4-dpr3",
+          reportedPeakPixels: stats.peakTotalPixels,
+          measuredPeakPixels,
+          deltaPixels: measuredPeakPixels - stats.peakTotalPixels,
+          reportedPeakMB: toMB(stats.peakTotalPixels),
+          measuredPeakMB: toMB(measuredPeakPixels),
+          hardBudgetPixels: stats.hardBudgetPixels,
+          hardBudgetMB: toMB(stats.hardBudgetPixels),
+          withinBudget: measuredPeakPixels <= stats.hardBudgetPixels && stats.peakTotalPixels <= stats.hardBudgetPixels,
+          noUnderreport: stats.peakTotalPixels >= measuredPeakPixels,
+        };
+      } finally {
+        await view.onClose();
+        view.containerEl.remove();
+      }
+    })();
+    trackingActive = false;
+
+    // --- Audit B: Mobile 14000pt x 14000pt square page @ 400% (hard budget 4M px) ---
+    Platform.isMobile = true;
+    Object.defineProperty(window, "devicePixelRatio", { configurable: true, get: () => 2 });
+    trackedCanvases = new Set();
+    measuredPeakPixels = 0;
+    trackingActive = true;
+    const hugeSquareAudit = await (async () => {
+      const pdfPath = "pz09-mobile-14000pt.pdf";
+      const { view } = await openReader(
+        { [pdfPath]: { name: "mobile-14000pt", pages: 2, crop: [0, 0, 14000, 14000], renderDelay: 60, textDelay: 10, paintContent: true } },
+        pdfPath,
+      );
+      try {
+        await view.renderPage(1);
+        await frame();
+        (view as any).visiblePages.add(1);
+        view.resetMemoryPeak();
+        measuredPeakPixels = 0;
+        updateMeasuredPeak();
+        const ratios: number[] = [];
+        let sampling = true;
+        ratios.push(measureWhiteRatio(view, 1));
+        const tick = () => { if (!sampling) return; ratios.push(measureWhiteRatio(view, 1)); requestAnimationFrame(tick); };
+        requestAnimationFrame(tick);
+        try {
+          view.setScale(4.0);
+          await wait(200);
+          await frame();
+        } finally {
+          sampling = false;
+        }
+        let flashFrames = 0, maxWhiteRatio = 0, maxJump = 0;
+        for (let i = 0; i < ratios.length; i++) {
+          if (ratios[i] > maxWhiteRatio) maxWhiteRatio = ratios[i];
+          if (i > 0) {
+            const j = Number((ratios[i] - ratios[i - 1]).toFixed(4));
+            if (j > maxJump) maxJump = j;
+            if (ratios[i] >= WHITE_FLASH_RATIO_THRESHOLD && j >= WHITE_FLASH_JUMP_THRESHOLD) flashFrames++;
+          }
+        }
+        const stats = view.getMemoryStats();
+        const p1 = stats.pages[1];
+        return {
+          scenario: "mobile-14000pt-400pct",
+          reportedPeakPixels: stats.peakTotalPixels,
+          measuredPeakPixels,
+          deltaPixels: measuredPeakPixels - stats.peakTotalPixels,
+          reportedPeakMB: toMB(stats.peakTotalPixels),
+          measuredPeakMB: toMB(measuredPeakPixels),
+          hardBudgetPixels: stats.hardBudgetPixels,
+          hardBudgetMB: toMB(stats.hardBudgetPixels),
+          skippedDoubleBuffer: Boolean((p1 as any)?.skippedDoubleBuffer),
+          dpr: p1 ? Number(p1.dpr.toFixed(5)) : 0,
+          flashFrames,
+          maxWhiteRatio,
+          maxJump,
+          withinBudget: measuredPeakPixels <= stats.hardBudgetPixels && stats.peakTotalPixels <= stats.hardBudgetPixels,
+          noUnderreport: stats.peakTotalPixels >= measuredPeakPixels,
+        };
+      } finally {
+        await view.onClose();
+        view.containerEl.remove();
+      }
+    })();
+    trackingActive = false;
+
+    // --- Audit C: 3 Allocation Failure Injections (getContext=null, size-silent-fail, size-throw) ---
+    // Use tight budget pressure (mobile + 2 visible pages at max scale so placeholder downsample is also exercised)
+    const runAllocFailureCase = async (mode: "getContext-null" | "size-silent-fail" | "size-throw") => {
+      Platform.isMobile = true;
+      Object.defineProperty(window, "devicePixelRatio", { configurable: true, get: () => 2 });
+      const pdfPath = \`pz09-fail-\${mode}.pdf\`;
+      const { view } = await openReader(
+        { [pdfPath]: { name: \`fail-\${mode}\`, pages: 2, crop: [0, 0, 595, 842], renderDelay: 60, textDelay: 10, paintContent: true } },
+        pdfPath,
+      );
+      try {
+        await view.setPageLayout("spread", false);
+        await waitPagesRendered(view, [1, 2], view.getScale());
+        (view as any).visiblePages.add(1);
+        (view as any).visiblePages.add(2);
+        // First zoom to 4.0 so both pages fill the mobile budget (triggering placeholder downsample path on next zoom)
+        view.setScale(4.0);
+        await waitPagesRendered(view, [1, 2], 4.0);
+        await frame();
+
+        const prevCanvas = view.getPageRecord(1)!.canvas;
+        const prevScale = view.getPageRecord(1)!.renderedScale;
+        const baselineWhiteRatio = measureWhiteRatio(view, 1);
+
+        failTriggered = 0;
+        failMode = mode;
+        const ratios: number[] = [baselineWhiteRatio];
+        let sampling = true;
+        const tick = () => { if (!sampling) return; ratios.push(measureWhiteRatio(view, 1)); requestAnimationFrame(tick); };
+        requestAnimationFrame(tick);
+        try {
+          view.setScale(3.2);
+          await wait(160);
+          await frame();
+        } finally {
+          sampling = false;
+          failMode = "none";
+        }
+
+        let flashFrames = 0, maxWhiteRatio = 0, maxJump = 0;
+        for (let i = 0; i < ratios.length; i++) {
+          if (ratios[i] > maxWhiteRatio) maxWhiteRatio = ratios[i];
+          if (i > 0) {
+            const j = Number((ratios[i] - ratios[i - 1]).toFixed(4));
+            if (j > maxJump) maxJump = j;
+            if (ratios[i] >= WHITE_FLASH_RATIO_THRESHOLD && j >= WHITE_FLASH_JUMP_THRESHOLD) flashFrames++;
+          }
+        }
+        const recAfter = view.getPageRecord(1)!;
+        const domPreserved = recAfter.canvas === prevCanvas && recAfter.canvas.width > 0 && recAfter.canvas.height > 0;
+        const pendingRerender = recAfter.renderedScale === prevScale && recAfter.renderedScale !== 3.2;
+
+        return {
+          mode,
+          failTriggered,
+          baselineWhiteRatio,
+          maxWhiteRatio,
+          maxJump,
+          flashFrames,
+          samples: ratios.length,
+          domPreserved,
+          pendingRerender,
+        };
+      } finally {
+        failMode = "none";
+        await view.onClose();
+        view.containerEl.remove();
+      }
+    };
+
+    const failGetContext = await runAllocFailureCase("getContext-null");
+    const failSilentSize = await runAllocFailureCase("size-silent-fail");
+    const failThrowSize = await runAllocFailureCase("size-throw");
+
+    const failures: string[] = [];
+    if (!spreadAudit.withinBudget) failures.push(\`[spread-dpr3] exceeded hard budget: measured=\${spreadAudit.measuredPeakPixels}px (\${spreadAudit.measuredPeakMB}MB), reported=\${spreadAudit.reportedPeakPixels}px, hard=\${spreadAudit.hardBudgetPixels}px\`);
+    if (!spreadAudit.noUnderreport) failures.push(\`[spread-dpr3] reported peak underreported: reported=\${spreadAudit.reportedPeakPixels}px < measured=\${spreadAudit.measuredPeakPixels}px (delta=\${spreadAudit.deltaPixels}px)\`);
+    if (!hugeSquareAudit.withinBudget) failures.push(\`[mobile-14000pt] exceeded hard budget: measured=\${hugeSquareAudit.measuredPeakPixels}px (\${hugeSquareAudit.measuredPeakMB}MB), reported=\${hugeSquareAudit.reportedPeakPixels}px, hard=\${hugeSquareAudit.hardBudgetPixels}px\`);
+    if (!hugeSquareAudit.noUnderreport) failures.push(\`[mobile-14000pt] reported peak underreported: reported=\${hugeSquareAudit.reportedPeakPixels}px < measured=\${hugeSquareAudit.measuredPeakPixels}px\`);
+    if (!(hugeSquareAudit.flashFrames === 0 && hugeSquareAudit.maxWhiteRatio < MAX_ALLOWED_WHITE_RATIO)) failures.push(\`[mobile-14000pt] white flash: flashFrames=\${hugeSquareAudit.flashFrames}, maxWhiteRatio=\${hugeSquareAudit.maxWhiteRatio}\`);
+    for (const f of [failGetContext, failSilentSize, failThrowSize]) {
+      if (!(f.failTriggered > 0)) failures.push(\`[\${f.mode}] failure injection was not triggered\`);
+      if (!(f.flashFrames === 0 && f.maxWhiteRatio < MAX_ALLOWED_WHITE_RATIO)) failures.push(\`[\${f.mode}] white flash on alloc fail: flashFrames=\${f.flashFrames}, baseline=\${f.baselineWhiteRatio}, maxWhiteRatio=\${f.maxWhiteRatio}, maxJump=\${f.maxJump}\`);
+      if (!f.domPreserved) failures.push(\`[\${f.mode}] old canvas replaced/cleared\`);
+      if (!f.pendingRerender) failures.push(\`[\${f.mode}] page not kept pending re-render\`);
+    }
+    if (failures.length) throw new Error("PZ-09 failed:\\n  - " + failures.join("\\n  - "));
+
+    return {
+      passed: true,
+      reconciliation: [spreadAudit, hugeSquareAudit],
+      allocationFailures: [failGetContext, failSilentSize, failThrowSize],
+    };
+  } finally {
+    trackingActive = false;
+    failMode = "none";
+    (document as any).createElement = origCreateElement;
+    Object.defineProperty(HTMLCanvasElement.prototype, "width", origWidthDesc);
+    Object.defineProperty(HTMLCanvasElement.prototype, "height", origHeightDesc);
+    HTMLCanvasElement.prototype.getContext = origGetContext;
+    Platform.isMobile = origIsMobile;
+    if (origDprDesc) Object.defineProperty(window, "devicePixelRatio", origDprDesc);
+  }
+};
+
+// ===== PZ-10: Cross-page eviction release-before-writeoff + Readability floor & <=500ms idle auto-upgrade =====
+(window as any).runPZ10EvictionOrderAndIdleUpgrade = async () => {
+  const origIsMobile = Platform.isMobile;
+  const origDprDesc = Object.getOwnPropertyDescriptor(window, "devicePixelRatio");
+  const origCreateElement = document.createElement.bind(document);
+  const origWidthDesc = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, "width")!;
+  const origHeightDesc = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, "height")!;
+  const origGetContext = HTMLCanvasElement.prototype.getContext;
+
+  const sampleCanvas = origCreateElement("canvas");
+  sampleCanvas.width = 160;
+  sampleCanvas.height = 160;
+  const sampleCtx = origGetContext.call(sampleCanvas, "2d", { willReadFrequently: true }) as CanvasRenderingContext2D;
+
+  // Measure both white ratio and high-frequency edge gradient (mean horizontal+vertical luma delta) of rendered canvas
+  const measureCanvasQuality = (canvas: HTMLCanvasElement): { width: number; height: number; whiteRatio: number; edgeEnergy: number } => {
+    const w = origWidthDesc.get!.call(canvas);
+    const h = origHeightDesc.get!.call(canvas);
+    if (w <= 0 || h <= 0) return { width: 0, height: 0, whiteRatio: 1, edgeEnergy: 0 };
+    sampleCtx.fillStyle = "#ffffff";
+    sampleCtx.fillRect(0, 0, sampleCanvas.width, sampleCanvas.height);
+    sampleCtx.drawImage(canvas, 0, 0, w, h, 0, 0, sampleCanvas.width, sampleCanvas.height);
+    const data = sampleCtx.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height).data;
+    const sw = sampleCanvas.width, sh = sampleCanvas.height;
+    let white = 0;
+    let gradSum = 0;
+    let gradCount = 0;
+    const luma = (idx: number) => 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+    for (let y = 0; y < sh; y++) {
+      for (let x = 0; x < sw; x++) {
+        const idx = (y * sw + x) * 4;
+        if (data[idx] >= 245 && data[idx + 1] >= 245 && data[idx + 2] >= 245) white++;
+        if (x + 1 < sw && y + 1 < sh) {
+          const l0 = luma(idx);
+          const lx = luma(idx + 4);
+          const ly = luma(idx + sw * 4);
+          gradSum += Math.abs(l0 - lx) + Math.abs(l0 - ly);
+          gradCount++;
+        }
+      }
+    }
+    return {
+      width: w,
+      height: h,
+      whiteRatio: Number((white / (sw * sh)).toFixed(4)),
+      edgeEnergy: Number((gradSum / Math.max(1, gradCount)).toFixed(2)),
+    };
+  };
+
+  let trackedCanvases = new Set<HTMLCanvasElement>();
+  let measuredPeakPixels = 0;
+  let trackingActive = false;
+  const computeLivePixels = () => {
+    let sum = 0;
+    for (const c of trackedCanvases) {
+      if (c.classList.contains("ms-ink-raster")) continue;
+      const w = origWidthDesc.get!.call(c);
+      const h = origHeightDesc.get!.call(c);
+      if (w > 0 && h > 0) sum += w * h;
+    }
+    return sum;
+  };
+  const updateMeasuredPeak = () => {
+    if (!trackingActive) return;
+    const sum = computeLivePixels();
+    if (sum > measuredPeakPixels) measuredPeakPixels = sum;
+  };
+
+  (document as any).createElement = function (tag: string, options?: any) {
+    const el = origCreateElement(tag, options);
+    if (trackingActive && tag.toLowerCase() === "canvas") trackedCanvases.add(el as HTMLCanvasElement);
+    return el;
+  };
+  Object.defineProperty(HTMLCanvasElement.prototype, "width", {
+    configurable: true,
+    get() { return origWidthDesc.get!.call(this); },
+    set(v: number) { origWidthDesc.set!.call(this, v); updateMeasuredPeak(); },
+  });
+  Object.defineProperty(HTMLCanvasElement.prototype, "height", {
+    configurable: true,
+    get() { return origHeightDesc.get!.call(this); },
+    set(v: number) { origHeightDesc.set!.call(this, v); updateMeasuredPeak(); },
+  });
+
+  try {
+    // --- Part A: Cross-page eviction of 3+ pages while page 4 has an in-flight offscreen buffer (Mobile 4M hard cap) ---
+    Platform.isMobile = true;
+    Object.defineProperty(window, "devicePixelRatio", { configurable: true, get: () => 2 });
+    trackedCanvases = new Set();
+    measuredPeakPixels = 0;
+    trackingActive = true;
+    const evictionAudit = await (async () => {
+      const pdfPath = "pz10-eviction-order.pdf";
+      const { view } = await openReader(
+        { [pdfPath]: { name: "evict-order", pages: 6, crop: [0, 0, 595, 842], renderDelay: 90, textDelay: 10, paintContent: true } },
+        pdfPath,
+      );
+      try {
+        // Pre-render pages 1, 2, 3 at scale 1.4 (~1.5M px each under mobile budget -> fills 4M hard cap)
+        (view as any).visiblePages.clear();
+        for (const p of [1, 2, 3]) {
+          (view as any).visiblePages.add(p);
+          await view.renderPage(p);
+        }
+        view.resetMemoryPeak();
+        measuredPeakPixels = computeLivePixels();
+
+        const frameTrace: { step: string; livePixels: number; reportedPixels: number }[] = [];
+        const recordStep = (step: string) => {
+          frameTrace.push({
+            step,
+            livePixels: computeLivePixels(),
+            reportedPixels: view.getMemoryStats().currentTotalPixels,
+          });
+        };
+        recordStep("before-inflight-p4");
+
+        // Start in-flight offscreen render on page 4 (~1M+ px allocated), then immediately evict pages 1, 2, 3, 4 by jumping to page 5 & 6
+        (view as any).visiblePages.clear();
+        (view as any).visiblePages.add(4);
+        const p4Promise = view.renderPage(4);
+        await wait(25); // allow page 4 to allocate its offscreen bufferCanvas while page.render is still pending
+        recordStep("p4-inflight-allocated");
+
+        // Now switch visibility to page 5 (triggers cross-page eviction of pages 1, 2, 3, 4 including in-flight page 4!)
+        (view as any).visiblePages.clear();
+        (view as any).visiblePages.add(5);
+        const p5Promise = view.renderPage(5);
+        await wait(25);
+        recordStep("p5-allocated-after-evict");
+
+        (view as any).visiblePages.clear();
+        (view as any).visiblePages.add(6);
+        const p6Promise = view.renderPage(6);
+        await Promise.allSettled([p4Promise, p5Promise, p6Promise]);
+        await frame();
+        recordStep("after-all-settled");
+
+        const stats = view.getMemoryStats();
+        return {
+          hardBudgetPixels: stats.hardBudgetPixels,
+          measuredPeakPixels,
+          reportedPeakPixels: stats.peakTotalPixels,
+          deltaPixels: measuredPeakPixels - stats.peakTotalPixels,
+          withinBudget: measuredPeakPixels <= stats.hardBudgetPixels && stats.peakTotalPixels <= stats.hardBudgetPixels,
+          noUnderreport: stats.peakTotalPixels >= measuredPeakPixels,
+          frameTrace,
+        };
+      } finally {
+        await view.onClose();
+        view.containerEl.remove();
+      }
+    })();
+    trackingActive = false;
+
+    // --- Part B: Readability floor (14000pt@400% must NOT destroy old 1414x1414 into 353x353 smudge) ---
+    Platform.isMobile = true;
+    Object.defineProperty(window, "devicePixelRatio", { configurable: true, get: () => 2 });
+    const readabilityAudit = await (async () => {
+      const pdfPath = "pz10-readability-14000pt.pdf";
+      const { view } = await openReader(
+        { [pdfPath]: { name: "readability-14000", pages: 2, crop: [0, 0, 14000, 14000], renderDelay: 50, textDelay: 10, paintContent: true } },
+        pdfPath,
+      );
+      try {
+        await view.renderPage(1);
+        await frame();
+        (view as any).visiblePages.add(1);
+        const before = measureCanvasQuality(view.getPageRecord(1)!.canvas);
+        view.setScale(4.0);
+        await wait(160);
+        await frame();
+        const after = measureCanvasQuality(view.getPageRecord(1)!.canvas);
+        return {
+          beforeWidth: before.width,
+          beforeHeight: before.height,
+          beforeEdgeEnergy: before.edgeEnergy,
+          afterWidth: after.width,
+          afterHeight: after.height,
+          afterEdgeEnergy: after.edgeEnergy,
+          afterWhiteRatio: after.whiteRatio,
+          preservedResolution: after.width >= Math.floor(before.width * 0.8) && after.height >= Math.floor(before.height * 0.8),
+          readableEdgeEnergy: after.edgeEnergy >= 8.0,
+        };
+      } finally {
+        await view.onClose();
+        view.containerEl.remove();
+      }
+    })();
+
+    // --- Part C: TRUE automatic idle upgrade within <=500ms (NO explicit renderPage / internal upgrade calls!) ---
+    Platform.isMobile = true;
+    Object.defineProperty(window, "devicePixelRatio", { configurable: true, get: () => 2 });
+    const idleUpgradeAudit = await (async () => {
+      const pdfPath = "pz10-idle-upgrade.pdf";
+      const { view } = await openReader(
+        { [pdfPath]: { name: "idle-upgrade", pages: 4, crop: [0, 0, 595, 842], renderDelay: 50, textDelay: 10, paintContent: true } },
+        pdfPath,
+      );
+      try {
+        await view.setPageLayout("spread", false);
+        await waitPagesRendered(view, [1, 2], view.getScale());
+        const scrollEl = view.getScrollContainer();
+
+        // Position scroll at the seam between page 1 and page 2 so real IntersectionObserver sees BOTH [1, 2]
+        view.setScale(4.0);
+        const rec1 = view.getPageRecord(1)!;
+        const seamLeft = Math.max(0, rec1.wrapper.offsetLeft + rec1.wrapper.offsetWidth - scrollEl.clientWidth / 2);
+        scrollEl.scrollLeft = seamLeft;
+        await waitPagesRendered(view, [1, 2], 4.0);
+        await frame();
+        const dprDuringSpread = view.getMemoryStats().pages[1]?.dpr ?? 0;
+
+        // Real user horizontal scroll left to bring only page 1 into viewport (pushes page 2 out of viewport)
+        // STRICT RULE: Do NOT call renderPage(), runIdleUpgrade(), or mutate visiblePages manually!
+        const eventsBefore = pdfEvents.length;
+        const t0 = performance.now();
+        scrollEl.scrollLeft = 0;
+        scrollEl.dispatchEvent(new Event("scroll"));
+
+        let upgradedAtMs = -1;
+        let finalDpr = dprDuringSpread;
+        const targetSingleDpr = Math.min(1.25, Math.sqrt(2_000_000 / (595 * 4 * 842 * 4)));
+        while (performance.now() - t0 <= 500) {
+          finalDpr = view.getMemoryStats().pages[1]?.dpr ?? 0;
+          if (finalDpr >= targetSingleDpr - 0.02 && !view.getPageRecord(1)?.renderPromise) {
+            upgradedAtMs = Math.round(performance.now() - t0);
+            break;
+          }
+          await wait(20);
+        }
+        const qualityAfterUpgrade = measureCanvasQuality(view.getPageRecord(1)!.canvas);
+        const upgradeRenderCount = pdfEvents.slice(eventsBefore).filter(e => e[0] === "render" && e[1] === "idle-upgrade" && e[2] === 1).length;
+        return {
+          trigger: "real-horizontal-scroll-spread-to-single-visible",
+          dprDuringSpread: Number(dprDuringSpread.toFixed(4)),
+          targetSingleDpr: Number(targetSingleDpr.toFixed(4)),
+          finalDpr: Number(finalDpr.toFixed(4)),
+          upgradedWithin500ms: upgradedAtMs >= 0 && upgradedAtMs <= 500 && upgradeRenderCount >= 1,
+          upgradedAtMs,
+          upgradeRenderCount,
+          afterUpgradeWidth: qualityAfterUpgrade.width,
+          afterUpgradeHeight: qualityAfterUpgrade.height,
+          afterUpgradeEdgeEnergy: qualityAfterUpgrade.edgeEnergy,
+        };
+      } finally {
+        await view.onClose();
+        view.containerEl.remove();
+      }
+    })();
+
+    // --- Part D: Folding page 2 in spread auto-upgrades page 1 within <=500ms (NO explicit renderPage!) ---
+    Platform.isMobile = true;
+    Object.defineProperty(window, "devicePixelRatio", { configurable: true, get: () => 2 });
+    const foldUpgradeAudit = await (async () => {
+      const pdfPath = "pz10-fold-upgrade.pdf";
+      const { view } = await openReader(
+        { [pdfPath]: { name: "fold-upgrade", pages: 2, crop: [0, 0, 595, 842], renderDelay: 40, textDelay: 10, paintContent: true } },
+        pdfPath,
+      );
+      try {
+        await view.setPageLayout("spread", false);
+        await waitPagesRendered(view, [1, 2], view.getScale());
+        const scrollEl = view.getScrollContainer();
+        view.setScale(4.0);
+        const rec1 = view.getPageRecord(1)!;
+        const rec2 = view.getPageRecord(2)!;
+        scrollEl.scrollLeft = Math.max(0, rec1.wrapper.offsetLeft + rec1.wrapper.offsetWidth - scrollEl.clientWidth / 2);
+        await waitPagesRendered(view, [1, 2], 4.0);
+        await frame();
+        const dprBefore = view.getMemoryStats().pages[1]?.dpr ?? 0;
+        const widthBefore = rec1.canvas.width;
+
+        const eventsBefore = pdfEvents.length;
+        const t0 = performance.now();
+        // Real UI click on page 2's fold button (page 2 remains in viewport as a folded bar, so visiblePages still contains 2)
+        rec2.wrapper.querySelector<HTMLButtonElement>(".ms-page-btn")!.click();
+
+        let upgradedAtMs = -1;
+        let finalDpr = dprBefore;
+        const targetSingleDpr = Math.min(1.25, Math.sqrt(2_000_000 / (595 * 4 * 842 * 4)));
+        while (performance.now() - t0 <= 500) {
+          finalDpr = view.getMemoryStats().pages[1]?.dpr ?? 0;
+          if (finalDpr >= targetSingleDpr - 0.02 && !rec1.renderPromise) {
+            upgradedAtMs = Math.round(performance.now() - t0);
+            break;
+          }
+          await wait(20);
+        }
+        const renderCount = pdfEvents.slice(eventsBefore).filter(e => e[0] === "render" && e[1] === "fold-upgrade" && e[2] === 1).length;
+        return {
+          widthBefore,
+          widthAfter: rec1.canvas.width,
+          dprBefore: Number(dprBefore.toFixed(4)),
+          finalDpr: Number(finalDpr.toFixed(4)),
+          targetSingleDpr: Number(targetSingleDpr.toFixed(4)),
+          upgradedWithin500ms: upgradedAtMs >= 0 && upgradedAtMs <= 500 && renderCount === 1,
+          upgradedAtMs,
+          renderCount,
+        };
+      } finally {
+        await view.onClose();
+        view.containerEl.remove();
+      }
+    })();
+
+    // --- Part E: Already-at-cap folded A4 page must NOT redundantly re-render on scroll / visibilitychange ---
+    Platform.isMobile = true;
+    Object.defineProperty(window, "devicePixelRatio", { configurable: true, get: () => 2 });
+    const noRedundantFoldRenderAudit = await (async () => {
+      const pdfPath = "pz10-folded-no-redundancy.pdf";
+      const { view, store } = await openReader(
+        { [pdfPath]: { name: "folded-cap", pages: 1, crop: [0, 0, 595, 842], renderDelay: 30, textDelay: 5, paintContent: true } },
+        pdfPath,
+      );
+      try {
+        store.updateDocMeta(pdfPath, {
+          pdfRegionFolds: [{ id: "fold-cap-1", pageId: view.getPdfPageId(1), rects: [{ x: 0, y: 120, w: 595, h: 600 }] }],
+        });
+        await view.refreshExtendLayout();
+        view.setScale(4.0);
+        await waitPagesRendered(view, [1], 4.0);
+        await wait(160);
+        const rec1 = view.getPageRecord(1)!;
+        const canvasBefore = rec1.canvas;
+        const dprBefore = view.getMemoryStats().pages[1]?.dpr ?? 0;
+        const scrollEl = view.getScrollContainer();
+
+        const eventsBefore = pdfEvents.length;
+        for (let i = 1; i <= 4; i++) {
+          scrollEl.scrollTop = i * 8;
+          scrollEl.dispatchEvent(new Event("scroll"));
+          await wait(15);
+        }
+        await wait(220);
+        for (let i = 0; i < 3; i++) {
+          document.dispatchEvent(new Event("visibilitychange"));
+          await wait(160);
+        }
+        const redundantRenders = pdfEvents.slice(eventsBefore).filter(e => e[0] === "render" && e[1] === "folded-cap" && e[2] === 1).length;
+        return {
+          dprBefore: Number(dprBefore.toFixed(4)),
+          dprAfter: Number((view.getMemoryStats().pages[1]?.dpr ?? 0).toFixed(4)),
+          canvasSwapped: rec1.canvas !== canvasBefore,
+          redundantRenders,
+        };
+      } finally {
+        await view.onClose();
+        view.containerEl.remove();
+      }
+    })();
+
+    const failures: string[] = [];
+    if (!evictionAudit.withinBudget) failures.push(\`[eviction-order] exceeded 4M hard budget: measured=\${evictionAudit.measuredPeakPixels}px, reported=\${evictionAudit.reportedPeakPixels}px, hard=\${evictionAudit.hardBudgetPixels}px\`);
+    if (!evictionAudit.noUnderreport) failures.push(\`[eviction-order] writeoff before release underreported: reported=\${evictionAudit.reportedPeakPixels}px < measured=\${evictionAudit.measuredPeakPixels}px (delta=\${evictionAudit.deltaPixels}px)\`);
+    if (!readabilityAudit.preservedResolution) failures.push(\`[readability-14000pt] old canvas destroyed: \${readabilityAudit.beforeWidth}x\${readabilityAudit.beforeHeight} -> \${readabilityAudit.afterWidth}x\${readabilityAudit.afterHeight}\`);
+    if (!readabilityAudit.readableEdgeEnergy) failures.push(\`[readability-14000pt] text smudged: edgeEnergy=\${readabilityAudit.afterEdgeEnergy} < 8.0\`);
+    if (!idleUpgradeAudit.upgradedWithin500ms) failures.push(\`[idle-upgrade-auto] did not auto-upgrade within 500ms: renders=\${idleUpgradeAudit.upgradeRenderCount}, spreadDpr=\${idleUpgradeAudit.dprDuringSpread}, finalDpr=\${idleUpgradeAudit.finalDpr}, target=\${idleUpgradeAudit.targetSingleDpr}\`);
+    if (!foldUpgradeAudit.upgradedWithin500ms) failures.push(\`[fold-upgrade-auto] folding page 2 did not auto-upgrade page 1 within 500ms: renders=\${foldUpgradeAudit.renderCount}, dpr=\${foldUpgradeAudit.dprBefore}->\${foldUpgradeAudit.finalDpr}, target=\${foldUpgradeAudit.targetSingleDpr}\`);
+    if (noRedundantFoldRenderAudit.redundantRenders !== 0 || noRedundantFoldRenderAudit.canvasSwapped) failures.push(\`[folded-no-redundancy] at-cap folded page redundantly re-rendered: renders=\${noRedundantFoldRenderAudit.redundantRenders}, swapped=\${noRedundantFoldRenderAudit.canvasSwapped}\`);
+    if (failures.length) throw new Error("PZ-10 failed:\\n  - " + failures.join("\\n  - "));
+
+    return { passed: true, evictionAudit, readabilityAudit, idleUpgradeAudit, foldUpgradeAudit, noRedundantFoldRenderAudit };
+  } finally {
+    trackingActive = false;
+    (document as any).createElement = origCreateElement;
+    Object.defineProperty(HTMLCanvasElement.prototype, "width", origWidthDesc);
+    Object.defineProperty(HTMLCanvasElement.prototype, "height", origHeightDesc);
+    Platform.isMobile = origIsMobile;
+    if (origDprDesc) Object.defineProperty(window, "devicePixelRatio", origDprDesc);
+  }
+};
+
 (window as any).ready = true;
 (window as any).getErrors = () => errors;
 `;
@@ -1061,6 +2074,8 @@ try {
         }
       }\n` + src
         .replace("const config = JSON.parse(new TextDecoder().decode(data));", "const decoded = new TextDecoder().decode(data); const config = decoded.startsWith('%PDF-') ? { name: 'real-pdf', pages: 1 } : JSON.parse(decoded);")
+        .replace("render({canvasContext,viewport}:any){", "render({canvasContext,viewport,transform}:any){")
+        .replace("canvasContext.fillStyle='#fff';canvasContext.fillRect(0,0,viewport.width,viewport.height);canvasContext.fillStyle='#222';canvasContext.fillText(config.name+' page '+num,20,30);", "canvasContext.save();if(transform)canvasContext.transform(transform[0],transform[1],transform[2],transform[3],transform[4],transform[5]);canvasContext.fillStyle='#fff';canvasContext.fillRect(0,0,viewport.width,viewport.height);canvasContext.fillStyle='#222';if(config.paintContent){for(let r=0;r<8;r++){canvasContext.fillRect(viewport.width*0.08,viewport.height*(0.06+r*0.115),viewport.width*0.84,viewport.height*0.065);}}canvasContext.fillText(config.name+' page '+num,20,30);canvasContext.restore();")
         .replace(/getViewport\(\{scale\}:\{scale:number\}\)\{[\s\S]*?return \{[\s\S]*?\};\s*\}/, `getViewport({scale}:{scale:number}){ const viewBox=config.crop||[0,0,600,800]; const rotation=config.rotations?.[num-1]??config.rotation??0; return new FakeViewport({viewBox,scale,rotation}); }`);
     }
     await writeFile(join(temporary, name + ".ts"), src);
@@ -1130,6 +2145,10 @@ try {
     const pz04 = await evalJson("window.runPZ04()");
     const pz05 = await evalJson("window.runPZ05()");
     const pz06 = await evalJson("window.runPZ06()");
+    const pz07 = await evalJson("window.runPZ07NoWhiteFlash()");
+    const pz08 = await evalJson("window.runPZ08MemoryBudgetMatrix()");
+    const pz09 = await evalJson("window.runPZ09BudgetAuditAndAllocFailures()");
+    const pz10 = await evalJson("window.runPZ10EvictionOrderAndIdleUpgrade()");
 
     // Native CDP Input.dispatchTouchEvent smoke test
     const cdpInit = await evalJson("window.setupCdpTouchSmoke()");
@@ -1317,6 +2336,10 @@ try {
       pz04,
       pz05,
       pz06,
+      pz07,
+      pz08,
+      pz09,
+      pz10,
       cdpTouchSmoke,
       q3NativeLostCapture,
       q3bTrustedBlur,
@@ -1326,9 +2349,22 @@ try {
       const evidenceDir = resolve(process.env.MARGINSTUDY_EVIDENCE_DIR, "pdf-pinch-zoom");
       await mkdir(evidenceDir, { recursive: true });
       await writeFile(join(evidenceDir, "results.json"), JSON.stringify(summary, null, 2) + "\n");
+      const flashEvidenceDir = resolve(process.env.MARGINSTUDY_EVIDENCE_DIR, "pdf-pinch-flash");
+      await mkdir(flashEvidenceDir, { recursive: true });
+      await writeFile(join(flashEvidenceDir, "results.json"), JSON.stringify({
+        head,
+        generatedAt: summary.generatedAt,
+        suite: "pdf-pinch-zoom",
+        passed: true,
+        pz01,
+        pz07,
+        pz08,
+        pz09,
+        pz10,
+      }, null, 2) + "\n");
     }
 
-    console.log("PASS pdf-pinch-zoom: PZ-01, PZ-02 (1024x768 + 768x1024), PZ-03, PZ-04, PZ-05, PZ-06, cdpTouchSmoke all passed (7/7)");
+    console.log("PASS pdf-pinch-zoom: PZ-01..PZ-10 (pinch, no-flash, 4x2 budget, audit/alloc-fail, eviction-order & idle-upgrade), cdpTouchSmoke all passed (11/11)");
   } finally {
     await browser("close").catch(() => {});
     await new Promise(done => server.close(done));

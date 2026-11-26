@@ -71,9 +71,17 @@ type PdfLayout = "single" | "spread";
 interface PdfViewRestore { path: string; fitWidth?: boolean; scale?: number; layout?: PdfLayout; continuous?: boolean; position?: PdfReadingLocation; referenceId?: string; pdfPageId?: string; }
 function restoredScale(value: unknown): number | undefined { return typeof value === "number" && Number.isFinite(value) && value >= 0.3 && value <= 4 ? Number(value.toFixed(3)) : undefined; }
 
-const MAX_CACHED_PAGES = 6;
-const MAX_CACHED_PIXELS = 32_000_000;
-const MAX_PAGE_PIXELS = 16_000_000;
+// 硬内存预算（每像素 4 字节 RGBA）：同时约束在屏缓存 + 活跃离屏双缓冲总峰值
+const DESKTOP_MAX_CACHED_PAGES = 4;
+const MOBILE_MAX_CACHED_PAGES = 3;
+const DESKTOP_HARD_TOTAL_PIXELS = 16_000_000; // 64 MB 总硬上限
+const MOBILE_HARD_TOTAL_PIXELS = 4_000_000;   // 16 MB 移动低清总硬上限
+const DESKTOP_MAX_PAGE_PIXELS = 8_000_000;    // 32 MB 单页画布硬上限（单页双缓冲峰值 <= 64 MB）
+const MOBILE_MAX_PAGE_PIXELS = 2_000_000;     // 8 MB 移动低清单页硬上限（单页双缓冲峰值 <= 16 MB）
+const MAX_PAGE_PIXELS = DESKTOP_MAX_PAGE_PIXELS;
+const MIN_DEGRADED_DPR = 0.25;
+const MIN_DOUBLE_BUFFER_DPR = 0.05; // 仅作放弃双缓冲阈值，绝不强制抬高突破硬预算
+const PLACEHOLDER_SHRINK_THRESHOLD_PIXELS = 262_144; // 1 MB 以上旧画布在极端压力下可同步降采样占位
 
 export class ReaderView extends ItemView {
   plugin: MarginStudyPlugin;
@@ -88,6 +96,23 @@ export class ReaderView extends ItemView {
   private scale = 1.4;
   private widthFitted = false;
   private fitRevision = 0;
+  private activeOffscreenCanvases = new Map<number, Set<HTMLCanvasElement>>();
+  private activeTempCanvases = new Set<HTMLCanvasElement>();
+  private pendingUpgradePages = new Map<number, number>();
+  private idleUpgradeTimer: number | null = null;
+  private idleUpgradeRunning = false;
+  private peakTotalPixels = 0;
+  private lastRenderBudget = new Map<number, {
+    dpr: number;
+    targetDpr: number;
+    compositePeakArea: number;
+    degraded: boolean;
+    downsampledPlaceholder: boolean;
+    skippedDoubleBuffer: boolean;
+    allocationFailed: boolean;
+    allocatedPixels: number;
+    hardBudgetPixels: number;
+  }>();
   private fitPending = 0;
   private pages = new Map<number, PageRecord>();
   private pageSizes = new Map<number, { w: number; h: number }>();
@@ -850,6 +875,7 @@ export class ReaderView extends ItemView {
         const location = this.pendingLocation ?? (resized ? anchor.location : null);
         if (location && !this.fitPending && this.navigationPage===null) void this.restoreHistoryLocation(location, false);
       }
+      this.enqueueEligibleVisibleUpgrades(80, true);
     });
     this.positionObserver.observe(this.scrollEl);
 
@@ -861,7 +887,9 @@ export class ReaderView extends ItemView {
     this.scrollEl.addEventListener("wheel", () => { this.locationAnchor = null; this.smoothNavigation = null; }, { passive: true });
     this.scrollEl.addEventListener("scroll", () => {
       if (this.smoothNavigation && Math.abs(this.scrollEl.scrollTop - this.smoothNavigation.targetTop) < 2) this.smoothNavigation = null;
+      this.enqueueEligibleVisibleUpgrades(100, true);
     }, { passive: true });
+    document.addEventListener("visibilitychange", this.onVisibilityChange);
     this.scrollEl.addEventListener("focusin", () => { this.plugin.activeReader = this; });
 
     this.buildToolbar();
@@ -900,6 +928,7 @@ export class ReaderView extends ItemView {
           }
         }
         this.evictOffscreenPages();
+        this.enqueueEligibleVisibleUpgrades(80, false);
       },
       { root: this.scrollEl, threshold: [0, 0.1, 0.5, 1] }
     );
@@ -936,6 +965,10 @@ export class ReaderView extends ItemView {
     this.speech?.dispose(); this.speech = null;
     if (this.savePositionTimer !== null) window.clearTimeout(this.savePositionTimer);
     this.savePositionTimer = null;
+    if (this.idleUpgradeTimer !== null) window.clearTimeout(this.idleUpgradeTimer);
+    this.idleUpgradeTimer = null;
+    this.pendingUpgradePages.clear();
+    document.removeEventListener("visibilitychange", this.onVisibilityChange);
     this.scrollEl?.removeEventListener("keydown", this.onPageKey);
     this.scrollEl?.removeEventListener("scroll", this.saveReadingPosition);
     this.destroyed = true;
@@ -1334,6 +1367,7 @@ export class ReaderView extends ItemView {
       this.unitPages(page).forEach((number) => this.visiblePages.add(number));
     }
     this.setCurrentPage(page);
+    this.enqueueEligibleVisibleUpgrades(80, false);
   }
   private async renderPageUnit(page: number): Promise<void> {
     await Promise.all(this.unitPages(page).map((number) => this.renderPage(number)));
@@ -1411,8 +1445,15 @@ export class ReaderView extends ItemView {
     for (const [num, rec] of this.pages) {
       const size = this.pageSizes.get(num);
       if (size) {
-        rec.wrapper.style.width = `${Math.floor(size.w * this.scale)}px`;
-        rec.wrapper.style.height = `${Math.floor(size.h * this.scale)}px`;
+        const nextW = Math.floor(size.w * this.scale);
+        const nextH = Math.floor(size.h * this.scale);
+        rec.wrapper.style.width = `${nextW}px`;
+        rec.wrapper.style.height = `${nextH}px`;
+        // 双缓冲过渡：旧位图按新尺寸 CSS 拉伸占位，避免新帧提交前露白边或跳动
+        if (this.visiblePages.has(num) && rec.canvas.width > 0 && rec.canvas.height > 0) {
+          rec.canvas.style.width = `${nextW}px`;
+          rec.canvas.style.height = `${nextH}px`;
+        }
       }
       if (this.visiblePages.has(num)) {
         if (rec.renderedScale !== this.scale) void this.renderPage(num);
@@ -1420,6 +1461,7 @@ export class ReaderView extends ItemView {
         this.releasePage(num, rec);
       }
     }
+    this.enqueueEligibleVisibleUpgrades(80, false);
     // 标注层随上面 renderPage 末尾统一渲染（页面已量好尺寸），此处无需重复调用
   }
 
@@ -2099,8 +2141,13 @@ export class ReaderView extends ItemView {
     if (!rec || !doc || this.destroyed || this.folded.has(pageNum) || !this.isPageShown(pageNum)) return Promise.resolve();
     rec.lastUsed = Date.now();
     const scale = this.scale;
+    const budgetSnap = this.getMemoryBudget();
+    const curShare = Math.min(budgetSnap.maxPagePixels, Math.floor(budgetSnap.hardTotalPixels / Math.max(2, this.getRenderableVisiblePageCount() * 2)));
+    const curNativeDpr = Math.min(window.devicePixelRatio || 1, budgetSnap.mobileLowRes ? 1.25 : Infinity);
+    const canUpgradeResolution = this.canPageUpgrade(pageNum, rec, curShare, curNativeDpr);
+    const needsUpgrade = this.pendingUpgradePages.has(pageNum) || canUpgradeResolution;
     if (rec.renderPromise && rec.renderingScale === scale) return rec.renderPromise;
-    if (rec.renderedScale === scale && !rec.renderPromise) return Promise.resolve();
+    if (rec.renderedScale === scale && !rec.renderPromise && !needsUpgrade) return Promise.resolve();
     const previous = rec.renderPromise;
     this.cancelPage(rec);
     const revision = rec.revision;
@@ -2109,8 +2156,11 @@ export class ReaderView extends ItemView {
     const current = () => !this.destroyed && this.doc === doc && this.loadRevision === loadRevision &&
       this.pages.get(pageNum) === rec && rec.revision === revision;
     const promise = (async () => {
+      let bufferCanvas: HTMLCanvasElement | null = null;
+      let composedCanvas: HTMLCanvasElement | null = null;
+      let bufferCommitted = false;
       try {
-        // 同一 canvas 必须等旧 renderTask 完成取消，才可调整 backing store。
+        // 同一页串行渲染，确保双缓冲峰值严格控制在「1 在屏 + 1 离屏」。
         if (previous) await previous;
         if (!current()) return;
         const page = await doc.getPage(pageNum);
@@ -2119,41 +2169,116 @@ export class ReaderView extends ItemView {
         this.originalPageSizes.set(pageNum, { w: original.width, h: original.height });
         const baseViewport = this.getPageViewport(page, scale);
         const viewport = extendProjection(baseViewport, this.extendNotes.gaps(pageNum, baseViewport, scale), regionFoldBands(this,pageNum,baseViewport));
-        rec.baseViewport = baseViewport; rec.viewport = viewport;
-        this.pageSizes.set(pageNum, { w: viewport.width / scale, h: viewport.height / scale });
-        const mobileLowRes = Platform.isMobile && this.plugin.store.settings.mobileLowRes !== false;
-        const maxPagePixels = mobileLowRes ? 4_000_000 : MAX_PAGE_PIXELS;
-        const dpr = Math.min(window.devicePixelRatio || 1, mobileLowRes ? 1.25 : Infinity, Math.sqrt(maxPagePixels / Math.max(1, viewport.width * viewport.height)));
-        rec.wrapper.style.width = `${Math.floor(viewport.width)}px`;
-        rec.wrapper.style.height = `${Math.floor(viewport.height)}px`;
-        rec.canvas.style.width = `${Math.floor(viewport.width)}px`;
-        rec.canvas.style.height = `${Math.floor(baseViewport.height)}px`;
-        rec.canvas.width = Math.max(1, Math.floor(viewport.width * dpr));
-        rec.canvas.height = Math.max(1, Math.floor(baseViewport.height * dpr));
-        rec.textLayer.style.width = `${Math.floor(viewport.width)}px`;
-        rec.textLayer.style.height = `${Math.floor(viewport.height)}px`;
-        rec.textLayer.style.setProperty("--scale-factor", String(viewport.scale));
-        rec.annLayer.style.width = `${Math.floor(viewport.width)}px`;
-        rec.annLayer.style.height = `${Math.floor(viewport.height)}px`;
-        rec.handlesLayer.style.width = `${Math.floor(viewport.width)}px`;
-        rec.handlesLayer.style.height = `${Math.floor(viewport.height)}px`;
-        const context = rec.canvas.getContext("2d");
-        if (!context) return;
+        const budget = this.getMemoryBudget();
+        const hasComposite = this.extendNotes.hasComposite(pageNum, baseViewport);
+        // 统一尺寸口径：DPR 限幅与实际分配使用同一组尺寸（含合成态源+目标瞬时总面积）
+        const srcW = Math.max(1, viewport.width);
+        const srcH = Math.max(1, baseViewport.height);
+        const dstW = Math.max(1, viewport.width);
+        const dstH = Math.max(1, viewport.height);
+        const srcArea = srcW * srcH;
+        const compositePeakArea = hasComposite ? srcArea + dstW * dstH : srcArea;
+        const visibleCount = this.getRenderableVisiblePageCount();
+        const perPageShare = Math.min(budget.maxPagePixels, Math.floor(budget.hardTotalPixels / Math.max(2, visibleCount * 2)));
+        const nativeDpr = Math.min(window.devicePixelRatio || 1, budget.mobileLowRes ? 1.25 : Infinity);
+        const soloTargetDpr = this.computeTargetDpr(compositePeakArea, budget.maxPagePixels, nativeDpr);
+        const targetDpr = this.computeTargetDpr(compositePeakArea, perPageShare, nativeDpr);
+
+        // 硬预算回收：分配离屏画布前先驱逐非可见页并同步物理归零
+        const desiredPeakPixels = Math.ceil(compositePeakArea * targetDpr * targetDpr);
+        this.evictOffscreenPages(desiredPeakPixels, pageNum);
+        let availablePixels = Math.max(0, budget.hardTotalPixels - this.getTotalActivePixels());
+        let downsampledPlaceholder = false;
+        const hasOldBitmap = rec.canvas.width > 0 && rec.canvas.height > 0;
+        // 极端内存压力兜底：仅当确认降采样后新图能达到可读性下限时才允许压缩旧画布，绝不为了放弃渲染而毁掉清晰旧图
+        const minNeededPixels = Math.ceil(compositePeakArea * MIN_DEGRADED_DPR * MIN_DEGRADED_DPR);
+        if (hasOldBitmap && availablePixels < minNeededPixels && rec.canvas.width * rec.canvas.height > PLACEHOLDER_SHRINK_THRESHOLD_PIXELS) {
+          const oldPixels = rec.canvas.width * rec.canvas.height;
+          const projectedAvailable = Math.max(0, budget.hardTotalPixels - (this.getTotalActivePixels() - oldPixels + PLACEHOLDER_SHRINK_THRESHOLD_PIXELS));
+          const projectedAllowed = Math.min(perPageShare, projectedAvailable);
+          const projectedDpr = projectedAllowed > 0 ? Math.min(targetDpr, Math.sqrt(projectedAllowed / compositePeakArea)) : 0;
+          const canRenderReadableAfterShrink = projectedDpr >= MIN_DOUBLE_BUFFER_DPR && Math.floor(srcW * projectedDpr) >= 1 && Math.floor(srcH * projectedDpr) >= 1;
+          if (canRenderReadableAfterShrink) {
+            downsampledPlaceholder = this.downsampleOnscreenPlaceholder(rec, budget.hardTotalPixels);
+            availablePixels = Math.max(0, budget.hardTotalPixels - this.getTotalActivePixels());
+          }
+        }
+        const allowedPixels = Math.min(perPageShare, availablePixels);
+        // 严禁任何下限突破预算：dpr 严格受 allowedPixels / compositePeakArea 上界约束
+        const dpr = allowedPixels > 0 ? Math.min(targetDpr, Math.sqrt(allowedPixels / compositePeakArea)) : 0;
+        const bufW = Math.floor(srcW * dpr);
+        const bufH = Math.floor(srcH * dpr);
+        const dstHpx = hasComposite && bufH > 0 ? Math.max(1, Math.floor(dstH * (bufH / Math.max(1, srcH)))) : 0;
+        const exactNeedPixels = bufW >= 1 && bufH >= 1 ? (hasComposite ? bufW * bufH + bufW * dstHpx : bufW * bufH) : Infinity;
+
+        // 若低于可读性下限或剩余预算不足：有旧位图时放弃该页双缓冲（保留原清晰旧位图 CSS 拉伸占位，0 白闪），并登记空闲自动升级
+        if (
+          (hasOldBitmap && dpr < MIN_DOUBLE_BUFFER_DPR) ||
+          bufW < 1 ||
+          bufH < 1 ||
+          this.getTotalActivePixels() + exactNeedPixels > budget.hardTotalPixels
+        ) {
+          this.lastRenderBudget.set(pageNum, {
+            dpr: 0,
+            targetDpr: nativeDpr,
+            compositePeakArea,
+            degraded: true,
+            downsampledPlaceholder,
+            skippedDoubleBuffer: true,
+            allocationFailed: false,
+            allocatedPixels: 0,
+            hardBudgetPixels: budget.hardTotalPixels,
+          });
+          if (soloTargetDpr >= MIN_DOUBLE_BUFFER_DPR) {
+            this.queuePageUpgrade(pageNum, soloTargetDpr);
+            this.scheduleIdleUpgrade();
+          }
+          this.recordPeakPixels();
+          return;
+        }
+        const degraded = dpr < nativeDpr - 1e-4 || downsampledPlaceholder;
+
+        // 双缓冲离屏渲染：安全分配并校验尺寸与 2D 上下文，失败一律保留旧位图不替换 DOM
+        const alloc = this.allocateOffscreenCanvas(bufW, bufH, budget.hardTotalPixels, viewport.width, baseViewport.height);
+        if (!alloc) {
+          this.lastRenderBudget.set(pageNum, {
+            dpr,
+            targetDpr: nativeDpr,
+            compositePeakArea,
+            degraded: true,
+            downsampledPlaceholder,
+            skippedDoubleBuffer: false,
+            allocationFailed: true,
+            allocatedPixels: 0,
+            hardBudgetPixels: budget.hardTotalPixels,
+          });
+          this.queuePageUpgrade(pageNum, targetDpr);
+          this.scheduleIdleUpgrade();
+          this.recordPeakPixels();
+          return;
+        }
+        bufferCanvas = alloc.canvas;
+        const context = alloc.ctx;
+        this.registerOffscreenCanvas(pageNum, bufferCanvas);
+
+        const bufferTextLayer = el("div", { class: "ms-text-layer" });
+        bufferTextLayer.style.width = `${Math.floor(viewport.width)}px`;
+        bufferTextLayer.style.height = `${Math.floor(viewport.height)}px`;
+        bufferTextLayer.style.setProperty("--scale-factor", String(viewport.scale));
         const task = page.render({ canvasContext: context, viewport: baseViewport,
           transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined });
         rec.renderTask = task;
         await task.promise;
         if (!current()) return;
         rec.renderTask = null;
-        clear(rec.textLayer);
         try {
           const text = await page.getTextContent();
           if (!current()) return;
-          rec.textTask = pdfjsLib.renderTextLayer({ textContentSource: text, container: rec.textLayer, viewport: baseViewport });
+          rec.textTask = pdfjsLib.renderTextLayer({ textContentSource: text, container: bufferTextLayer, viewport: baseViewport });
           await rec.textTask.promise;
           const words=this.recognizedPages.get(pageNum);
-          if(current()&&!rec.textLayer.querySelector('span')&&words){
-            rec.textLayer.removeAttribute("data-main-rotation");
+          if(current()&&!bufferTextLayer.querySelector('span')&&words){
+            bufferTextLayer.removeAttribute("data-main-rotation");
             for(const word of words){
               const width=word.w*viewport.width,height=word.h*baseViewport.height;
               if(!word.text.trim()||width<=0||height<=0)continue;
@@ -2161,15 +2286,105 @@ export class ReaderView extends ItemView {
               span.style.cssText=`left:${word.x*viewport.width}px;top:${(1-word.y-word.h)*baseViewport.height}px;font-family:Helvetica,sans-serif;font-size:${fontSize}px;line-height:1;height:${height}px;transform-origin:0 0;`;
               context.font=`${fontSize}px Helvetica`;const measured=context.measureText(word.text).width;
               if(measured)span.style.transform=`scaleX(${width/measured})`;
-              rec.textLayer.append(span,document.createElement("br"));
+              bufferTextLayer.append(span,document.createElement("br"));
             }
             if(words.length)this.pageTextCache.set(pageNum,mergeOcrWords(words));
           }
-          if(current())orderTextColumns(rec.textLayer,baseViewport);
         } catch { /* 没有文字层的扫描 PDF 仍可阅读及区域摘录。 */ }
         if (!current()) return;
-        try{rec.imageRects=await pdfImageRegions(page);}catch{rec.imageRects=[];}
-        if(!current())return;
+        let imageRects: import("../types").PdfRect[] = [];
+        try { imageRects = await pdfImageRegions(page); } catch { imageRects = []; }
+        if (!current()) return;
+
+        // 离屏完成折叠/留白合成（零中间拷贝），合成前校验硬预算、失败保留旧位图
+        let finalCanvas = bufferCanvas;
+        if (hasComposite) {
+          const ratio = bufferCanvas.height / Math.max(1, baseViewport.height);
+          const expectedTargetPixels = bufferCanvas.width * Math.max(1, Math.floor(Math.max(1, viewport.height) * ratio));
+          if (this.getTotalActivePixels() + expectedTargetPixels > budget.hardTotalPixels) {
+            this.lastRenderBudget.set(pageNum, {
+              dpr,
+              targetDpr: nativeDpr,
+              compositePeakArea,
+              degraded: true,
+              downsampledPlaceholder,
+              skippedDoubleBuffer: true,
+              allocationFailed: false,
+              allocatedPixels: 0,
+              hardBudgetPixels: budget.hardTotalPixels,
+            });
+            this.queuePageUpgrade(pageNum, targetDpr);
+            this.scheduleIdleUpgrade();
+            return;
+          }
+          composedCanvas = this.extendNotes.composeCanvas(pageNum, baseViewport, viewport, bufferCanvas);
+          if (!composedCanvas) {
+            this.lastRenderBudget.set(pageNum, {
+              dpr,
+              targetDpr: nativeDpr,
+              compositePeakArea,
+              degraded: true,
+              downsampledPlaceholder,
+              skippedDoubleBuffer: false,
+              allocationFailed: true,
+              allocatedPixels: 0,
+              hardBudgetPixels: budget.hardTotalPixels,
+            });
+            this.queuePageUpgrade(pageNum, targetDpr);
+            this.scheduleIdleUpgrade();
+            return;
+          }
+          if (composedCanvas !== bufferCanvas) {
+            this.registerOffscreenCanvas(pageNum, composedCanvas);
+            this.releaseSingleOffscreenCanvas(pageNum, bufferCanvas);
+            bufferCanvas = null;
+            finalCanvas = composedCanvas;
+          }
+        }
+        const finalAllocatedPixels = finalCanvas.width * finalCanvas.height;
+        this.lastRenderBudget.set(pageNum, {
+          dpr,
+          targetDpr: nativeDpr,
+          compositePeakArea,
+          degraded,
+          downsampledPlaceholder,
+          skippedDoubleBuffer: false,
+          allocationFailed: false,
+          allocatedPixels: finalAllocatedPixels,
+          hardBudgetPixels: budget.hardTotalPixels,
+        });
+
+        // 若因并发/跨页压力低于当前布局目标清晰度，登记空闲自动升级；达到目标清晰度则清除升级标记
+        if (dpr < targetDpr - 0.01) {
+          this.queuePageUpgrade(pageNum, targetDpr);
+          this.scheduleIdleUpgrade();
+        } else {
+          this.pendingUpgradePages.delete(pageNum);
+        }
+
+        // 单帧原子替换：一次性切换 DOM 节点并同步各层尺寸与叠加层
+        const prevCanvas = rec.canvas;
+        const prevTextLayer = rec.textLayer;
+        rec.baseViewport = baseViewport;
+        rec.viewport = viewport;
+        rec.imageRects = imageRects;
+        this.pageSizes.set(pageNum, { w: viewport.width / scale, h: viewport.height / scale });
+        rec.wrapper.style.width = `${Math.floor(viewport.width)}px`;
+        rec.wrapper.style.height = `${Math.floor(viewport.height)}px`;
+        rec.annLayer.style.width = `${Math.floor(viewport.width)}px`;
+        rec.annLayer.style.height = `${Math.floor(viewport.height)}px`;
+        rec.handlesLayer.style.width = `${Math.floor(viewport.width)}px`;
+        rec.handlesLayer.style.height = `${Math.floor(viewport.height)}px`;
+        prevCanvas.replaceWith(finalCanvas);
+        prevTextLayer.replaceWith(bufferTextLayer);
+        rec.canvas = finalCanvas;
+        rec.textLayer = bufferTextLayer;
+        prevCanvas.width = prevCanvas.height = 0;
+        // finalCanvas 已转入在屏 rec.canvas，从离屏登记表移除（不归零）
+        this.unregisterOffscreenCanvas(pageNum, finalCanvas);
+        this.recordPeakPixels();
+        bufferCommitted = true;
+        try { orderTextColumns(rec.textLayer, baseViewport); } catch { /* noop */ }
         this.extendNotes.paint(pageNum, baseViewport);
         this.extendNotes.render(pageNum);
         renderRegionFolds(this, pageNum);
@@ -2181,6 +2396,10 @@ export class ReaderView extends ItemView {
           console.error("MarginStudy render page:", error);
         }
       } finally {
+        if (!bufferCommitted) {
+          if (bufferCanvas) this.releaseSingleOffscreenCanvas(pageNum, bufferCanvas);
+          if (composedCanvas && composedCanvas !== bufferCanvas) this.releaseSingleOffscreenCanvas(pageNum, composedCanvas);
+        }
         if (rec.revision === revision) {
           rec.renderTask = null;
           rec.textTask = null;
@@ -2192,6 +2411,315 @@ export class ReaderView extends ItemView {
     })();
     rec.renderPromise = promise;
     return promise;
+  }
+
+  private onVisibilityChange = (): void => {
+    if (!document.hidden) this.enqueueEligibleVisibleUpgrades(80, false);
+  };
+
+  private getRenderableVisiblePageCount(): number {
+    let count = 0;
+    for (const num of this.visiblePages) {
+      if (!this.isPageShown(num) || this.folded.has(num)) continue;
+      const size = this.pageSizes.get(num);
+      if (size && (size.w <= 0 || size.h <= 0)) continue;
+      count++;
+    }
+    return Math.max(1, count);
+  }
+
+  private computeTargetDpr(compositePeakArea: number, sharePixels: number, nativeDpr: number): number {
+    return Math.min(nativeDpr, Math.sqrt(Math.max(1, sharePixels) / Math.max(1, compositePeakArea)));
+  }
+
+  private queuePageUpgrade(pageNum: number, targetDpr: number): boolean {
+    const quantized = Number(targetDpr.toFixed(4));
+    const existing = this.pendingUpgradePages.get(pageNum);
+    if (existing !== undefined && Math.abs(existing - quantized) < 1e-4) return false;
+    this.pendingUpgradePages.set(pageNum, quantized);
+    return true;
+  }
+
+  private targetDprForUpgrade(pageNum: number, curShare: number, nativeDpr: number): number | null {
+    const prevBudget = this.lastRenderBudget.get(pageNum);
+    if (!prevBudget) return null;
+    const nextTargetDpr = this.computeTargetDpr(prevBudget.compositePeakArea, curShare, nativeDpr);
+    if (prevBudget.allocationFailed) return nextTargetDpr;
+    if (prevBudget.skippedDoubleBuffer) {
+      return nextTargetDpr >= MIN_DOUBLE_BUFFER_DPR ? nextTargetDpr : null;
+    }
+    return prevBudget.dpr < nextTargetDpr - 0.01 ? nextTargetDpr : null;
+  }
+
+  private canPageUpgrade(pageNum: number, _rec: PageRecord, curShare: number, nativeDpr: number): boolean {
+    return this.targetDprForUpgrade(pageNum, curShare, nativeDpr) !== null;
+  }
+
+  private enqueueEligibleVisibleUpgrades(delayMs = 80, debounce = false): void {
+    if (this.destroyed || !this.doc || this.pinchState) return;
+    const budget = this.getMemoryBudget();
+    const visibleCount = this.getRenderableVisiblePageCount();
+    const curShare = Math.min(budget.maxPagePixels, Math.floor(budget.hardTotalPixels / Math.max(2, visibleCount * 2)));
+    const nativeDpr = Math.min(window.devicePixelRatio || 1, budget.mobileLowRes ? 1.25 : Infinity);
+    let enqueued = false;
+    for (const num of this.visiblePages) {
+      if (!this.isPageShown(num) || this.folded.has(num)) continue;
+      const rec = this.pages.get(num);
+      if (!rec || rec.renderPromise) continue;
+      const nextTarget = this.targetDprForUpgrade(num, curShare, nativeDpr);
+      if (nextTarget !== null) {
+        if (this.queuePageUpgrade(num, nextTarget)) enqueued = true;
+      } else {
+        this.pendingUpgradePages.delete(num);
+      }
+    }
+    if (enqueued || this.pendingUpgradePages.size > 0) {
+      this.scheduleIdleUpgrade(delayMs, debounce);
+    }
+  }
+
+  private scheduleIdleUpgrade(delayMs = 80, debounce = false): void {
+    if (this.destroyed || this.idleUpgradeRunning) return;
+    if (this.idleUpgradeTimer !== null) {
+      if (!debounce) return;
+      window.clearTimeout(this.idleUpgradeTimer);
+      this.idleUpgradeTimer = null;
+    }
+    this.idleUpgradeTimer = window.setTimeout(() => {
+      this.idleUpgradeTimer = null;
+      void this.runIdleUpgrade();
+    }, delayMs);
+  }
+
+  private async runIdleUpgrade(): Promise<void> {
+    if (this.destroyed || !this.doc || this.idleUpgradeRunning || this.pendingUpgradePages.size === 0) return;
+    if (this.pinchState) {
+      this.scheduleIdleUpgrade(80, false);
+      return;
+    }
+    this.idleUpgradeRunning = true;
+    try {
+      const budget = this.getMemoryBudget();
+      const candidates = [...this.pendingUpgradePages.keys()].filter(p => this.visiblePages.has(p) && this.isPageShown(p) && !this.folded.has(p));
+      for (const pageNum of candidates) {
+        if (this.destroyed || !this.doc || this.pinchState) return;
+        const rec = this.pages.get(pageNum);
+        if (!rec || rec.renderPromise) continue;
+        // 二次核验：仅当此刻仍低于目标清晰度时才执行升级，避免无收益重绘
+        const curShare = Math.min(budget.maxPagePixels, Math.floor(budget.hardTotalPixels / Math.max(2, this.getRenderableVisiblePageCount() * 2)));
+        const nativeDpr = Math.min(window.devicePixelRatio || 1, budget.mobileLowRes ? 1.25 : Infinity);
+        if (!this.canPageUpgrade(pageNum, rec, curShare, nativeDpr)) {
+          this.pendingUpgradePages.delete(pageNum);
+          continue;
+        }
+        // 先同步驱逐并物理释放所有非可见页，腾出完整单页预算后再升级清晰度
+        this.evictOffscreenPages(budget.hardTotalPixels, pageNum);
+        await this.renderPage(pageNum);
+      }
+    } finally {
+      this.idleUpgradeRunning = false;
+      if (!this.destroyed && this.doc && this.pendingUpgradePages.size > 0) {
+        this.scheduleIdleUpgrade(80, false);
+      }
+    }
+  }
+
+  private getMemoryBudget() {
+    const mobileLowRes = Platform.isMobile && this.plugin.store.settings.mobileLowRes !== false;
+    return {
+      mobileLowRes,
+      hardTotalPixels: mobileLowRes ? MOBILE_HARD_TOTAL_PIXELS : DESKTOP_HARD_TOTAL_PIXELS,
+      maxPagePixels: mobileLowRes ? MOBILE_MAX_PAGE_PIXELS : DESKTOP_MAX_PAGE_PIXELS,
+      maxCachedPages: mobileLowRes ? MOBILE_MAX_CACHED_PAGES : DESKTOP_MAX_CACHED_PAGES,
+    };
+  }
+
+  private getTotalCachedPixels(): number {
+    let total = 0;
+    for (const rec of this.pages.values()) {
+      if (rec.canvas.width > 0 && rec.canvas.height > 0) total += rec.canvas.width * rec.canvas.height;
+    }
+    return total;
+  }
+
+  private getTotalActivePixels(): number {
+    let total = this.getTotalCachedPixels();
+    const counted = new Set<HTMLCanvasElement>();
+    for (const rec of this.pages.values()) counted.add(rec.canvas);
+    for (const set of this.activeOffscreenCanvases.values()) {
+      for (const c of set) {
+        if (!counted.has(c) && c.width > 0 && c.height > 0) {
+          counted.add(c);
+          total += c.width * c.height;
+        }
+      }
+    }
+    for (const c of this.activeTempCanvases) {
+      if (!counted.has(c) && c.width > 0 && c.height > 0) {
+        counted.add(c);
+        total += c.width * c.height;
+      }
+    }
+    return total;
+  }
+
+  private recordPeakPixels(): void {
+    const total = this.getTotalActivePixels();
+    if (total > this.peakTotalPixels) this.peakTotalPixels = total;
+  }
+
+  private registerOffscreenCanvas(pageNum: number, canvas: HTMLCanvasElement): void {
+    let set = this.activeOffscreenCanvases.get(pageNum);
+    if (!set) {
+      set = new Set();
+      this.activeOffscreenCanvases.set(pageNum, set);
+    }
+    set.add(canvas);
+    this.recordPeakPixels();
+  }
+
+  private unregisterOffscreenCanvas(pageNum: number, canvas: HTMLCanvasElement): void {
+    const set = this.activeOffscreenCanvases.get(pageNum);
+    if (!set) return;
+    set.delete(canvas);
+    if (set.size === 0) this.activeOffscreenCanvases.delete(pageNum);
+  }
+
+  /** 先物理归零，确认 width===0 && height===0 后才销账，杜绝销账早于释放。 */
+  private releaseSingleOffscreenCanvas(pageNum: number, canvas: HTMLCanvasElement): void {
+    try { canvas.width = canvas.height = 0; } catch { /* noop */ }
+    if (canvas.width === 0 && canvas.height === 0) {
+      this.unregisterOffscreenCanvas(pageNum, canvas);
+    }
+  }
+
+  private releaseAllOffscreenCanvases(pageNum: number): void {
+    const set = this.activeOffscreenCanvases.get(pageNum);
+    if (!set) return;
+    for (const canvas of [...set]) {
+      this.releaseSingleOffscreenCanvas(pageNum, canvas);
+    }
+  }
+
+  private allocateOffscreenCanvas(
+    width: number,
+    height: number,
+    hardBudgetPixels: number,
+    cssWidth: number,
+    cssHeight: number,
+  ): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null {
+    const w = Math.max(1, Math.floor(width));
+    const h = Math.max(1, Math.floor(height));
+    const pixels = w * h;
+    if (this.getTotalActivePixels() + pixels > hardBudgetPixels) return null;
+    const canvas = el("canvas", { class: "ms-page-canvas" }) as HTMLCanvasElement;
+    canvas.style.width = `${Math.floor(cssWidth)}px`;
+    canvas.style.height = `${Math.floor(cssHeight)}px`;
+    try {
+      canvas.width = 0;
+      canvas.height = 0;
+      canvas.width = w;
+      canvas.height = h;
+    } catch {
+      try { canvas.width = canvas.height = 0; } catch { /* noop */ }
+      return null;
+    }
+    if (canvas.width !== w || canvas.height !== h) {
+      try { canvas.width = canvas.height = 0; } catch { /* noop */ }
+      return null;
+    }
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      try { canvas.width = canvas.height = 0; } catch { /* noop */ }
+      return null;
+    }
+    return { canvas, ctx };
+  }
+
+  private downsampleOnscreenPlaceholder(rec: PageRecord, hardBudgetPixels: number): boolean {
+    const oldW = rec.canvas.width, oldH = rec.canvas.height;
+    const oldPixels = oldW * oldH;
+    if (oldW <= 0 || oldH <= 0) return false;
+    const remaining = hardBudgetPixels - this.getTotalActivePixels();
+    const maxPlaceholderPixels = Math.min(PLACEHOLDER_SHRINK_THRESHOLD_PIXELS, remaining);
+    if (maxPlaceholderPixels < 1 || oldPixels <= maxPlaceholderPixels) return false;
+    const shrink = Math.min(0.25, Math.sqrt(maxPlaceholderPixels / oldPixels));
+    const nextW = Math.max(1, Math.floor(oldW * shrink));
+    const nextH = Math.max(1, Math.floor(oldH * shrink));
+    const nextPixels = nextW * nextH;
+    if (nextPixels > remaining || nextPixels >= oldPixels) return false;
+    const placeholder = el("canvas", { class: "ms-page-canvas" }) as HTMLCanvasElement;
+    placeholder.style.width = rec.canvas.style.width;
+    placeholder.style.height = rec.canvas.style.height;
+    let committed = false;
+    try {
+      placeholder.width = 0;
+      placeholder.height = 0;
+      placeholder.width = nextW;
+      placeholder.height = nextH;
+      if (placeholder.width !== nextW || placeholder.height !== nextH) {
+        try { placeholder.width = placeholder.height = 0; } catch { /* noop */ }
+        return false;
+      }
+      this.activeTempCanvases.add(placeholder);
+      this.recordPeakPixels();
+      const ctx = placeholder.getContext("2d");
+      if (!ctx) {
+        try { placeholder.width = placeholder.height = 0; } catch { /* noop */ }
+        return false;
+      }
+      ctx.drawImage(rec.canvas, 0, 0, oldW, oldH, 0, 0, nextW, nextH);
+      const prev = rec.canvas;
+      prev.replaceWith(placeholder);
+      rec.canvas = placeholder;
+      prev.width = prev.height = 0;
+      committed = true;
+      return true;
+    } catch {
+      try { placeholder.width = placeholder.height = 0; } catch { /* noop */ }
+      return false;
+    } finally {
+      if (!committed) {
+        try { placeholder.width = placeholder.height = 0; } catch { /* noop */ }
+      }
+      if (committed || (placeholder.width === 0 && placeholder.height === 0)) {
+        this.activeTempCanvases.delete(placeholder);
+      }
+    }
+  }
+
+  resetMemoryPeak(): void {
+    this.peakTotalPixels = this.getTotalActivePixels();
+  }
+
+  getMemoryStats(): {
+    cachedPixels: number;
+    activeOffscreenPixels: number;
+    currentTotalPixels: number;
+    peakTotalPixels: number;
+    hardBudgetPixels: number;
+    maxPagePixels: number;
+    cachedPages: number;
+    pages: Record<number, { dpr: number; targetDpr: number; degraded: boolean; downsampledPlaceholder: boolean; skippedDoubleBuffer: boolean; allocationFailed: boolean; allocatedPixels: number; hardBudgetPixels: number }>;
+  } {
+    const budget = this.getMemoryBudget();
+    const cachedPixels = this.getTotalCachedPixels();
+    const currentTotalPixels = this.getTotalActivePixels();
+    const offscreen = Math.max(0, currentTotalPixels - cachedPixels);
+    let cachedPages = 0;
+    for (const rec of this.pages.values()) if (rec.canvas.width > 0 && rec.canvas.height > 0) cachedPages++;
+    const pages: Record<number, any> = {};
+    for (const [k, v] of this.lastRenderBudget) pages[k] = { ...v };
+    return {
+      cachedPixels,
+      activeOffscreenPixels: offscreen,
+      currentTotalPixels,
+      peakTotalPixels: Math.max(this.peakTotalPixels, currentTotalPixels),
+      hardBudgetPixels: budget.hardTotalPixels,
+      maxPagePixels: budget.maxPagePixels,
+      cachedPages,
+      pages,
+    };
   }
 
   private cancelPage(rec: PageRecord): void {
@@ -2208,6 +2736,9 @@ export class ReaderView extends ItemView {
     this.extendNotes.releasePage(pageNum);
     this.annController?.releasePage(pageNum);
     rec.canvas.width = rec.canvas.height = 0;
+    // 先物理归零该页所有在途离屏画布，归零后再从预算账本销账
+    this.releaseAllOffscreenCanvases(pageNum);
+    this.pendingUpgradePages.delete(pageNum);
     rec.renderedScale = -1;
     rec.viewport = null; rec.baseViewport = null;
     rec.wrapper.querySelectorAll(":scope > .ms-extend-layer, :scope > .ms-region-fold").forEach(node => node.remove());
@@ -2218,18 +2749,20 @@ export class ReaderView extends ItemView {
     if (pending) void pending.finally(() => {
       if (rec.renderPromise === pending) rec.renderPromise = null;
     });
+    this.enqueueEligibleVisibleUpgrades(80, false);
   }
 
-  private evictOffscreenPages(): void {
-    const cached = [...this.pages.entries()].filter(([, rec]) => rec.canvas.width > 0 && rec.canvas.height > 0);
-    let pixels = cached.reduce((sum, [, rec]) => sum + rec.canvas.width * rec.canvas.height, 0);
-    let count = cached.length;
-    const candidates = cached.filter(([num]) => !this.visiblePages.has(num) && num !== this.navigationPage)
+  private evictOffscreenPages(reservePixels = 0, keepPage?: number): void {
+    const budget = this.getMemoryBudget();
+    const cached = [...this.pages.entries()].filter(([num, rec]) =>
+      (rec.canvas.width > 0 && rec.canvas.height > 0) || this.activeOffscreenCanvases.has(num),
+    );
+    let count = cached.filter(([, rec]) => rec.canvas.width > 0 && rec.canvas.height > 0).length;
+    const candidates = cached.filter(([num]) => !this.visiblePages.has(num) && num !== this.navigationPage && num !== keepPage)
       .sort((a, b) => a[1].lastUsed - b[1].lastUsed);
     for (const [num, rec] of candidates) {
-      if (count <= MAX_CACHED_PAGES && pixels <= MAX_CACHED_PIXELS) break;
-      pixels -= rec.canvas.width * rec.canvas.height;
-      count--;
+      if (count <= budget.maxCachedPages && this.getTotalActivePixels() + reservePixels <= budget.hardTotalPixels) break;
+      if (rec.canvas.width > 0 && rec.canvas.height > 0) count--;
       this.releasePage(num, rec);
     }
   }
@@ -2355,6 +2888,7 @@ export class ReaderView extends ItemView {
     this.thumbPanel
       ?.querySelector(`.ms-thumb-item[data-page="${pageNum}"]`)
       ?.classList.toggle("is-folded", folded);
+    this.enqueueEligibleVisibleUpgrades(80, false);
   }
 
   // ===== 书签 =====
