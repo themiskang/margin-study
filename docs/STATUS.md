@@ -200,3 +200,17 @@ G10b-03 **3/3 次确定性失败**（切本后 `refreshExtendLayout` 打断导�
 5. **滚动防抖穿越捏合**（滚动后 250ms 内捏合仍会保存）与 **可信 blur/hidden 未中止**（残留 2 个预览后误提交）→ 捏合开始取消待执行防抖、失焦仅在手势活动时中止。
 
 已装 1.5.2 到 Mac `yan` 库与 Pad 两个库（`Documents/yan`、`Documents/MarginStudy-A30-Isolated`）。
+
+## 2026-11-26 · 缩放白闪/内存/自动补画收口（合并 `7aaf2b3`，发布 1.5.3）
+
+业主 Pad 实机反馈“每次缩放白闪一下”。根因：`renderPage` 在 `page.render` 之前改写 `rec.canvas.width/height`，**改 backing store 会立即清空画布**，中间空窗在慢设备可见。
+
+六轮复核（codex × gpt-6.2-sol high）逐轮收紧，最终 `3c4f9e2` 终裁 **PASS 4/4**：
+1. 双缓冲单帧替换（旧画面保留至新帧就绪）；PZ-07 60Hz 取样，Red `flashFrames=1`（0.5676→1.0，跳变 0.4324）→ Green 四路 0 帧（maxJump ≤0.0008）。
+2. 内存：折叠 A4 桌面 498 MB → **34.91 MiB**，移动 115 MB → **9.34 MiB**；折叠页改单趟分段合成 `composeCanvas`，去中间拷贝。
+3. 预算：逐像素对账 delta=0（`desktop-spread-a4-dpr3` 15,999,882 px ≤ 16M，消除 246,559 px 低估）；**先物理归零再销账**，跨页驱逐含在途页，峰值 3,732,892 px。
+4. 分配失败保旧位图：`getContext=null` / 尺寸静默失败 / 尺寸抛异常三类注入，修前一种 100% 白 → 修后 0 帧且 `domPreserved=true`、`pendingRerender=true`。
+5. 可读性下限：14000pt@400% 保留 1414×1414（edgeEnergy 20.19 ≥ 8.0），不再用 353×353 糊块换预算。
+6. 自动升级：按**每页可渲染性**判资格（折叠页不占预算分母，`visiblePages` 原集合不改）、`eps=0.01`、`Map<page,targetDpr>` 去重 + 单执行锁；折叠邻页 296ms 内升级、已达目标页重复事件 0 次重渲；Red（换回 `39a4ec8`）769.2ms 零升级可复现。
+
+门禁：`verify:public` 112/112（缩放专项 11 项）、`px-gap` 295/298 exceeded 0、锚点 2.063px、折叠 388388 采样像素全等、移动峰值 3,999,988/4,000,000 px。已装 1.5.3 到 Mac `yan` 与 Pad 两个库。
