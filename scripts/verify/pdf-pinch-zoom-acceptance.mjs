@@ -21,7 +21,7 @@ const docFixtures = join(project, "src/documents/acceptance-fixtures");
 const temporary = await realpath(await mkdtemp(join(tmpdir(), "marginstudy-pdf-pinch-")));
 
 const fixtureSource = `
-import { TFile } from "obsidian";
+import { TFile, Platform } from "obsidian";
 import { Store } from "${project}/src/model/store";
 import { ReaderView } from "${project}/src/pdf/readerView";
 import { events as pdfEvents } from "${project}/src/pdf/pdfjs";
@@ -1172,6 +1172,179 @@ let cdpView: ReaderView | null = null;
   }
 };
 
+// ===== PZ-08: Hard memory budget matrix (4 page types x Desktop/Mobile) + 0 white-flash under degradation =====
+(window as any).runPZ08MemoryBudgetMatrix = async () => {
+  const origIsMobile = Platform.isMobile;
+  const origDprDesc = Object.getOwnPropertyDescriptor(window, "devicePixelRatio");
+  Object.defineProperty(window, "devicePixelRatio", { configurable: true, get: () => 2 });
+
+  const WHITE_FLASH_RATIO_THRESHOLD = 0.98;
+  const WHITE_FLASH_JUMP_THRESHOLD = 0.25;
+  const MAX_ALLOWED_WHITE_RATIO = 0.90;
+  const sampleCanvas = document.createElement("canvas");
+  sampleCanvas.width = 64;
+  sampleCanvas.height = 80;
+  const sampleCtx = sampleCanvas.getContext("2d", { willReadFrequently: true })!;
+
+  const measureWhiteRatio = (view: ReaderView, pageNum: number): number => {
+    const rec = view.getPageRecord(pageNum);
+    if (!rec) return 1;
+    const wRect = rec.wrapper.getBoundingClientRect();
+    const cRect = rec.canvas.getBoundingClientRect();
+    sampleCtx.fillStyle = "#ffffff";
+    sampleCtx.fillRect(0, 0, sampleCanvas.width, sampleCanvas.height);
+    if (rec.canvas.width > 0 && rec.canvas.height > 0 && wRect.width > 0 && wRect.height > 0 && cRect.width > 0 && cRect.height > 0) {
+      const dx = ((cRect.left - wRect.left) / wRect.width) * sampleCanvas.width;
+      const dy = ((cRect.top - wRect.top) / wRect.height) * sampleCanvas.height;
+      const dw = (cRect.width / wRect.width) * sampleCanvas.width;
+      const dh = (cRect.height / wRect.height) * sampleCanvas.height;
+      sampleCtx.drawImage(rec.canvas, 0, 0, rec.canvas.width, rec.canvas.height, dx, dy, dw, dh);
+    }
+    const data = sampleCtx.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height).data;
+    let white = 0;
+    const total = sampleCanvas.width * sampleCanvas.height;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i] >= 245 && data[i + 1] >= 245 && data[i + 2] >= 245) white++;
+    }
+    return Number((white / total).toFixed(4));
+  };
+
+  const toMB = (pixels: number) => Number(((pixels * 4) / (1024 * 1024)).toFixed(2));
+
+  const runCase = async (
+    tier: "desktop" | "mobile",
+    pageType: "normal-a4" | "folded-a4" | "rotated-a4" | "spread-a4",
+  ) => {
+    Platform.isMobile = tier === "mobile";
+    const pdfPath = \`mem-\${tier}-\${pageType}.pdf\`;
+    const cfg: any = {
+      name: \`\${tier}-\${pageType}\`,
+      pages: 6,
+      crop: [0, 0, 595, 842],
+      renderDelay: 80,
+      textDelay: 10,
+      paintContent: true,
+    };
+    if (pageType === "rotated-a4") cfg.rotation = 90;
+    const { view, store } = await openReader({ [pdfPath]: cfg }, pdfPath);
+    try {
+      if (pageType === "spread-a4") {
+        await view.setPageLayout("spread", false);
+        await waitPagesRendered(view, [1, 2], view.getScale());
+      } else if (pageType === "folded-a4") {
+        // Fold ~75% of A4 height (leaving top & bottom dark content bands visible)
+        store.updateDocMeta(pdfPath, {
+          pdfRegionFolds: [{ id: "fold-a4-1", pageId: view.getPdfPageId(1), rects: [{ x: 0, y: 120, w: 595, h: 600 }] }],
+        });
+        await view.refreshExtendLayout();
+        await waitPagesRendered(view, [1], view.getScale());
+        await frame();
+      } else {
+        await view.renderPage(1);
+        await frame();
+      }
+
+      const targetPages = pageType === "spread-a4" ? [1, 2] : [1];
+      for (const p of targetPages) (view as any).visiblePages.add(p);
+      view.resetMemoryPeak();
+
+      // Zoom from 1.4 -> 4.0 (extreme scale at DPR=2) while sampling at ~60Hz
+      const ratios: number[] = [];
+      let sampling = true;
+      ratios.push(measureWhiteRatio(view, 1));
+      const tick = () => {
+        if (!sampling) return;
+        ratios.push(measureWhiteRatio(view, 1));
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+      try {
+        view.setScale(4.0);
+        await waitPagesRendered(view, targetPages, 4.0);
+        await frame();
+      } finally {
+        sampling = false;
+      }
+
+      let flashFrames = 0;
+      let maxWhiteRatio = 0;
+      let maxJump = 0;
+      for (let i = 0; i < ratios.length; i++) {
+        if (ratios[i] > maxWhiteRatio) maxWhiteRatio = ratios[i];
+        if (i > 0) {
+          const jump = Number((ratios[i] - ratios[i - 1]).toFixed(4));
+          if (jump > maxJump) maxJump = jump;
+          if (ratios[i] >= WHITE_FLASH_RATIO_THRESHOLD && jump >= WHITE_FLASH_JUMP_THRESHOLD) {
+            flashFrames++;
+          }
+        }
+      }
+
+      const stats = view.getMemoryStats();
+      const page1 = stats.pages[1];
+      const peakMB = toMB(stats.peakTotalPixels);
+      const hardBudgetMB = toMB(stats.hardBudgetPixels);
+
+      assert(
+        stats.peakTotalPixels <= stats.hardBudgetPixels,
+        \`PZ-08 [\${tier}/\${pageType}] exceeded hard budget: peak=\${peakMB}MB (\${stats.peakTotalPixels}px) > hard=\${hardBudgetMB}MB (\${stats.hardBudgetPixels}px)\`,
+      );
+      assert(
+        flashFrames === 0 && maxWhiteRatio < MAX_ALLOWED_WHITE_RATIO,
+        \`PZ-08 [\${tier}/\${pageType}] white flash under budget: flashFrames=\${flashFrames}, maxWhiteRatio=\${maxWhiteRatio}, maxJump=\${maxJump}\`,
+      );
+
+      // Verify offscreen cache hard cap by rendering all 6 pages sequentially while only page 6 stays visible
+      for (let p = 2; p <= 6; p++) {
+        (view as any).visiblePages.clear();
+        (view as any).visiblePages.add(p);
+        await view.renderPage(p);
+      }
+      const afterScroll = view.getMemoryStats();
+      const maxCachedPages = tier === "mobile" ? 3 : 4;
+      assert(
+        afterScroll.cachedPages <= maxCachedPages && afterScroll.currentTotalPixels <= afterScroll.hardBudgetPixels,
+        \`PZ-08 [\${tier}/\${pageType}] offscreen cache cap exceeded: cachedPages=\${afterScroll.cachedPages} (max \${maxCachedPages}), total=\${toMB(afterScroll.currentTotalPixels)}MB (hard \${hardBudgetMB}MB)\`,
+      );
+
+      return {
+        tier,
+        pageType,
+        peakPixels: stats.peakTotalPixels,
+        peakMB,
+        hardBudgetPixels: stats.hardBudgetPixels,
+        hardBudgetMB,
+        degraded: Boolean(page1?.degraded),
+        downsampledPlaceholder: Boolean(page1?.downsampledPlaceholder),
+        dpr: page1 ? Number(page1.dpr.toFixed(4)) : 0,
+        targetDpr: page1 ? Number(page1.targetDpr.toFixed(4)) : 0,
+        flashFrames,
+        maxWhiteRatio,
+        maxJump,
+        samples: ratios.length,
+        afterScrollCachedPages: afterScroll.cachedPages,
+        afterScrollMB: toMB(afterScroll.currentTotalPixels),
+      };
+    } finally {
+      await view.onClose();
+      view.containerEl.remove();
+    }
+  };
+
+  try {
+    const matrix: any[] = [];
+    for (const tier of ["desktop", "mobile"] as const) {
+      for (const pageType of ["normal-a4", "folded-a4", "rotated-a4", "spread-a4"] as const) {
+        matrix.push(await runCase(tier, pageType));
+      }
+    }
+    return { passed: true, dprSimulated: 2, matrix };
+  } finally {
+    Platform.isMobile = origIsMobile;
+    if (origDprDesc) Object.defineProperty(window, "devicePixelRatio", origDprDesc);
+  }
+};
+
 (window as any).ready = true;
 (window as any).getErrors = () => errors;
 `;
@@ -1209,7 +1382,8 @@ try {
         }
       }\n` + src
         .replace("const config = JSON.parse(new TextDecoder().decode(data));", "const decoded = new TextDecoder().decode(data); const config = decoded.startsWith('%PDF-') ? { name: 'real-pdf', pages: 1 } : JSON.parse(decoded);")
-        .replace("canvasContext.fillStyle='#222';canvasContext.fillText(config.name+' page '+num,20,30);", "canvasContext.fillStyle='#222';if(config.paintContent){for(let r=0;r<8;r++){canvasContext.fillRect(viewport.width*0.08,viewport.height*(0.06+r*0.115),viewport.width*0.84,viewport.height*0.065);}}canvasContext.fillText(config.name+' page '+num,20,30);")
+        .replace("render({canvasContext,viewport}:any){", "render({canvasContext,viewport,transform}:any){")
+        .replace("canvasContext.fillStyle='#fff';canvasContext.fillRect(0,0,viewport.width,viewport.height);canvasContext.fillStyle='#222';canvasContext.fillText(config.name+' page '+num,20,30);", "canvasContext.save();if(transform)canvasContext.transform(transform[0],transform[1],transform[2],transform[3],transform[4],transform[5]);canvasContext.fillStyle='#fff';canvasContext.fillRect(0,0,viewport.width,viewport.height);canvasContext.fillStyle='#222';if(config.paintContent){for(let r=0;r<8;r++){canvasContext.fillRect(viewport.width*0.08,viewport.height*(0.06+r*0.115),viewport.width*0.84,viewport.height*0.065);}}canvasContext.fillText(config.name+' page '+num,20,30);canvasContext.restore();")
         .replace(/getViewport\(\{scale\}:\{scale:number\}\)\{[\s\S]*?return \{[\s\S]*?\};\s*\}/, `getViewport({scale}:{scale:number}){ const viewBox=config.crop||[0,0,600,800]; const rotation=config.rotations?.[num-1]??config.rotation??0; return new FakeViewport({viewBox,scale,rotation}); }`);
     }
     await writeFile(join(temporary, name + ".ts"), src);
@@ -1280,6 +1454,7 @@ try {
     const pz05 = await evalJson("window.runPZ05()");
     const pz06 = await evalJson("window.runPZ06()");
     const pz07 = await evalJson("window.runPZ07NoWhiteFlash()");
+    const pz08 = await evalJson("window.runPZ08MemoryBudgetMatrix()");
 
     // Native CDP Input.dispatchTouchEvent smoke test
     const cdpInit = await evalJson("window.setupCdpTouchSmoke()");
@@ -1468,6 +1643,7 @@ try {
       pz05,
       pz06,
       pz07,
+      pz08,
       cdpTouchSmoke,
       q3NativeLostCapture,
       q3bTrustedBlur,
@@ -1486,10 +1662,11 @@ try {
         passed: true,
         pz01,
         pz07,
+        pz08,
       }, null, 2) + "\n");
     }
 
-    console.log("PASS pdf-pinch-zoom: PZ-01, PZ-02 (1024x768 + 768x1024), PZ-03, PZ-04, PZ-05, PZ-06, PZ-07 (no white flash), cdpTouchSmoke all passed (8/8)");
+    console.log("PASS pdf-pinch-zoom: PZ-01, PZ-02 (1024x768 + 768x1024), PZ-03, PZ-04, PZ-05, PZ-06, PZ-07 (no white flash), PZ-08 (memory budget 4x2), cdpTouchSmoke all passed (9/9)");
   } finally {
     await browser("close").catch(() => {});
     await new Promise(done => server.close(done));

@@ -26,6 +26,6 @@
 - `reference-opacity-guard.mjs` 基于 TypeScript AST 与 CSS 规则扫描，强制参考层 `0.35` 双轨校验（递归 `calc()` 规范化数值 + 精确形态白名单 + 生产者侧 token 常量引用），基线精确等于 `4`（1 TS 常量 + 2 CSS 回退 + 1 定义点），其余形态、不可判定 `calc()` 或基线计数偏离即 FAIL 并报 `文件:行号`。
 - `yan-r2-r10-surfaces-acceptance.mjs` 零私有夹具公开浏览器套件（GAP-10a / YAN-01），覆盖 R2–R10 九面三视口（R8 追加 380×700）基线几何、专属控件命中与零重叠、R4/R5 菜单契约、简洁态往返零残留与 R9/R10 防溢出。
 - `anchor-lifecycle-navigation-acceptance.mjs` 零私有夹具公开浏览器套件（GAP-10b），在 1200×800 与真实 PDF.js Worker 下验证跨页折叠回跳、改名移目录多源/分块/非默认本回跳、工作区冷重开回跳与缺源离线保护及双路恢复重锚。
-- `pdf-pinch-zoom-acceptance.mjs` 零私有夹具公开浏览器套件，验证 PDF 双指缩放两阶段提交、无白闪双缓冲（PZ-07 ~60Hz 采样，覆盖捏合与桌面缩放按钮）、锚点保持、手写/套索零副作用、三指安全与 CDP 触控冒烟。
+- `pdf-pinch-zoom-acceptance.mjs` 零私有夹具公开浏览器套件，验证 PDF 双指缩放两阶段提交、无白闪双缓冲（PZ-07 ~60Hz 采样，覆盖捏合与桌面缩放按钮）、4×2 内存硬预算与降级无白闪矩阵（PZ-08）、锚点保持、手写/套索零副作用、三指安全与 CDP 触控冒烟。
 
 [PROTOCOL]: Update this header on change, then check AGENTS.md
