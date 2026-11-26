@@ -730,39 +730,61 @@ let activeHarness: Awaited<ReturnType<typeof createHarness>> | null = null;
   assert(h.root.dataset.readerTool === "pen", "#5 pen did not activate");
   mark(5, "手写画笔与设置", false, "bottom:ink");
 
-  // #6 & #7 撤销/重做 across all 4 scenes (excerpt/handwriting/organize/recall) with real node move 120->170->120->170
+  // #6 & #7 撤销/重做 across all 5 scenes: move node 120->170 -> switch scene -> undo reverts node 170->120 & keeps scene -> redo restores 120->170 & keeps scene
   const crossSceneHistory: any[] = [];
-  for (const sceneId of ["excerpt", "handwriting", "organize", "recall"]) {
-    await h.selectScene(sceneId);
+  const sceneCases: Array<{ fromTpl: string; fromScene: string; tpl: string; scene: string }> = [
+    { fromTpl: "standard", fromScene: "organize", tpl: "standard", scene: "excerpt" },
+    { fromTpl: "standard", fromScene: "excerpt", tpl: "standard", scene: "handwriting" },
+    { fromTpl: "standard", fromScene: "excerpt", tpl: "standard", scene: "organize" },
+    { fromTpl: "standard", fromScene: "organize", tpl: "standard", scene: "recall" },
+    { fromTpl: "standard", fromScene: "recall", tpl: "read-write-recall", scene: "reading" },
+  ];
+  for (const sc of sceneCases) {
+    h.store.selectStudyScene("set-1", sc.fromTpl, sc.fromScene as any);
+    (h.view as any).drawToolbar();
+    await frame();
+    const xStart = h.store.getNode("n1")!.x;
+    assert(xStart === 120, \`#6/#7 [\${sc.scene}] expected initial x=120, got \${xStart}\`);
+    // Move node in prior scene, then switch to target scene
     h.store.moveNode("n1", 170, 120);
     await frame();
     const xAfterMove = h.store.getNode("n1")!.x;
-    assert(xAfterMove === 170, \`#6/#7 [\${sceneId}] moveNode did not set x=170 (got \${xAfterMove})\`);
+    assert(xAfterMove === 170, \`#6/#7 [\${sc.scene}] moveNode did not set x=170 (got \${xAfterMove})\`);
+    h.store.selectStudyScene("set-1", sc.tpl, sc.scene as any);
+    (h.view as any).drawToolbar();
+    await frame(); await frame();
+    assert(h.store.getStudyScene("set-1")?.sceneId === sc.scene, \`#6/#7 [\${sc.scene}] failed to switch scene\`);
     const undoBtn = h.root.querySelector<HTMLButtonElement>('.ms-bottom-scene-tools [data-bottom-action="undo"]')!;
     const redoBtn = h.root.querySelector<HTMLButtonElement>('.ms-bottom-scene-tools [data-bottom-action="redo"]')!;
-    assert(undoBtn && undoBtn.checkVisibility() && !undoBtn.disabled, \`#6 [\${sceneId}] bottom undo missing or disabled\`);
+    assert(undoBtn && undoBtn.checkVisibility() && !undoBtn.disabled, \`#6 [\${sc.scene}] bottom undo missing or disabled\`);
     const ur = undoBtn.getBoundingClientRect();
-    assert(isHit(undoBtn, ur.left + ur.width / 2, ur.top + ur.height / 2), \`#6 [\${sceneId}] undo not hit\`);
+    assert(isHit(undoBtn, ur.left + ur.width / 2, ur.top + ur.height / 2), \`#6 [\${sc.scene}] undo not hit\`);
     undoBtn.click();
     await frame();
     const xAfterUndo = h.store.getNode("n1")!.x;
-    assert(xAfterUndo === 120, \`#6 [\${sceneId}] undo did not revert x 170->120 (got \${xAfterUndo})\`);
-    assert(redoBtn && redoBtn.checkVisibility() && !redoBtn.disabled, \`#7 [\${sceneId}] bottom redo not enabled after undo\`);
-    const rr = redoBtn.getBoundingClientRect();
-    assert(isHit(redoBtn, rr.left + rr.width / 2, rr.top + rr.height / 2), \`#7 [\${sceneId}] redo not hit\`);
-    redoBtn.click();
+    const sceneAfterUndo = h.store.getStudyScene("set-1")?.sceneId;
+    assert(xAfterUndo === 120, \`#6 [\${sc.scene}] cross-scene undo did not revert x 170->120 (got \${xAfterUndo}, scene=\${sceneAfterUndo})\`);
+    assert(sceneAfterUndo === sc.scene, \`#6 [\${sc.scene}] cross-scene undo reverted scene to \${sceneAfterUndo}\`);
+    const redoBtnNow = h.root.querySelector<HTMLButtonElement>('.ms-bottom-scene-tools [data-bottom-action="redo"]')!;
+    assert(redoBtnNow && redoBtnNow.checkVisibility() && !redoBtnNow.disabled, \`#7 [\${sc.scene}] bottom redo not enabled after undo\`);
+    const rr = redoBtnNow.getBoundingClientRect();
+    assert(isHit(redoBtnNow, rr.left + rr.width / 2, rr.top + rr.height / 2), \`#7 [\${sc.scene}] redo not hit\`);
+    redoBtnNow.click();
     await frame();
     const xAfterRedo = h.store.getNode("n1")!.x;
-    assert(xAfterRedo === 170, \`#7 [\${sceneId}] redo did not restore x 120->170 (got \${xAfterRedo})\`);
-    // Revert back to 120 so next scene starts clean
-    undoBtn.click();
+    const sceneAfterRedo = h.store.getStudyScene("set-1")?.sceneId;
+    assert(xAfterRedo === 170, \`#7 [\${sc.scene}] cross-scene redo did not restore x 120->170 (got \${xAfterRedo})\`);
+    assert(sceneAfterRedo === sc.scene, \`#7 [\${sc.scene}] cross-scene redo changed scene to \${sceneAfterRedo}\`);
+    // Clean up node position back to 120
+    const undoClean = h.root.querySelector<HTMLButtonElement>('.ms-bottom-scene-tools [data-bottom-action="undo"]')!;
+    undoClean.click();
     await frame();
-    assert(h.store.getNode("n1")!.x === 120, \`#6 [\${sceneId}] cleanup undo failed\`);
-    crossSceneHistory.push({ sceneId, moveX: xAfterMove, undoX: xAfterUndo, redoX: xAfterRedo });
+    assert(h.store.getNode("n1")!.x === 120, \`#6 [\${sc.scene}] cleanup undo failed\`);
+    crossSceneHistory.push({ scene: sc.scene, moveX: xAfterMove, undoX: xAfterUndo, sceneAfterUndo, redoX: xAfterRedo, sceneAfterRedo });
   }
   await h.selectScene("excerpt");
-  mark(6, "撤销", false, "bottom:undo(excerpt+handwriting+organize+recall)");
-  mark(7, "重做", false, "bottom:redo(excerpt+handwriting+organize+recall)");
+  mark(6, "撤销", false, "bottom:undo(5-scene cross-scene verified)");
+  mark(7, "重做", false, "bottom:redo(5-scene cross-scene verified)");
 
   // #8 house -> study home
   const homeBtn = h.root.querySelector<HTMLButtonElement>('.ms-workspace-context [aria-label="打开学习集与文档"]')!;

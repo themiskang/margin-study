@@ -601,14 +601,21 @@ export class Store {
     const template = this.getSceneTemplates().find(item => item.id === templateId);
     if (!template?.scenes.some(scene => scene.id === sceneId)) throw new Error("场景不属于所选模板");
     const next: StudySceneSelection = { templateId, sceneId, interfaceMode: this.getStudyScene(id)!.interfaceMode };
-    if (!same(set.scene, next)) this.updateStudySet(id, { scene: next });
+    if (same(set.scene, next)) return;
+    // Scene selection is a view/layout switch, never a content edit on the undo stack.
+    set.scene = clone(next);
+    this.save();
+    this.changed();
   }
   setStudyInterface(id: string, interfaceMode: StudySceneSelection["interfaceMode"]): void {
     if (interfaceMode !== "scenes" && interfaceMode !== "traditional") throw new Error("界面模式无效");
+    const set = this.studySets.find(item => item.id === id);
     const current = this.getStudyScene(id);
-    if (!current) throw new Error("学习集不存在");
+    if (!set || !current) throw new Error("学习集不存在");
     if (current.interfaceMode === interfaceMode) return;
-    this.updateStudySet(id, { scene: { ...current, interfaceMode } });
+    set.scene = { ...current, interfaceMode };
+    this.save();
+    this.changed();
   }
   /** Stable document identity also repairs snapshots captured before an asynchronous rename. */
   normalizeWorkspaceState(state: Record<string, unknown>): Record<string, unknown> {
@@ -2139,6 +2146,10 @@ export class Store {
       this.activeReviewDeckId = this.reviewDecks.some(deck => deck.id === current.activeReviewDeckId) ? current.activeReviewDeckId : snapshot.data.activeReviewDeckId;
       for (const set of this.studySets) {
         const live = current.studySets?.find(item => item.id === set.id), prior = previous.data.studySets?.find(item => item.id === set.id);
+        if (live) {
+          // Scene and interface mode are view state; library content undo must not rewind them.
+          if (live.scene === undefined) delete set.scene; else set.scene = clone(live.scene);
+        }
         if (live && (set.reviewDeckId === prior?.reviewDeckId || live.reviewDeckId !== prior?.reviewDeckId)) set.reviewDeckId = live.reviewDeckId;
         if (live && (same(set.reviewSettings, prior?.reviewSettings) || !same(live.reviewSettings, prior?.reviewSettings))) {
           if (live.reviewSettings === undefined) delete set.reviewSettings; else set.reviewSettings = clone(live.reviewSettings);
