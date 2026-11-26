@@ -51,6 +51,7 @@ import { el } from "../utils/dom";
 import { hasDeviceRecallHintProvider, requestDeviceRecallHint } from "../recall/deviceProvider";
 import { uid } from "../utils/id";
 import type { HandwritingSource, ReaderReturnPosition } from "../documents/readingPosition";
+import { BottomToolbarOverflowController, computeBottomBarClearance } from "./bottomToolbarOverflow";
 
 export const VIEW_TYPE_STUDY_WORKSPACE = "margin-study-workspace";
 type ChildReader = ReaderView | WordReaderView | DocumentReaderView;
@@ -150,6 +151,7 @@ export class StudyWorkspaceView extends ItemView {
       if (controls && this.toolbar.classList.contains("has-scene-header")) controls.hidden = true;
       this.toolbar.querySelector<HTMLButtonElement>(".ms-workspace-extra-tools-toggle")?.setAttribute("aria-expanded", "false");
     }
+    this.bottomOverflow?.handleOutsidePointerDown(event.target as Node);
     if (this.popup && !this.popup.classList.contains("ms-study-home-screen") && !this.popup.contains(event.target as Node) && !(event.target as HTMLElement).closest("[data-popup-trigger]")) this.dismissPopup();
   };
   private reader: ChildReader | null = null;
@@ -167,6 +169,9 @@ export class StudyWorkspaceView extends ItemView {
   private workspaceNoticeLayer: HTMLElement | null = null;
   private workspaceNoticeTimer: number | null = null;
   private bottomPressDisposers: (() => void)[] = [];
+  private bottomOverflow: BottomToolbarOverflowController | null = null;
+  private bottomLayoutResize: ResizeObserver | null = null;
+  private bottomLayoutRaf: number | null = null;
   private documentHook = (cardId: string) => {
     if (this.state.linkMode === "both" || this.state.linkMode === "document") {
       this.state.mindmap = true; this.applyLayout(); this.renderer?.revealCard(cardId, "linked");
@@ -312,6 +317,16 @@ export class StudyWorkspaceView extends ItemView {
     const floatingResize = new ResizeObserver(positionFloatingActions);
     floatingResize.observe(this.root); floatingResize.observe(this.mapPane);
     this.register(() => floatingResize.disconnect());
+    this.bottomOverflow = new BottomToolbarOverflowController(this.root, this.bottomCapsule);
+    this.bottomLayoutResize = new ResizeObserver(() => this.scheduleBottomLayoutSync());
+    this.bottomLayoutResize.observe(this.root);
+    this.bottomLayoutResize.observe(this.bottomCapsule);
+    this.bottomLayoutResize.observe(this.readerPane);
+    this.register(() => {
+      this.bottomLayoutResize?.disconnect(); this.bottomLayoutResize = null;
+      if (this.bottomLayoutRaf !== null) { window.cancelAnimationFrame(this.bottomLayoutRaf); this.bottomLayoutRaf = null; }
+      this.bottomOverflow?.dispose(); this.bottomOverflow = null;
+    });
     this.renderer = new MindmapRenderer(this.plugin, { nativeChrome: true, onSelectionChange: nodes => this.onMindmapSelectionChange(nodes),
       onCloseMindmap: () => { this.state.mindmap=false; this.state.reader=true; this.layoutChanged(); },
       onShowMindmap: () => { if(!this.state.mindmap){this.state.mindmap=true;this.layoutChanged();} },
@@ -343,6 +358,7 @@ export class StudyWorkspaceView extends ItemView {
         if (activeWorkspace && !(target instanceof Element && target.closest("input,textarea,[contenteditable=true]"))) { event.preventDefault(); event.stopPropagation(); this.toggleCleanView(); return; }
       }
       if (event.key !== "Escape" || event.defaultPrevented || document.querySelector(".ms-modal-bg,.modal-container")) return;
+      if (this.bottomOverflow?.handleEscape()) { event.preventDefault(); return; }
       if (this.popup) { event.preventDefault(); this.dismissPopup(); return; }
       if (this.reader?.getBlockSelectionMode()) { event.preventDefault();this.reader.setBlockSelectionMode(false);this.drawToolbar();return; }
       const escTarget=event.target;
@@ -385,6 +401,9 @@ export class StudyWorkspaceView extends ItemView {
   async onClose(): Promise<void> {
     this.cleanHandleDispose?.(); this.cleanHandleDispose = null; this.cleanHandleEl = null;
     this.bottomPressDisposers.splice(0).forEach(dispose=>dispose());
+    this.bottomOverflow?.dispose(); this.bottomOverflow = null;
+    this.bottomLayoutResize?.disconnect(); this.bottomLayoutResize = null;
+    if (this.bottomLayoutRaf !== null) { window.cancelAnimationFrame(this.bottomLayoutRaf); this.bottomLayoutRaf = null; }
     this.closePageDialog?.();
     this.captureReader(); this.closed = true;
     this.releaseHostSidebars?.(); this.releaseHostSidebars = null;
@@ -750,6 +769,7 @@ export class StudyWorkspaceView extends ItemView {
     const undo=this.bottomCapsule?.querySelector<HTMLButtonElement>('[data-bottom-action="undo"]'),redo=this.bottomCapsule?.querySelector<HTMLButtonElement>('[data-bottom-action="redo"]');
     if(undo){undo.disabled=!state?.canUndo;undo.title=this.undoButton?.title??"撤销";}
     if(redo){redo.disabled=!state?.canRedo;redo.title=this.redoButton?.title??"重做";}
+    this.bottomOverflow?.syncItemStates();
   }
   private async applyHistory(redo:boolean):Promise<void> {
     if(this.historyScope==="library"){if(redo)this.plugin.store.redoLibraryChange();else this.plugin.store.undoLibraryChange();}
@@ -1027,7 +1047,9 @@ export class StudyWorkspaceView extends ItemView {
     this.root.classList.toggle("is-clean-view", enabled);
     this.root.dataset.cleanView = String(enabled);
     if (this.cleanHandleEl) this.cleanHandleEl.setAttribute("aria-label", enabled ? "恢复全部按钮" : "简洁显示把手");
+    if (enabled) this.bottomOverflow?.closeMenu();
     this.syncCleanPenStrip();
+    this.syncBottomClearance();
   }
   public setCleanView(enabled: boolean): void {
     if (this.state.cleanView === enabled) return;
@@ -1104,6 +1126,7 @@ export class StudyWorkspaceView extends ItemView {
   private drawBottomCapsule(): void {
     if (!this.bottomCapsule) return;
     this.bottomPressDisposers.splice(0).forEach(dispose=>dispose());
+    this.bottomOverflow?.closeMenu();
     const dock=this.bottomCapsule;
     const effectiveMode = this.state.cleanView && this.isHandwritingTool() ? "writing" : this.state.bottomMode;
     dock.dataset.mode=effectiveMode;
@@ -1117,7 +1140,12 @@ export class StudyWorkspaceView extends ItemView {
     const action=(icon:string,label:string,callback:(button:HTMLButtonElement)=>void,active?:boolean,disabled=false)=>{
       const item=el("button",{type:"button",class:"ms-bottom-action",title:disabled?label+"（暂不可用）":label,"aria-label":label}) as HTMLButtonElement;
       if(active!==undefined)item.setAttribute("aria-pressed",String(active));
-      item.disabled=disabled;setNativeIcon(item,icon);item.addEventListener("click",()=>callback(item));return item;
+      item.disabled=disabled;setNativeIcon(item,icon);
+      item.addEventListener("click",()=>{
+        const anchor = item.classList.contains("is-bottom-overflowed") ? (this.bottomOverflow?.getToggle() ?? item) : item;
+        callback(anchor);
+      });
+      return item;
     };
     const store=this.plugin.store,activeSet=store.studySets.find(set=>set.id===store.activeStudySetId),selection=activeSet?store.getStudyScene(activeSet.id):undefined;
     const sceneTemplate=selection?store.getSceneTemplates().find(template=>template.id===selection.templateId):undefined;
@@ -1125,6 +1153,7 @@ export class StudyWorkspaceView extends ItemView {
       dock.setAttribute("aria-label","学习场景工具栏");
       this.drawSceneBottomCapsule(dock,collapse,action,sceneTemplate,selection,activeSet.id);
       this.syncHistoryButtons();
+      this.syncBottomLayout();
       return;
     }
     dock.setAttribute("aria-label","MN4 阅读工具栏");
@@ -1200,6 +1229,7 @@ export class StudyWorkspaceView extends ItemView {
     primary.append(reading,writing,recall);
     dock.append(collapse,primary);
     this.syncHistoryButtons();
+    this.syncBottomLayout();
   }
   private drawSceneBottomCapsule(
     dock:HTMLElement,
@@ -1315,6 +1345,37 @@ export class StudyWorkspaceView extends ItemView {
     if(continuous?.active){const status=el("div",{role:"status",text:`连续摘录中 · ${continuous.count} 段`});const finish=el("button",{type:"button",text:"完成","aria-label":"完成连续摘录"});finish.addEventListener("click",()=>this.finishContinuousExcerpt());status.append(finish);primary.append(status);}
     primary.append(sceneNav,tools);
     dock.replaceChildren(collapse,primary);
+  }
+  private syncBottomClearance(): void {
+    if (!this.root || !this.bottomCapsule || !this.readerPane) return;
+    const capsuleVisible = typeof this.bottomCapsule.checkVisibility === "function"
+      ? this.bottomCapsule.checkVisibility()
+      : getComputedStyle(this.bottomCapsule).display !== "none";
+    const clearance = computeBottomBarClearance(
+      this.readerPane.getBoundingClientRect(),
+      this.bottomCapsule.getBoundingClientRect(),
+      {
+        cleanView: this.state.cleanView,
+        statusBarHidden: this.root.dataset.statusBar === "hidden",
+        collapsed: this.state.bottomCollapsed,
+        capsuleVisible,
+      },
+    );
+    this.root.style.setProperty("--ms-bottom-bar-clearance", `${clearance}px`);
+  }
+  private syncBottomLayout(): void {
+    this.bottomOverflow?.sync();
+    this.syncBottomClearance();
+    this.scheduleBottomLayoutSync();
+  }
+  private scheduleBottomLayoutSync(): void {
+    if (this.closed || this.bottomLayoutRaf !== null) return;
+    this.bottomLayoutRaf = window.requestAnimationFrame(() => {
+      this.bottomLayoutRaf = null;
+      if (this.closed) return;
+      this.bottomOverflow?.sync();
+      this.syncBottomClearance();
+    });
   }
   private bindPresetLongPress(button:HTMLButtonElement,presetId:HandwritingPresetId,label:string):void {
     let timer:number|null=null,pointerId:number|null=null,startX=0,startY=0,consumed=false;
@@ -2667,6 +2728,7 @@ export class StudyWorkspaceView extends ItemView {
     this.root.style.setProperty("--ms-auxiliary-width",this.state.auxiliaryWidth+"px");
     this.root.style.setProperty("--ms-reader-ratio",String(this.state.ratio));
     this.root.style.setProperty("--ms-map-ratio",String(1-this.state.ratio));
+    this.scheduleBottomLayoutSync();
   }
   private splitter(kind:"library"|"main"|"auxiliary"): HTMLElement {
     const node=el("div",{class:"ms-workspace-splitter ms-workspace-splitter-"+kind,role:"separator",tabindex:"0","aria-label":kind==="main"?"调整文档与脑图比例":kind==="library"?"调整文档列表宽度":"调整卡片面板宽度","aria-orientation":"vertical"});
