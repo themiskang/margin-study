@@ -785,9 +785,12 @@ body.ms-theme-dark .ms-study-workspace[data-reading-theme] .ms-workspace-tab>but
 [data-status-bar="compact"] .ms-bottom-capsule-shell .ms-bottom-primary.ms-bottom-scenes .ms-bottom-scene-tools { display:none; }
 
 /* ===== UI-01 底部工具栏安全区与超宽溢出菜单 ===== */
-.ms-study-workspace.is-clean-view,
-.ms-study-workspace[data-status-bar="hidden"],
-.ms-study-workspace:has(> .ms-bottom-capsule-shell[data-collapsed="true"]) { --ms-bottom-bar-clearance:0px !important; }
+.ms-study-workspace.is-clean-view:not([data-inline-text-editing="true"]),
+.ms-study-workspace[data-status-bar="hidden"]:not([data-inline-text-editing="true"]),
+.ms-study-workspace:has(> .ms-bottom-capsule-shell[data-collapsed="true"]):not([data-inline-text-editing="true"]) { --ms-bottom-bar-clearance:0px !important; }
+/* ===== UI-03 文本框格式条底部单槽互斥 ===== */
+.ms-study-workspace[data-inline-text-editing="true"] .ms-bottom-capsule-shell,
+.ms-study-workspace[data-inline-text-editing="true"] .ms-clean-pen-strip { display:none !important; }
 .ms-bottom-action.is-bottom-overflowed,
 .ms-bottom-divider.is-bottom-overflow-divider-hidden { display:none !important; }
 .ms-study-workspace .ms-bottom-primary.ms-bottom-scenes.has-bottom-overflow { width:max-content; max-width:100%; left:0; padding:0 4px; }

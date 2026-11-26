@@ -51,6 +51,7 @@ import { el } from "../utils/dom";
 import { hasDeviceRecallHintProvider, requestDeviceRecallHint } from "../recall/deviceProvider";
 import { uid } from "../utils/id";
 import type { HandwritingSource, ReaderReturnPosition } from "../documents/readingPosition";
+import { INLINE_TEXT_EDITOR_CHANGE_EVENT } from "../annot/inlineTextEditor";
 import { BottomToolbarOverflowController, computeBottomBarClearance } from "./bottomToolbarOverflow";
 
 export const VIEW_TYPE_STUDY_WORKSPACE = "margin-study-workspace";
@@ -166,6 +167,7 @@ export class StudyWorkspaceView extends ItemView {
   private bottomLayoutResize: ResizeObserver | null = null;
   private bottomLayoutRaf: number | null = null;
   private lastDocumentPopupAnchor: HTMLElement | null = null;
+  private inlineEditRestoreHandwritingMode: "pen" | "highlight" | "eraser" | "lasso" | null = null;
   private documentHook = (cardId: string) => {
     if (this.state.linkMode === "both" || this.state.linkMode === "document") {
       this.state.mindmap = true; this.applyLayout(); this.renderer?.revealCard(cardId, "linked");
@@ -316,7 +318,20 @@ export class StudyWorkspaceView extends ItemView {
     this.bottomLayoutResize.observe(this.root);
     this.bottomLayoutResize.observe(this.bottomCapsule);
     this.bottomLayoutResize.observe(this.readerPane);
+    const inlineEditorChanged = () => {
+      if (this.root.dataset.inlineTextEditing === "true") {
+        this.bottomOverflow?.closeMenu();
+      } else if (this.inlineEditRestoreHandwritingMode) {
+        const restoreMode = this.inlineEditRestoreHandwritingMode;
+        this.inlineEditRestoreHandwritingMode = null;
+        if (this.state.cleanView && this.reader) this.setReaderHandwritingMode(restoreMode, false);
+      }
+      this.syncCleanPenStrip();
+      this.syncBottomLayout();
+    };
+    this.root.addEventListener(INLINE_TEXT_EDITOR_CHANGE_EVENT, inlineEditorChanged);
     this.register(() => {
+      this.root.removeEventListener(INLINE_TEXT_EDITOR_CHANGE_EVENT, inlineEditorChanged);
       this.bottomLayoutResize?.disconnect(); this.bottomLayoutResize = null;
       if (this.bottomLayoutRaf !== null) { window.cancelAnimationFrame(this.bottomLayoutRaf); this.bottomLayoutRaf = null; }
       this.bottomOverflow?.dispose(); this.bottomOverflow = null;
@@ -1362,6 +1377,23 @@ export class StudyWorkspaceView extends ItemView {
   }
   private syncBottomClearance(): void {
     if (!this.root || !this.bottomCapsule || !this.readerPane) return;
+    if (this.root.dataset.inlineTextEditing === "true") {
+      const stylebar = this.root.querySelector<HTMLElement>(".ms-overlay-stylebar");
+      const stylebarRect = stylebar?.getBoundingClientRect() ?? null;
+      const clearance = computeBottomBarClearance(
+        this.readerPane.getBoundingClientRect(),
+        stylebarRect,
+        {
+          cleanView: false,
+          statusBarHidden: false,
+          collapsed: false,
+          capsuleVisible: !!stylebar && !!stylebarRect && stylebarRect.height > 0,
+          gap: 4,
+        },
+      );
+      this.root.style.setProperty("--ms-bottom-bar-clearance", `${clearance}px`);
+      return;
+    }
     const capsuleVisible = typeof this.bottomCapsule.checkVisibility === "function"
       ? this.bottomCapsule.checkVisibility()
       : getComputedStyle(this.bottomCapsule).display !== "none";
@@ -2036,6 +2068,10 @@ export class StudyWorkspaceView extends ItemView {
   }
   private readerAction(label:string): void {
     if(!this.reader){this.chooseDocument();return;}
+    if (label === "文字批注" && this.state.cleanView && this.isHandwritingTool()) {
+      const mode = this.reader.getHandwritingMode();
+      if (mode !== "off") this.inlineEditRestoreHandwritingMode = mode;
+    }
     const control=[...this.reader.getReaderToolbar().querySelectorAll<HTMLButtonElement>("button")].find(button=>button.getAttribute("aria-label")===label||button.title===label);
     if(control&&!control.disabled)control.click();
   }

@@ -1,7 +1,36 @@
+/**
+ * [INPUT]: 依赖 DOM 工具（../utils/dom）、富文本运行模型（./textRuns）与字体清单（./textFonts）。
+ * [OUTPUT]: 导出 openInlineTextEditor、InlineTextDraft 与宿主编辑态变更事件常量 INLINE_TEXT_EDITOR_CHANGE_EVENT。
+ * [POS]: 文档文字框与留白文字框的内联富文本编辑器，挂载到工作区或阅读器宿主并维护引用计数的单槽编辑态。
+ * [PROTOCOL]: Update this header on change, then check AGENTS.md
+ */
 import { el } from "../utils/dom";
 import type { AnnotationTextRun, AnnotationTextStyle } from "../types";
 import { applyTextStyle, normalizeTextRuns, normalizeTextStyle, readTextRuns, renderTextRuns, sliceTextRuns } from "./textRuns";
 import { textFontFamilies } from "./textFonts";
+
+export const INLINE_TEXT_EDITOR_CHANGE_EVENT = "ms-inline-text-editor-change";
+const inlineEditingCount = new WeakMap<HTMLElement, number>();
+
+function acquireInlineEditing(host: HTMLElement): () => void {
+  const next = (inlineEditingCount.get(host) ?? 0) + 1;
+  inlineEditingCount.set(host, next);
+  host.dataset.inlineTextEditing = "true";
+  host.dispatchEvent(new CustomEvent(INLINE_TEXT_EDITOR_CHANGE_EVENT, { bubbles: true, detail: { editing: true, count: next } }));
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const remaining = Math.max(0, (inlineEditingCount.get(host) ?? 1) - 1);
+    if (remaining === 0) {
+      inlineEditingCount.delete(host);
+      delete host.dataset.inlineTextEditing;
+    } else {
+      inlineEditingCount.set(host, remaining);
+    }
+    host.dispatchEvent(new CustomEvent(INLINE_TEXT_EDITOR_CHANGE_EVENT, { bubbles: true, detail: { editing: remaining > 0, count: remaining } }));
+  };
+}
 
 export interface InlineTextDraft { text: string; fontSize: number; color: string; background: string; runs?: AnnotationTextRun[]; }
 interface TextSelection { start: number; end: number; }
@@ -209,11 +238,26 @@ export function openInlineTextEditor(options: {
   };
   const queue = () => { if (!closed && !frame) frame = requestAnimationFrame(layout); };
   const observer = new MutationObserver(queue), resize = new ResizeObserver(queue);
+  let releaseHostEditing: (() => void) | null = null;
   const finish = () => {
-    if (closed) return; finishComposition(); readInput(); closed = true;
-    if (frame) cancelAnimationFrame(frame); observer.disconnect(); resize.disconnect();
-    document.removeEventListener("scroll", queue, true); window.removeEventListener("resize", queue); document.removeEventListener("selectionchange", selectionChanged); document.removeEventListener("pointerdown", outside, true);
-    options.anchor()?.classList.remove("is-editing-source"); root.remove();
+    if (closed) return;
+    closed = true;
+    try {
+      finishComposition();
+      readInput();
+    } finally {
+      if (frame) cancelAnimationFrame(frame);
+      observer.disconnect();
+      resize.disconnect();
+      document.removeEventListener("scroll", queue, true);
+      window.removeEventListener("resize", queue);
+      document.removeEventListener("selectionchange", selectionChanged);
+      document.removeEventListener("pointerdown", outside, true);
+      options.anchor()?.classList.remove("is-editing-source");
+      root.remove();
+      releaseHostEditing?.();
+      releaseHostEditing = null;
+    }
     const first = state.runs[0]?.style ?? pending ?? fallback;
     options.save({ text: state.runs.map(run => run.text).join(""), runs: normalizeTextRuns(state.runs, fallback), fontSize: first.fontSize, color: first.color, background: boxBackground });
   };
@@ -230,6 +274,7 @@ export function openInlineTextEditor(options: {
     }
   });
   sizeGroup.append(sizes, size); box.append(text); layer.append(box); bar.append(font, sizeGroup, bold, italic, underline, back, fore, done); root.append(layer, bar); host.append(root);
+  releaseHostEditing = acquireInlineEditing(host);
   observer.observe(options.scroll, { childList: true, subtree: true }); resize.observe(options.scroll); resize.observe(host);
   document.addEventListener("scroll", queue, true); window.addEventListener("resize", queue); document.addEventListener("selectionchange", selectionChanged); document.addEventListener("pointerdown", outside, true);
   render(); layout();

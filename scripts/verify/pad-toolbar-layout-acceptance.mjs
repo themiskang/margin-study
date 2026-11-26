@@ -1071,6 +1071,271 @@ let activeHarness: Awaited<ReturnType<typeof createHarness>> | null = null;
   };
 };
 
+async function openPdfInlineTextBox(h: Awaited<ReturnType<typeof createHarness>>) {
+  (h.view as any).readerAction("文字批注");
+  await frame();
+  const page = h.root.querySelector<HTMLElement>(".ms-page")!;
+  assert(page, "PDF .ms-page missing for text overlay placement");
+  const pr = page.getBoundingClientRect();
+  page.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, clientX: pr.left + 80, clientY: pr.top + 80 }));
+  await frame();
+  await wait(30);
+  await frame();
+  const editor = h.root.querySelector<HTMLElement>(".ms-overlay-text-editor");
+  assert(editor, "inline text editor did not open");
+  return editor;
+}
+
+(window as any).measureU301Viewport = async (w: number, hSize: number) => {
+  const h = activeHarness!;
+  document.body.classList.remove("is-mobile");
+  h.store.setStudyInterface("set-1", "scenes");
+  (h.view as any).state.bottomCollapsed = false;
+  (h.view as any).state.cleanView = false;
+  (h.view as any).applyLayout();
+  await h.openDoc("pdf");
+  await h.selectScene("excerpt");
+  await frame(); await frame();
+
+  // Open overflow menu first if narrow to verify entering editing auto-closes it
+  const overflowToggle = h.root.querySelector<HTMLButtonElement>(".ms-bottom-overflow-toggle");
+  if (overflowToggle) {
+    overflowToggle.click();
+    await frame();
+    assert(!!h.root.querySelector(".ms-bottom-overflow-menu"), \`[U3-01 \${w}x\${hSize}] overflow menu did not open before edit\`);
+  }
+
+  await openPdfInlineTextBox(h);
+
+  assert(h.root.dataset.inlineTextEditing === "true", \`[U3-01 \${w}x\${hSize}] data-inline-text-editing not set to true\`);
+  assert(!h.root.querySelector(".ms-bottom-overflow-menu"), \`[U3-01 \${w}x\${hSize}] overflow menu remained open during inline text editing\`);
+
+  const capsule = h.root.querySelector<HTMLElement>(".ms-bottom-capsule-shell")!;
+  const penStrip = h.root.querySelector<HTMLElement>(".ms-clean-pen-strip")!;
+  const stylebar = h.root.querySelector<HTMLElement>(".ms-overlay-stylebar")!;
+  assert(stylebar && stylebar.checkVisibility(), \`[U3-01 \${w}x\${hSize}] .ms-overlay-stylebar not visible\`);
+  assert(!capsule.checkVisibility(), \`[U3-01 \${w}x\${hSize}] .ms-bottom-capsule-shell still visible during inline text editing\`);
+  assert(!penStrip.checkVisibility(), \`[U3-01 \${w}x\${hSize}] .ms-clean-pen-strip still visible during inline text editing\`);
+
+  const sr = stylebar.getBoundingClientRect();
+  assert(
+    sr.left >= -1 && sr.top >= -1 && sr.right <= window.innerWidth + 1 && sr.bottom <= window.innerHeight + 1,
+    \`[U3-01 \${w}x\${hSize}] stylebar out of viewport: \${JSON.stringify(sr.toJSON())}\`,
+  );
+  const scrollDiff = Number((stylebar.scrollWidth - stylebar.clientWidth).toFixed(2));
+  assert(stylebar.scrollWidth <= stylebar.clientWidth + 1, \`[U3-01 \${w}x\${hSize}] stylebar overflowed horizontally: scrollWidth=\${stylebar.scrollWidth} clientWidth=\${stylebar.clientWidth}\`);
+
+  // Check every control in stylebar is visible and hit by elementFromPoint
+  const controlSelectors = [
+    ".ms-text-font",
+    ".ms-text-size input",
+    ".ms-text-bold",
+    ".ms-text-italic",
+    ".ms-text-underline",
+    ".ms-text-backcolor",
+    ".ms-text-forecolor",
+    ".ms-text-done",
+  ];
+  for (const sel of controlSelectors) {
+    const ctrl = stylebar.querySelector<HTMLElement>(sel)!;
+    assert(ctrl && ctrl.checkVisibility(), \`[U3-01 \${w}x\${hSize}] control \${sel} not visible\`);
+    const cr = ctrl.getBoundingClientRect();
+    assert(cr.left >= -1 && cr.right <= window.innerWidth + 1, \`[U3-01 \${w}x\${hSize}] control \${sel} clipped: \${JSON.stringify(cr.toJSON())}\`);
+    assert(isHit(ctrl, cr.left + cr.width / 2, cr.top + cr.height / 2), \`[U3-01 \${w}x\${hSize}] control \${sel} not hit\`);
+  }
+
+  // Clearance check: readerHost.bottom <= stylebar.top + 1
+  const hostRect = h.root.querySelector<HTMLElement>(".ms-workspace-reader-host")!.getBoundingClientRect();
+  assert(hostRect.bottom <= sr.top + 1, \`[U3-01 \${w}x\${hSize}] readerHost.bottom (\${hostRect.bottom}) > stylebar.top (\${sr.top}) + 1\`);
+
+  // Exit via done button
+  stylebar.querySelector<HTMLButtonElement>(".ms-text-done")!.click();
+  await frame(); await frame();
+  assert(!h.root.querySelector(".ms-overlay-text-editor"), \`[U3-01 \${w}x\${hSize}] editor did not close\`);
+  assert(!("inlineTextEditing" in h.root.dataset), \`[U3-01 \${w}x\${hSize}] inlineTextEditing leaked in dataset\`);
+  assert(capsule.checkVisibility(), \`[U3-01 \${w}x\${hSize}] capsule did not restore\`);
+
+  // Also test entering inline text editing from clean-view handwriting mode (.ms-clean-pen-strip)
+  let cleanPenMutualExclOk = true;
+  if (w === 1131) {
+    (h.view.getReader() as any).setHandwritingMode("pen");
+    h.view.setCleanView(true);
+    await frame(); await frame();
+    assert(penStrip.checkVisibility() && !capsule.checkVisibility(), "[U3-01 clean-hw] pen strip not visible before edit");
+    await openPdfInlineTextBox(h);
+    assert(!penStrip.checkVisibility() && !capsule.checkVisibility(), "[U3-01 clean-hw] pen strip or capsule visible during edit");
+    h.root.querySelector<HTMLButtonElement>(".ms-text-done")!.click();
+    await frame(); await frame();
+    assert(penStrip.checkVisibility() && !capsule.checkVisibility(), "[U3-01 clean-hw] pen strip did not restore after edit");
+    assert(!("inlineTextEditing" in h.root.dataset), "[U3-01 clean-hw] dataset leaked");
+    h.view.setCleanView(false);
+    (h.view.getReader() as any).setHandwritingMode("off");
+    await frame(); await frame();
+  }
+
+  return {
+    viewport: \`\${w}x\${hSize}\`,
+    stylebarHeight: Number(sr.height.toFixed(2)),
+    scrollDiff,
+    hostBottomMinusBarTop: Number((hostRect.bottom - sr.top).toFixed(2)),
+    cleanPenMutualExclOk,
+    passed: true,
+  };
+};
+
+(window as any).measureU302ExitPaths = async () => {
+  const h = activeHarness!;
+  document.body.classList.remove("is-mobile");
+  h.store.setStudyInterface("set-1", "scenes");
+  (h.view as any).state.bottomCollapsed = false;
+  (h.view as any).state.cleanView = false;
+  (h.view as any).applyLayout();
+  await h.openDoc("pdf");
+  await h.selectScene("excerpt");
+  await frame(); await frame();
+
+  const snapshotBar = () => {
+    const capsule = h.root.querySelector<HTMLElement>(".ms-bottom-capsule-shell")!;
+    const rect = capsule.getBoundingClientRect().toJSON();
+    const buttons = [...capsule.querySelectorAll<HTMLButtonElement>("button")]
+      .filter(b => b.checkVisibility())
+      .map(b => ({ label: b.getAttribute("aria-label") || b.dataset.msTool || "", rect: b.getBoundingClientRect().toJSON() }));
+    const dataset = JSON.stringify(Object.fromEntries(Object.entries(h.root.dataset).sort()));
+    return { rect, buttons, dataset };
+  };
+
+  const baseline = snapshotBar();
+  const pathResults: any[] = [];
+
+  const paths: Array<{ name: string; exit: (editor: HTMLElement) => Promise<void> }> = [
+    {
+      name: "done-button",
+      exit: async editor => {
+        editor.querySelector<HTMLButtonElement>(".ms-text-done")!.click();
+      },
+    },
+    {
+      name: "escape-key",
+      exit: async editor => {
+        editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+      },
+    },
+    {
+      name: "mod-enter",
+      exit: async editor => {
+        editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true, cancelable: true }));
+      },
+    },
+    {
+      name: "switch-tool",
+      exit: async () => {
+        (h.view as any).useReaderTool("hand");
+        await frame();
+        (h.view as any).useReaderTool("text");
+      },
+    },
+    {
+      name: "switch-layer-or-notebook",
+      exit: async () => {
+        const reader = h.view.getReader() as any;
+        const annot = reader?.annController;
+        assert(annot && typeof annot.createInkLayer === "function", "reader.annController missing createInkLayer");
+        annot.createInkLayer("UI03 Layer");
+      },
+    },
+  ];
+
+  for (const p of paths) {
+    const editor = await openPdfInlineTextBox(h);
+    assert(h.root.dataset.inlineTextEditing === "true", \`[U3-02 \${p.name}] did not enter inline editing\`);
+    await p.exit(editor);
+    await frame(); await wait(30); await frame();
+
+    assert(!h.root.querySelector(".ms-overlay-text-editor"), \`[U3-02 \${p.name}] editor still in DOM\`);
+    assert(!("inlineTextEditing" in h.root.dataset), \`[U3-02 \${p.name}] inlineTextEditing leaked in dataset\`);
+    const after = snapshotBar();
+    assert(after.dataset === baseline.dataset, \`[U3-02 \${p.name}] dataset drifted: \${baseline.dataset} -> \${after.dataset}\`);
+    const maxContainerDelta = Math.max(
+      Math.abs(after.rect.left - baseline.rect.left),
+      Math.abs(after.rect.top - baseline.rect.top),
+      Math.abs(after.rect.width - baseline.rect.width),
+      Math.abs(after.rect.height - baseline.rect.height),
+    );
+    assert(maxContainerDelta <= 1.0, \`[U3-02 \${p.name}] capsule rect drifted by \${maxContainerDelta}px\`);
+    assert(after.buttons.length === baseline.buttons.length, \`[U3-02 \${p.name}] button count drifted: \${baseline.buttons.length} -> \${after.buttons.length}\`);
+    let maxBtnDelta = 0;
+    for (let i = 0; i < baseline.buttons.length; i++) {
+      const a = after.buttons[i].rect, b = baseline.buttons[i].rect;
+      const d = Math.max(Math.abs(a.left - b.left), Math.abs(a.top - b.top), Math.abs(a.width - b.width), Math.abs(a.height - b.height));
+      if (d > maxBtnDelta) maxBtnDelta = d;
+    }
+    assert(maxBtnDelta <= 1.0, \`[U3-02 \${p.name}] button rect drifted by \${maxBtnDelta}px\`);
+    pathResults.push({ path: p.name, maxContainerDelta: Number(maxContainerDelta.toFixed(2)), maxBtnDelta: Number(maxBtnDelta.toFixed(2)), datasetEqual: true, passed: true });
+  }
+
+  return { passed: true, count: pathResults.length, paths: pathResults };
+};
+
+(window as any).measureUJoint01 = async () => {
+  const h = activeHarness!;
+  document.body.classList.remove("is-mobile");
+  h.store.setStudyInterface("set-1", "scenes");
+  (h.view as any).state.bottomCollapsed = false;
+  (h.view as any).state.cleanView = false;
+  (h.view as any).applyLayout();
+  await h.openDoc("pdf");
+  await h.selectScene("excerpt");
+  await frame(); await frame();
+
+  // 1. UI-01: overflow toggle present & zero occlusion
+  const toggleBefore = h.root.querySelector<HTMLButtonElement>(".ms-bottom-overflow-toggle")!;
+  assert(toggleBefore && toggleBefore.checkVisibility(), "[U-JOINT-01] overflow toggle missing at 380x700");
+  const toggleRectBefore = toggleBefore.getBoundingClientRect().toJSON();
+  assert(!h.root.querySelector(".ms-workspace-extra-tools-toggle") && !h.root.querySelector(".ms-workspace-toolbar-controls"), "[U-JOINT-01] legacy top overlay present");
+
+  // 2. UI-01 + UI-02: open overflow menu -> 更多 (excerpt.more) -> 文字批注 -> place text box
+  toggleBefore.click();
+  await frame();
+  const moreItem = h.root.querySelector<HTMLButtonElement>('.ms-bottom-overflow-menu [data-ms-tool="excerpt.more"]')!;
+  assert(moreItem && moreItem.checkVisibility(), "[U-JOINT-01] excerpt.more missing in overflow menu");
+  moreItem.click();
+  await frame();
+  const docMore = h.root.querySelector<HTMLElement>(".ms-document-more")!;
+  assert(docMore && docMore.checkVisibility(), "[U-JOINT-01] .ms-document-more did not open");
+  const textAnnotRow = [...docMore.querySelectorAll<HTMLButtonElement>(".ms-document-more-row")].find(b => b.getAttribute("aria-label") === "文字批注")!;
+  assert(textAnnotRow, "[U-JOINT-01] 文字批注 missing in unified more");
+  textAnnotRow.click();
+  await frame();
+  const page = h.root.querySelector<HTMLElement>(".ms-page")!;
+  const pr = page.getBoundingClientRect();
+  page.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, clientX: pr.left + 60, clientY: pr.top + 60 }));
+  await frame(); await wait(30); await frame();
+
+  // 3. UI-03: single-slot stylebar active, capsule & overflow hidden, done button hit
+  const stylebar = h.root.querySelector<HTMLElement>(".ms-overlay-stylebar")!;
+  const capsule = h.root.querySelector<HTMLElement>(".ms-bottom-capsule-shell")!;
+  assert(stylebar && stylebar.checkVisibility(), "[U-JOINT-01] stylebar not visible");
+  assert(!capsule.checkVisibility() && !h.root.querySelector(".ms-bottom-overflow-menu"), "[U-JOINT-01] capsule or overflow menu not hidden");
+  assert(stylebar.scrollWidth <= stylebar.clientWidth + 1, "[U-JOINT-01] stylebar overflowed at 380x700");
+  const doneBtn = stylebar.querySelector<HTMLButtonElement>(".ms-text-done")!;
+  const dr = doneBtn.getBoundingClientRect();
+  assert(isHit(doneBtn, dr.left + dr.width / 2, dr.top + dr.height / 2), "[U-JOINT-01] done button not hit");
+
+  // 4. Exit via ✓ -> verify capsule + overflow toggle restored to same rect and clickable
+  doneBtn.click();
+  await frame(); await frame();
+  assert(!h.root.querySelector(".ms-overlay-text-editor") && !("inlineTextEditing" in h.root.dataset), "[U-JOINT-01] inline editing not cleared");
+  assert(capsule.checkVisibility(), "[U-JOINT-01] capsule not restored");
+  const toggleAfter = h.root.querySelector<HTMLButtonElement>(".ms-bottom-overflow-toggle")!;
+  assert(toggleAfter && toggleAfter.checkVisibility(), "[U-JOINT-01] overflow toggle not restored");
+  const tr = toggleAfter.getBoundingClientRect();
+  const toggleDelta = Math.max(Math.abs(tr.left - toggleRectBefore.left), Math.abs(tr.top - toggleRectBefore.top));
+  assert(toggleDelta <= 1.0, \`[U-JOINT-01] overflow toggle rect drifted by \${toggleDelta}px\`);
+  assert(isHit(toggleAfter, tr.left + tr.width / 2, tr.top + tr.height / 2), "[U-JOINT-01] restored overflow toggle not hit");
+
+  return { passed: true, toggleDelta: Number(toggleDelta.toFixed(2)), stylebarScrollDiff: Number((stylebar.scrollWidth - stylebar.clientWidth).toFixed(2)) };
+};
+
 (window as any).ready = true;
 `;
 
@@ -1140,7 +1405,7 @@ try {
     const report = {
       meta: {
         suite: "pad-toolbar-layout",
-        cards: ["UI-01", "UI-02"],
+        cards: ["UI-01", "UI-02", "UI-03"],
         a30PhysicalResolution: "3392x2400",
         a30EquivalentViewport: "1131x800@DPR3",
         deviceOffline: true,
@@ -1152,6 +1417,9 @@ try {
       u201: [],
       u202: null,
       u203: [],
+      u301: [],
+      u302: null,
+      uJoint01: null,
     };
 
   try {
@@ -1224,6 +1492,20 @@ try {
       report.u203.push(await evalJson(`window.measureU203TraditionalAndPopups(${w}, ${hSize}, ${checkTrad})`));
     }
 
+    // U3-01: inline text editor single-slot mutual exclusion + narrow compact stylebar + zero reader overlap
+    for (const [w, hSize, dpr] of [[1131, 800, 3], [756, 427, 1], [380, 700, 1]]) {
+      await browser("set", "viewport", String(w), String(hSize), String(dpr));
+      report.u301.push(await evalJson(`window.measureU301Viewport(${w}, ${hSize})`));
+    }
+
+    // U3-02: 5 exit paths atomically restore bottom capsule rect/buttons/dataset
+    await browser("set", "viewport", "1131", "800", "3");
+    report.u302 = await evalJson("window.measureU302ExitPaths()");
+
+    // U-JOINT-01: UI-01 + UI-02 + UI-03 combined end-to-end flow at 380x700
+    await browser("set", "viewport", "380", "700", "1");
+    report.uJoint01 = await evalJson("window.measureUJoint01()");
+
     const done = await evalJson("window.disposeHarness()");
     if (done.runtimeErrors.length > 0) {
       throw new Error("Runtime errors: " + JSON.stringify(done.runtimeErrors));
@@ -1237,7 +1519,7 @@ try {
     const totalU101Checks = report.u101.reduce((s, r) => s + r.checkedCount, 0);
     const totalU103Items = report.u103.reduce((s, r) => s + r.scenes.reduce((a, b) => a + b.clickedCount, 0), 0);
     console.log(
-      `PASS pad-toolbar-layout: U1-01 (${totalU101Checks}/${totalU101Checks}, maxOverlapArea=0), U1-02 (3/3), U1-03 (${totalU103Items}/${totalU103Items}), U1-04 (3/3), U2-01 (4/4 no legacy overlay), U2-02 (${report.u202.total}/24 matrix, ${report.u202.uniqueCount}/9 unique), U2-03 (3/3 popups in viewport)`,
+      `PASS pad-toolbar-layout: U1-01 (${totalU101Checks}/${totalU101Checks}, maxOverlapArea=0), U1-02 (3/3), U1-03 (${totalU103Items}/${totalU103Items}), U1-04 (3/3), U2-01 (4/4), U2-02 (${report.u202.total}/24, ${report.u202.uniqueCount}/9 unique), U2-03 (3/3), U3-01 (3/3 single-slot), U3-02 (${report.u302.count}/5 exit paths), U-JOINT-01 (PASS)`,
     );
   } finally {
     await browser("close").catch(() => {});
