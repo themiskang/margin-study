@@ -27,3 +27,4 @@ pdf.worker.js
 
 # 内部交付包（不随开源发布；Step 5 会从历史剔除）
 handoff-to-edict/
+/node_modules
