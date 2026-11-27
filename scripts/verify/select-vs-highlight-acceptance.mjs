@@ -906,9 +906,61 @@ function primaryBtn(id: string): HTMLButtonElement | null {
       // Mouse 4px micro-drag -> strictly 0 annotations && !pop
       await clearSelection();
       await wait(400);
-      await dragSelectSpan(ws.scroll, "第三段八字文本哦", 4, 0, 240, { pointerType: "mouse", detail: 1 });
+      await dragSelectSpan(ws.scroll, "第三段八字文本哦", 4, 0, 240, { pointerType: "mouse", detail: 0 });
+      assert((await ws.store.loadAnnotations("s8.pdf")).length === 0 && ws.store.cards.length === 0 && ws.store.nodes.length === 0 && !getPop(),
+        "S8b single mouse 4px micro-drag was not blocked");
+
+      // Consecutive 4px micro-drags from same origin at 40/65/120ms (3 repeats each, simulating real Obsidian pointerdown.detail=0 + mousedown.detail=1)
+      const microDragOnce = async (text: string, x0 = 160, y0 = 160) => {
+        const span = findSpan(ws.scroll, text);
+        dispatchPtr(ws.scroll, "pointerdown", x0, y0, { pointerType: "mouse", detail: 0 });
+        ws.scroll.dispatchEvent(new MouseEvent("mousedown", { clientX: x0, clientY: y0, button: 0, detail: 1, bubbles: true, cancelable: true }));
+        selectNodeText(span);
+        document.dispatchEvent(new Event("selectionchange"));
+        dispatchPtr(window, "pointerup", x0 + 4, y0, { pointerType: "mouse", detail: 0 });
+      };
+      for (const gapMs of [40, 65, 120]) {
+        for (let trial = 0; trial < 3; trial++) {
+          await clearSelection();
+          await wait(380);
+          await microDragOnce("这是八个中文字符");
+          await wait(gapMs);
+          await microDragOnce("这是八个中文字符");
+          await wait(240);
+          await frame();
+          assert((await ws.store.loadAnnotations("s8.pdf")).length === 0 && ws.store.cards.length === 0 && ws.store.nodes.length === 0 && !getPop(),
+            \`S8b consecutive 2x 4px micro-drag @\${gapMs}ms trial \${trial + 1} popped menu\`);
+        }
+      }
+
+      // 3 consecutive 4px micro-drags @ 60ms -> still no popup
+      await clearSelection();
+      await wait(380);
+      await microDragOnce("第二段八字内容啊");
+      await wait(60);
+      await microDragOnce("第二段八字内容啊");
+      await wait(60);
+      await microDragOnce("第二段八字内容啊");
+      await wait(240);
+      await frame();
+      assert((await ws.store.loadAnnotations("s8.pdf")).length === 0 && ws.store.cards.length === 0 && ws.store.nodes.length === 0 && !getPop(),
+        "S8b consecutive 3x 4px micro-drag @60ms popped menu");
+
+      // 4px micro-drag + normal 8-char drag + 4px micro-drag -> ONLY normal drag pops menu
+      await clearSelection();
+      await wait(380);
+      await microDragOnce("这是八个中文字符");
+      await wait(60);
+      assert(!getPop(), "S8b interleaved 1st micro-drag popped menu");
+      await dragSelectSpan(ws.scroll, "这是八个中文字符", 180, 0, 120, { pointerType: "mouse", detail: 0 });
+      assert((await ws.store.loadAnnotations("s8.pdf")).length === 0 && !!getPop()?.checkVisibility(),
+        "S8b interleaved normal 8-char drag did not pop menu");
+      await wait(60);
+      await microDragOnce("这是八个中文字符");
+      await wait(240);
+      await frame();
       assert((await ws.store.loadAnnotations("s8.pdf")).length === 0 && !getPop(),
-        "S8b mouse 4px micro-drag was not blocked");
+        "S8b interleaved 2nd micro-drag popped menu");
 
       // S8c: drag pause 260ms before pointerup -> no early popup; after pointerup expand More + late selectionchange -> secondary stays connected
       await clearSelection();

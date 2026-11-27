@@ -970,8 +970,16 @@ export abstract class BaseAnnotationController {
   private pendingSelection = false;
   private selectionPointerId: number | null = null;
   private selectionGestureSeq = 0;
-  private lastPointerDownMeta: { x: number; y: number; time: number; count: number } | null = null;
-  private selectionDragStart: { token: number; x: number; y: number; detail: number; downAt: number; pointerType: string } | null = null;
+  private lastPointerDownMeta: { x: number; y: number; time: number; count: number; completedTap: boolean } | null = null;
+  private selectionDragStart: {
+    token: number;
+    x: number;
+    y: number;
+    explicitDetail: number;
+    fallbackDetail: number;
+    downAt: number;
+    pointerType: string;
+  } | null = null;
   private lastSelectionDrag: {
     token: number;
     start: { x: number; y: number };
@@ -1019,14 +1027,17 @@ export abstract class BaseAnnotationController {
     if (!this.pointerSelecting) this.bindSelectionPointerWindowListeners();
     const token = ++this.selectionGestureSeq;
     const now = Date.now();
-    let detail = event.detail || 1;
+    const explicitDetail = event.detail || 0;
+    let fallbackDetail = explicitDetail || 1;
     const prev = this.lastPointerDownMeta;
-    if (prev && now - prev.time <= 350 && Math.hypot(event.clientX - prev.x, event.clientY - prev.y) <= 8) {
+    // Only chain stationary taps (pointerup moved <= 2px) into the detail=0 multi-click fallback;
+    // consecutive micro-drags (e.g. 4px @ 65ms) must never be promoted to detail >= 2.
+    if (prev && prev.completedTap && now - prev.time <= 350 && Math.hypot(event.clientX - prev.x, event.clientY - prev.y) <= 8) {
       const count = prev.count + 1;
-      this.lastPointerDownMeta = { x: event.clientX, y: event.clientY, time: now, count };
-      detail = Math.max(detail, count);
+      this.lastPointerDownMeta = { x: event.clientX, y: event.clientY, time: now, count, completedTap: false };
+      fallbackDetail = Math.max(fallbackDetail, count);
     } else {
-      this.lastPointerDownMeta = { x: event.clientX, y: event.clientY, time: now, count: detail };
+      this.lastPointerDownMeta = { x: event.clientX, y: event.clientY, time: now, count: fallbackDetail, completedTap: false };
     }
     this.pointerSelecting = true;
     this.pendingSelection = false;
@@ -1035,7 +1046,8 @@ export abstract class BaseAnnotationController {
       token,
       x: event.clientX,
       y: event.clientY,
-      detail,
+      explicitDetail,
+      fallbackDetail,
       downAt: now,
       pointerType: event.pointerType || "mouse",
     };
@@ -1048,8 +1060,8 @@ export abstract class BaseAnnotationController {
 
   private onSelectionMouseDown = (event: MouseEvent): void => {
     if (!this.pointerSelecting || !this.selectionDragStart) return;
-    if (event.detail > this.selectionDragStart.detail) {
-      this.selectionDragStart.detail = event.detail;
+    if (event.detail > this.selectionDragStart.explicitDetail) {
+      this.selectionDragStart.explicitDetail = event.detail;
       if (this.lastPointerDownMeta && event.detail > this.lastPointerDownMeta.count) {
         this.lastPointerDownMeta.count = event.detail;
       }
@@ -1067,7 +1079,17 @@ export abstract class BaseAnnotationController {
     const sel = window.getSelection();
     const selText = sel && !sel.isCollapsed ? sel.toString() : "";
     if (start) {
-      const detail = Math.max(start.detail, event.detail || 1);
+      const moveDist = Math.hypot(event.clientX - start.x, event.clientY - start.y);
+      const isStationaryTap = moveDist <= 2;
+      if (isStationaryTap && this.lastPointerDownMeta) {
+        this.lastPointerDownMeta.completedTap = true;
+      } else {
+        this.lastPointerDownMeta = null;
+      }
+      const authoritativeDetail = Math.max(start.explicitDetail, event.detail || 0);
+      const detail = authoritativeDetail > 0
+        ? authoritativeDetail
+        : (isStationaryTap ? start.fallbackDetail : 1);
       const touchLongPress = start.pointerType === "touch" && Date.now() - start.downAt >= 300;
       this.lastSelectionDrag = {
         token: start.token,
