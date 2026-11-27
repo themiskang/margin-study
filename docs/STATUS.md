@@ -244,3 +244,16 @@ G10b-03 **3/3 次确定性失败**（切本后 `refreshExtendLayout` 打断导�
 - 手滑保护：4px 微拖、两次/三次连续微拖（40/65/120ms）、拖选后 Esc/点空白 → 0 产物且**菜单不弹**。根因为 `pointerdown.detail=0` 与 `mousedown.detail=1` 混用导致连击兜底把微拖误升为双击；已改为仅位移 ≤2px 的静止点击计入连击链。
 
 门禁：`verify:public` 116 → **117/117**（新增 `select-vs-highlight`）；`px-gap` 295/298 exceeded 0。已装 1.5.5 到 Mac `yan` 与 Pad 两个库。
+
+## 2026-11-27 · 底栏让位回归修复（合并 `49c22ff`，发布 1.5.6）
+
+业主 1.5.5 实机（Mac，1510×962@DPR2，场景模式）反馈：**底部工具栏仍压住正文**。
+
+根因：`syncBottomClearance` 用 `readerRect.bottom - capsuleRect.top` 并把结果写回**同一阅读区的 margin**——**用被自己修改的元素测量自己**，真机上逐帧收敛到 0；合成测试在稳定后单次采样，恰好取到有让位那一帧，故 240/240 全绿仍漏。
+
+三轮修复（复核逐轮加布局）：
+1. `dd85f2f`：改为按胶囊自身 `height + computedStyle.bottom + gap` 计算，移除 `observe(readerPane)`，补 `visualViewport`/`window` resize；30 帧极差 0。复核抓出**窄屏菜单展开时让位仅 95px**（380×700 溢出 389.86 / 统一更多 876.61 px²）。
+2. `a11e46a`：让位取「所有可见底部浮层」最大值（胶囊/溢出菜单/统一更多/格式条），菜单开合同步。复核抓出**竖排分屏 `756×851@DPR2` 让位 0**，「更多」盖正文 4253.61 px²。
+3. `db33efc`：移除「竖排=0」一刀切，改为统一几何侵入深度 `barHeight + barBottomOffset - readerBottomInset`；竖排「更多」展开 231px、横排 624px，三滚动位交叠 0；竖排保留 130.02px 可滚阅读区。
+
+门禁：`verify:public` **117/117**、`px-gap` 295/298 exceeded 0。已装 1.5.6 到 Mac `yan` 与 Pad 两个库。
