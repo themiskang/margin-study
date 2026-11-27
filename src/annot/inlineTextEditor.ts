@@ -221,7 +221,39 @@ export function openInlineTextEditor(options: {
   text.addEventListener("paste", event => { event.preventDefault(); replaceSelection(event.clipboardData?.getData("text/plain") ?? "", event.clipboardData?.getData("text/html")); });
   text.addEventListener("drop", event => { event.preventDefault(); const value = event.dataTransfer?.getData("text/plain"); if (value) replaceSelection(value); });
   const selectionChanged = () => { if (composing) return; const selection = window.getSelection(); if (!selection?.anchorNode || !text.contains(selection.anchorNode)) return; const previous = state.selection; rememberSelection(); if (previous.start !== state.selection.start || previous.end !== state.selection.end) pending = null; updateBar(); };
-  const outside = (event: PointerEvent) => { if (popup && !bar.contains(event.target as Node)) closePopup(); };
+  const suppressNextClick = () => {
+    const swallow = (clickEvent: MouseEvent) => {
+      clickEvent.preventDefault();
+      clickEvent.stopPropagation();
+      cleanup();
+    };
+    const scheduleCleanup = () => { window.setTimeout(cleanup, 0); };
+    const timer = window.setTimeout(cleanup, 400);
+    function cleanup() {
+      window.clearTimeout(timer);
+      document.removeEventListener("click", swallow, true);
+      document.removeEventListener("pointerup", scheduleCleanup, true);
+      document.removeEventListener("pointercancel", scheduleCleanup, true);
+    }
+    document.addEventListener("click", swallow, true);
+    document.addEventListener("pointerup", scheduleCleanup, true);
+    document.addEventListener("pointercancel", scheduleCleanup, true);
+  };
+  const outside = (event: PointerEvent) => {
+    if (closed) return;
+    const target = event.target as Node | null;
+    const inBar = !!target && (bar.contains(target) || (!!popup && popup.contains(target)));
+    if (inBar) return;
+    if (popup) closePopup();
+    if (target && box.contains(target)) return;
+    const isTabSwitch = target instanceof Element && !!target.closest(".ms-workspace-tab");
+    if (!isTabSwitch) {
+      event.preventDefault();
+      event.stopPropagation();
+      suppressNextClick();
+    }
+    finish();
+  };
   const layout = () => {
     frame = 0; if (closed) return;
     const anchor = options.anchor(), viewport = options.scroll.getBoundingClientRect(), bounds = root.getBoundingClientRect();

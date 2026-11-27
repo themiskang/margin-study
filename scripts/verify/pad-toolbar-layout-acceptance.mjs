@@ -1206,8 +1206,59 @@ async function openPdfInlineTextBox(h: Awaited<ReturnType<typeof createHarness>>
 
   const baseline = snapshotBar();
   const pathResults: any[] = [];
+  const outsideResults: any[] = [];
 
-  const paths: Array<{ name: string; exit: (editor: HTMLElement) => Promise<void> }> = [
+  const getAnnotationCount = async () => (await h.store.loadAnnotations("Long.pdf")).filter(a => !a.overlay?.deleted).length;
+  const dispatchPointerClick = (target: Element, clientX: number, clientY: number) => {
+    target.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, pointerId: 1, pointerType: "mouse", button: 0, clientX, clientY }));
+    target.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, pointerId: 1, pointerType: "mouse", button: 0, clientX, clientY }));
+    target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0, clientX, clientY }));
+  };
+
+  // Whitelist 3 areas: stylebar itself, editor body, font-size dropdown & popover must NOT close editor
+  const whitelistResults: any[] = [];
+  {
+    const editor = await openPdfInlineTextBox(h);
+    const stylebar = editor.querySelector<HTMLElement>(".ms-overlay-stylebar")!;
+    const boldBtn = editor.querySelector<HTMLButtonElement>(".ms-text-bold")!;
+    const inlineText = editor.querySelector<HTMLElement>(".ms-overlay-inline-text")!;
+    const sizeBtn = editor.querySelector<HTMLButtonElement>('[aria-label="选择文字字号"]')!;
+
+    // 1. stylebar control
+    const br = boldBtn.getBoundingClientRect();
+    dispatchPointerClick(boldBtn, br.left + br.width / 2, br.top + br.height / 2);
+    await frame();
+    assert(!!h.root.querySelector(".ms-overlay-text-editor") && h.root.dataset.inlineTextEditing === "true", "[U3-02 whitelist] stylebar click closed editor");
+    whitelistResults.push({ target: "stylebar", keptOpen: true });
+
+    // 2. editor body
+    const tr = inlineText.getBoundingClientRect();
+    dispatchPointerClick(inlineText, tr.left + tr.width / 2, tr.top + tr.height / 2);
+    await frame();
+    assert(!!h.root.querySelector(".ms-overlay-text-editor") && h.root.dataset.inlineTextEditing === "true", "[U3-02 whitelist] editor body click closed editor");
+    whitelistResults.push({ target: "editor-body", keptOpen: true });
+
+    // 3. font-size dropdown button + its popover option
+    const sr = sizeBtn.getBoundingClientRect();
+    dispatchPointerClick(sizeBtn, sr.left + sr.width / 2, sr.top + sr.height / 2);
+    await frame();
+    const popover = stylebar.querySelector<HTMLElement>(".ms-text-style-popover.ms-text-size-list")!;
+    assert(popover && popover.checkVisibility(), "[U3-02 whitelist] size popover did not open");
+    const opt18 = popover.querySelector<HTMLButtonElement>('[aria-label="字号 18"]')!;
+    assert(opt18, "[U3-02 whitelist] size 18 option missing");
+    const or = opt18.getBoundingClientRect();
+    dispatchPointerClick(opt18, or.left + or.width / 2, or.top + or.height / 2);
+    await frame();
+    assert(!!h.root.querySelector(".ms-overlay-text-editor") && h.root.dataset.inlineTextEditing === "true", "[U3-02 whitelist] size popover click closed editor");
+    whitelistResults.push({ target: "size-dropdown-popover", keptOpen: true });
+
+    // Close cleanly
+    editor.querySelector<HTMLButtonElement>(".ms-text-done")!.click();
+    await frame(); await wait(30); await frame();
+    assert(!h.root.querySelector(".ms-overlay-text-editor") && !("inlineTextEditing" in h.root.dataset), "[U3-02 whitelist] cleanup failed");
+  }
+
+  const paths: Array<{ name: string; outside?: boolean; exit: (editor: HTMLElement) => Promise<void> }> = [
     {
       name: "done-button",
       exit: async editor => {
@@ -1235,7 +1286,7 @@ async function openPdfInlineTextBox(h: Awaited<ReturnType<typeof createHarness>>
       },
     },
     {
-      name: "switch-layer-or-notebook",
+      name: "switch-layer",
       exit: async () => {
         const reader = h.view.getReader() as any;
         const annot = reader?.annController;
@@ -1243,16 +1294,92 @@ async function openPdfInlineTextBox(h: Awaited<ReturnType<typeof createHarness>>
         annot.createInkLayer("UI03 Layer");
       },
     },
+    {
+      name: "switch-tab",
+      exit: async () => {
+        const htmlTab = h.root.querySelector<HTMLButtonElement>('.ms-workspace-tab[data-path="Long.html"] [role="tab"]')!;
+        const pdfTab = h.root.querySelector<HTMLButtonElement>('.ms-workspace-tab[data-path="Long.pdf"] [role="tab"]')!;
+        assert(htmlTab && pdfTab, "[U3-02 switch-tab] tabs missing");
+        const hr = htmlTab.getBoundingClientRect();
+        dispatchPointerClick(htmlTab, hr.left + hr.width / 2, hr.top + hr.height / 2);
+        await frame(); await wait(60); await frame();
+        assert((h.view as any).state.activePath === "Long.html", "[U3-02 switch-tab] did not switch to Long.html");
+        assert(!h.root.querySelector(".ms-overlay-text-editor") && !("inlineTextEditing" in h.root.dataset), "[U3-02 switch-tab] editor stayed open after switching tab");
+        const pr = pdfTab.getBoundingClientRect();
+        dispatchPointerClick(pdfTab, pr.left + pr.width / 2, pr.top + pr.height / 2);
+        await frame(); await wait(60); await frame();
+        assert((h.view as any).state.activePath === "Long.pdf", "[U3-02 switch-tab] did not switch back to Long.pdf");
+      },
+    },
+    {
+      name: "outside-click-pdf",
+      outside: true,
+      exit: async () => {
+        const page = h.root.querySelector<HTMLElement>(".ms-page")!;
+        const pr = page.getBoundingClientRect();
+        const x = pr.left + Math.min(pr.width * 0.72, 260), y = pr.top + Math.min(pr.height * 0.65, 320);
+        const hit = document.elementFromPoint(x, y) ?? page;
+        assert(!hit.closest(".ms-overlay-text-editor"), "[U3-02 outside-click-pdf] target fell inside editor");
+        dispatchPointerClick(hit, x, y);
+      },
+    },
+    {
+      name: "outside-click-header",
+      outside: true,
+      exit: async () => {
+        const header = h.root.querySelector<HTMLElement>(".ms-workspace-toolbar")!;
+        const hr = header.getBoundingClientRect();
+        const x = hr.left + hr.width / 2, y = hr.top + hr.height / 2;
+        const hit = document.elementFromPoint(x, y) ?? header;
+        dispatchPointerClick(hit, x, y);
+      },
+    },
+    {
+      name: "outside-click-mindmap",
+      outside: true,
+      exit: async () => {
+        const map = h.root.querySelector<HTMLElement>(".ms-workspace-map")!;
+        const mr = map.getBoundingClientRect();
+        const x = mr.left + mr.width * 0.75, y = mr.top + mr.height * 0.5;
+        const hit = document.elementFromPoint(x, y) ?? map;
+        dispatchPointerClick(hit, x, y);
+      },
+    },
+    {
+      name: "outside-click-splitter",
+      outside: true,
+      exit: async () => {
+        const splitter = h.root.querySelector<HTMLElement>(".ms-workspace-splitter-main")!;
+        const sr = splitter.getBoundingClientRect();
+        const x = sr.left + sr.width / 2, y = sr.top + Math.min(40, sr.height * 0.25);
+        const hit = document.elementFromPoint(x, y) ?? splitter;
+        dispatchPointerClick(hit, x, y);
+      },
+    },
   ];
 
   for (const p of paths) {
     const editor = await openPdfInlineTextBox(h);
     assert(h.root.dataset.inlineTextEditing === "true", \`[U3-02 \${p.name}] did not enter inline editing\`);
+    const annBefore = await getAnnotationCount();
+    const ratioBefore = (h.view as any).state.ratio;
+    const worldBefore = h.root.querySelector<HTMLElement>(".ms-mindmap-world")?.style.transform ?? "";
+
     await p.exit(editor);
     await frame(); await wait(30); await frame();
 
     assert(!h.root.querySelector(".ms-overlay-text-editor"), \`[U3-02 \${p.name}] editor still in DOM\`);
     assert(!("inlineTextEditing" in h.root.dataset), \`[U3-02 \${p.name}] inlineTextEditing leaked in dataset\`);
+    const annAfter = await getAnnotationCount();
+    const annotationsDelta = annAfter - annBefore;
+    assert(annotationsDelta === 0, \`[U3-02 \${p.name}] unexpected side-effect annotation delta: \${annotationsDelta}\`);
+    if (p.outside) {
+      const ratioAfter = (h.view as any).state.ratio;
+      const worldAfter = h.root.querySelector<HTMLElement>(".ms-mindmap-world")?.style.transform ?? "";
+      assert(ratioAfter === ratioBefore, \`[U3-02 \${p.name}] outside click dragged splitter: \${ratioBefore} -> \${ratioAfter}\`);
+      assert(worldAfter === worldBefore, \`[U3-02 \${p.name}] outside click dragged mindmap: \${worldBefore} -> \${worldAfter}\`);
+      assert((window.getSelection()?.toString() ?? "") === "", \`[U3-02 \${p.name}] outside click created text selection\`);
+    }
     const after = snapshotBar();
     assert(after.dataset === baseline.dataset, \`[U3-02 \${p.name}] dataset drifted: \${baseline.dataset} -> \${after.dataset}\`);
     const maxContainerDelta = Math.max(
@@ -1270,10 +1397,19 @@ async function openPdfInlineTextBox(h: Awaited<ReturnType<typeof createHarness>>
       if (d > maxBtnDelta) maxBtnDelta = d;
     }
     assert(maxBtnDelta <= 1.0, \`[U3-02 \${p.name}] button rect drifted by \${maxBtnDelta}px\`);
-    pathResults.push({ path: p.name, maxContainerDelta: Number(maxContainerDelta.toFixed(2)), maxBtnDelta: Number(maxBtnDelta.toFixed(2)), datasetEqual: true, passed: true });
+    const entry = {
+      path: p.name,
+      maxContainerDelta: Number(maxContainerDelta.toFixed(2)),
+      maxBtnDelta: Number(maxBtnDelta.toFixed(2)),
+      datasetEqual: true,
+      annotationsDelta,
+      passed: true,
+    };
+    pathResults.push(entry);
+    if (p.outside) outsideResults.push(entry);
   }
 
-  return { passed: true, count: pathResults.length, paths: pathResults };
+  return { passed: true, count: pathResults.length, paths: pathResults, outsideTargets: outsideResults, whitelist: whitelistResults };
 };
 
 (window as any).measureUJoint01 = async () => {
@@ -1519,7 +1655,7 @@ try {
     const totalU101Checks = report.u101.reduce((s, r) => s + r.checkedCount, 0);
     const totalU103Items = report.u103.reduce((s, r) => s + r.scenes.reduce((a, b) => a + b.clickedCount, 0), 0);
     console.log(
-      `PASS pad-toolbar-layout: U1-01 (${totalU101Checks}/${totalU101Checks}, maxOverlapArea=0), U1-02 (3/3), U1-03 (${totalU103Items}/${totalU103Items}), U1-04 (3/3), U2-01 (4/4), U2-02 (${report.u202.total}/24, ${report.u202.uniqueCount}/9 unique), U2-03 (3/3), U3-01 (3/3 single-slot), U3-02 (${report.u302.count}/5 exit paths), U-JOINT-01 (PASS)`,
+      `PASS pad-toolbar-layout: U1-01 (${totalU101Checks}/${totalU101Checks}, maxOverlapArea=0), U1-02 (3/3), U1-03 (${totalU103Items}/${totalU103Items}), U1-04 (3/3), U2-01 (4/4), U2-02 (${report.u202.total}/24, ${report.u202.uniqueCount}/9 unique), U2-03 (3/3), U3-01 (3/3 single-slot), U3-02 (${report.u302.count}/10 exit paths, ${report.u302.outsideTargets.length}/4 outside, ${report.u302.whitelist.length}/3 whitelist), U-JOINT-01 (PASS)`,
     );
   } finally {
     await browser("close").catch(() => {});
