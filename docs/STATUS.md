@@ -229,3 +229,18 @@ G10b-03 **3/3 次确定性失败**（切本后 `refreshExtendLayout` 打断导�
 - **ANNOT-03**：`historyScope` 路由 + 三种独立阅读器 `Cmd+Z`（`4484a81`）；复核抓出**底部菜单打开时 `Cmd+Z` 误撤背后文档**（`1bb53c4`），加统一浮层守卫，浮层关闭后撤销恢复。
 
 门禁：`verify:public` 112 → **116/116**（新增 `annot-threshold`、`annot-undo-atomicity`、`pad-toolbar-layout`、`workspace-annot-undo-e2e`）；`px-gap` 295/298 exceeded 0。已装 1.5.4 到 Mac `yan` 与 Pad 两个库。
+
+## 2026-11-27 · 拖选只选中（合并 `SELECT-01`，发布 1.5.5）
+
+业主反馈：在「摘录/书写」场景拖选一句话，**松手即自动高亮并成卡**，用户期望"只选中，再由自己决定"。
+
+根因：`studyWorkspace.ts` 在 `excerpt`/`writing` 场景且工具为选择时调用 `setAutomaticTextExcerpt(true)`；`baseController.ts` 在 `automaticTextExcerpt && 选中长度≥minChars` 时直接 `commitAnnotation(...,"highlight",...)`，**没有"仅选中"中间态**，且该开关无用户可见设置项。
+
+修复（`e1050ca` → `8254a0d`，复核 PASS）：
+- 默认 **拖选仅选中**；选区菜单主行直接提供「高亮 / 摘录卡 / 复制」（原来「高亮」在二级菜单且无「摘录卡」）。
+- 新增设置 `autoHighlightOnSelect`（默认关，进设置页 + `featureSearch` 23/23，重载持久化）。
+- 点「高亮」→ 1 标注，是否成卡服从 `autoCardOnHighlight`；点「摘录卡」→ 严格 1 标注 + 1 卡（不双卡），1 次撤销原子撤回。
+- 连续摘录（P0）保持逐笔自动，退出即复原为仅选中。
+- 手滑保护：4px 微拖、两次/三次连续微拖（40/65/120ms）、拖选后 Esc/点空白 → 0 产物且**菜单不弹**。根因为 `pointerdown.detail=0` 与 `mousedown.detail=1` 混用导致连击兜底把微拖误升为双击；已改为仅位移 ≤2px 的静止点击计入连击链。
+
+门禁：`verify:public` 116 → **117/117**（新增 `select-vs-highlight`）；`px-gap` 295/298 exceeded 0。已装 1.5.5 到 Mac `yan` 与 Pad 两个库。
