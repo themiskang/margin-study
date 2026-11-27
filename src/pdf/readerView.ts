@@ -416,6 +416,20 @@ export class ReaderView extends ItemView {
   getEditHistoryState(): ReaderEditHistoryState { return this.annController.getEditHistoryState(); }
   undoLastEdit(): void | Promise<void> { return this.extendNotes.hasEditor() ? this.finishExtendEditing().then(() => this.annController.undoLastEdit()) : this.annController.undoLastEdit(); }
   redoLastEdit(): void | Promise<void> { return this.extendNotes.hasEditor() ? this.finishExtendEditing().then(() => this.annController.redoLastEdit()) : this.annController.redoLastEdit(); }
+  private onStandaloneHistoryKey = (event: KeyboardEvent): void => {
+    if (this.destroyed || this.workspaceChrome || event.defaultPrevented) return;
+    if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== "z") return;
+    const root = this.containerEl.children[1] as HTMLElement | undefined;
+    if (root?.closest(".ms-study-workspace") || this.containerEl.closest(".ms-study-workspace")) return;
+    if (document.querySelector(".ms-modal-bg,.modal-container")) return;
+    const target = event.target;
+    if (target instanceof Element && target.closest("input,textarea,[contenteditable=true]")) return;
+    const active = document.activeElement;
+    if (active instanceof Element && active.closest("input,textarea,[contenteditable=true]")) return;
+    if (event.currentTarget === window && this.app.workspace.activeLeaf !== this.leaf && !(target instanceof Node && this.containerEl.contains(target))) return;
+    event.preventDefault();
+    void (event.shiftKey ? this.redoLastEdit() : this.undoLastEdit());
+  };
   subscribeEditHistory(listener: (state: ReaderEditHistoryState) => void): () => void { return this.annController.subscribeEditHistory(listener); }
   beginExtend(): void { if (this.getPdfPageEdits()) this.extendNotes.begin(); }
   stopExtend(): void { this.extendNotes.stop(); }
@@ -863,6 +877,8 @@ export class ReaderView extends ItemView {
     this.scrollEl.tabIndex = 0;
     this.scrollEl.setAttribute("aria-label", "PDF 正文；方向键和 PageUp / PageDown 翻页");
     this.scrollEl.addEventListener("keydown", this.onPageKey);
+    this.containerEl.addEventListener("keydown", this.onStandaloneHistoryKey);
+    window.addEventListener("keydown", this.onStandaloneHistoryKey);
     this.scrollEl.addEventListener("scroll", this.saveReadingPosition, { passive: true });
     this.scrollEl.style.setProperty("--ms-page-gap", this.plugin.store.settings.pageGap + "px");
     this.thumbPanel = el("div", { class: "ms-thumb-panel" });
@@ -970,6 +986,8 @@ export class ReaderView extends ItemView {
     this.pendingUpgradePages.clear();
     document.removeEventListener("visibilitychange", this.onVisibilityChange);
     this.scrollEl?.removeEventListener("keydown", this.onPageKey);
+    this.containerEl?.removeEventListener("keydown", this.onStandaloneHistoryKey);
+    window.removeEventListener("keydown", this.onStandaloneHistoryKey);
     this.scrollEl?.removeEventListener("scroll", this.saveReadingPosition);
     this.destroyed = true;
     this.positionObserver?.disconnect(); this.positionObserver = null;

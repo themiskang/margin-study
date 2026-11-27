@@ -352,7 +352,18 @@ export class StudyWorkspaceView extends ItemView {
         const target=event.target;if(!(target instanceof Element&&target.closest("input,textarea,[contenteditable=true]"))){event.preventDefault();event.stopPropagation();this.openReaderSearch();return;}
       }
     },true);
+    const isEditableKeyTarget=(target:EventTarget|null)=>target instanceof Element&&!!target.closest("input,textarea,[contenteditable=true]");
+    const handleWorkspaceHistoryKey=(event:KeyboardEvent,fromWindow:boolean):boolean=>{
+      if(this.closed||event.defaultPrevented||!(event.ctrlKey||event.metaKey)||event.altKey||event.key.toLowerCase()!=="z")return false;
+      if(document.querySelector(".ms-modal-bg,.modal-container"))return false;
+      if(isEditableKeyTarget(event.target)||isEditableKeyTarget(document.activeElement))return false;
+      if(fromWindow&&this.app.workspace.activeLeaf!==this.leaf&&!(event.target instanceof Node&&this.root.contains(event.target)))return false;
+      event.preventDefault();
+      void this.applyHistory(event.shiftKey);
+      return true;
+    };
     this.registerDomEvent(window, "keydown", event => {
+      if (handleWorkspaceHistoryKey(event, true)) return;
       if (!event.defaultPrevented && event.metaKey && event.altKey && !event.shiftKey && (event.code==="KeyM" || event.key.toLowerCase()==="m") && this.app.workspace.activeLeaf===this.leaf) {
         const target=event.target;
         if (!(target instanceof Element && target.closest("input,textarea,[contenteditable=true]"))) { event.preventDefault(); event.stopPropagation(); this.renderer?.toggleSceneMultiSelect(); return; }
@@ -386,11 +397,8 @@ export class StudyWorkspaceView extends ItemView {
     this.registerEvent(this.app.vault.on("create", file => { if (file.path !== "_marginstudy-recovery" && !file.path.startsWith("_marginstudy-recovery/")) this.scheduleRefresh(); }));
     this.registerEvent(this.app.vault.on("delete", file => { if (file.path !== "_marginstudy-recovery" && !file.path.startsWith("_marginstudy-recovery/")) this.scheduleRefresh(); }));
     this.registerDomEvent(this.root, "keydown", event => {
-      const target=event.target as HTMLElement;
-      if(!event.defaultPrevented&&(event.ctrlKey||event.metaKey)&&!event.altKey&&!event.shiftKey&&event.key.toLowerCase()==="f"&&!target.closest("input,textarea,[contenteditable=true]")){event.preventDefault();this.openReaderSearch();return;}
-      if(!event.defaultPrevented&&(event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==="z"&&!target.closest("input,textarea,[contenteditable=true]")){
-        event.preventDefault();this.applyHistory(event.shiftKey);return;
-      }
+      if(!event.defaultPrevented&&(event.ctrlKey||event.metaKey)&&!event.altKey&&!event.shiftKey&&event.key.toLowerCase()==="f"&&!isEditableKeyTarget(event.target)){event.preventDefault();this.openReaderSearch();return;}
+      if(handleWorkspaceHistoryKey(event, false))return;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "w" && this.state.activePath) {
         event.preventDefault(); event.stopPropagation(); void this.closeTab(this.state.activePath);
       }
@@ -777,9 +785,8 @@ export class StudyWorkspaceView extends ItemView {
     const redoTitle=state?.redoLabel?"重做"+state.redoLabel:!isLibrary?"没有可重做的手写、批注或页编辑":"没有可重做的卡片或脑图变更";
     if(this.undoButton){this.undoButton.disabled=!state?.canUndo;this.undoButton.title=undoTitle;}
     if(this.redoButton){this.redoButton.disabled=!state?.canRedo;this.redoButton.title=redoTitle;}
-    const undo=this.bottomCapsule?.querySelector<HTMLButtonElement>('[data-bottom-action="undo"]'),redo=this.bottomCapsule?.querySelector<HTMLButtonElement>('[data-bottom-action="redo"]');
-    if(undo){undo.disabled=!state?.canUndo;undo.title=undoTitle;}
-    if(redo){redo.disabled=!state?.canRedo;redo.title=redoTitle;}
+    for(const undo of this.bottomCapsule?.querySelectorAll<HTMLButtonElement>('[data-bottom-action="undo"]')??[]){undo.disabled=!state?.canUndo;undo.title=undoTitle;}
+    for(const redo of this.bottomCapsule?.querySelectorAll<HTMLButtonElement>('[data-bottom-action="redo"]')??[]){redo.disabled=!state?.canRedo;redo.title=redoTitle;}
     this.bottomOverflow?.syncItemStates();
   }
   private async applyHistory(redo:boolean):Promise<void> {
@@ -792,7 +799,10 @@ export class StudyWorkspaceView extends ItemView {
     }else{
       const readerState=this.reader?.getEditHistoryState();
       if(redo?readerState?.canRedo:readerState?.canUndo){if(redo)await this.reader?.redoLastEdit();else await this.reader?.undoLastEdit();}
-      else await this.applyWorkspaceHistory(redo);
+      else{
+        const ws=this.getWorkspaceEditHistoryState();
+        if(redo?ws.canRedo:ws.canUndo)await this.applyWorkspaceHistory(redo);
+      }
     }
     this.syncHistoryButtons();this.scheduleRefresh();
   }

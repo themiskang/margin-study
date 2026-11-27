@@ -92,6 +92,20 @@ export class WordReaderView extends ItemView implements HtmlReader {
   getEditHistoryState(): ReaderEditHistoryState { return this.ann.getEditHistoryState(); }
   undoLastEdit(): void | Promise<void> { return this.ann.undoLastEdit(); }
   redoLastEdit(): void | Promise<void> { return this.ann.redoLastEdit(); }
+  private onStandaloneHistoryKey = (event: KeyboardEvent): void => {
+    if (this.destroyed || this.workspaceChrome || event.defaultPrevented) return;
+    if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== "z") return;
+    const root = this.containerEl.children[1] as HTMLElement | undefined;
+    if (root?.closest(".ms-study-workspace") || this.containerEl.closest(".ms-study-workspace")) return;
+    if (document.querySelector(".ms-modal-bg,.modal-container")) return;
+    const target = event.target;
+    if (target instanceof Element && target.closest("input,textarea,[contenteditable=true]")) return;
+    const active = document.activeElement;
+    if (active instanceof Element && active.closest("input,textarea,[contenteditable=true]")) return;
+    if (event.currentTarget === window && this.app.workspace.activeLeaf !== this.leaf && !(target instanceof Node && this.containerEl.contains(target))) return;
+    event.preventDefault();
+    void (event.shiftKey ? this.redoLastEdit() : this.undoLastEdit());
+  };
   subscribeEditHistory(listener: (state: ReaderEditHistoryState) => void): () => void { return this.ann.subscribeEditHistory(listener); }
 
   async setState(state: any): Promise<void> {
@@ -133,6 +147,8 @@ export class WordReaderView extends ItemView implements HtmlReader {
     this.scrollEl.addEventListener("scroll", this.onScroll, { passive: true });
     this.scrollEl.addEventListener("pointerdown", () => { this.plugin.activeReader = this; });
     this.scrollEl.addEventListener("focusin", () => { this.plugin.activeReader = this; });
+    this.containerEl.addEventListener("keydown", this.onStandaloneHistoryKey);
+    window.addEventListener("keydown", this.onStandaloneHistoryKey);
 
     this.ann = new HtmlAnnotationController(this.plugin, this);
     this.speech = new ReadingSpeechControls({ owner: `word-${Math.random().toString(36).slice(2)}`,
@@ -147,6 +163,8 @@ export class WordReaderView extends ItemView implements HtmlReader {
     this.destroyed = true;
     this.reading.disconnect();
     this.scrollEl?.removeEventListener("scroll", this.onScroll);
+    this.containerEl?.removeEventListener("keydown", this.onStandaloneHistoryKey);
+    window.removeEventListener("keydown", this.onStandaloneHistoryKey);
     if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
     this.loadRevision++;
     this.loadedPath = null;

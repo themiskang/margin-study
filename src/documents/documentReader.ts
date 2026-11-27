@@ -106,6 +106,20 @@ export class DocumentReaderView extends ItemView implements HtmlReader {
   getEditHistoryState(): ReaderEditHistoryState { return this.ann.getEditHistoryState(); }
   undoLastEdit(): void | Promise<void> { return this.ann.undoLastEdit(); }
   redoLastEdit(): void | Promise<void> { return this.ann.redoLastEdit(); }
+  private onStandaloneHistoryKey = (event: KeyboardEvent): void => {
+    if (this.destroyed || this.workspaceChrome || event.defaultPrevented) return;
+    if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== "z") return;
+    const root = this.containerEl.children[1] as HTMLElement | undefined;
+    if (root?.closest(".ms-study-workspace") || this.containerEl.closest(".ms-study-workspace")) return;
+    if (document.querySelector(".ms-modal-bg,.modal-container")) return;
+    const target = event.target;
+    if (target instanceof Element && target.closest("input,textarea,[contenteditable=true]")) return;
+    const active = document.activeElement;
+    if (active instanceof Element && active.closest("input,textarea,[contenteditable=true]")) return;
+    if (event.currentTarget === window && this.app.workspace.activeLeaf !== this.leaf && !(target instanceof Node && this.containerEl.contains(target))) return;
+    event.preventDefault();
+    void (event.shiftKey ? this.redoLastEdit() : this.undoLastEdit());
+  };
   subscribeEditHistory(listener: (state: ReaderEditHistoryState) => void): () => void { return this.ann.subscribeEditHistory(listener); }
 
   getState(): Record<string, unknown> {
@@ -153,6 +167,8 @@ export class DocumentReaderView extends ItemView implements HtmlReader {
     this.scrollEl.addEventListener("focusin", this.activate);
     this.scrollEl.addEventListener("scroll", this.onScroll, { passive: true });
     this.bodyEl.addEventListener("click", this.onLink);
+    this.containerEl.addEventListener("keydown", this.onStandaloneHistoryKey);
+    window.addEventListener("keydown", this.onStandaloneHistoryKey);
     if (this.filePath) await this.loadFileByPath(this.filePath);
   }
   private activate = () => { this.plugin.activeReader = this; };
@@ -166,6 +182,8 @@ export class DocumentReaderView extends ItemView implements HtmlReader {
     this.scrollEl?.removeEventListener("pointerdown", this.activate);
     this.scrollEl?.removeEventListener("focusin", this.activate);
     this.bodyEl?.removeEventListener("click", this.onLink);
+    this.containerEl?.removeEventListener("keydown", this.onStandaloneHistoryKey);
+    window.removeEventListener("keydown", this.onStandaloneHistoryKey);
     if (this.plugin.activeReader === this) this.plugin.activeReader = null;
     this.clearSearchHighlight();
     try { await this.ann?.destroy(); }
