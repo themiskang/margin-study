@@ -51,6 +51,8 @@ import { el } from "../utils/dom";
 import { hasDeviceRecallHintProvider, requestDeviceRecallHint } from "../recall/deviceProvider";
 import { uid } from "../utils/id";
 import type { HandwritingSource, ReaderReturnPosition } from "../documents/readingPosition";
+import { INLINE_TEXT_EDITOR_CHANGE_EVENT } from "../annot/inlineTextEditor";
+import { BottomToolbarOverflowController, computeBottomBarClearance } from "./bottomToolbarOverflow";
 
 export const VIEW_TYPE_STUDY_WORKSPACE = "margin-study-workspace";
 type ChildReader = ReaderView | WordReaderView | DocumentReaderView;
@@ -90,7 +92,6 @@ export class StudyWorkspaceView extends ItemView {
   private stateProvided = false;
   private root!: HTMLElement;
   private toolbar!: HTMLElement;
-  private workspaceToolsOpen = false;
   private bottomCapsule!: HTMLElement;
   private workspaceFloatingActions!: HTMLElement;
   private body!: HTMLElement;
@@ -144,12 +145,7 @@ export class StudyWorkspaceView extends ItemView {
   private deckFilter = false;
   private deckQuery = "";
   private outsidePopup = (event: PointerEvent) => {
-    if (this.workspaceToolsOpen && this.toolbar && !this.toolbar.contains(event.target as Node)) {
-      this.workspaceToolsOpen = false;
-      const controls = this.toolbar.querySelector<HTMLElement>(".ms-workspace-toolbar-controls");
-      if (controls && this.toolbar.classList.contains("has-scene-header")) controls.hidden = true;
-      this.toolbar.querySelector<HTMLButtonElement>(".ms-workspace-extra-tools-toggle")?.setAttribute("aria-expanded", "false");
-    }
+    this.bottomOverflow?.handleOutsidePointerDown(event.target as Node);
     if (this.popup && !this.popup.classList.contains("ms-study-home-screen") && !this.popup.contains(event.target as Node) && !(event.target as HTMLElement).closest("[data-popup-trigger]")) this.dismissPopup();
   };
   private reader: ChildReader | null = null;
@@ -167,6 +163,11 @@ export class StudyWorkspaceView extends ItemView {
   private workspaceNoticeLayer: HTMLElement | null = null;
   private workspaceNoticeTimer: number | null = null;
   private bottomPressDisposers: (() => void)[] = [];
+  private bottomOverflow: BottomToolbarOverflowController | null = null;
+  private bottomLayoutResize: ResizeObserver | null = null;
+  private bottomLayoutRaf: number | null = null;
+  private lastDocumentPopupAnchor: HTMLElement | null = null;
+  private inlineEditRestoreHandwritingMode: "pen" | "highlight" | "eraser" | "lasso" | null = null;
   private documentHook = (cardId: string) => {
     if (this.state.linkMode === "both" || this.state.linkMode === "document") {
       this.state.mindmap = true; this.applyLayout(); this.renderer?.revealCard(cardId, "linked");
@@ -312,6 +313,29 @@ export class StudyWorkspaceView extends ItemView {
     const floatingResize = new ResizeObserver(positionFloatingActions);
     floatingResize.observe(this.root); floatingResize.observe(this.mapPane);
     this.register(() => floatingResize.disconnect());
+    this.bottomOverflow = new BottomToolbarOverflowController(this.root, this.bottomCapsule);
+    this.bottomLayoutResize = new ResizeObserver(() => this.scheduleBottomLayoutSync());
+    this.bottomLayoutResize.observe(this.root);
+    this.bottomLayoutResize.observe(this.bottomCapsule);
+    this.bottomLayoutResize.observe(this.readerPane);
+    const inlineEditorChanged = () => {
+      if (this.root.dataset.inlineTextEditing === "true") {
+        this.bottomOverflow?.closeMenu();
+      } else if (this.inlineEditRestoreHandwritingMode) {
+        const restoreMode = this.inlineEditRestoreHandwritingMode;
+        this.inlineEditRestoreHandwritingMode = null;
+        if (this.state.cleanView && this.reader) this.setReaderHandwritingMode(restoreMode, false);
+      }
+      this.syncCleanPenStrip();
+      this.syncBottomLayout();
+    };
+    this.root.addEventListener(INLINE_TEXT_EDITOR_CHANGE_EVENT, inlineEditorChanged);
+    this.register(() => {
+      this.root.removeEventListener(INLINE_TEXT_EDITOR_CHANGE_EVENT, inlineEditorChanged);
+      this.bottomLayoutResize?.disconnect(); this.bottomLayoutResize = null;
+      if (this.bottomLayoutRaf !== null) { window.cancelAnimationFrame(this.bottomLayoutRaf); this.bottomLayoutRaf = null; }
+      this.bottomOverflow?.dispose(); this.bottomOverflow = null;
+    });
     this.renderer = new MindmapRenderer(this.plugin, { nativeChrome: true, onSelectionChange: nodes => this.onMindmapSelectionChange(nodes),
       onCloseMindmap: () => { this.state.mindmap=false; this.state.reader=true; this.layoutChanged(); },
       onShowMindmap: () => { if(!this.state.mindmap){this.state.mindmap=true;this.layoutChanged();} },
@@ -343,6 +367,7 @@ export class StudyWorkspaceView extends ItemView {
         if (activeWorkspace && !(target instanceof Element && target.closest("input,textarea,[contenteditable=true]"))) { event.preventDefault(); event.stopPropagation(); this.toggleCleanView(); return; }
       }
       if (event.key !== "Escape" || event.defaultPrevented || document.querySelector(".ms-modal-bg,.modal-container")) return;
+      if (this.bottomOverflow?.handleEscape()) { event.preventDefault(); return; }
       if (this.popup) { event.preventDefault(); this.dismissPopup(); return; }
       if (this.reader?.getBlockSelectionMode()) { event.preventDefault();this.reader.setBlockSelectionMode(false);this.drawToolbar();return; }
       const escTarget=event.target;
@@ -385,6 +410,9 @@ export class StudyWorkspaceView extends ItemView {
   async onClose(): Promise<void> {
     this.cleanHandleDispose?.(); this.cleanHandleDispose = null; this.cleanHandleEl = null;
     this.bottomPressDisposers.splice(0).forEach(dispose=>dispose());
+    this.bottomOverflow?.dispose(); this.bottomOverflow = null;
+    this.bottomLayoutResize?.disconnect(); this.bottomLayoutResize = null;
+    if (this.bottomLayoutRaf !== null) { window.cancelAnimationFrame(this.bottomLayoutRaf); this.bottomLayoutRaf = null; }
     this.closePageDialog?.();
     this.captureReader(); this.closed = true;
     this.releaseHostSidebars?.(); this.releaseHostSidebars = null;
@@ -745,11 +773,14 @@ export class StudyWorkspaceView extends ItemView {
   private syncHistoryButtons():void {
     const state=this.currentHistoryState();
     const isLibrary=this.historyScope==="library";
-    if(this.undoButton){this.undoButton.disabled=!state?.canUndo;this.undoButton.title=state?.undoLabel?"撤销"+state.undoLabel:!isLibrary?"没有可撤销的手写、批注或页编辑":"没有可撤销的卡片或脑图变更";}
-    if(this.redoButton){this.redoButton.disabled=!state?.canRedo;this.redoButton.title=state?.redoLabel?"重做"+state.redoLabel:!isLibrary?"没有可重做的手写、批注或页编辑":"没有可重做的卡片或脑图变更";}
+    const undoTitle=state?.undoLabel?"撤销"+state.undoLabel:!isLibrary?"没有可撤销的手写、批注或页编辑":"没有可撤销的卡片或脑图变更";
+    const redoTitle=state?.redoLabel?"重做"+state.redoLabel:!isLibrary?"没有可重做的手写、批注或页编辑":"没有可重做的卡片或脑图变更";
+    if(this.undoButton){this.undoButton.disabled=!state?.canUndo;this.undoButton.title=undoTitle;}
+    if(this.redoButton){this.redoButton.disabled=!state?.canRedo;this.redoButton.title=redoTitle;}
     const undo=this.bottomCapsule?.querySelector<HTMLButtonElement>('[data-bottom-action="undo"]'),redo=this.bottomCapsule?.querySelector<HTMLButtonElement>('[data-bottom-action="redo"]');
-    if(undo){undo.disabled=!state?.canUndo;undo.title=this.undoButton?.title??"撤销";}
-    if(redo){redo.disabled=!state?.canRedo;redo.title=this.redoButton?.title??"重做";}
+    if(undo){undo.disabled=!state?.canUndo;undo.title=undoTitle;}
+    if(redo){redo.disabled=!state?.canRedo;redo.title=redoTitle;}
+    this.bottomOverflow?.syncItemStates();
   }
   private async applyHistory(redo:boolean):Promise<void> {
     if(this.historyScope==="library"){if(redo)this.plugin.store.redoLibraryChange();else this.plugin.store.undoLibraryChange();}
@@ -769,42 +800,6 @@ export class StudyWorkspaceView extends ItemView {
     this.root.dataset.readerTool=this.readerTool;
     const store = this.plugin.store;
     this.toolbar.replaceChildren();
-    const main = el("div", { class: "ms-native-main-tools" });
-    const divider = () => el("span", { class: "ms-native-tool-divider", "aria-hidden": "true" });
-    const tool = (icon: string, label: string, action: () => void, active?: boolean) => this.toolbarButton(icon,label,action,active);
-    const map = el("button", { class: "ms-native-text-tool" + (this.state.mindmap ? " is-active" : ""), text: "脑图", "aria-label": "显示或隐藏脑图", "aria-pressed": String(this.state.mindmap) });
-    map.addEventListener("click", () => { this.state.mindmap=!this.state.mindmap; if(!this.state.mindmap)this.state.reader=true; this.layoutChanged(); });
-    const selectTool = (icon:string, label:string, mode:string) => {
-      const button=tool(icon,label,()=>this.useReaderTool(mode),this.readerTool===mode);
-      button.dataset.readerTool=mode; return button;
-    };
-    const pen=selectTool("pencil","手写画笔与设置","pen"); pen.addEventListener("dblclick",()=>this.reader?.openHandwritingSettings(pen));
-    this.undoButton=tool("undo-2","撤销",()=>this.applyHistory(false));
-    this.redoButton=tool("redo-2","重做",()=>this.applyHistory(true));
-    main.append(
-      tool("panel-left","显示或隐藏学习集列表",()=>{this.state.library=!this.state.library;this.layoutChanged();},this.state.library),
-      tool("house","学习集与文档",()=>this.showStudyHome()),
-      this.undoButton,this.redoButton,
-      map,divider(),tool("settings-2","文档与脑图联动设置",()=>this.cycleLinkMode()),
-      selectTool("hand","移动与选择","hand"),selectTool("baseline","文本摘录","text"),
-      selectTool("scan","区域摘录","region"),selectTool("between-horizontal-start","留白","extend"),divider(),pen,
-      tool("type","文字批注",()=>this.readerAction("文字批注")),tool("image","插入图片批注",()=>this.readerAction("插入图片批注")),divider(),
-      el("span",{class:"ms-workspace-spacer"}),
-      tool(this.focusedStage?"minimize":"scan-line","专注工作区",()=>this.toggleFocus(),this.focusedStage),
-      tool("columns","双文对照",()=>{if(this.reader instanceof ReaderView)this.reader.compare((file,sync)=>this.openMobileComparison(file,sync));else new Notice("请先打开 PDF 文档");}),
-      tool("file-search","文档内搜索",()=>this.openReaderSearch()),
-      tool("scan-text","识别当前扫描页",()=>{if(this.reader instanceof ReaderView)void this.reader.recognizeCurrentPage();else new Notice("请先打开 PDF 文档");}),
-      tool("book-marked","文档目录与书签",()=>this.toggleDocumentNavigation(),this.state.documentNavigation),
-      tool("more-vertical","文档与工作区设置",()=>this.openLayoutMenu())
-    );
-    const side=el("div",{class:"ms-native-side-tools"});
-    if(this.state.auxiliary!=="none")for(const [key,label] of [["cards","卡片"],["review","复习"]] as const){
-      const button=el("button",{class:"ms-native-text-tool"+(this.state.auxiliary===key?" is-active":""),text:label,"aria-label":key==="cards"?"卡片列表":"复习卡组","aria-pressed":String(this.state.auxiliary===key)});
-      button.addEventListener("click",()=>{this.selectAuxiliary(this.state.auxiliary===key?"none":key);}); side.append(button);
-    }
-    side.append(tool("sparkles","AI 学习助手",()=>this.openAuxiliary("ai"),this.state.auxiliary==="ai"));
-    if(this.state.auxiliary!=="none")side.append(tool("globe","研究浏览器",()=>this.openAuxiliary("research"),this.state.auxiliary==="research"));
-    side.append(tool("ellipsis","学习集更多设置",()=>this.openStudyMore()));
     const activeSet=store.studySets.find(set=>set.id===store.activeStudySetId);
     const selection=activeSet?store.getStudyScene(activeSet.id):undefined;
     const template=selection?store.getSceneTemplates().find(item=>item.id===selection.templateId):undefined;
@@ -831,14 +826,56 @@ export class StudyWorkspaceView extends ItemView {
     const followButton=el("button",{type:"button",class:"ms-workspace-follow-selection",text:"跟着选中 ▾","aria-label":"跟着选中",title:"跟着选中，没选中时，新卡放在当前画面"});
     followButton.addEventListener("click",()=>this.openExcerptDestinationMenu(followButton));
     context.append(favoritesButton, searchButton);
-    const controlsId=uid("workspace-tools");
-    const controls=el("div",{class:"ms-workspace-toolbar-controls",id:controlsId});controls.append(main,side);
-    controls.hidden=sceneHeader&&!this.workspaceToolsOpen;
-    const extraTools=this.toolbarButton("ellipsis","工作区工具",()=>{this.workspaceToolsOpen=!this.workspaceToolsOpen;controls.hidden=!this.workspaceToolsOpen;extraTools.setAttribute("aria-expanded",String(this.workspaceToolsOpen));});
-    extraTools.classList.add("ms-workspace-extra-tools-toggle");extraTools.textContent="⋯";extraTools.style.fontSize="24px";extraTools.style.lineHeight="1";extraTools.setAttribute("aria-expanded",String(this.workspaceToolsOpen));extraTools.setAttribute("aria-controls",controlsId);
-    this.toolbar.append(context);this.toolbar.append(followButton);if(sceneHeader){this.toolbar.append(extraTools);const destination=activeSet?.excerptDestination,target=destination?.nodeId&&destination.mode!=="document"&&destination.canvasId===store.activeCanvasId?store.getNode(destination.nodeId):undefined;
-      const label=destination?.mode==="mindmap"?"自动加入脑图":destination?.mode==="document"?"只留在文档":destination?.mode==="contents"?"跟着目录":destination?.mode==="selection"?"跟着选中":target?`固定 · ${target.title}`:"目录 · 屏幕位置";const button=el("button",{type:"button",class:"ms-excerpt-destination","aria-label":"摘录落点："+label,title:label,text:label+" ▾"});button.addEventListener("click",()=>this.openExcerptDestinationMenu(button));this.toolbar.append(button);}
-    this.toolbar.append(controls);
+    this.toolbar.append(context);this.toolbar.append(followButton);
+    if(sceneHeader){
+      this.undoButton=null;
+      this.redoButton=null;
+      const destination=activeSet?.excerptDestination,target=destination?.nodeId&&destination.mode!=="document"&&destination.canvasId===store.activeCanvasId?store.getNode(destination.nodeId):undefined;
+      const label=destination?.mode==="mindmap"?"自动加入脑图":destination?.mode==="document"?"只留在文档":destination?.mode==="contents"?"跟着目录":destination?.mode==="selection"?"跟着选中":target?`固定 · ${target.title}`:"目录 · 屏幕位置";
+      const button=el("button",{type:"button",class:"ms-excerpt-destination","aria-label":"摘录落点："+label,title:label,text:label+" ▾"});
+      button.addEventListener("click",()=>this.openExcerptDestinationMenu(button));
+      this.toolbar.append(button);
+    }else{
+      const main = el("div", { class: "ms-native-main-tools" });
+      const divider = () => el("span", { class: "ms-native-tool-divider", "aria-hidden": "true" });
+      const tool = (icon: string, label: string, action: () => void, active?: boolean) => this.toolbarButton(icon,label,action,active);
+      const map = el("button", { class: "ms-native-text-tool" + (this.state.mindmap ? " is-active" : ""), text: "脑图", "aria-label": "显示或隐藏脑图", "aria-pressed": String(this.state.mindmap) });
+      map.addEventListener("click", () => { this.state.mindmap=!this.state.mindmap; if(!this.state.mindmap)this.state.reader=true; this.layoutChanged(); });
+      const selectTool = (icon:string, label:string, mode:string) => {
+        const button=tool(icon,label,()=>this.useReaderTool(mode),this.readerTool===mode);
+        button.dataset.readerTool=mode; return button;
+      };
+      const pen=selectTool("pencil","手写画笔与设置","pen"); pen.addEventListener("dblclick",()=>this.reader?.openHandwritingSettings(pen));
+      this.undoButton=tool("undo-2","撤销",()=>this.applyHistory(false));
+      this.redoButton=tool("redo-2","重做",()=>this.applyHistory(true));
+      main.append(
+        tool("panel-left","显示或隐藏学习集列表",()=>{this.state.library=!this.state.library;this.layoutChanged();},this.state.library),
+        tool("house","学习集与文档",()=>this.showStudyHome()),
+        this.undoButton,this.redoButton,
+        map,divider(),tool("settings-2","文档与脑图联动设置",()=>this.cycleLinkMode()),
+        selectTool("hand","移动与选择","hand"),selectTool("baseline","文本摘录","text"),
+        selectTool("scan","区域摘录","region"),selectTool("between-horizontal-start","留白","extend"),divider(),pen,
+        tool("type","文字批注",()=>this.readerAction("文字批注")),tool("image","插入图片批注",()=>this.readerAction("插入图片批注")),divider(),
+        el("span",{class:"ms-workspace-spacer"}),
+        tool(this.focusedStage?"minimize":"scan-line","专注工作区",()=>this.toggleFocus(),this.focusedStage),
+        tool("columns","双文对照",()=>{if(this.reader instanceof ReaderView)this.reader.compare((file,sync)=>this.openMobileComparison(file,sync));else new Notice("请先打开 PDF 文档");}),
+        tool("file-search","文档内搜索",()=>this.openReaderSearch()),
+        tool("scan-text","识别当前扫描页",()=>{if(this.reader instanceof ReaderView)void this.reader.recognizeCurrentPage();else new Notice("请先打开 PDF 文档");}),
+        tool("book-marked","文档目录与书签",()=>this.toggleDocumentNavigation(),this.state.documentNavigation),
+        tool("more-vertical","文档与工作区设置",()=>this.openLayoutMenu())
+      );
+      const side=el("div",{class:"ms-native-side-tools"});
+      if(this.state.auxiliary!=="none")for(const [key,label] of [["cards","卡片"],["review","复习"]] as const){
+        const button=el("button",{class:"ms-native-text-tool"+(this.state.auxiliary===key?" is-active":""),text:label,"aria-label":key==="cards"?"卡片列表":"复习卡组","aria-pressed":String(this.state.auxiliary===key)});
+        button.addEventListener("click",()=>{this.selectAuxiliary(this.state.auxiliary===key?"none":key);}); side.append(button);
+      }
+      side.append(tool("sparkles","AI 学习助手",()=>this.openAuxiliary("ai"),this.state.auxiliary==="ai"));
+      if(this.state.auxiliary!=="none")side.append(tool("globe","研究浏览器",()=>this.openAuxiliary("research"),this.state.auxiliary==="research"));
+      side.append(tool("ellipsis","学习集更多设置",()=>this.openStudyMore()));
+      const controlsId=uid("workspace-tools");
+      const controls=el("div",{class:"ms-workspace-toolbar-controls",id:controlsId});controls.append(main,side);
+      this.toolbar.append(controls);
+    }
     this.syncHistoryButtons();
     this.drawBottomCapsule();
     this.syncCleanPenStrip();
@@ -1027,7 +1064,9 @@ export class StudyWorkspaceView extends ItemView {
     this.root.classList.toggle("is-clean-view", enabled);
     this.root.dataset.cleanView = String(enabled);
     if (this.cleanHandleEl) this.cleanHandleEl.setAttribute("aria-label", enabled ? "恢复全部按钮" : "简洁显示把手");
+    if (enabled) this.bottomOverflow?.closeMenu();
     this.syncCleanPenStrip();
+    this.syncBottomClearance();
   }
   public setCleanView(enabled: boolean): void {
     if (this.state.cleanView === enabled) return;
@@ -1104,6 +1143,7 @@ export class StudyWorkspaceView extends ItemView {
   private drawBottomCapsule(): void {
     if (!this.bottomCapsule) return;
     this.bottomPressDisposers.splice(0).forEach(dispose=>dispose());
+    this.bottomOverflow?.closeMenu();
     const dock=this.bottomCapsule;
     const effectiveMode = this.state.cleanView && this.isHandwritingTool() ? "writing" : this.state.bottomMode;
     dock.dataset.mode=effectiveMode;
@@ -1117,7 +1157,12 @@ export class StudyWorkspaceView extends ItemView {
     const action=(icon:string,label:string,callback:(button:HTMLButtonElement)=>void,active?:boolean,disabled=false)=>{
       const item=el("button",{type:"button",class:"ms-bottom-action",title:disabled?label+"（暂不可用）":label,"aria-label":label}) as HTMLButtonElement;
       if(active!==undefined)item.setAttribute("aria-pressed",String(active));
-      item.disabled=disabled;setNativeIcon(item,icon);item.addEventListener("click",()=>callback(item));return item;
+      item.disabled=disabled;setNativeIcon(item,icon);
+      item.addEventListener("click",()=>{
+        const anchor = item.classList.contains("is-bottom-overflowed") ? (this.bottomOverflow?.getToggle() ?? item) : item;
+        callback(anchor);
+      });
+      return item;
     };
     const store=this.plugin.store,activeSet=store.studySets.find(set=>set.id===store.activeStudySetId),selection=activeSet?store.getStudyScene(activeSet.id):undefined;
     const sceneTemplate=selection?store.getSceneTemplates().find(template=>template.id===selection.templateId):undefined;
@@ -1125,6 +1170,7 @@ export class StudyWorkspaceView extends ItemView {
       dock.setAttribute("aria-label","学习场景工具栏");
       this.drawSceneBottomCapsule(dock,collapse,action,sceneTemplate,selection,activeSet.id);
       this.syncHistoryButtons();
+      this.syncBottomLayout();
       return;
     }
     dock.setAttribute("aria-label","MN4 阅读工具栏");
@@ -1200,6 +1246,7 @@ export class StudyWorkspaceView extends ItemView {
     primary.append(reading,writing,recall);
     dock.append(collapse,primary);
     this.syncHistoryButtons();
+    this.syncBottomLayout();
   }
   private drawSceneBottomCapsule(
     dock:HTMLElement,
@@ -1234,7 +1281,7 @@ export class StudyWorkspaceView extends ItemView {
     sceneNav.append(el("span",{class:"ms-bottom-divider",role:"separator","aria-hidden":"true"}));
     const tools=el("div",{class:"ms-bottom-scene-tools",role:"toolbar","aria-label":template.scenes.find(scene=>scene.id===selection.sceneId)?.label+"工具","data-scene-id":selection.sceneId});
     const hasReader=!!this.reader;
-    const toolKeys:Record<string,string>=selection.sceneId==="reading"?{"主题":"theme","标题链接":"title-links","块选择":"block-selection"}:selection.sceneId==="excerpt"?{"手型（摘录笔盒）":"excerpt.hand","文本":"excerpt.text","矩形":"excerpt.rectangle","留白":"excerpt.extend","套索":"lasso","连续摘录":"continuous-excerpt","铅笔笔尖":"ink","撤销":"undo","重做":"redo","标题链接":"title-links","块选择":"block-selection","文档笔记本":"document-notebook","更多":"excerpt.more"}:selection.sceneId==="handwriting"?{"普通笔 1":"pen.1","普通笔 2":"pen.2","荧光笔":"highlighter","铅笔":"pencil","套索":"lasso","橡皮擦":"eraser","手形工具":"hand","文本框":"text-box","图片框":"image-box","撤销":"undo","重做":"redo","手写层":"ink-layers"}:selection.sceneId==="writing"?{"文本":"excerpt.text","矩形":"excerpt.rectangle","留白":"excerpt.extend","连续摘录":"continuous-excerpt","普通笔 1":"pen.1","普通笔 2":"pen.2","荧光笔":"highlighter","更多":"pen.more","套索":"lasso","橡皮擦":"eraser","手形工具":"hand","撤销":"undo","重做":"redo"}:selection.sceneId==="organize"?{"卡片分组看板":"board","层级":"hierarchy","复制移动":"copy-move","链接":"links","选择":"selection","铅笔笔尖":"ink","撤销":"undo","重做":"redo"}: {"层级":"hierarchy","重置":"recall-reset","AI提示":"ai-hint","回忆设置":"recall-settings","手写":"ink","自动加入复习":"auto-review","复习":"review"};
+    const toolKeys:Record<string,string>=selection.sceneId==="reading"?{"主题":"theme","标题链接":"title-links","块选择":"block-selection","撤销":"undo","重做":"redo","更多":"scene.more"}:selection.sceneId==="excerpt"?{"手型（摘录笔盒）":"excerpt.hand","文本":"excerpt.text","矩形":"excerpt.rectangle","留白":"excerpt.extend","套索":"lasso","连续摘录":"continuous-excerpt","铅笔笔尖":"ink","撤销":"undo","重做":"redo","标题链接":"title-links","块选择":"block-selection","文档笔记本":"document-notebook","更多":"excerpt.more"}:selection.sceneId==="handwriting"?{"普通笔 1":"pen.1","普通笔 2":"pen.2","荧光笔":"highlighter","铅笔":"pencil","套索":"lasso","橡皮擦":"eraser","手形工具":"hand","文本框":"text-box","图片框":"image-box","撤销":"undo","重做":"redo","手写层":"ink-layers","更多":"scene.more"}:selection.sceneId==="writing"?{"文本":"excerpt.text","矩形":"excerpt.rectangle","留白":"excerpt.extend","连续摘录":"continuous-excerpt","普通笔 1":"pen.1","普通笔 2":"pen.2","荧光笔":"highlighter","更多":"pen.more","套索":"lasso","橡皮擦":"eraser","手形工具":"hand","撤销":"undo","重做":"redo","工作区与文档更多":"scene.more"}:selection.sceneId==="organize"?{"卡片分组看板":"board","层级":"hierarchy","复制移动":"copy-move","链接":"links","选择":"selection","铅笔笔尖":"ink","撤销":"undo","重做":"redo","更多":"scene.more"}: {"层级":"hierarchy","重置":"recall-reset","AI提示":"ai-hint","回忆设置":"recall-settings","手写":"ink","自动加入复习":"auto-review","复习":"review","撤销":"undo","重做":"redo","更多":"scene.more"};
     const add=(icon:string,label:string,callback:(button?:HTMLButtonElement)=>void,active?:boolean,disabled=false)=>{const item=action(icon,label,button=>callback(button),active,disabled);const key=toolKeys[label];if(key)item.dataset.msTool=key;if(key==="undo"||key==="redo")item.dataset.bottomAction=key;if((selection.sceneId==="excerpt"||selection.sceneId==="writing")&&(key==="excerpt.text"||key==="excerpt.rectangle"))item.setAttribute("aria-current",String(!!active));tools.append(item);return item;};
     if(selection.sceneId==="excerpt"){
       add("hand","手型（摘录笔盒）",()=>this.useReaderTool("hand"),this.readerTool==="hand",!hasReader);
@@ -1249,7 +1296,7 @@ export class StudyWorkspaceView extends ItemView {
       add("character-bubble","标题链接",()=>{const on=!this.reader?.getTitleLinksEnabled?.();this.reader?.setTitleLinksEnabled?.(on);this.drawToolbar();},this.reader?.getTitleLinksEnabled?.()??false,!hasReader);
       add("bottom-blocks","块选择",()=>this.toggleBlockSelection(),this.reader?.getBlockSelectionMode()??false,!hasReader);
       add("notebook","文档笔记本",()=>this.toggleDocumentNavigation(),false,!hasReader);
-      add("chevron-right","更多",()=>this.openLayoutMenu(),false,!hasReader);
+      add("chevron-right","更多",button=>this.openLayoutMenu(button),false,false);
     }else if(selection.sceneId==="handwriting"||selection.sceneId==="writing"){
       const normalPens=this.handwritingPresets().filter(preset=>preset.type!=="pencil"&&preset.type!=="highlighter"),marker=this.handwritingPresets().find(preset=>preset.type==="highlighter");
       const pencil=this.handwritingPresets().find(preset=>preset.type==="pencil");
@@ -1275,7 +1322,12 @@ export class StudyWorkspaceView extends ItemView {
       }
       add("undo-2","撤销",()=>this.applyHistory(false),false,!this.currentHistoryState()?.canUndo);
       add("redo-2","重做",()=>this.applyHistory(true),false,!this.currentHistoryState()?.canRedo);
-      if(selection.sceneId==="handwriting")add("layers","手写层",button=>this.reader?.openHandwritingSettings(button),false,!hasReader);
+      if(selection.sceneId==="handwriting"){
+        add("layers","手写层",button=>this.reader?.openHandwritingSettings(button),false,!hasReader);
+        add("chevron-right","更多",button=>this.openLayoutMenu(button),false,false);
+      }else{
+        add("chevron-right","工作区与文档更多",button=>this.openLayoutMenu(button),false,false);
+      }
     }else if(selection.sceneId==="organize"){
       add("panels-top-left","卡片分组看板",()=>this.renderer?.openBoard());
       add("bottom-hierarchy","层级",()=>this.openRecallHierarchy(tools));
@@ -1284,6 +1336,7 @@ export class StudyWorkspaceView extends ItemView {
       add("pencil","铅笔笔尖",()=>this.setReaderHandwritingMode("pen"),this.readerTool==="pen",!hasReader);
       add("undo-2","撤销",()=>this.applyHistory(false),false,!this.currentHistoryState()?.canUndo);
       add("redo-2","重做",()=>this.applyHistory(true),false,!this.currentHistoryState()?.canRedo);
+      add("chevron-right","更多",button=>this.openLayoutMenu(button),false,false);
     }else if(selection.sceneId==="recall"){
       add("bottom-hierarchy","层级",button=>{if(button)this.openRecallHierarchy(button);},false,!hasReader);
       add("bottom-reset","重置",()=>this.resetRecall(),false,!this.isRecallActive());
@@ -1297,6 +1350,9 @@ export class StudyWorkspaceView extends ItemView {
         if(store.settings.autoReview&&!currentDeck)openReviewDecks(this.plugin);
       },this.plugin.store.settings.autoReview,!hasReader);
       add("clipboard-list","复习",()=>this.selectAuxiliary("review"),false,!hasReader);
+      add("undo-2","撤销",()=>this.applyHistory(false),false,!this.currentHistoryState()?.canUndo);
+      add("redo-2","重做",()=>this.applyHistory(true),false,!this.currentHistoryState()?.canRedo);
+      add("chevron-right","更多",button=>this.openLayoutMenu(button),false,false);
     }else if(selection.sceneId!=="reading"){
       for(const scene of template.scenes.filter(scene=>scene.id===selection.sceneId))for(const tool of scene.tools)tools.append(el("span",{class:"ms-bottom-scene-capability",text:tool,"aria-label":tool}));
     }
@@ -1304,6 +1360,9 @@ export class StudyWorkspaceView extends ItemView {
       add("circle-half","主题",()=>this.cycleReadingTheme());
       add("character-bubble","标题链接",()=>{const on=!this.reader?.getTitleLinksEnabled?.();this.reader?.setTitleLinksEnabled?.(on);this.drawToolbar();},this.reader?.getTitleLinksEnabled?.()??false,!hasReader);
       add("bottom-blocks","块选择",()=>this.toggleBlockSelection(),this.reader?.getBlockSelectionMode()??false,!hasReader);
+      add("undo-2","撤销",()=>this.applyHistory(false),false,!this.currentHistoryState()?.canUndo);
+      add("redo-2","重做",()=>this.applyHistory(true),false,!this.currentHistoryState()?.canRedo);
+      add("chevron-right","更多",button=>this.openLayoutMenu(button),false,false);
     }
     if(!["standard","read-write-recall"].includes(template.id)){
       const order=template.scenes.find(scene=>scene.id===selection.sceneId)?.tools??[];
@@ -1315,6 +1374,54 @@ export class StudyWorkspaceView extends ItemView {
     if(continuous?.active){const status=el("div",{role:"status",text:`连续摘录中 · ${continuous.count} 段`});const finish=el("button",{type:"button",text:"完成","aria-label":"完成连续摘录"});finish.addEventListener("click",()=>this.finishContinuousExcerpt());status.append(finish);primary.append(status);}
     primary.append(sceneNav,tools);
     dock.replaceChildren(collapse,primary);
+  }
+  private syncBottomClearance(): void {
+    if (!this.root || !this.bottomCapsule || !this.readerPane) return;
+    if (this.root.dataset.inlineTextEditing === "true") {
+      const stylebar = this.root.querySelector<HTMLElement>(".ms-overlay-stylebar");
+      const stylebarRect = stylebar?.getBoundingClientRect() ?? null;
+      const clearance = computeBottomBarClearance(
+        this.readerPane.getBoundingClientRect(),
+        stylebarRect,
+        {
+          cleanView: false,
+          statusBarHidden: false,
+          collapsed: false,
+          capsuleVisible: !!stylebar && !!stylebarRect && stylebarRect.height > 0,
+          gap: 4,
+        },
+      );
+      this.root.style.setProperty("--ms-bottom-bar-clearance", `${clearance}px`);
+      return;
+    }
+    const capsuleVisible = typeof this.bottomCapsule.checkVisibility === "function"
+      ? this.bottomCapsule.checkVisibility()
+      : getComputedStyle(this.bottomCapsule).display !== "none";
+    const clearance = computeBottomBarClearance(
+      this.readerPane.getBoundingClientRect(),
+      this.bottomCapsule.getBoundingClientRect(),
+      {
+        cleanView: this.state.cleanView,
+        statusBarHidden: this.root.dataset.statusBar === "hidden",
+        collapsed: this.state.bottomCollapsed,
+        capsuleVisible,
+      },
+    );
+    this.root.style.setProperty("--ms-bottom-bar-clearance", `${clearance}px`);
+  }
+  private syncBottomLayout(): void {
+    this.bottomOverflow?.sync();
+    this.syncBottomClearance();
+    this.scheduleBottomLayoutSync();
+  }
+  private scheduleBottomLayoutSync(): void {
+    if (this.closed || this.bottomLayoutRaf !== null) return;
+    this.bottomLayoutRaf = window.requestAnimationFrame(() => {
+      this.bottomLayoutRaf = null;
+      if (this.closed) return;
+      this.bottomOverflow?.sync();
+      this.syncBottomClearance();
+    });
   }
   private bindPresetLongPress(button:HTMLButtonElement,presetId:HandwritingPresetId,label:string):void {
     let timer:number|null=null,pointerId:number|null=null,startX=0,startY=0,consumed=false;
@@ -1684,6 +1791,8 @@ export class StudyWorkspaceView extends ItemView {
     const pane=this.popover("学习集");pane.classList.add("ms-native-study-more");
     const action=(text:string,icon:string,callback:()=>void)=>{const row=el("button",{class:"ms-native-menu-row",text});const glyph=el("span",{class:"ms-native-menu-icon"});setIcon(glyph,icon);row.prepend(glyph);row.addEventListener("click",()=>{this.dismissPopup();callback();});pane.append(row);};
     action(this.focusedStage?"退出沉浸模式":"进入沉浸模式","scan-line",()=>this.toggleFocus());
+    action("显示/隐藏学习集侧栏","panel-left",()=>{this.state.library=!this.state.library;this.layoutChanged();});
+    action("显示/隐藏脑图","share-2",()=>{this.state.mindmap=!this.state.mindmap;if(!this.state.mindmap)this.state.reader=true;this.layoutChanged();});
     action("卡片","panels-top-left",()=>this.selectAuxiliary("cards"));
     action("复习","clipboard-list",()=>this.selectAuxiliary("review"));
     action("研究","globe",()=>this.selectAuxiliary("research"));
@@ -1959,6 +2068,10 @@ export class StudyWorkspaceView extends ItemView {
   }
   private readerAction(label:string): void {
     if(!this.reader){this.chooseDocument();return;}
+    if (label === "文字批注" && this.state.cleanView && this.isHandwritingTool()) {
+      const mode = this.reader.getHandwritingMode();
+      if (mode !== "off") this.inlineEditRestoreHandwritingMode = mode;
+    }
     const control=[...this.reader.getReaderToolbar().querySelectorAll<HTMLButtonElement>("button")].find(button=>button.getAttribute("aria-label")===label||button.title===label);
     if(control&&!control.disabled)control.click();
   }
@@ -2223,7 +2336,8 @@ export class StudyWorkspaceView extends ItemView {
     const select=el("button",{class:"ms-native-quiet",text:"选择","aria-label":"选择复习卡片"});select.addEventListener("click",()=>{if(deck)openReviewDeckBrowser(this.plugin,deck.id);});
     footer.append(this.toolbarButton("list-filter","复习筛选与排序",()=>{this.deckFilter=!this.deckFilter;this.drawAuxiliary();}),select,el("span",{class:"ms-workspace-spacer"}),this.toolbarButton("ellipsis","管理复习卡组",()=>openReviewDecks(this.plugin)));this.auxiliary.append(footer);
   }
-  private openLayoutMenu(): void {
+  private openLayoutMenu(anchor?: HTMLElement): void {
+    this.lastDocumentPopupAnchor = anchor ?? null;
     const pane = this.popover("文档 - 更多"); pane.classList.add("ms-document-more");
     pane.querySelector(".ms-native-popover-head button")?.remove();
     const list = el("div", { class: "ms-document-more-list" }); pane.append(list);
@@ -2314,10 +2428,23 @@ export class StudyWorkspaceView extends ItemView {
       await translateIntoPage(this.plugin, { text, language: this.plugin.store.settings.translationTargetLanguage ?? "简体中文" });
       new Notice("译文已插入当前页，可双击编辑");
     }, !pdf);
-    row("阅读设置", "type", () => this.openReadSettings(), !reader);
+    row("阅读设置", "type", () => this.openReadSettings(anchor), !reader);
     row("Show Document Tabs", "panel-top", () => { this.state.showTabs = !this.state.showTabs; this.layoutChanged(); }, false, () => this.state.showTabs);
     if (pdf) row("Handwriting on Top", "layers", () => pdf.setHandwritingOnTop(!pdf.getHandwritingOnTop()), false, () => pdf.getHandwritingOnTop());
-    this.anchorDocumentPopup(pane);
+    if (this.toolbar.classList.contains("has-scene-header")) {
+      list.append(el("div", { class: "ms-document-more-divider", role: "separator" }));
+      row("文档内搜索", "file-search", () => this.openReaderSearch(), !reader);
+      row("识别当前扫描页", "scan-text", () => { if (this.reader instanceof ReaderView) void this.reader.recognizeCurrentPage(); else new Notice("请先打开 PDF 文档"); }, !pdf);
+      row("文字批注", "type", () => this.readerAction("文字批注"), !reader);
+      row("插入图片批注", "image", () => this.readerAction("插入图片批注"), !reader);
+      row("双文对照", "columns", () => { if (this.reader instanceof ReaderView) this.reader.compare((file, sync) => this.openMobileComparison(file, sync)); else new Notice("请先打开 PDF 文档"); }, !pdf);
+      row("显示/隐藏学习集侧栏", "panel-left", () => { this.state.library = !this.state.library; this.layoutChanged(); }, false, () => this.state.library);
+      row("显示/隐藏脑图", "share-2", () => { this.state.mindmap = !this.state.mindmap; if (!this.state.mindmap) this.state.reader = true; this.layoutChanged(); }, false, () => this.state.mindmap);
+      row("文档与脑图联动设置", "settings-2", () => this.cycleLinkMode(), false);
+      row(this.focusedStage ? "退出沉浸模式" : "专注工作区", this.focusedStage ? "minimize" : "scan-line", () => this.toggleFocus(), false);
+      row("学习集更多设置…", "ellipsis", () => this.openStudyMore(), false);
+    }
+    this.anchorDocumentPopup(pane, 320, anchor);
   }
   private getReadingTheme(): ReadingTheme {
     const saved = this.plugin.store.settings.readingTheme;
@@ -2329,7 +2456,7 @@ export class StudyWorkspaceView extends ItemView {
   private setReadingTheme(theme: ReadingTheme): void {
     this.plugin.store.settings.readingTheme = theme; this.applyReadingTheme(); this.plugin.store.save();
   }
-  private openReadSettings(): void {
+  private openReadSettings(anchor?: HTMLElement): void {
     const pane = this.popover("阅读设置"); pane.classList.add("ms-read-settings");
     pane.querySelector(".ms-native-popover-head")?.remove();
     const reader = this.reader, path = reader?.getFilePath(), notebook = reader?.getDocumentNotebookId();
@@ -2359,7 +2486,7 @@ export class StudyWorkspaceView extends ItemView {
     }
     const more = el("button",{class:"ms-reading-more",text:"更多设置","aria-label":"更多设置"});
     more.addEventListener("click",()=>{if(current())this.openReadingPreferences();});pane.append(more);
-    this.anchorDocumentPopup(pane,350);
+    this.anchorDocumentPopup(pane, 350, anchor ?? this.lastDocumentPopupAnchor ?? undefined);
   }
   private openReadingPreferences(initialCategory = "UI Theme"): void {
     const pane = this.popover("设置"); pane.classList.add("ms-reading-preferences");
@@ -2419,16 +2546,43 @@ export class StudyWorkspaceView extends ItemView {
     show(["Card Style","UI Theme","Handwriting","Keyboard","OCR","Margin","Excerpt"].includes(initialCategory) ? initialCategory : "UI Theme");
     body.append(sidebar,content);pane.append(head,body);
   }
-  private anchorDocumentPopup(pane: HTMLElement, preferredWidth = 320): void {
-    const trigger = this.toolbar.querySelector<HTMLElement>('[aria-label="文档与工作区设置"]');
-    if (!trigger) return;
-    const root = this.root.getBoundingClientRect(), anchor = trigger.getBoundingClientRect();
-    const width = Math.min(preferredWidth, Math.max(0, root.width - 24)), center = anchor.left + anchor.width / 2 - root.left;
+  private anchorDocumentPopup(pane: HTMLElement, preferredWidth = 320, triggerEl?: HTMLElement): void {
+    const resolvedTrigger =
+      (triggerEl && triggerEl.isConnected && triggerEl.getBoundingClientRect().width > 0 ? triggerEl : null) ??
+      this.toolbar.querySelector<HTMLElement>('[aria-label="文档与工作区设置"]') ??
+      this.bottomCapsule?.querySelector<HTMLElement>('[data-ms-tool="excerpt.more"], [data-ms-tool="scene.more"], .ms-bottom-overflow-toggle') ??
+      this.bottomCapsule ??
+      this.toolbar.querySelector<HTMLElement>(".ms-workspace-context");
+    const root = this.root.getBoundingClientRect();
+    const width = Math.min(preferredWidth, Math.max(120, root.width - 24));
+    let anchor = resolvedTrigger?.getBoundingClientRect();
+    if (!anchor || (anchor.width === 0 && anchor.height === 0)) {
+      anchor = this.bottomCapsule?.getBoundingClientRect() ?? root;
+    }
+    const center = anchor.left + anchor.width / 2 - root.left;
     const left = clamp(center - width / 2, 12, Math.max(12, root.width - width - 12));
-    const top = anchor.bottom - root.top + 12;
-    pane.style.left = left + "px"; pane.style.top = top + "px"; pane.style.width = width + "px";
-    pane.style.setProperty("--ms-document-menu-height", Math.max(70, root.height - top - 12) + "px");
+    pane.style.left = left + "px";
+    pane.style.width = width + "px";
     pane.style.setProperty("--ms-document-menu-arrow", clamp(center - left, 16, width - 16) + "px");
+    const inLowerHalf = anchor.top - root.top > root.height / 2;
+    if (inLowerHalf) {
+      const ctxBottom = this.toolbar.querySelector<HTMLElement>(".ms-workspace-context")?.getBoundingClientRect().bottom ?? 0;
+      const headerBottom = Math.max(this.toolbar.getBoundingClientRect().bottom, ctxBottom) - root.top;
+      const topGuard = Math.max(12, Math.ceil(headerBottom) + 8);
+      const bottomOffset = Math.max(12, Math.round(root.bottom - anchor.top + 8));
+      const availHeight = Math.max(120, Math.floor(root.height - bottomOffset - topGuard));
+      pane.style.top = "auto";
+      pane.style.bottom = bottomOffset + "px";
+      pane.style.maxHeight = availHeight + "px";
+      pane.style.setProperty("--ms-document-menu-height", availHeight + "px");
+    } else {
+      const top = clamp(anchor.bottom - root.top + 12, 12, Math.max(12, root.height - 140));
+      const availHeight = Math.max(70, Math.floor(root.height - top - 12));
+      pane.style.bottom = "auto";
+      pane.style.top = top + "px";
+      pane.style.maxHeight = availHeight + "px";
+      pane.style.setProperty("--ms-document-menu-height", availHeight + "px");
+    }
   }
   /** 5.0.2 合并：把当前页 / 页范围 / 整本 PDF 或重组文档合并进另一份文档（目标为 .msref 时追加引用，否则新建集合）。 */
   private openMergeIntoDocument(): void {
@@ -2667,6 +2821,7 @@ export class StudyWorkspaceView extends ItemView {
     this.root.style.setProperty("--ms-auxiliary-width",this.state.auxiliaryWidth+"px");
     this.root.style.setProperty("--ms-reader-ratio",String(this.state.ratio));
     this.root.style.setProperty("--ms-map-ratio",String(1-this.state.ratio));
+    this.scheduleBottomLayoutSync();
   }
   private splitter(kind:"library"|"main"|"auxiliary"): HTMLElement {
     const node=el("div",{class:"ms-workspace-splitter ms-workspace-splitter-"+kind,role:"separator",tabindex:"0","aria-label":kind==="main"?"调整文档与脑图比例":kind==="library"?"调整文档列表宽度":"调整卡片面板宽度","aria-orientation":"vertical"});

@@ -551,7 +551,7 @@ try{
     for(const action of ['更多场景模板…','编辑场景模板…']){button(open(),action).click();assert(p.root.querySelector('[aria-label="场景模板管理"]'),'manager did not open for '+action);button(p.root,'关闭工具面板').click();}
     button(open(),'切换到传统界面').click();await frame();assert(p.store.getStudyScene(p.set.id)?.interfaceMode==='traditional','traditional mode did not activate');
     button(open(),'切换到场景界面').click();await frame();assert(p.store.getStudyScene(p.set.id)?.interfaceMode==='scenes','scene mode did not return');
-    button(p.root,'工作区工具').click();button(p.root,'学习集更多设置').click();const studyMore=p.root.querySelector('[aria-label="学习集"]');assert(studyMore?.textContent?.includes('全局搜索…'),'unrelated settings no longer reachable from more');for(const label of ['进入沉浸模式','卡片','复习','研究','AI'])assert([...studyMore!.querySelectorAll('button')].some(row=>row.textContent?.trim()===label),'missing study menu label: '+label);
+    p.root.querySelector<HTMLButtonElement>('[data-ms-tool="excerpt.more"]')!.click();button(p.root.querySelector('[aria-label="文档 - 更多"]')!,'学习集更多设置…').click();const studyMore=p.root.querySelector('[aria-label="学习集"]');assert(studyMore?.textContent?.includes('全局搜索…'),'unrelated settings no longer reachable from more');for(const label of ['进入沉浸模式','卡片','复习','研究','AI'])assert([...studyMore!.querySelectorAll('button')].some(row=>row.textContent?.trim()===label),'missing study menu label: '+label);
   });
   await test('MN5 document capsule matches the 47-row baseline structure and retains management tools',async()=>{
     const p=await fresh(),extra=['Extra One.html','Extra Two.md','Extra Three.html'];
@@ -924,7 +924,8 @@ try{
       command.callback();await frame();
       assert(p.store.getStudyScene(p.set.id)?.interfaceMode==='scenes','second command did not restore scenes');
       assert(p.root.querySelector('.ms-workspace-toolbar.has-scene-header'),'scene header did not return');
-      button(p.root,'学习集更多设置').click();
+      p.root.querySelector<HTMLButtonElement>('[data-ms-tool="excerpt.more"]')!.click();
+      button(p.root.querySelector('[aria-label="文档 - 更多"]')!,'学习集更多设置…').click();
       button(p.root.querySelector('[aria-label="学习集"]')!,'切换界面模式').click();await frame();
       assert(p.store.getStudyScene(p.set.id)?.interfaceMode==='traditional','menu did not switch mode');
     } finally {plugin.unload();}
@@ -2794,16 +2795,17 @@ try{
     const p=await fresh();p.store.setStudyInterface(p.set.id,'scenes');
     for(const [template,scene] of [['standard','excerpt'],['standard','handwriting'],['standard','organize'],['read-write-recall','writing']] as const){
       p.store.selectStudyScene(p.set.id,template,scene);p.view.refresh(true);await frame();
-      const toolbar=p.root.querySelector('.ms-native-main-tools')!,dock=p.root.querySelector('.ms-bottom-scene-tools')!;
-      const topUndo=button(toolbar,'撤销'),topRedo=button(toolbar,'重做'),undo=button(dock,'撤销'),redo=button(dock,'重做');
+      assert(!p.root.querySelector('.ms-native-main-tools'),'scene mode should not render legacy top toolbar controls');
+      const dock=p.root.querySelector('.ms-bottom-scene-tools')!;
+      const undo=button(dock,'撤销'),redo=button(dock,'重做');
       const node=mapCard(p,'beta-node'),box=node.getBoundingClientRect(),before={...p.store.getNode('beta-node')!};
       pointer(node,'pointerdown',box.left+20,box.top+20,91);pointer(window,'pointermove',box.left+100,box.top+70,91);pointer(window,'pointerup',box.left+100,box.top+70,91);
       const moved={...p.store.getNode('beta-node')!};assert(moved.x!==before.x&&moved.y!==before.y,'drag did not move node');
-      assert(!undo.disabled&&!topUndo.disabled&&redo.disabled&&topRedo.disabled,scene+' commit history buttons differ');
-      undo.click();assert(p.store.getLibraryHistoryState().canRedo&&!redo.disabled&&!topRedo.disabled,scene+' redo unavailable immediately after undo');
+      assert(!undo.disabled&&redo.disabled,scene+' commit history buttons differ');
+      undo.click();assert(p.store.getLibraryHistoryState().canRedo&&!redo.disabled,scene+' redo unavailable immediately after undo');
       assert(p.store.getNode('beta-node')!.x===before.x&&p.store.getNode('beta-node')!.y===before.y,scene+' undo changed coordinates');
       redo.click();assert(p.store.getNode('beta-node')!.x===moved.x&&p.store.getNode('beta-node')!.y===moved.y,scene+' immediate redo changed coordinates');
-      assert(p.store.getLibraryHistoryState().canUndo&&!undo.disabled&&!topUndo.disabled&&redo.disabled&&topRedo.disabled,scene+' redo history buttons differ');
+      assert(p.store.getLibraryHistoryState().canUndo&&!undo.disabled&&redo.disabled,scene+' redo history buttons differ');
     }
   });
   await test('node moves update incrementally without rebuilding',async()=>{
@@ -3173,7 +3175,7 @@ try{
   await test('An unbound study set never displays the globally selected review deck, while explicit bindings and library browsing retain it',async()=>{
     const p=await fresh(),deck=p.store.createReviewDeck('Other set deck',p.set.id);p.store.enqueueReviewInDeck(['anchor-card'],deck.id);
     const before=JSON.stringify([p.store.reviewDecks,p.store.srs,p.store.reviewPending]),empty=p.store.createStudySet('Isolated empty set');p.view.refresh(true);
-    button(p.root,'复习卡组').click();
+    p.root.querySelector<HTMLButtonElement>('[data-ms-tool="excerpt.more"]')!.click();button(p.root.querySelector('[aria-label="文档 - 更多"]')!,'学习集更多设置…').click();button(p.root.querySelector('[aria-label="学习集"]')!,'复习').click();
     assert(!p.root.querySelector('[data-review-card]'),'unbound study set displays another set review cards');
     assert(!button(p.root,'选择复习卡组').textContent?.includes(deck.name),'unbound study set inherits the global deck title');
     assert(button(p.root,'浏览复习卡组').disabled,'unbound study set can start the global deck');
@@ -3183,7 +3185,7 @@ try{
   });
   await test('Choosing a deck for an unbound study set starts empty and shares an existing deck only after explicit selection and confirmation',async()=>{
     const p=await fresh(),deck=p.store.createReviewDeck('Existing shared deck',p.set.id);p.store.enqueueReviewInDeck(['anchor-card'],deck.id);
-    const isolated=p.store.createStudySet('New isolated set'),before=JSON.stringify([p.store.reviewDecks,p.store.srs,p.store.reviewPending]);p.view.refresh(true);button(p.root,'复习卡组').click();button(p.root,'选择复习卡组').click();
+    const isolated=p.store.createStudySet('New isolated set'),before=JSON.stringify([p.store.reviewDecks,p.store.srs,p.store.reviewPending]);p.view.refresh(true);p.root.querySelector<HTMLButtonElement>('[data-ms-tool="excerpt.more"]')!.click();button(p.root.querySelector('[aria-label="文档 - 更多"]')!,'学习集更多设置…').click();button(p.root.querySelector('[aria-label="学习集"]')!,'复习').click();button(p.root,'选择复习卡组').click();
     const modal=document.querySelector<HTMLElement>('[data-review-decks]')!,select=modal.querySelector<HTMLSelectElement>('[aria-label="选择复习卡组"]')!;
     assert(select.value==='','unbound set picker preselects another set deck');assert(!modal.querySelector('[data-deck-member]'),'unbound picker previews foreign members before selection');
     assert(!isolated.reviewDeckId&&JSON.stringify([p.store.reviewDecks,p.store.srs,p.store.reviewPending])===before,'opening the picker mutates deck data');assert(button(modal,'关闭'),'empty picker cannot be closed');
@@ -3194,7 +3196,7 @@ try{
   });
   await test('Browsing a selected existing deck from an unbound study set never persists a binding or changes review data',async()=>{
     const p=await fresh(),deck=p.store.createReviewDeck('Browse without binding',p.set.id);p.store.enqueueReviewInDeck(['anchor-card'],deck.id);const isolated=p.store.createStudySet('Read-only browse set');
-    const before=JSON.stringify([p.store.studySets,p.store.reviewDecks,p.store.srs,p.store.reviewPending,p.store.reviewLogs]);p.view.refresh(true);button(p.root,'复习卡组').click();button(p.root,'选择复习卡组').click();
+    const before=JSON.stringify([p.store.studySets,p.store.reviewDecks,p.store.srs,p.store.reviewPending,p.store.reviewLogs]);p.view.refresh(true);p.root.querySelector<HTMLButtonElement>('[data-ms-tool="excerpt.more"]')!.click();button(p.root.querySelector('[aria-label="文档 - 更多"]')!,'学习集更多设置…').click();button(p.root.querySelector('[aria-label="学习集"]')!,'复习').click();button(p.root,'选择复习卡组').click();
     const picker=document.querySelector<HTMLElement>('[data-review-decks]')!,select=picker.querySelector<HTMLSelectElement>('[aria-label="选择复习卡组"]')!;select.value=deck.id;select.dispatchEvent(new Event('change',{bubbles:true}));button(picker,'浏览全部卡片').click();
     await until(()=>document.querySelector('.ms-review-browser [aria-label="关闭浏览"]'),'read-only deck browser did not finish rendering');
     assert(!isolated.reviewDeckId&&JSON.stringify([p.store.studySets,p.store.reviewDecks,p.store.srs,p.store.reviewPending,p.store.reviewLogs])===before,'browsing a candidate deck persists a binding or review data');button(document,'关闭浏览').click();
@@ -3274,7 +3276,7 @@ try{
   await test('Selecting the current empty study set closes the picker without creating another canvas or undo entry',async()=>{
     const p=await fresh(),set=p.store.createStudySet('Empty current set');p.view.refresh(true);
     const canvas=p.store.activeCanvasId,count=p.store.canvases.length,history=JSON.stringify(p.store.getLibraryHistoryState());
-    for(let i=0;i<3;i++){button(p.root,'学习集与文档').click();button(p.root.querySelector('[aria-label="StudySet"]')!,set.name).click();}
+    for(let i=0;i<3;i++){button(p.root,'打开学习集与文档').click();button(p.root.querySelector('[aria-label="StudySet"]')!,set.name).click();}
     assert(p.store.activeCanvasId===canvas&&p.store.canvases.length===count,'current-set selection created or selected a new empty canvas');
     assert(JSON.stringify(p.store.getLibraryHistoryState())===history,'current-set selection added an undoable edit');
     assert(!p.root.querySelector('[aria-label="StudySet"]'),'current-set picker stayed open');
@@ -3303,7 +3305,7 @@ try{
   await test('Creating a study set starts empty unless the user explicitly includes the open documents',async()=>{
     const p=await fresh();await p.view.openFile(p.beta);const cards=JSON.stringify(p.store.cards),paths=state(p).tabs.map((tab:any)=>tab.path);
     const create=(name:string,include:boolean)=>{
-      button(p.root,'学习集与文档').click();button(p.root.querySelector('[aria-label="StudySet"]')!,'＋ 新建学习集').click();
+      button(p.root,'打开学习集与文档').click();button(p.root.querySelector('[aria-label="StudySet"]')!,'＋ 新建学习集').click();
       const modal=document.querySelector('.ms-modal')!,input=modal.querySelector<HTMLInputElement>('[aria-label="学习集名称"]'),choice=modal.querySelector<HTMLInputElement>('[aria-label="包含当前打开的文档"]');
       assert(input&&choice&&!choice.checked,'creation dialog did not offer an explicit default-empty document choice');
       input!.value=name;choice!.checked=include;button(modal,'创建学习集').click();
@@ -3322,19 +3324,27 @@ try{
     row.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,button:2}));const dialog=document.querySelector('.ms-modal')!;assert(dialog.textContent?.includes('关联卡片内容会保留'),'removal warning did not explain shared card retention');
     button(dialog,'移除学习集').click();assert(!p.store.studySets.some(set=>set.id===temporary.id)&&!p.store.nodes.some(node=>node.id==='temporary-node'),'study set/map was not removed');assert(p.store.getCard('temporary-retained-card'),'shared card content was removed with its set');
   });
-  await test('Scene header keeps workspace tools available from a single-row header',async()=>{
+  await test('Scene header keeps workspace tools available from bottom unified more without legacy top overlay',async()=>{
     const p=await fresh();p.store.setStudyInterface(p.set.id,'scenes');p.view.refresh(true);await frame();
-    const toggle=button(p.root,'工作区工具'),controls=p.root.querySelector<HTMLElement>('.ms-workspace-toolbar-controls')!;
-    assert(toggle.getAttribute('aria-expanded')==='false'&&!controls.checkVisibility(),'extra tools should start closed');
-    toggle.click();await frame();assert(toggle.getAttribute('aria-expanded')==='true'&&controls.checkVisibility(),'extra tools did not open');
-    assert(button(controls,'文档目录与书签').checkVisibility(),'workspace action is not accessible after opening');const icon=button(controls,'文档目录与书签').querySelector('svg')!;assert(icon.getBoundingClientRect().width>10,'workspace icon collapsed to zero width');
-    p.root.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerType:'touch'}));await frame();assert(toggle.getAttribute('aria-expanded')==='false'&&!controls.checkVisibility(),'tapping outside did not dismiss workspace tools');
-    toggle.click();await frame();
-    toggle.click();await frame();assert(toggle.getAttribute('aria-expanded')==='false'&&!controls.checkVisibility(),'extra tools did not close');
+    assert(!p.root.querySelector('.ms-workspace-extra-tools-toggle'),'legacy top extra tools toggle should be removed in scene mode');
+    assert(!p.root.querySelector('.ms-workspace-toolbar-controls'),'legacy top toolbar controls should be removed in scene mode');
+    const moreBtn=p.root.querySelector<HTMLButtonElement>('[data-ms-tool="excerpt.more"]')!;
+    moreBtn.click();await frame();
+    const docMore=p.root.querySelector<HTMLElement>('.ms-document-more')!;
+    assert(docMore&&docMore.checkVisibility(),'bottom unified more menu did not open');
+    assert(button(docMore,'文档内搜索').checkVisibility()&&button(docMore,'学习集更多设置…').checkVisibility(),'workspace actions not accessible from bottom unified more');
+    p.root.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerType:'touch'}));await frame();
+    assert(!p.root.querySelector('.ms-document-more'),'tapping outside did not dismiss bottom unified more');
   });
   await test('Scene header and Cards provide reachable touch controls at narrow widths',async()=>{
-    const p=await fresh();p.store.setStudyInterface(p.set.id,'scenes');p.view.refresh(true);for(const width of [380,800,1200]){p.view.containerEl.style.width=width+'px';await frame();const toggle=button(p.root,'工作区工具'),box=toggle.getBoundingClientRect(),root=p.root.getBoundingClientRect();assert(toggle.textContent==='⋯'&&box.width>=30&&box.left>=root.left&&box.right<=root.right,'more button is not visible within the header at '+width);const hit=document.elementFromPoint(box.left+box.width/2,box.top+box.height/2);assert(hit===toggle||toggle.contains(hit),'more button is covered at '+width);}
-    const close=button(p.root,'关闭卡片面板');assert(close.checkVisibility(),'Cards close button missing');close.click();await frame();assert(p.root.dataset.auxiliary==='none','Cards close button did not close the panel');button(p.root,'工作区工具').click();await frame();button(p.root,'学习集更多设置').click();button(p.root.querySelector('[aria-label="学习集"]')!,'卡片').click();await frame();assert(p.root.dataset.auxiliary==='cards'&&button(p.root,'关闭卡片面板').checkVisibility(),'Cards could not be reopened');
+    const p=await fresh();p.store.setStudyInterface(p.set.id,'scenes');p.view.refresh(true);
+    for(const width of [380,800,1200]){p.view.containerEl.style.width=width+'px';await frame();await frame();assert(!p.root.querySelector('.ms-workspace-extra-tools-toggle'),'legacy top toggle should not exist at '+width);const ctx=p.root.querySelector<HTMLElement>('.ms-workspace-context')!,box=ctx.getBoundingClientRect(),root=p.root.getBoundingClientRect();assert(box.left>=root.left-1&&box.right<=root.right+1,'context capsule out of bounds at '+width);}
+    p.view.containerEl.style.width='1200px';await frame();await frame();
+    const close=button(p.root,'关闭卡片面板');assert(close.checkVisibility(),'Cards close button missing');close.click();await frame();assert(p.root.dataset.auxiliary==='none','Cards close button did not close the panel');
+    p.root.querySelector<HTMLButtonElement>('[data-ms-tool="excerpt.more"]')!.click();await frame();
+    button(p.root.querySelector('[aria-label="文档 - 更多"]')!,'学习集更多设置…').click();await frame();
+    button(p.root.querySelector('[aria-label="学习集"]')!,'卡片').click();await frame();
+    assert(p.root.dataset.auxiliary==='cards'&&button(p.root,'关闭卡片面板').checkVisibility(),'Cards could not be reopened');
   });
   await test('A05 template manager copies and edits a scene without changing its source',async()=>{
     const p=await fresh();p.store.setStudyInterface(p.set.id,'scenes');p.view.refresh(true);await frame();
@@ -3426,7 +3436,7 @@ try{
   (window as any).showWorkspaceScene=async()=>{await closeAll();const p=await fresh();annotation(p).click();p.view.refresh(true);button(p.root,'文档目录与书签').click();button(p.root.querySelector('[aria-label="书页查找方式"]')!,'卡片').click();await wait(80);await frame();};
   (window as any).showA07Scene=async()=>{await closeAll();const p=await fresh();p.store.updateStudySet(p.set.id,{pinned:true,category:'课程'});p.view.refresh(true);button(p.root,'学习集与文档').click();await frame();};
   (window as any).showA30Scene=async()=>{await closeAll();const p=await fresh();p.store.updateStudySet(p.set.id,{documentAttachments:{[p.alpha.path]:[p.beta.path]}});p.store.setStudyInterface(p.set.id,'scenes');p.view.refresh(true);await frame();if(p.view.state.library)button(p.root,'显示或隐藏学习集列表').click();const close=p.root.querySelector<HTMLButtonElement>('[aria-label="关闭卡片面板"]');close?.click();await frame();};
-  (window as any).showA30HomeScene=async()=>{await closeAll();const p=await fresh();p.store.updateStudySet(p.set.id,{pinned:false,category:'课程'});for(let index=1;index<6;index++)p.store.createStudySet(`A30 layout ${index}`);p.view.refresh(true);button(p.root,'学习集与文档').click();await frame();await wait(40);};
+  (window as any).showA30HomeScene=async()=>{await closeAll();const p=await fresh();p.store.updateStudySet(p.set.id,{pinned:false,category:'课程'});for(let index=1;index<6;index++)p.store.createStudySet(`A30 layout ${index}`);p.view.refresh(true);button(p.root,'打开学习集与文档').click();await frame();await wait(40);};
   (window as any).readA30HomeGeometry=()=>{const textRect=(node:Element|null)=>{if(!node)return null;const range=document.createRange();range.selectNodeContents(node);return range.getBoundingClientRect().toJSON();},screen=document.querySelector<HTMLElement>('.ms-study-home-screen'),nav=screen?.querySelector<HTMLElement>('.ms-study-home-navigation'),head=screen?.querySelector<HTMLElement>('.ms-native-popover-head'),group=screen?.querySelector<HTMLElement>('[data-home-group="全部学习集"]'),cards=[...(group?.querySelectorAll<HTMLElement>('.ms-study-home-card')??[])].slice(0,6);return {viewport:[innerWidth,innerHeight],screen:screen?.getBoundingClientRect().toJSON(),nav:nav?.getBoundingClientRect().toJSON(),brand:nav?.querySelector<HTMLElement>('.ms-study-home-brand')?.getBoundingClientRect().toJSON(),brandText:textRect(nav?.querySelector('.ms-study-home-brand')??null),appActions:[...nav?.querySelectorAll<HTMLElement>('.ms-study-home-header-action')??[]].map(node=>({label:node.getAttribute('aria-label'),rect:node.getBoundingClientRect().toJSON()})),recentLabel:textRect(nav?.querySelector('.ms-study-home-recent-label')??null),navItems:[...(nav?.querySelectorAll<HTMLButtonElement>(':scope > button:not(.ms-study-home-header-action)')??[])].map(node=>({label:node.textContent?.trim(),aria:node.getAttribute('aria-label'),rect:node.getBoundingClientRect().toJSON(),textRect:textRect(node)})),footerItems:[...(nav?.querySelectorAll<HTMLButtonElement>('.ms-study-home-footer button')??[])].map(node=>({label:node.getAttribute('aria-label')??node.textContent?.trim(),rect:node.getBoundingClientRect().toJSON(),textRect:textRect(node)})),head:head?.getBoundingClientRect().toJSON(),headTitle:head?.querySelector<HTMLElement>('strong')?.getBoundingClientRect().toJSON(),close:head?.querySelector<HTMLElement>('[aria-label="关闭工具面板"]')?.getBoundingClientRect().toJSON(),group:group?.getBoundingClientRect().toJSON(),grid:getComputedStyle(group!).gridTemplateColumns,cards:cards.map(card=>({rect:card.getBoundingClientRect().toJSON(),background:getComputedStyle(card).backgroundColor})),pageBackground:screen?getComputedStyle(screen).backgroundColor:null,sidebarBackground:nav?getComputedStyle(nav).backgroundColor:null,headerTools:screen?.querySelector<HTMLElement>('.ms-study-home-header-tools')?.getBoundingClientRect().toJSON(),headerFields:[...(screen?.querySelectorAll<HTMLElement>('.ms-study-home-header-tools > *')??[])].map(node=>({label:node.getAttribute('aria-label'),tag:node.tagName,rect:node.getBoundingClientRect().toJSON(),iconRect:node.querySelector('svg')?.getBoundingClientRect().toJSON()??null})),horizontalOverflow:screen?screen.scrollWidth>screen.clientWidth:false};};
   (window as any).showA09Scene=async()=>{await closeAll();const p=await fresh();await p.view.openFile(p.alpha);await p.view.openMobileComparison(p.beta,false);await frame();};
   (window as any).showTocDragScene=async()=>{
