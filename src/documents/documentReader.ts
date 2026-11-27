@@ -5,6 +5,7 @@ import type { HandwritingMode } from "../annot/penGeometry";
 import type { ReaderEditHistoryState } from "../annot/baseController";
 import { HtmlAnnotationController, HtmlReader } from "../word/htmlAnnot";
 import { el, clear, hasBlockingHistoryOverlay } from "../utils/dom";
+import { attachReaderSwipeGuard } from "../utils/swipeGuard";
 import { ReadingSpeechControls, documentSpeechSections } from "../audio/speechControls";
 import { DocumentTarget, DocumentTocEntry, StaticDocument, headingToc, parseEpub, resolveDocumentTarget, sanitizeStaticHtml, wrapSection } from "./content";
 import { markdownSnapshot } from "./markdown";
@@ -41,6 +42,7 @@ export class DocumentReaderView extends ItemView implements HtmlReader {
   private recallScopeEl: HTMLButtonElement | null = null;
   private speech: ReadingSpeechControls | null = null;
   private workspaceChrome = false;
+  private disposeSwipeGuard: (() => void) | null = null;
 
   constructor(leaf: WorkspaceLeaf, plugin: MarginStudyPlugin) { super(leaf); this.plugin = plugin; }
   getViewType(): string { return VIEW_TYPE_DOCUMENT; }
@@ -166,6 +168,8 @@ export class DocumentReaderView extends ItemView implements HtmlReader {
     this.scrollEl.addEventListener("pointerdown", this.activate);
     this.scrollEl.addEventListener("focusin", this.activate);
     this.scrollEl.addEventListener("scroll", this.onScroll, { passive: true });
+    this.disposeSwipeGuard?.();
+    this.disposeSwipeGuard = attachReaderSwipeGuard(this.scrollEl, this.plugin.store);
     this.bodyEl.addEventListener("click", this.onLink);
     this.containerEl.addEventListener("keydown", this.onStandaloneHistoryKey);
     window.addEventListener("keydown", this.onStandaloneHistoryKey);
@@ -176,6 +180,8 @@ export class DocumentReaderView extends ItemView implements HtmlReader {
     this.speech?.dispose(); this.speech = null;
     this.destroyed = true; this.loadRevision++; this.loadAbort?.abort();
     this.reading.disconnect();
+    this.disposeSwipeGuard?.();
+    this.disposeSwipeGuard = null;
     if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
     if (this.searchTimer !== null) window.clearTimeout(this.searchTimer);
     this.scrollEl?.removeEventListener("scroll", this.onScroll);

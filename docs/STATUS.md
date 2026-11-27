@@ -15,6 +15,14 @@
 | 开源发版 | 本地准备已完成：历史已清理（`.git` 84 MB → 7.9 MB，`dist/` 与 `handoff-to-edict/` 已从全部历史剔除）、`evidence/` 已外迁至仓库外、隐私复扫 0 命中。**尚未创建远端、尚未推送** | [决策](archive/plans/) |
 当前差距统一登记在 [MN5 差距表](MN5-PARITY-GAP.md)。工作顺序见 [路线图](ROADMAP.md)。阶段验收、历史计划和交接见 [归档索引](archive/README.md)。
 
+## 2026-11-27 · 阅读区防侧栏滑动守卫（`themiskang/fix-swipe-guard`）
+
+- 方案：采用 Obsidian 官方 `data-ignore-swipe="true"` 属性方案（`src/utils/swipeGuard.ts`），挂在 PDF/Word/HTML/EPUB 阅读器 `scrollEl` 与 `StudyWorkspaceView.readerHost` 上，关闭设置 `blockSidebarSwipe=false` 时通过 `removeAttribute` 即时移除。
+- **规格订正（非放宽判据）**：原规格要求「工具栏/输入框不挂属性」，本意是不许把交互弄坏；因 Obsidian 侧栏手势判定采用 DOM 祖先链继承，无法对 `scrollEl` 子树豁免，故保留 `data-ignore-swipe` 挂在 `scrollEl`，并将判定标准订正为两条：
+  1. **阅读器外部**的工具栏 / 脑图 / 卡片面板 / 输入框**不得**被覆盖；
+  2. **阅读器内部**的浮层控件（角度输入框、留白工具栏等）允许继承该属性，但**必须仍然完全可用**——能输入、能点击、能拖动、能触发原有动作。
+- 验收：`scripts/verify/reader-swipe-guard-acceptance.mjs` 覆盖 A–E（含 E2 页内角度输入框与留白工具栏全按钮/拖拽）及双真机视口 `1131×800@DPR3` / `1510×962@DPR2`。
+
 ## 2026-11-22 · P0 备份守卫（合并 `f930749`）
 
 问题：备份清单含 `MarginStudyBackups/…` 内部路径时，加载期守卫直接抛错，**整个插件加载失败**（Pad 实机 1.15.1 默认状态复现）。

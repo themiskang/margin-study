@@ -136,6 +136,7 @@ const automatedSuites=[
   ["annot-undo-atomicity","scripts/verify/annot-undo-atomicity-acceptance.mjs"],
   ["workspace-annot-undo-e2e","scripts/verify/workspace-annot-undo-e2e-acceptance.mjs"],
   ["select-vs-highlight","scripts/verify/select-vs-highlight-acceptance.mjs"],
+  ["reader-swipe-guard","scripts/verify/reader-swipe-guard-acceptance.mjs"],
 ];
 const replaySuites=[
   ["document-more","scripts/verify/compare-document-more-evidence.py"],

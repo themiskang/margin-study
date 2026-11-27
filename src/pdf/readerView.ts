@@ -18,6 +18,7 @@ import type { ReaderEditHistoryState } from "../annot/baseController";
 import { loadPdf, pdfjsLib } from "./pdfjs";
 import { AnnotationController } from "./annotationLayer";
 import { el, clear, hasBlockingHistoryOverlay } from "../utils/dom";
+import { attachReaderSwipeGuard } from "../utils/swipeGuard";
 import { createModal } from "../utils/modal";
 import type { Annotation, DocMeta, PdfRect, PdfCrop, PdfPageEdits, PdfExtendMode, PdfExtendNote, Stroke } from "../types";
 import { EditedPdfDocument, originalPdfPages, remapEditedPdfMetadata, validatePdfPageEdits, mapEditedPdfAnnotation } from "./editedDocument";
@@ -206,6 +207,7 @@ export class ReaderView extends ItemView {
   } | null = null;
   private pinchFrame = 0;
   private pinchSettling = false;
+  private disposeSwipeGuard: (() => void) | null = null;
 
   constructor(leaf: WorkspaceLeaf, plugin: MarginStudyPlugin) {
     super(leaf);
@@ -862,9 +864,9 @@ export class ReaderView extends ItemView {
       this.scrollEl.addEventListener("contextmenu", event => {
         if ((event.target as Element).closest(".ms-text-layer")) event.preventDefault();
       });
-      for (const type of ["touchstart", "touchmove", "touchend", "touchcancel"] as const)
-        this.scrollEl.addEventListener(type, event => event.stopPropagation(), { passive: true });
     }
+    this.disposeSwipeGuard?.();
+    this.disposeSwipeGuard = attachReaderSwipeGuard(this.scrollEl, this.plugin.store);
     this.scrollEl.addEventListener("click", this.extendNotes.onPlace, true);
     this.scrollEl.addEventListener("click",event=>{
       if(!this.plugin.store.settings.tapPageEdges||this.annController?.getHandwritingMode()!=="off"||this.annController?.isLassoMode()||!(event.target instanceof HTMLElement)||!event.target.matches(".ms-page-canvas,.ms-text-layer")||window.getSelection()?.toString())return;
@@ -968,6 +970,8 @@ export class ReaderView extends ItemView {
     window.removeEventListener("marginstudy-reading-layout", this.onGlobalReadingLayout);
     await this.finishExtendEditing(); this.extendNotes.reset();
     this.clearPinchState();
+    this.disposeSwipeGuard?.();
+    this.disposeSwipeGuard = null;
     this.scrollEl?.removeEventListener("click", this.extendNotes.onPlace, true);
     this.scrollEl?.removeEventListener("pointerdown", this.onPinchPointerDown, true);
     this.scrollEl?.removeEventListener("pointerdown", this.extendNotes.onRegionStart, true);
