@@ -1,7 +1,12 @@
 /**
  * [INPUT]: 依赖 ReaderView、WordReaderView、DocumentReaderView、StudyWorkspaceView、MarginStudySettingTab、Store 与默认 agent-browser CDP 后端。
- * [OUTPUT]: 执行官方 data-ignore-swipe 属性方案的 A–E + 设置 UI + F 双真机视口（1131×800@DPR3、1510×962@DPR2）全量验收。
+ * [OUTPUT]: 执行官方 data-ignore-swipe 属性方案的 A–E（含 E2 页内控件可用性）+ 设置 UI + F 双真机视口（1131×800@DPR3、1510×962@DPR2）全量验收。
  * [POS]: 公开浏览器验收套件 reader-swipe-guard，注册于 scripts/verify.mjs。
+ * [SPEC-CORRECTION]:
+ *   原规格要求「工具栏/输入框不挂属性」，本意是不许把交互弄坏；因 Obsidian 侧栏手势判定采用 DOM 祖先链继承，无法对 scrollEl 子树豁免，
+ *   故保留 data-ignore-swipe 挂在 scrollEl，并将判定标准订正为两条：
+ *   1. 阅读器外部的工具栏 / 脑图 / 卡片面板 / 输入框不得被覆盖；
+ *   2. 阅读器内部的浮层控件（角度输入框、留白工具栏等）允许继承该属性，但必须仍然完全可用——能输入、能点击、能拖动、能触发原有动作。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
 import { readFile, writeFile, mkdtemp, realpath, rm } from "node:fs/promises";
@@ -513,6 +518,182 @@ function inspectNode(node: Element | null) {
   return { selectedText, length: selectedText.length };
 };
 
+// E2: In-page floating controls inside scrollEl (inheriting data-ignore-swipe="true") remain 100% functional
+(window as any).testInPageControlsE2 = async () => {
+  const view = activeState!.view as ReaderView;
+  const store = activeState!.store;
+  const scrollEl = view.getScrollContainer();
+  assert(scrollEl.getAttribute("data-ignore-swipe") === "true", "E2 requires data-ignore-swipe='true' on scrollEl");
+
+  // 1. Angle input inside PDF free-text overlay (.ms-free-overlay-tools)
+  const annId = "ann-swipe-rot-" + Math.random().toString(36).slice(2, 8);
+  (view as any).annController.pushAnnotation({
+    id: annId,
+    docPath: "e.pdf",
+    docKind: "pdf",
+    page: 1,
+    type: "note",
+    text: "旋转测试批注",
+    color: "#ff5b8a",
+    rects: [{ x: 80, y: 120, w: 180, h: 48 }],
+    overlay: { kind: "text", rotation: 0 },
+    createdAt: stamp,
+  });
+  await frame();
+
+  const overlayEl = scrollEl.querySelector<HTMLElement>(\`.ms-free-overlay[data-ann-id="\${annId}"]\`);
+  const angleInput = scrollEl.querySelector<HTMLInputElement>('input[aria-label="旋转批注角度"]');
+  assert(overlayEl, "E2 missing .ms-free-overlay element");
+  assert(angleInput, "E2 missing angle input[aria-label='旋转批注角度']");
+  const angleInheritsIgnoreSwipe = angleInput!.closest("[data-ignore-swipe]") === scrollEl;
+  const rotationBefore = (await store.loadAnnotations("e.pdf")).find(a => a.id === annId)?.overlay?.rotation ?? 0;
+  const transformBefore = overlayEl!.style.transform;
+
+  let inputFired = false;
+  let changeFired = false;
+  angleInput!.addEventListener("input", () => { inputFired = true; });
+  angleInput!.addEventListener("change", () => { changeFired = true; });
+  overlayEl!.focus();
+  await frame();
+  angleInput!.focus();
+  const focused = document.activeElement === angleInput;
+  angleInput!.value = "35";
+  angleInput!.dispatchEvent(new Event("input", { bubbles: true }));
+  angleInput!.dispatchEvent(new Event("change", { bubbles: true }));
+  await wait(40);
+  await frame();
+
+  const overlayAfter = scrollEl.querySelector<HTMLElement>(\`.ms-free-overlay[data-ann-id="\${annId}"]\`);
+  const chromeAfter = scrollEl.querySelector<HTMLElement>(\`.ms-free-overlay-chrome[data-ann-id="\${annId}"]\`);
+  const rotationAfter = (await store.loadAnnotations("e.pdf")).find(a => a.id === annId)?.overlay?.rotation ?? 0;
+  const transformAfter = overlayAfter?.style.transform || chromeAfter?.style.transform || "";
+  assert(focused, "E2 angle input failed to focus");
+  assert(inputFired && changeFired, \`E2 angle input events missing: input=\${inputFired}, change=\${changeFired}\`);
+  assert(rotationBefore === 0 && rotationAfter === 35, \`E2 rotation did not update: \${rotationBefore} -> \${rotationAfter}\`);
+  assert(transformAfter === "rotate(35deg)", \`E2 overlay transform mismatch: \${transformAfter}\`);
+
+  // 2. Extend note toolbar & drag handles (.ms-extend-note inside .ms-extend-layer)
+  await view.createExtend(1, { x: 0.5, y: 0.3 });
+  await view.finishExtendEditing();
+  await frame();
+
+  const getBox = () => scrollEl.querySelector<HTMLElement>(".ms-extend-note");
+  const box0 = getBox();
+  assert(box0, "E2 missing .ms-extend-note");
+  const extendInheritsIgnoreSwipe = box0!.closest("[data-ignore-swipe]") === scrollEl;
+
+  // 2a. 编辑留白文字
+  const editBtn = box0!.querySelector<HTMLButtonElement>('button[aria-label="编辑留白文字"]');
+  assert(editBtn, "E2 missing 编辑留白文字 button");
+  editBtn!.click();
+  await frame();
+  const editor = document.querySelector<HTMLElement>('[aria-label="留白文字"]');
+  assert(editor, "E2 clicking 编辑留白文字 did not open editor");
+  editor!.textContent = "留白可用性验证";
+  editor!.dispatchEvent(new Event("input", { bubbles: true }));
+  await view.finishExtendEditing();
+  await frame();
+  const textAfterEdit = view.getExtendNotes()[0]?.text ?? "";
+  assert(textAfterEdit === "留白可用性验证", \`E2 extend text did not save: \${textAfterEdit}\`);
+
+  // 2b. 调整留白高度拖拽 (.ms-extend-resize)
+  const boxForResize = getBox()!;
+  const resizeBtn = boxForResize.querySelector<HTMLButtonElement>('button[aria-label="调整留白高度"]')!;
+  assert(resizeBtn, "E2 missing 调整留白高度 handle");
+  const heightBefore = view.getExtendNotes()[0].height;
+  const rRect = resizeBtn.getBoundingClientRect();
+  const rx = rRect.left + rRect.width / 2;
+  const ry = rRect.top + rRect.height / 2;
+  resizeBtn.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerId: 11, clientX: rx, clientY: ry }));
+  window.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, cancelable: true, button: 0, pointerId: 11, clientX: rx, clientY: ry + 52 }));
+  window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, button: 0, pointerId: 11, clientX: rx, clientY: ry + 52 }));
+  await frame();
+  await wait(30);
+  const heightAfter = view.getExtendNotes()[0].height;
+  assert(heightAfter > heightBefore, \`E2 extend resize drag did not increase height: \${heightBefore} -> \${heightAfter}\`);
+
+  // 2c. 移动留白位置拖拽 (.ms-extend-move)
+  const boxForMove = getBox()!;
+  const moveBtn = boxForMove.querySelector<HTMLButtonElement>('button[aria-label="移动留白位置"]')!;
+  assert(moveBtn, "E2 missing 移动留白位置 handle");
+  const yBefore = view.getExtendNotes()[0].anchor.y;
+  const mRect = moveBtn.getBoundingClientRect();
+  const mx = mRect.left + mRect.width / 2;
+  const my = mRect.top + mRect.height / 2;
+  moveBtn.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerId: 12, clientX: mx, clientY: my }));
+  window.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, cancelable: true, button: 0, pointerId: 12, clientX: mx, clientY: my + 48 }));
+  window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, button: 0, pointerId: 12, clientX: mx, clientY: my + 48 }));
+  await frame();
+  await wait(30);
+  const yAfter = view.getExtendNotes()[0].anchor.y;
+  assert(yAfter !== yBefore, \`E2 extend move drag did not change y: \${yBefore} -> \${yAfter}\`);
+
+  // 2d. 移动留白位置点击折叠 -> 自动展开
+  const moveBtnClick = getBox()!.querySelector<HTMLButtonElement>('button[aria-label="移动留白位置"]')!;
+  moveBtnClick.click();
+  await frame();
+  await wait(30);
+  const collapsedAfterClick = !!view.getExtendNotes()[0]?.collapsed;
+  const lineBtn = scrollEl.querySelector<HTMLButtonElement>(".ms-extend-line");
+  assert(collapsedAfterClick && lineBtn, "E2 clicking 移动留白位置 did not collapse extend note");
+  lineBtn!.click();
+  await frame();
+  const autoExpandBtn = scrollEl.querySelector<HTMLButtonElement>('button[aria-label="自动展开"]');
+  assert(autoExpandBtn, "E2 missing 自动展开 button after opening collapsed extend");
+  autoExpandBtn!.click();
+  await frame();
+  await wait(30);
+  const collapsedAfterExpand = !!view.getExtendNotes()[0]?.collapsed;
+  assert(collapsedAfterExpand === false, "E2 clicking 自动展开 did not uncollapse extend note");
+
+  // 2e. 留白菜单 -> 改颜色 + 删除留白
+  const menuBtn = getBox()!.querySelector<HTMLButtonElement>('button[aria-label="留白菜单"]')!;
+  assert(menuBtn, "E2 missing 留白菜单 button");
+  menuBtn.click();
+  await frame();
+  const menuDialog = view.containerEl.querySelector<HTMLElement>('.ms-extend-menu[role="dialog"]');
+  assert(menuDialog, "E2 clicking 留白菜单 did not open menu dialog");
+  const colorBtn = menuDialog!.querySelector<HTMLButtonElement>('button[aria-label="颜色 #b8f7ba"]');
+  assert(colorBtn, "E2 missing color button in extend menu");
+  colorBtn!.click();
+  await frame();
+  await wait(30);
+  const colorAfter = view.getExtendNotes()[0]?.color ?? "";
+  assert(colorAfter === "#b8f7ba", \`E2 extend color did not update: \${colorAfter}\`);
+
+  // Reopen menu and click 删除留白
+  const menuBtn2 = getBox()!.querySelector<HTMLButtonElement>('button[aria-label="留白菜单"]')!;
+  menuBtn2.click();
+  await frame();
+  const delBtn = view.containerEl.querySelector<HTMLButtonElement>('.ms-extend-menu button[aria-label="删除留白"]');
+  assert(delBtn, "E2 missing 删除留白 button in extend menu");
+  delBtn!.click();
+  await frame();
+  await wait(30);
+  const notesAfterDelete = view.getExtendNotes().length;
+  assert(notesAfterDelete === 0, \`E2 extend note not deleted: remaining=\${notesAfterDelete}\`);
+
+  return {
+    angleInput: {
+      inheritsIgnoreSwipe: angleInheritsIgnoreSwipe,
+      focused,
+      inputFired,
+      changeFired,
+      rotation: [rotationBefore, rotationAfter],
+      transform: [transformBefore, transformAfter],
+    },
+    extendToolbar: {
+      inheritsIgnoreSwipe: extendInheritsIgnoreSwipe,
+      textSaved: textAfterEdit,
+      resizeHeight: [Number(heightBefore.toFixed(2)), Number(heightAfter.toFixed(2))],
+      moveY: [Number(yBefore.toFixed(4)), Number(yAfter.toFixed(4))],
+      collapsedThenExpanded: [collapsedAfterClick, collapsedAfterExpand],
+      menuColor: colorAfter,
+      notesAfterDelete,
+    },
+  };
+};
+
 (window as any).getErrors = () => [...errors];
 (window as any).ready = true;
 `;
@@ -755,6 +936,11 @@ export class Setting {
         const sel = await evalCdp("window.testLongPressTextSelection()");
         record(sel.length === 10, `[${vp.label}] E4 text selection failed: ${JSON.stringify(sel)}`);
 
+        // E2: In-page floating controls (angle input + extend toolbar + drag handles)
+        const e2 = await evalCdp("window.testInPageControlsE2()");
+        record(e2.angleInput.inheritsIgnoreSwipe && e2.angleInput.rotation[1] === 35 && e2.angleInput.transform[1] === "rotate(35deg)", `[${vp.label}] E2 angle input failed: ${JSON.stringify(e2.angleInput)}`);
+        record(e2.extendToolbar.inheritsIgnoreSwipe && e2.extendToolbar.notesAfterDelete === 0 && e2.extendToolbar.resizeHeight[1] > e2.extendToolbar.resizeHeight[0] && e2.extendToolbar.moveY[1] !== e2.extendToolbar.moveY[0], `[${vp.label}] E2 extend toolbar failed: ${JSON.stringify(e2.extendToolbar)}`);
+
         summary[vp.label] = {
           hosts_ABCD: {
             pdf: { on: hosts.pdf.onState.hostAttr, off: hosts.pdf.offState.hostAttr, reOn: hosts.pdf.reOnState.hostAttr, ebOn: hosts.pdf.onState.inner.ebIgnored, ebOff: hosts.pdf.offState.inner.ebIgnored, toolbarEb: hosts.pdf.onState.toolbar.ebIgnored },
@@ -770,6 +956,7 @@ export class Setting {
             pinchScale: [fitAgain.scale, afterPinch.scale],
             textSelectionLen: sel.length,
           },
+          E2_inPageControls: e2,
         };
       }
 
