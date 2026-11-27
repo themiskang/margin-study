@@ -657,6 +657,241 @@ async function openStandaloneHtml(htmlPath: string, html: string) {
     report.C4 = { standaloneResult, htmlResult, noDoubleTriggerResult };
   }
 
+  // ===== C5: 6 类浮层打开时 Cmd+Z 不得误撤背后文档 + 关闭后恢复正常撤销 =====
+  {
+    const ws = await openWorkspace("c5-overlays.pdf", {
+      cards: [{ id: "c-ind", type: "excerpt", docPath: "c5-overlays.pdf", front: "Independent Card", tags: [], links: [], createdAt: stamp }],
+      nodes: [{ id: "n-ind", cardId: "c-ind", canvasId: "canvas-1", parentId: null, title: "Independent Node", collapsed: false, x: 120, y: 120 }],
+    });
+    try {
+      const counts = async () => ({
+        annotations: (await ws.store.loadAnnotations("c5-overlays.pdf")).length,
+        cards: ws.store.cards.length,
+        nodes: ws.store.nodes.length,
+        nodeX: ws.store.nodes.find(n => n.id === "n-ind")?.x,
+        historyScope: (ws.view as any).historyScope,
+      });
+      const pressEsc = (target: EventTarget) => {
+        target.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true, cancelable: true }));
+      };
+
+      // 建立基线：独立节点移动 + PDF 高亮 1 -> 1/2/3（且当前焦点在 reader 栈）
+      ws.store.moveNode("n-ind", 184, 140);
+      await frame();
+      await dragSelectPdfText(ws.scroll, "六个中文字符", 160, 0, 80);
+      const baseline = await counts();
+      assert(baseline.annotations === 1 && baseline.cards === 2 && baseline.nodes === 3 && baseline.historyScope === "reader",
+        "C5 baseline mismatch: " + JSON.stringify(baseline));
+
+      const overlays: Record<string, any> = {};
+
+      // 1) 底部统一「更多」菜单 (.ms-native-popover)
+      {
+        const moreBtn = ws.root.querySelector<HTMLButtonElement>('[data-ms-tool="excerpt.more"]')!;
+        assert(moreBtn, "C5 missing excerpt.more button");
+        moreBtn.click();
+        await frame();
+        const popover = ws.root.querySelector<HTMLElement>(".ms-native-popover");
+        assert(popover, "C5 bottom more popover did not open");
+        const row = popover!.querySelector<HTMLButtonElement>("button:not([aria-label='关闭工具面板'])") ?? popover!.querySelector<HTMLButtonElement>("button")!;
+        assert(row, "C5 bottom more popover missing button");
+        row.focus();
+        const before = await counts();
+        const ev = dispatchCmdZ(row, false);
+        await wait(40);
+        await frame();
+        const after = await counts();
+        const stillOpen = !!ws.root.querySelector(".ms-native-popover");
+        assert(after.annotations === 1 && after.cards === 2 && after.nodes === 3 && after.nodeX === 184 && stillOpen,
+          "C5 bottomMore failed: " + JSON.stringify({ before, after, stillOpen }));
+        pressEsc(window);
+        await frame();
+        assert(!ws.root.querySelector(".ms-native-popover"), "C5 bottomMore did not close on Escape");
+        overlays.bottomMore = { before, after, closedByCmdZ: !stillOpen, prevented: ev.defaultPrevented };
+      }
+
+      // 2) UI-01 溢出菜单 (.ms-bottom-overflow-menu) —— 精确复现复核 420px 场景
+      {
+        const prevWidth = fixturesHost.style.width;
+        fixturesHost.style.width = "420px";
+        (ws.view as any).syncBottomLayout?.();
+        await wait(60);
+        await frame();
+        const toggle = ws.root.querySelector<HTMLButtonElement>(".ms-bottom-overflow-toggle");
+        assert(toggle, "C5 overflow toggle did not appear at 420px");
+        toggle!.click();
+        await frame();
+        const menu = ws.root.querySelector<HTMLElement>(".ms-bottom-overflow-menu");
+        assert(menu, "C5 overflow menu did not open");
+        const item = [...menu!.querySelectorAll<HTMLButtonElement>(".ms-bottom-overflow-item")]
+          .find(b => b.textContent?.includes("连续摘录")) ?? menu!.querySelector<HTMLButtonElement>(".ms-bottom-overflow-item")!;
+        item.focus();
+        const before = await counts();
+        const ev = dispatchCmdZ(item, false);
+        await wait(40);
+        await frame();
+        const after = await counts();
+        const stillOpen = !!ws.root.querySelector(".ms-bottom-overflow-menu");
+        assert(after.annotations === 1 && after.cards === 2 && after.nodes === 3 && after.nodeX === 184 && stillOpen,
+          "C5 overflowMenu failed: " + JSON.stringify({ before, after, stillOpen }));
+        pressEsc(window);
+        await frame();
+        assert(!ws.root.querySelector(".ms-bottom-overflow-menu"), "C5 overflowMenu did not close on Escape");
+        fixturesHost.style.width = prevWidth;
+        (ws.view as any).syncBottomLayout?.();
+        await wait(60);
+        await frame();
+        overlays.overflowMenu = { before, after, closedByCmdZ: !stillOpen, prevented: ev.defaultPrevented };
+      }
+
+      // 3) 格式条字号下拉浮层 (.ms-text-style-popover) —— 独立验证避免临时文字框干扰其余 5 类计数
+      {
+        const wsFont = await openWorkspace("c5-fontsize.pdf", {
+          cards: [{ id: "c-ind", type: "excerpt", docPath: "c5-fontsize.pdf", front: "Independent Card", tags: [], links: [], createdAt: stamp }],
+          nodes: [{ id: "n-ind", cardId: "c-ind", canvasId: "canvas-1", parentId: null, title: "Independent Node", collapsed: false, x: 120, y: 120 }],
+        });
+        try {
+          const fCounts = async () => ({
+            annotations: (await wsFont.store.loadAnnotations("c5-fontsize.pdf")).length,
+            cards: wsFont.store.cards.length,
+            nodes: wsFont.store.nodes.length,
+          });
+          await dragSelectPdfText(wsFont.scroll, "六个中文字符", 160, 0, 80);
+          wsFont.reader.beginTextAnnotation();
+          await frame();
+          const page = wsFont.scroll.querySelector<HTMLElement>("[data-page='1']")!;
+          const rect = page.getBoundingClientRect();
+          page.dispatchEvent(new MouseEvent("click", {
+            clientX: rect.left + 80,
+            clientY: rect.top + 80,
+            bubbles: true,
+            cancelable: true,
+          }));
+          await wait(60);
+          await frame();
+          const editor = wsFont.root.querySelector<HTMLElement>(".ms-overlay-text-editor");
+          assert(editor, "C5 inline text editor did not open");
+          const sizeBtn = editor!.querySelector<HTMLButtonElement>('[aria-label="选择文字字号"]')!;
+          assert(sizeBtn, "C5 font size dropdown button missing");
+          sizeBtn.click();
+          await frame();
+          const sizePopover = editor!.querySelector<HTMLElement>(".ms-text-style-popover");
+          assert(sizePopover, "C5 font size popover did not open");
+          const opt = sizePopover!.querySelector<HTMLButtonElement>("button")!;
+          opt.focus();
+          const before = await fCounts();
+          const ev = dispatchCmdZ(opt, false);
+          await wait(40);
+          await frame();
+          const after = await fCounts();
+          const stillOpen = !!editor!.querySelector(".ms-text-style-popover");
+          assert(after.annotations === before.annotations && after.cards === before.cards && after.nodes === before.nodes && stillOpen,
+            "C5 fontSizePopover failed: " + JSON.stringify({ before, after, stillOpen }));
+          pressEsc(editor!);
+          await frame();
+          pressEsc(editor!);
+          await wait(60);
+          await frame();
+          assert(!wsFont.root.querySelector(".ms-overlay-text-editor"), "C5 inline text editor did not close");
+          overlays.fontSizePopover = { before, after, closedByCmdZ: !stillOpen, prevented: ev.defaultPrevented };
+        } finally {
+          await wsFont.dispose();
+        }
+        // 重新挂载主 ws DOM（openWorkspace 清空了 fixturesHost）
+        fixturesHost.append(ws.view.containerEl);
+        await frame();
+      }
+
+      // 4) 脑图搜索框 (.ms-mm-search / .ms-workspace-map input)
+      {
+        const mapSearchToggle = ws.root.querySelector<HTMLButtonElement>('.ms-workspace-map button[aria-label*="搜索"]');
+        if (mapSearchToggle) { mapSearchToggle.click(); await frame(); }
+        let searchInput = ws.root.querySelector<HTMLInputElement>(".ms-mm-search, .ms-workspace-map input");
+        let injected = false;
+        if (!searchInput) {
+          searchInput = document.createElement("input");
+          searchInput.className = "ms-mm-search";
+          searchInput.type = "text";
+          ws.root.querySelector(".ms-workspace-map-host")!.append(searchInput);
+          injected = true;
+        }
+        searchInput.focus();
+        searchInput.value = "测试";
+        const before = await counts();
+        const ev = dispatchCmdZ(searchInput, false);
+        await wait(40);
+        await frame();
+        const after = await counts();
+        assert(after.annotations === 1 && after.cards === 2 && after.nodes === 3 && ev.defaultPrevented === false,
+          "C5 mindmapSearch failed: " + JSON.stringify({ before, after, prevented: ev.defaultPrevented }));
+        searchInput.blur();
+        if (injected) searchInput.remove();
+        else if (mapSearchToggle) { pressEsc(window); await frame(); }
+        overlays.mindmapSearch = { before, after, closedByCmdZ: false, prevented: ev.defaultPrevented };
+      }
+
+      // 5) 模态框 (.ms-modal-bg)
+      {
+        const modalBg = document.createElement("div");
+        modalBg.className = "ms-modal-bg";
+        const modalBtn = document.createElement("button");
+        modalBtn.type = "button";
+        modalBtn.textContent = "确认合并";
+        modalBg.append(modalBtn);
+        document.body.append(modalBg);
+        modalBtn.focus();
+        const before = await counts();
+        const ev = dispatchCmdZ(modalBtn, false);
+        await wait(40);
+        await frame();
+        const after = await counts();
+        const stillOpen = document.body.contains(modalBg);
+        assert(after.annotations === 1 && after.cards === 2 && after.nodes === 3 && stillOpen,
+          "C5 modal failed: " + JSON.stringify({ before, after, stillOpen }));
+        modalBg.remove();
+        await frame();
+        overlays.modal = { before, after, closedByCmdZ: !stillOpen, prevented: ev.defaultPrevented };
+      }
+
+      // 6) 侧栏面板输入框 (.ms-workspace-auxiliary input)
+      {
+        const aux = ws.root.querySelector<HTMLElement>(".ms-workspace-auxiliary")!;
+        assert(aux, "C5 auxiliary sidebar missing");
+        const sideInput = document.createElement("input");
+        sideInput.type = "text";
+        sideInput.value = "侧栏笔记";
+        aux.append(sideInput);
+        sideInput.focus();
+        const before = await counts();
+        const ev = dispatchCmdZ(sideInput, false);
+        await wait(40);
+        await frame();
+        const after = await counts();
+        assert(after.annotations === 1 && after.cards === 2 && after.nodes === 3 && ev.defaultPrevented === false,
+          "C5 sidebarInput failed: " + JSON.stringify({ before, after, prevented: ev.defaultPrevented }));
+        sideInput.blur();
+        sideInput.remove();
+        await frame();
+        overlays.sidebarInput = { before, after, closedByCmdZ: false, prevented: ev.defaultPrevented };
+      }
+
+      // 7) 反向验证：所有浮层关闭后，Cmd+Z 恢复正常撤销（1/2/3 -> 0/1/1）
+      const readerHost = ws.root.querySelector<HTMLElement>(".ms-workspace-reader-host")!;
+      dispatchPtr(readerHost, "pointerdown", 120, 200);
+      await frame();
+      dispatchCmdZ(ws.root, false);
+      await wait(40);
+      await frame();
+      const afterRecoveryUndo = await counts();
+      assert(afterRecoveryUndo.annotations === 0 && afterRecoveryUndo.cards === 1 && afterRecoveryUndo.nodes === 1,
+        "C5 recovery undo failed: " + JSON.stringify(afterRecoveryUndo));
+
+      report.C5 = { baseline, overlays, afterRecoveryUndo };
+    } finally {
+      await ws.dispose();
+    }
+  }
+
   return report;
 };
 

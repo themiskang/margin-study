@@ -17,7 +17,7 @@ import type { HandwritingMode } from "../annot/penGeometry";
 import type { ReaderEditHistoryState } from "../annot/baseController";
 import { loadPdf, pdfjsLib } from "./pdfjs";
 import { AnnotationController } from "./annotationLayer";
-import { el, clear } from "../utils/dom";
+import { el, clear, hasBlockingHistoryOverlay } from "../utils/dom";
 import { createModal } from "../utils/modal";
 import type { Annotation, DocMeta, PdfRect, PdfCrop, PdfPageEdits, PdfExtendMode, PdfExtendNote, Stroke } from "../types";
 import { EditedPdfDocument, originalPdfPages, remapEditedPdfMetadata, validatePdfPageEdits, mapEditedPdfAnnotation } from "./editedDocument";
@@ -421,12 +421,12 @@ export class ReaderView extends ItemView {
     if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== "z") return;
     const root = this.containerEl.children[1] as HTMLElement | undefined;
     if (root?.closest(".ms-study-workspace") || this.containerEl.closest(".ms-study-workspace")) return;
-    if (document.querySelector(".ms-modal-bg,.modal-container")) return;
     const target = event.target;
     if (target instanceof Element && target.closest("input,textarea,[contenteditable=true]")) return;
     const active = document.activeElement;
     if (active instanceof Element && active.closest("input,textarea,[contenteditable=true]")) return;
     if (event.currentTarget === window && this.app.workspace.activeLeaf !== this.leaf && !(target instanceof Node && this.containerEl.contains(target))) return;
+    if (hasBlockingHistoryOverlay(document)) { event.preventDefault(); return; }
     event.preventDefault();
     void (event.shiftKey ? this.redoLastEdit() : this.undoLastEdit());
   };

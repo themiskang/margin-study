@@ -47,7 +47,7 @@ import { openGlobalSearch } from "../search/globalSearch";
 import { FEATURE_INDEX, favoriteFeatureIds, openSettingAndReveal, runFeature } from "../search/featureSearch";
 import { toggleStudyInterface } from "./scenes";
 import { createModal, openConfirm, openTextModal } from "../utils/modal";
-import { el } from "../utils/dom";
+import { el, hasBlockingHistoryOverlay } from "../utils/dom";
 import { hasDeviceRecallHintProvider, requestDeviceRecallHint } from "../recall/deviceProvider";
 import { uid } from "../utils/id";
 import type { HandwritingSource, ReaderReturnPosition } from "../documents/readingPosition";
@@ -355,9 +355,9 @@ export class StudyWorkspaceView extends ItemView {
     const isEditableKeyTarget=(target:EventTarget|null)=>target instanceof Element&&!!target.closest("input,textarea,[contenteditable=true]");
     const handleWorkspaceHistoryKey=(event:KeyboardEvent,fromWindow:boolean):boolean=>{
       if(this.closed||event.defaultPrevented||!(event.ctrlKey||event.metaKey)||event.altKey||event.key.toLowerCase()!=="z")return false;
-      if(document.querySelector(".ms-modal-bg,.modal-container"))return false;
       if(isEditableKeyTarget(event.target)||isEditableKeyTarget(document.activeElement))return false;
       if(fromWindow&&this.app.workspace.activeLeaf!==this.leaf&&!(event.target instanceof Node&&this.root.contains(event.target)))return false;
+      if(this.popup||this.bottomOverflow?.isOpen()||hasBlockingHistoryOverlay(document)){event.preventDefault();return true;}
       event.preventDefault();
       void this.applyHistory(event.shiftKey);
       return true;

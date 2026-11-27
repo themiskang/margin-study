@@ -29,3 +29,27 @@ export function clear(node: HTMLElement): void {
 export function qs<T extends HTMLElement = HTMLElement>(root: ParentNode, sel: string): T | null {
   return root.querySelector<T>(sel);
 }
+
+const HISTORY_BLOCKING_OVERLAY_SELECTOR = [
+  ".ms-modal-bg",
+  ".modal-container",
+  ".ms-pdf-camera-bg",
+  ".ms-ink-layer-modal",
+  ".ms-native-popover",
+  ".ms-bottom-overflow-menu",
+  ".ms-text-style-popover",
+  ".ms-overlay-text-editor",
+  ".ms-reader-extend-popover",
+  ".ms-recall-hint",
+  ".ms-pdf-add-page-menu",
+  ".menu",
+].join(",");
+
+/** 判断是否存在打开的模态框、菜单或浮层，防止 Cmd/Ctrl+Z 误撤背后文档 */
+export function hasBlockingHistoryOverlay(doc: Document = document): boolean {
+  for (const node of doc.querySelectorAll<HTMLElement>(HISTORY_BLOCKING_OVERLAY_SELECTOR)) {
+    if (node.hidden || node.style.display === "none") continue;
+    return true;
+  }
+  return false;
+}

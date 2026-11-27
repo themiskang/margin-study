@@ -4,7 +4,7 @@ import type { HandwritingPresetId, HandwritingPresetSpec, ReaderContentsEntry } 
 import type { HandwritingMode } from "../annot/penGeometry";
 import type { ReaderEditHistoryState } from "../annot/baseController";
 import { HtmlAnnotationController, HtmlReader } from "./htmlAnnot";
-import { el, clear } from "../utils/dom";
+import { el, clear, hasBlockingHistoryOverlay } from "../utils/dom";
 import * as mammoth from "mammoth";
 import { ReadingSpeechControls, documentSpeechSections } from "../audio/speechControls";
 import { ReadingPositionTracker } from "../documents/readingPosition";
@@ -97,12 +97,12 @@ export class WordReaderView extends ItemView implements HtmlReader {
     if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== "z") return;
     const root = this.containerEl.children[1] as HTMLElement | undefined;
     if (root?.closest(".ms-study-workspace") || this.containerEl.closest(".ms-study-workspace")) return;
-    if (document.querySelector(".ms-modal-bg,.modal-container")) return;
     const target = event.target;
     if (target instanceof Element && target.closest("input,textarea,[contenteditable=true]")) return;
     const active = document.activeElement;
     if (active instanceof Element && active.closest("input,textarea,[contenteditable=true]")) return;
     if (event.currentTarget === window && this.app.workspace.activeLeaf !== this.leaf && !(target instanceof Node && this.containerEl.contains(target))) return;
+    if (hasBlockingHistoryOverlay(document)) { event.preventDefault(); return; }
     event.preventDefault();
     void (event.shiftKey ? this.redoLastEdit() : this.undoLastEdit());
   };
