@@ -193,7 +193,9 @@ async function createHarness() {
   await frame();
 
   const openMoreMenu = () => {
-    button(view.containerEl, "文档与工作区设置").click();
+    const trigger = view.containerEl.querySelector<HTMLButtonElement>('[data-ms-tool="excerpt.more"], [aria-label="文档与工作区设置"]');
+    assert(trigger, "Missing button: 文档与工作区设置 / excerpt.more");
+    trigger.click();
     return view.containerEl.querySelector<HTMLElement>('[aria-label="文档 - 更多"]')!;
   };
   const runMergeModal = async (scope: "page" | "range" | "document", targetPath: string, range = "") => {

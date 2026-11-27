@@ -300,6 +300,36 @@ body.ms-theme-dark .ms-modal.ms-ink-layer-modal { color: #111; background: #fff;
 .ms-text-color-menu > input[type=color] { margin-top: 10px; width: 40px; }
 .ms-text-color-menu > button { margin: 8px; color: white; background: transparent; border: 1px solid #aaa; }
 @media(max-width:760px) { .ms-overlay-stylebar > .ms-text-font { min-width: 105px; max-width: 140px; }.ms-overlay-stylebar > button { min-width: 33px; padding: 2px 6px; } }
+/* UI-03: workspace single-slot alignment, safe-area inset, dark theme, and <=460px compact row */
+.ms-study-workspace .ms-overlay-text-editor { z-index: 42; }
+.ms-study-workspace .ms-overlay-stylebar { padding-bottom: calc(4px + env(safe-area-inset-bottom, 0px)); }
+@media (max-width: 460px) {
+  .ms-overlay-stylebar { padding: 4px 4px calc(4px + env(safe-area-inset-bottom, 0px)); }
+  .ms-overlay-stylebar > .ms-text-font { min-width: 56px; max-width: 88px; flex: 1 1 56px; padding: 2px 6px 2px 4px; margin: 0 1px; }
+  .ms-text-size { flex: none; padding-right: 3px; margin-right: 2px; }
+  .ms-overlay-stylebar .ms-text-size > input { width: 28px; }
+  .ms-overlay-stylebar > .ms-text-bold,
+  .ms-overlay-stylebar > .ms-text-italic,
+  .ms-overlay-stylebar > .ms-text-underline { flex: none; min-width: 28px; width: 28px; padding: 2px; margin: 0 1px; font-size: 17px; }
+  .ms-overlay-stylebar > .ms-text-backcolor,
+  .ms-overlay-stylebar > .ms-text-forecolor { flex: none; min-width: 30px; width: 30px; padding: 2px; margin: 0 1px; font-size: 15px; }
+  .ms-overlay-stylebar > .ms-text-done { flex: none; min-width: 32px; width: 32px; padding: 2px 4px; margin-left: auto; }
+}
+body.ms-theme-dark .ms-study-workspace .ms-overlay-stylebar,
+.ms-study-workspace[data-reading-theme=dark] .ms-overlay-stylebar,
+.ms-study-workspace[data-reading-theme=gray] .ms-overlay-stylebar { background: #30343d; border-top-color: #505762; color: #e7e9ed; }
+body.ms-theme-dark .ms-study-workspace .ms-overlay-stylebar > button,
+body.ms-theme-dark .ms-study-workspace .ms-text-size > button,
+body.ms-theme-dark .ms-study-workspace .ms-overlay-stylebar .ms-text-size > input,
+.ms-study-workspace[data-reading-theme=dark] .ms-overlay-stylebar > button,
+.ms-study-workspace[data-reading-theme=dark] .ms-text-size > button,
+.ms-study-workspace[data-reading-theme=dark] .ms-overlay-stylebar .ms-text-size > input,
+.ms-study-workspace[data-reading-theme=gray] .ms-overlay-stylebar > button,
+.ms-study-workspace[data-reading-theme=gray] .ms-text-size > button,
+.ms-study-workspace[data-reading-theme=gray] .ms-overlay-stylebar .ms-text-size > input { color: #e7e9ed; }
+body.ms-theme-dark .ms-study-workspace .ms-overlay-stylebar > .ms-text-done,
+.ms-study-workspace[data-reading-theme=dark] .ms-overlay-stylebar > .ms-text-done,
+.ms-study-workspace[data-reading-theme=gray] .ms-overlay-stylebar > .ms-text-done { color: #8dc1ff; }
 .ms-text-layer[data-main-rotation="90"] { transform: rotate(90deg) translateY(-100%); }
 .ms-text-layer[data-main-rotation="180"] { transform: rotate(180deg) translate(-100%, -100%); }
 .ms-text-layer[data-main-rotation="270"] { transform: rotate(270deg) translateX(-100%); }

@@ -106,6 +106,7 @@ const automatedSuites=[
   ["workspace-a26","src/workspace/a26-acceptance.mjs"],
   ["workspace-clean-view-template","scripts/verify/clean-view-template-acceptance.mjs"],
   ["workspace-clean-view","scripts/verify/clean-view-acceptance.mjs"],
+  ["pad-toolbar-layout","scripts/verify/pad-toolbar-layout-acceptance.mjs"],
   ["yan-r2-r10-surfaces","scripts/verify/yan-r2-r10-surfaces-acceptance.mjs"],
   ["anchor-lifecycle-navigation","scripts/verify/anchor-lifecycle-navigation-acceptance.mjs"],
   ["mindmap-layout","src/mindmap/layout-acceptance.mjs"],
@@ -131,6 +132,9 @@ const automatedSuites=[
   ["lasso-ui-workflow","scripts/verify/lasso-ui-workflow-acceptance.mjs"],
   ["merge-annotation-parity","scripts/verify/merge-annotation-parity-acceptance.mjs"],
   ["merge-document-undo","scripts/verify/merge-document-undo-acceptance.mjs"],
+  ["annot-threshold","scripts/verify/annot-threshold-acceptance.mjs"],
+  ["annot-undo-atomicity","scripts/verify/annot-undo-atomicity-acceptance.mjs"],
+  ["workspace-annot-undo-e2e","scripts/verify/workspace-annot-undo-e2e-acceptance.mjs"],
 ];
 const replaySuites=[
   ["document-more","scripts/verify/compare-document-more-evidence.py"],

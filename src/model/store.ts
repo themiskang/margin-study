@@ -601,14 +601,21 @@ export class Store {
     const template = this.getSceneTemplates().find(item => item.id === templateId);
     if (!template?.scenes.some(scene => scene.id === sceneId)) throw new Error("场景不属于所选模板");
     const next: StudySceneSelection = { templateId, sceneId, interfaceMode: this.getStudyScene(id)!.interfaceMode };
-    if (!same(set.scene, next)) this.updateStudySet(id, { scene: next });
+    if (same(set.scene, next)) return;
+    // Scene selection is a view/layout switch, never a content edit on the undo stack.
+    set.scene = clone(next);
+    this.save();
+    this.changed();
   }
   setStudyInterface(id: string, interfaceMode: StudySceneSelection["interfaceMode"]): void {
     if (interfaceMode !== "scenes" && interfaceMode !== "traditional") throw new Error("界面模式无效");
+    const set = this.studySets.find(item => item.id === id);
     const current = this.getStudyScene(id);
-    if (!current) throw new Error("学习集不存在");
+    if (!set || !current) throw new Error("学习集不存在");
     if (current.interfaceMode === interfaceMode) return;
-    this.updateStudySet(id, { scene: { ...current, interfaceMode } });
+    set.scene = { ...current, interfaceMode };
+    this.save();
+    this.changed();
   }
   /** Stable document identity also repairs snapshots captured before an asynchronous rename. */
   normalizeWorkspaceState(state: Record<string, unknown>): Record<string, unknown> {
@@ -2139,6 +2146,10 @@ export class Store {
       this.activeReviewDeckId = this.reviewDecks.some(deck => deck.id === current.activeReviewDeckId) ? current.activeReviewDeckId : snapshot.data.activeReviewDeckId;
       for (const set of this.studySets) {
         const live = current.studySets?.find(item => item.id === set.id), prior = previous.data.studySets?.find(item => item.id === set.id);
+        if (live) {
+          // Scene and interface mode are view state; library content undo must not rewind them.
+          if (live.scene === undefined) delete set.scene; else set.scene = clone(live.scene);
+        }
         if (live && (set.reviewDeckId === prior?.reviewDeckId || live.reviewDeckId !== prior?.reviewDeckId)) set.reviewDeckId = live.reviewDeckId;
         if (live && (same(set.reviewSettings, prior?.reviewSettings) || !same(live.reviewSettings, prior?.reviewSettings))) {
           if (live.reviewSettings === undefined) delete set.reviewSettings; else set.reviewSettings = clone(live.reviewSettings);
@@ -2230,6 +2241,32 @@ export class Store {
   getRevision(): number { return this.revision; }
   undoLibraryChange(): boolean { if (this.documentCommitPending) throw new Error("文档操作正在保存，请稍后重试。"); const item = this.history.pop(); if (!item) return false; this.future.push(item); this.libraryHistoryRevision++; if ('readOnly' in item) this.changed(); else if ('nodeMove' in item) { const node=this.getNode(item.nodeMove.id); if(node) Object.assign(node,item.nodeMove.before); this.save(); } else { this.restoreSnapshot(item.before, item.after); this.restoreCardAnchors(); } return true; }
   libraryTransaction<T>(label: string, action: () => T): T { return this.mutate(label, action); }
+  /**
+   * 受控内部原子变更：专供阅读器 editUndo 全程托管撤销/重做的伴生卡片与脑图节点创建/回滚调用。
+   * 在 transactionDepth 保护下一次性执行 action -> repairGraph -> save，不推 store.history、不递增 libraryHistoryRevision。
+   */
+  applyLinkedSilentMutation<T>(action: () => T): T {
+    if (this.documentCommitPending && !this.documentCommitOwner && !this.transactionDepth) {
+      throw new Error("文档操作正在保存，请稍后重试。");
+    }
+    if (this.transactionDepth) return action();
+    const before = this.snapshot();
+    this.transactionDepth++;
+    try {
+      const result = action();
+      this.repairGraph();
+      const after = this.snapshot();
+      if (!same(before, after)) {
+        this.save();
+      }
+      return result;
+    } catch (e) {
+      this.restoreSnapshot(before);
+      throw e;
+    } finally {
+      this.transactionDepth--;
+    }
+  }
   async commitStudySetImport<T>(canvasId: string, action: () => T): Promise<T> {
     this.assertNoDesktopMainConflict();
     if (this.documentCommitPending || this.settings.diagnosticNoPersist) throw new Error("当前无法保存学习集导入。");
@@ -2928,9 +2965,16 @@ export class Store {
     if (options.open === false) return;
     this.activeStudySetId = id;
     if (!set) { this.activeCanvasId = undefined; this.save(); return; }
-    const candidates = this.canvases.filter(c => c.studySetId === id && c.kind !== "review" && this.canvasHasNotes(c.id));
-    candidates.sort((a,b) => (b.lastVisitedAt ?? "").localeCompare(a.lastVisitedAt ?? ""));
-    const canvas = candidates[0] ?? this.createCanvas(set.id, set.name);
+    const allOwned = this.canvases.filter(c => c.studySetId === id && c.kind !== "review");
+    const withNotes = allOwned.filter(c => this.canvasHasNotes(c.id));
+    const pool = withNotes.length ? withNotes : allOwned;
+    pool.sort((a, b) => (b.lastVisitedAt ?? "").localeCompare(a.lastVisitedAt ?? ""));
+    let canvas = pool[0];
+    if (!canvas) {
+      // Study-set switching is a view navigation; silently initialize a blank canvas if none exists without touching undo/redo history.
+      canvas = { id: uid("canvas"), studySetId: set.id, name: set.name.trim() || "未命名脑图", createdAt: new Date().toISOString() };
+      this.canvases.push(canvas);
+    }
     this.setActiveCanvas(canvas.id, options.documentPath);
   }
   createCanvas(studySetId: string, name: string): MindCanvas { return this.mutate("创建脑图", () => {

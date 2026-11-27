@@ -16,6 +16,7 @@ import { PenController, inkHitTest, measurePenCommit, paintInkStrokes } from "..
 import { inkLayerOpacity } from "../annot/inkLayers";
 import { handwritingPresetWidth } from "../annot/handwritingPresets";
 import { BaseAnnotationController, SelTarget, VoiceTarget } from "../annot/baseController";
+import { isValidRegionSize, LASSO_MIN_SIZE_PX, REGION_MIN_SIZE_PX } from "../annot/selectionGuard";
 import { recognizeImage, mergeOcrWords } from "../ocr/ocr";
 import { annotationGeometry, clientRectToPdfRect, uniquePdfRects } from "../anchors/pdfGeometry";
 import { PageCollectionDocument, mapCollectionAnnotation } from "../documents/pageCollection";
@@ -288,6 +289,7 @@ export class AnnotationController extends BaseAnnotationController {
     return ann.cardId?this.plugin.store.getCard(ann.cardId):undefined;
   }
   async createRegionExtend(page: number, client: DOMRect): Promise<void> {
+    if (!isValidRegionSize(client.width, client.height, REGION_MIN_SIZE_PX)) return;
     const rec = this.reader.getPageRecord(page);
     if (!this.docPath || !rec?.viewport) return;
     const rect = clientRectToPdfRect(client, rec.canvas.getBoundingClientRect(), rec.viewport);
@@ -295,8 +297,12 @@ export class AnnotationController extends BaseAnnotationController {
     const bounds = rec.canvas.getBoundingClientRect();
     const image = this.captureRegion(page, client.left - bounds.left, client.top - bounds.top, client.width, client.height);
     const ann: Annotation = { id: uid("ann"), docPath: this.docPath, docKind: "pdf", page, type: "region", rects: [rect], pdfGeometry: [{page,rects:[rect]}], pdfCoordinateSpace: "pdf", text: "", image, color: this.color, createdAt: todayStr() };
+    const wasContinuous = this.getContinuousExcerpt().active;
     this.pushAnnotation(ann);
-    if (this.plugin.store.settings.autoCardOnRegion) this.makeCard(ann,"excerpt",true);
+    if (!wasContinuous) {
+      const linkedCard = this.plugin.store.settings.autoCardOnRegion ? this.makeCard(ann, "excerpt", true, true) : undefined;
+      this.recordRegionExcerptCreate(ann, linkedCard);
+    }
     await this.extendAnnotation(ann.id);
   }
 
@@ -384,7 +390,22 @@ export class AnnotationController extends BaseAnnotationController {
       onInputActivity: change => this.plugin.store.noteInputActivity?.(change),
       onCommit: (strokes, brush, width, opacity) => this.createPenAnnotation(num, strokes, layerId, notebookId, brush, width, opacity, undefined, source),
       onPaste: (entries) => this.pastePenAnnotations(num, entries, layerId, notebookId, source),
-      onExcerpt: (_selection, bounds, image) => this.excerptLassoSelection(num, bounds, image),
+      onExcerpt: (selection, bounds, image) => {
+        const rec = this.reader.getPageRecord(num);
+        const wr = rec?.wrapper.getBoundingClientRect();
+        let next = bounds;
+        if (selection.length && wr && wr.width > 0 && wr.height > 0) {
+          const w = bounds.width * wr.width, h = bounds.height * wr.height;
+          if (h === 0 && w >= REGION_MIN_SIZE_PX) {
+            const pad = Math.min(1, 16 / wr.height);
+            next = { ...bounds, y: Math.max(0, bounds.y - pad / 2), height: pad };
+          } else if (w === 0 && h >= REGION_MIN_SIZE_PX) {
+            const pad = Math.min(1, 16 / wr.width);
+            next = { ...bounds, x: Math.max(0, bounds.x - pad / 2), width: pad };
+          }
+        }
+        this.excerptLassoSelection(num, next, image);
+      },
       onUnbind: (ids) => this.unbindInkAnnotations(ids),
       onSelectionChange: (hasSelection) => {
         if (hasSelection) {
@@ -471,13 +492,16 @@ export class AnnotationController extends BaseAnnotationController {
     if (!rec?.viewport) return;
     const wrapperRect = rec.wrapper.getBoundingClientRect();
     const canvasRect = rec.canvas.getBoundingClientRect();
+    const rawWidth = bounds.width * wrapperRect.width;
+    const rawHeight = bounds.height * wrapperRect.height;
+    if (!isValidRegionSize(rawWidth, rawHeight, REGION_MIN_SIZE_PX)) return;
     const client = {
       left: wrapperRect.left + bounds.x * wrapperRect.width,
       top: wrapperRect.top + bounds.y * wrapperRect.height,
       right: wrapperRect.left + (bounds.x + bounds.width) * wrapperRect.width,
       bottom: wrapperRect.top + (bounds.y + bounds.height) * wrapperRect.height,
-      width: Math.max(4, bounds.width * wrapperRect.width),
-      height: Math.max(4, bounds.height * wrapperRect.height),
+      width: rawWidth,
+      height: rawHeight,
     };
     const pdfRect = clientRectToPdfRect(client, canvasRect, rec.viewport) ?? { x: bounds.x, y: bounds.y, w: Math.max(0.01, bounds.width), h: Math.max(0.01, bounds.height) };
     const ix1 = Math.max(client.left, canvasRect.left), iy1 = Math.max(client.top, canvasRect.top);
@@ -570,7 +594,7 @@ export class AnnotationController extends BaseAnnotationController {
     const top = Math.min(this.lassoStart.y, y);
     const width = Math.abs(x - this.lassoStart.x);
     const height = Math.abs(y - this.lassoStart.y);
-    if (width < 20 || height < 20) return;
+    if (!isValidRegionSize(width, height, LASSO_MIN_SIZE_PX)) return;
 
     const pageNum = this.lassoStart.page;
     const rec = this.reader.getPageRecord(pageNum);

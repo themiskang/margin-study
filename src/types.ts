@@ -441,6 +441,8 @@ export interface MarginStudySettings {
   theme: ThemeMode; // 界面主题：亮/暗/跟随系统
   accent: string; // 主题色预设 id（见 ACCENTS）
   autoCardOnHighlight: boolean; // 高亮/下划线后自动生成摘录卡
+  /** 自动摘录与自动成卡的最短有效字数（中文，英文自动按 2 倍折算；0 表示关闭，默认 4）。 */
+  autoExcerptMinChars?: number;
   autoCardOnRegion: boolean; // 区域摘录（套索框选）后自动生成摘录卡
   autoReview: boolean; // 阅读器新卡自动加入当前复习卡组
   autoNodeOnCard: boolean; // 生成卡片时自动在脑图创建对应节点（仿 MN 实时联动）
@@ -483,6 +485,7 @@ export const DEFAULT_SETTINGS: MarginStudySettings = {
   ocrSelectionCorrection: false,
   accent: "indigo",
   autoCardOnHighlight: true, // 对齐 MN：每画一笔摘录即自动成卡（旧用户 data.json 已存值不受影响）
+  autoExcerptMinChars: 4,
   autoCardOnRegion: true,
   autoReview: false,
   autoNodeOnCard: true,

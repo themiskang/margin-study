@@ -45,11 +45,21 @@ try {
     const events=[];s.subscribeNavigation(event=>events.push(event));s.setActiveStudySet("set");
     assert.equal(s.activeCanvasId,"a");assert.deepEqual(events.at(-1),{canvasId:"a",documentPath:"fixture.pdf"});
   });
-  await test("mount without opening does not restore navigation; an empty set creates a named canvas",async()=>{
+  await test("mount without opening does not restore navigation; existing empty canvas is reused and canvasless set silently initializes one without undo history",async()=>{
     const {store:s}=await setup();let count=0;s.subscribeNavigation(()=>count++);
+    const revBefore=s.getLibraryHistoryState().revision;
     s.setActiveStudySet("set",{open:false});assert.equal(count,0);assert.equal(s.activeCanvasId,"a");
-    s.setActiveStudySet("set",{documentPath:"chosen.epub"});assert.equal(s.canvases.find(c=>c.id===s.activeCanvasId).name,"Learning set");assert.equal(count,1);
+    s.setActiveStudySet("set",{documentPath:"chosen.epub"});
+    assert.equal(s.canvases.filter(c=>c.studySetId==="set").length,2);
+    assert.equal(s.getLibraryHistoryState().revision,revBefore);
+    assert.equal(count,1);
     assert.equal(s.getCanvasKind(s.activeCanvasId),"document");
+    const {store:s0}=await fresh({cards:[],nodes:[],studySets:[{id:"set",name:"Learning set",docPaths:["fixture.pdf"],createdAt:time}],canvases:[],activeStudySetId:undefined,activeCanvasId:undefined});
+    const rev0=s0.getLibraryHistoryState().revision;
+    s0.setActiveStudySet("set",{documentPath:"chosen.epub"});
+    assert.equal(s0.canvases.find(c=>c.id===s0.activeCanvasId).name,"Learning set");
+    assert.equal(s0.getLibraryHistoryState().revision,rev0);
+    assert.equal(s0.getLibraryHistoryState().canUndo,false);
   });
   await test("removing a document preserves hidden cards, membership, pending, schedules and logs",async()=>{
     const {store:s}=await setup([card("visible"),card("hidden",{hidden:true})]);
