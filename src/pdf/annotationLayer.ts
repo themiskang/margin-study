@@ -306,7 +306,7 @@ export class AnnotationController extends BaseAnnotationController {
     await this.extendAnnotation(ann.id);
   }
 
-  protected commitAnnotation(target: SelTarget, type: AnnotationType, color: string, text: string): void {
+  protected commitAnnotation(target: SelTarget, type: AnnotationType, color: string, text: string, options?: { forceCard?: boolean; showPopup?: boolean }): void {
     if (!this.docPath || target.kind !== "pdf") return;
     const ann: Annotation = {
       id: uid("ann"),
@@ -322,8 +322,8 @@ export class AnnotationController extends BaseAnnotationController {
       createdAt: todayStr(),
     };
     if (type === "note") ann.noteText = "";
-    this.pushAnnotation(ann);
-    this.showExcerptMenu(ann);
+    this.pushAnnotation(ann, options);
+    if (options?.showPopup !== false) this.showExcerptMenu(ann);
   }
 
   protected resolveVoiceTarget(e: MouseEvent): VoiceTarget | null {

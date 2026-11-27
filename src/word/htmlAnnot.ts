@@ -249,7 +249,7 @@ export class HtmlAnnotationController extends BaseAnnotationController {
     });
   }
 
-  protected commitAnnotation(target: SelTarget, type: AnnotationType, color: string, text: string): void {
+  protected commitAnnotation(target: SelTarget, type: AnnotationType, color: string, text: string, options?: { forceCard?: boolean; showPopup?: boolean }): void {
     if (!this.docPath || target.kind !== "html") return;
     const ann: Annotation = {
       id: uid("ann"),
@@ -264,8 +264,8 @@ export class HtmlAnnotationController extends BaseAnnotationController {
       createdAt: todayStr(),
     };
     if (type === "note") ann.noteText = "";
-    this.pushAnnotation(ann);
-    this.showExcerptMenu(ann);
+    this.pushAnnotation(ann, options);
+    if (options?.showPopup !== false) this.showExcerptMenu(ann);
   }
 
   protected resolveVoiceTarget(e: MouseEvent): VoiceTarget | null {

@@ -48,6 +48,12 @@ export type SelTarget =
 
 /** 语音落点（归一化坐标；PDF 附带页码） */
 export type VoiceTarget = { x: number; y: number; page?: number };
+
+/** 标注提交选项：支持显式「摘录卡」单事务强制建卡与控制是否再弹出标注浮窗。 */
+export interface CommitAnnotationOptions {
+  forceCard?: boolean;
+  showPopup?: boolean;
+}
 export type AssistiveCandidate = {box:DOMRect;text:string;target:SelTarget;range?:Range;image?:string|(()=>string|undefined)};
 
 /** Chronological reader edits; document commands can rebuild their paper asynchronously. */
@@ -184,7 +190,16 @@ export abstract class BaseAnnotationController {
   private continuousExcerptKey = "text";
   private get continuousExcerpt(): { cardId?: string; annotationId?: string; count: number } | null { return this.continuousExcerpts.get(this.continuousExcerptKey) ?? null; }
   setContinuousExcerptPen(key:string):void {
-    this.continuousExcerptKey=key; this.continuousExcerptListener?.();
+    this.continuousExcerptKey=key;
+    if (key !== "text" && this.continuousAutoOverride !== null) {
+      const restore = this.continuousAutoOverride;
+      this.continuousAutoOverride = null;
+      this.setAutomaticTextExcerpt(restore);
+    } else if (key === "text" && this.continuousExcerpt && !this.automaticTextExcerpt) {
+      this.continuousAutoOverride = false;
+      this.automaticTextExcerpt = true;
+    }
+    this.continuousExcerptListener?.();
   }
   private continuousExcerptListener: (() => void) | null = null;
   setContinuousExcerptListener(listener: (() => void) | null): void { this.continuousExcerptListener = listener; }
@@ -193,12 +208,25 @@ export abstract class BaseAnnotationController {
     if (on && !this.docPath) return;
     if (on && !this.continuousExcerpt) this.continuousExcerpts.set(this.continuousExcerptKey, { count: 0 });
     if (!on) this.continuousExcerpts.delete(this.continuousExcerptKey);
+    if (on && this.continuousExcerptKey === "text" && !this.automaticTextExcerpt) {
+      this.continuousAutoOverride = false;
+      this.automaticTextExcerpt = true;
+    } else if (!on && this.continuousExcerptKey === "text" && this.continuousAutoOverride !== null) {
+      const restore = this.continuousAutoOverride;
+      this.continuousAutoOverride = null;
+      this.setAutomaticTextExcerpt(restore);
+    }
     this.continuousExcerptListener?.();
   }
   continueExcerptInCard(cardId:string):boolean {
     const card=this.plugin.store.getCard(cardId);
     if (!card || card.docPath!==this.docPath || !["text","region"].includes(this.continuousExcerptKey)) return false;
-    this.continuousExcerpts.set(this.continuousExcerptKey,{cardId,count:0});this.continuousExcerptListener?.();return true;
+    this.continuousExcerpts.set(this.continuousExcerptKey,{cardId,count:0});
+    if (this.continuousExcerptKey === "text" && !this.automaticTextExcerpt) {
+      this.continuousAutoOverride = false;
+      this.automaticTextExcerpt = true;
+    }
+    this.continuousExcerptListener?.();return true;
   }
   plugin: MarginStudyPlugin;
   protected docPath: string | null = null;
@@ -212,11 +240,13 @@ export abstract class BaseAnnotationController {
   private closeCompetingMenuListener: (() => void) | null = null;
   private closeSelectionSpeech: (() => void) | null = null;
   private automaticTextExcerpt = false;
+  private continuousAutoOverride: boolean | null = null;
   private lastAutomaticSelection: { range: Range; target: string; text: string; annotationId: string; revision: number } | null = null;
   setAutomaticTextExcerpt(on: boolean): void {
+    this.continuousAutoOverride = null;
     if (this.automaticTextExcerpt === on) return;
-    this.automaticTextExcerpt = on; this.lastAutomaticSelection = null;
-    this.selectionSession++; if (this.selTimer !== null) window.clearTimeout(this.selTimer); this.selTimer = null; this.removePop();
+    this.automaticTextExcerpt = on; this.lastAutomaticSelection = null; this.lastSelectionDrag = null; this.activePopSelection = null;
+    this.selectionSession++; if (this.selTimer != null && typeof window !== "undefined") window.clearTimeout(this.selTimer); this.selTimer = null; this.removePop();
   }
 
   // 语音批注（桌面 + 平板）
@@ -648,7 +678,7 @@ export abstract class BaseAnnotationController {
   /** DOM 选区 → 标注定位信息；落在文档外返回 null */
   protected abstract resolveSelection(range: Range): SelTarget | null;
   /** 由选区定位信息 + 类型 构造并渲染一条标注 */
-  protected abstract commitAnnotation(target: SelTarget, type: AnnotationType, color: string, text: string): void;
+  protected abstract commitAnnotation(target: SelTarget, type: AnnotationType, color: string, text: string, options?: CommitAnnotationOptions): void;
   /** 增量渲染单条标注 */
   protected abstract renderOne(ann: Annotation): void;
   /** 增量移除单条标注的 DOM */
@@ -940,12 +970,22 @@ export abstract class BaseAnnotationController {
   private pendingSelection = false;
   private selectionPointerId: number | null = null;
   private selectionGestureSeq = 0;
-  private selectionDragStart: { token: number; x: number; y: number; detail: number } | null = null;
+  private lastPointerDownMeta: { x: number; y: number; time: number; count: number; completedTap: boolean } | null = null;
+  private selectionDragStart: {
+    token: number;
+    x: number;
+    y: number;
+    explicitDetail: number;
+    fallbackDetail: number;
+    downAt: number;
+    pointerType: string;
+  } | null = null;
   private lastSelectionDrag: {
     token: number;
     start: { x: number; y: number };
     end: { x: number; y: number };
     detail: number;
+    touchLongPress: boolean;
     selectionText: string;
     timestamp: number;
     committed: boolean;
@@ -956,6 +996,15 @@ export abstract class BaseAnnotationController {
       endOffset: number;
       targetKey: string;
     };
+  } | null = null;
+  private activePopSelection: {
+    startContainer: Node;
+    startOffset: number;
+    endContainer: Node;
+    endOffset: number;
+    targetKey: string;
+    revision: number;
+    session: number;
   } | null = null;
 
   private bindSelectionPointerWindowListeners(): void {
@@ -974,12 +1023,34 @@ export abstract class BaseAnnotationController {
     if (this.disposed || this.releasing || this.voicePlacing || this.penMode || this.lassoMode || this.assistiveMode === "block") return;
     if (event.button !== 0 || event.isPrimary === false) return;
     if (this.popEl && this.popEl.contains(event.target as Node)) return;
+    if (this.popEl) this.removePop();
     if (!this.pointerSelecting) this.bindSelectionPointerWindowListeners();
     const token = ++this.selectionGestureSeq;
+    const now = Date.now();
+    const explicitDetail = event.detail || 0;
+    let fallbackDetail = explicitDetail || 1;
+    const prev = this.lastPointerDownMeta;
+    // Only chain stationary taps (pointerup moved <= 2px) into the detail=0 multi-click fallback;
+    // consecutive micro-drags (e.g. 4px @ 65ms) must never be promoted to detail >= 2.
+    if (prev && prev.completedTap && now - prev.time <= 350 && Math.hypot(event.clientX - prev.x, event.clientY - prev.y) <= 8) {
+      const count = prev.count + 1;
+      this.lastPointerDownMeta = { x: event.clientX, y: event.clientY, time: now, count, completedTap: false };
+      fallbackDetail = Math.max(fallbackDetail, count);
+    } else {
+      this.lastPointerDownMeta = { x: event.clientX, y: event.clientY, time: now, count: fallbackDetail, completedTap: false };
+    }
     this.pointerSelecting = true;
     this.pendingSelection = false;
     this.selectionPointerId = event.pointerId;
-    this.selectionDragStart = { token, x: event.clientX, y: event.clientY, detail: event.detail || 1 };
+    this.selectionDragStart = {
+      token,
+      x: event.clientX,
+      y: event.clientY,
+      explicitDetail,
+      fallbackDetail,
+      downAt: now,
+      pointerType: event.pointerType || "mouse",
+    };
     this.lastSelectionDrag = null;
     if (this.selTimer !== null) {
       window.clearTimeout(this.selTimer);
@@ -989,8 +1060,11 @@ export abstract class BaseAnnotationController {
 
   private onSelectionMouseDown = (event: MouseEvent): void => {
     if (!this.pointerSelecting || !this.selectionDragStart) return;
-    if (event.detail > this.selectionDragStart.detail) {
-      this.selectionDragStart.detail = event.detail;
+    if (event.detail > this.selectionDragStart.explicitDetail) {
+      this.selectionDragStart.explicitDetail = event.detail;
+      if (this.lastPointerDownMeta && event.detail > this.lastPointerDownMeta.count) {
+        this.lastPointerDownMeta.count = event.detail;
+      }
     }
   };
 
@@ -1005,12 +1079,24 @@ export abstract class BaseAnnotationController {
     const sel = window.getSelection();
     const selText = sel && !sel.isCollapsed ? sel.toString() : "";
     if (start) {
-      const detail = Math.max(start.detail, event.detail || 1);
+      const moveDist = Math.hypot(event.clientX - start.x, event.clientY - start.y);
+      const isStationaryTap = moveDist <= 2;
+      if (isStationaryTap && this.lastPointerDownMeta) {
+        this.lastPointerDownMeta.completedTap = true;
+      } else {
+        this.lastPointerDownMeta = null;
+      }
+      const authoritativeDetail = Math.max(start.explicitDetail, event.detail || 0);
+      const detail = authoritativeDetail > 0
+        ? authoritativeDetail
+        : (isStationaryTap ? start.fallbackDetail : 1);
+      const touchLongPress = start.pointerType === "touch" && Date.now() - start.downAt >= 300;
       this.lastSelectionDrag = {
         token: start.token,
         start: { x: start.x, y: start.y },
         end: { x: event.clientX, y: event.clientY },
         detail,
+        touchLongPress,
         selectionText: selText,
         timestamp: Date.now(),
         committed: false,
@@ -1038,7 +1124,10 @@ export abstract class BaseAnnotationController {
   // 选区变化（鼠标与平板触摸通用）触发选区捕获，200ms 防抖（体验增强 M）
   private onSelectionChange = (): void => {
     if (this.disposed || this.releasing || this.voicePlacing || this.penMode || this.lassoMode || this.assistiveMode === 'block') return;
-    if (this.pointerSelecting) this.pendingSelection = true;
+    if (this.pointerSelecting) {
+      this.pendingSelection = true;
+      return;
+    }
     if (this.selTimer !== null) window.clearTimeout(this.selTimer);
     const revision = this.documentRevision, path = this.docPath, session = this.selectionSession, view = this.getScrollContainer();
     this.selTimer = window.setTimeout(() => {
@@ -1050,6 +1139,7 @@ export abstract class BaseAnnotationController {
 
   private handleSelection(fromBlock = false): void {
     if (this.disposed || this.releasing || !this.docPath || this.voicePlacing || this.penMode || this.lassoMode || this.assistiveMode === "block" || !this.getScrollContainer().isConnected) return;
+    if (!fromBlock && this.pointerSelecting) return;
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.toString().trim()) {
       // 选区收起时不在此移除 pop：避免点击工具条按钮时因 selectionchange 误关，
@@ -1076,7 +1166,7 @@ export abstract class BaseAnnotationController {
       const sameSelection = !drag.selectionText || drag.selectionText === selectedText;
       if (!drag.committed && (!fresh || !sameSelection)) {
         this.lastSelectionDrag = null;
-      } else if (!drag.committed && isPointerMicroDrag(drag.start, drag.end, drag.detail)) {
+      } else if (!drag.committed && !drag.touchLongPress && isPointerMicroDrag(drag.start, drag.end, drag.detail)) {
         this.removePop();
         return;
       }
@@ -1127,15 +1217,37 @@ export abstract class BaseAnnotationController {
         };
       }
     }
+    const selectionKey = {
+      startContainer: range.startContainer,
+      startOffset: range.startOffset,
+      endContainer: range.endContainer,
+      endOffset: range.endOffset,
+      targetKey,
+      revision: this.documentRevision,
+      session: this.selectionSession,
+    };
+    if (
+      this.popEl?.isConnected &&
+      this.activePopSelection &&
+      this.activePopSelection.startContainer === selectionKey.startContainer &&
+      this.activePopSelection.startOffset === selectionKey.startOffset &&
+      this.activePopSelection.endContainer === selectionKey.endContainer &&
+      this.activePopSelection.endOffset === selectionKey.endOffset &&
+      this.activePopSelection.targetKey === selectionKey.targetKey &&
+      this.activePopSelection.revision === selectionKey.revision &&
+      this.activePopSelection.session === selectionKey.session
+    ) {
+      return;
+    }
     this.currentTarget = target;
     this.currentText = selectedText;
-    this.showSelectionPop(range.cloneRange());
+    this.showSelectionPop(range.cloneRange(), selectionKey);
   }
 
   protected selectionActions(target: SelTarget, text: string): { id?: string; label: string; run: () => void | Promise<void> }[] { return []; }
   protected correctSelectionText(_target:SelTarget,text:string):Promise<string> {return Promise.resolve(text);}
 
-  private showSelectionPop(range: Range): void {
+  private showSelectionPop(range: Range, selectionKey?: typeof this.activePopSelection): void {
     this.removePop();
     document.dispatchEvent(new Event("ms-reader-menu-opening"));
     const pop = el("div", { class: "ms-ann-pop" });
@@ -1152,6 +1264,10 @@ export abstract class BaseAnnotationController {
         if (selectionIsCurrent()) this.commitAnnotation(target, type, this.color, text);
       }});
     }
+    actions.push({ id: "excerpt-card", label: "摘录卡", group: "excerpt", run: async () => {
+      if (!target) return;
+      if (selectionIsCurrent()) this.commitAnnotation(target, "highlight", this.color, text, { forceCard: true, showPopup: false });
+    }});
     if (target) actions.push(...this.selectionActions(target, text).map((action, index) => ({
       ...action, id: action.id ?? `document-${index}`, group: "document",
     })));
@@ -1183,7 +1299,7 @@ export abstract class BaseAnnotationController {
       this.closeSelectionSpeech?.();
       this.closeSelectionSpeech = openExtendSpeech(this.getScrollContainer(), text, "选区朗读");
     }});
-    const defaultPrimary = ["copy", "fold", "extend-ink", "extend-text", "ask", ...actions.filter(action => action.group === "color").map(action => action.id), "research"];
+    const defaultPrimary = ["highlight", "excerpt-card", "copy", ...actions.filter(action => action.group === "color").map(action => action.id), "fold", "extend-ink", "extend-text", "ask", "research"];
     renderContextActionMenu(pop, actions, {
       primaryIds: this.plugin.store.getEffectiveSceneSettings().textSelectionMenuActions ?? defaultPrimary,
       savePrimaryIds: ids => { this.plugin.store.setEffectiveSceneSettings({textSelectionMenuActions:ids}); },
@@ -1196,6 +1312,7 @@ export abstract class BaseAnnotationController {
     pop.addEventListener("click", event => event.stopPropagation());
     document.body.append(pop);
     this.popEl = pop;
+    this.activePopSelection = selectionKey ?? null;
     const boundary = view.closest<HTMLElement>(".ms-study-workspace") ?? view.closest<HTMLElement>(".ms-reader-root") ?? view;
     const reposition = () => {
       if (!selectionIsCurrent() || !boundary.isConnected) { this.removePop(); return; }
@@ -1247,7 +1364,7 @@ export abstract class BaseAnnotationController {
   }
 
   /** 构造标注 + 推入缓存 + 持久化 + 增量渲染 + 提示（子类 commitAnnotation 复用） */
-  protected pushAnnotation(ann: Annotation): void {
+  protected pushAnnotation(ann: Annotation, options?: CommitAnnotationOptions): void {
     if (ann.type === "pen") {
       const current = this.penRevisionIsCurrent();
       if (!current) return;
@@ -1384,14 +1501,17 @@ export abstract class BaseAnnotationController {
       return;
     }
     let linkedCard: LinkedCardCreationRecord | undefined;
+    const forceCard = options?.forceCard === true;
     if (
       (ann.type === "highlight" || ann.type === "underline") &&
       !ann.cardId &&
-      this.plugin.store.settings.autoCardOnHighlight &&
-      meetsExcerptMinLength(ann.text ?? "", this.plugin.store.settings.autoExcerptMinChars)
+      (forceCard || (
+        this.plugin.store.settings.autoCardOnHighlight &&
+        meetsExcerptMinLength(ann.text ?? "", this.plugin.store.settings.autoExcerptMinChars)
+      ))
     ) {
       linkedCard = this.makeCard(ann, "excerpt", true, true);
-      new Notice("已自动生成摘录卡（可在卡片管理中查看）");
+      new Notice(forceCard ? "已生成摘录卡（可在卡片管理中查看）" : "已自动生成摘录卡（可在卡片管理中查看）");
     }
     if (
       this.docPath &&
@@ -3313,6 +3433,7 @@ export abstract class BaseAnnotationController {
   }
 
   protected removePop(): void {
+    this.activePopSelection = null;
     this.closeCompetingMenuListener?.();this.closeCompetingMenuListener=null;
     this.closeSelectionPop?.();
     this.closeSelectionPop = null;
