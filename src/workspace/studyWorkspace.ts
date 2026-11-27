@@ -287,11 +287,7 @@ export class StudyWorkspaceView extends ItemView {
     this.tabResize.observe(this.tabBar);
     // Pen and overlay controls stop bubbling; observe their original gesture first.
     this.registerDomEvent(this.readerHost,"pointerdown",()=>{this.historyScope="reader";this.syncHistoryButtons();},true);
-    this.register(attachReaderSwipeGuard(this.readerHost, {
-      isEnabled: () => this.plugin.store.settings.blockSidebarSwipe !== false,
-      getScrollEl: () => this.reader?.getScrollContainer?.() ?? this.readerHost,
-      isSelectionOrMultiSelectActive: () => (this.reader instanceof ReaderView && this.reader.isPinching()) || !!this.reader?.getBlockSelectionMode?.(),
-    }));
+    this.register(attachReaderSwipeGuard(this.readerHost, this.plugin.store));
     const blockSelectionChanged=()=>this.drawToolbar();this.readerHost.addEventListener("ms-block-selection-change",blockSelectionChanged);this.register(()=>this.readerHost.removeEventListener("ms-block-selection-change",blockSelectionChanged));
     const recallReveal=(event:Event)=>{const source=(event as CustomEvent<{source:string}>).detail?.source;if(source==="reader")this.renderer?.resetRecallReveals();else if(source==="map")this.reader?.clearRecallReveals();};
     this.root.addEventListener("ms-recall-reveal",recallReveal);this.register(()=>this.root.removeEventListener("ms-recall-reveal",recallReveal));

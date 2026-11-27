@@ -169,11 +169,7 @@ export class DocumentReaderView extends ItemView implements HtmlReader {
     this.scrollEl.addEventListener("focusin", this.activate);
     this.scrollEl.addEventListener("scroll", this.onScroll, { passive: true });
     this.disposeSwipeGuard?.();
-    this.disposeSwipeGuard = attachReaderSwipeGuard(this.scrollEl, {
-      isEnabled: () => this.plugin.store.settings.blockSidebarSwipe !== false,
-      getScrollEl: () => this.scrollEl,
-      isSelectionOrMultiSelectActive: () => this.getBlockSelectionMode(),
-    });
+    this.disposeSwipeGuard = attachReaderSwipeGuard(this.scrollEl, this.plugin.store);
     this.bodyEl.addEventListener("click", this.onLink);
     this.containerEl.addEventListener("keydown", this.onStandaloneHistoryKey);
     window.addEventListener("keydown", this.onStandaloneHistoryKey);

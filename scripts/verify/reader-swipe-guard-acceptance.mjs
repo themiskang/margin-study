@@ -1,6 +1,6 @@
 /**
  * [INPUT]: 依赖 ReaderView、WordReaderView、DocumentReaderView、StudyWorkspaceView、MarginStudySettingTab、Store 与默认 agent-browser CDP 后端。
- * [OUTPUT]: 执行阅读区单指水平防侧栏滑出守卫的 A–E + 覆盖范围/排除区/设置项 + G 双真机视口（1131×800@DPR3、1510×962@DPR2）全量验收。
+ * [OUTPUT]: 执行官方 data-ignore-swipe 属性方案的 A–E + 设置 UI + F 双真机视口（1131×800@DPR3、1510×962@DPR2）全量验收。
  * [POS]: 公开浏览器验收套件 reader-swipe-guard，注册于 scripts/verify.mjs。
  * [PROTOCOL]: Update this header on change, then check AGENTS.md
  */
@@ -46,19 +46,24 @@ const pageItems = [
   { str: "第二行用于验证平板手写时不误触侧栏的段落文本", x: 60, y: 680, w: 320, h: 18, hasEOL: true },
 ];
 
-// Global touchmove observer on document (bubble phase) to measure defaultPrevented
-let touchStats = { total: 0, prevented: 0, lastDefaultPrevented: false };
-document.addEventListener("touchmove", (event) => {
-  touchStats.total += 1;
-  if (event.defaultPrevented) touchStats.prevented += 1;
-  touchStats.lastDefaultPrevented = event.defaultPrevented;
-}, false);
-
-(window as any).resetTouchStats = () => {
-  touchStats = { total: 0, prevented: 0, lastDefaultPrevented: false };
-  return touchStats;
-};
-(window as any).getTouchStats = () => ({ ...touchStats });
+/**
+ * 原样复刻 Obsidian obsidian.asar/app.js Eb() 的 touchstart 祖先循环：
+ * 含 HTMLAudioElement、HTMLElement.dataset.ignoreSwipe 与 style.touchAction === "none" 短路条件。
+ */
+function obsidianEbShouldIgnore(targetNode: Node | null): boolean {
+  let r: Node | null = targetNode;
+  for (; r;) {
+    if (
+      r instanceof HTMLAudioElement ||
+      (r instanceof HTMLElement && Boolean(r.dataset.ignoreSwipe)) ||
+      ((r instanceof HTMLElement || r instanceof SVGElement) && r.style.touchAction === "none")
+    ) {
+      return true;
+    }
+    r = r.parentNode;
+  }
+  return false;
+}
 
 let activeState: {
   view: any;
@@ -163,119 +168,7 @@ function makeLeaf(app: any) {
   return { app, setViewState: async () => {}, updateHeader() {}, getRoot: () => app.workspace.rootSplit };
 }
 
-(window as any).setupPdfFixture = async () => {
-  await cleanupActive();
-  document.body.classList.add("is-mobile");
-  (Platform as any).isMobile = true;
-
-  const { app, host } = makeEnv({
-    "swipe.pdf": { name: "swipe", pages: 4, textItems: pageItems },
-  });
-  const store = new Store(host);
-  await store.load();
-  assert(store.settings.blockSidebarSwipe === true, "Expected default blockSidebarSwipe === true");
-  const plugin = makePlugin(app, store);
-  const view = new ReaderView(makeLeaf(app), plugin);
-  view.containerEl.style.cssText = "position:relative;width:100vw;height:100vh;display:flex;flex-direction:column;";
-  fixturesHost.append(view.containerEl);
-  await view.onOpen();
-  await view.loadFileByPath("swipe.pdf");
-  await view.fitWidth();
-  await view.renderPage(1);
-  await view.renderPage(2);
-  await frame();
-  await wait(40);
-  const scrollEl = view.getScrollContainer();
-  scrollEl.scrollTop = 0;
-  scrollEl.scrollLeft = 0;
-  await frame();
-  activeState = { view, store, plugin, kind: "pdf" };
-  const rect = scrollEl.getBoundingClientRect();
-  return {
-    cx: Math.round(rect.left + rect.width / 2),
-    cy: Math.round(rect.top + rect.height / 2),
-    scrollWidth: scrollEl.scrollWidth,
-    clientWidth: scrollEl.clientWidth,
-    scrollHeight: scrollEl.scrollHeight,
-    clientHeight: scrollEl.clientHeight,
-    scrollTop: scrollEl.scrollTop,
-    scrollLeft: scrollEl.scrollLeft,
-    scale: view.getScale(),
-    isMobileBody: document.body.classList.contains("is-mobile"),
-    dpr: window.devicePixelRatio,
-    innerWidth: window.innerWidth,
-    innerHeight: window.innerHeight,
-  };
-};
-
-(window as any).getPdfMetrics = () => {
-  const view = activeState!.view as ReaderView;
-  const scrollEl = view.getScrollContainer();
-  const rect = scrollEl.getBoundingClientRect();
-  return {
-    cx: Math.round(rect.left + rect.width / 2),
-    cy: Math.round(rect.top + rect.height / 2),
-    scrollWidth: scrollEl.scrollWidth,
-    clientWidth: scrollEl.clientWidth,
-    scrollHeight: scrollEl.scrollHeight,
-    clientHeight: scrollEl.clientHeight,
-    scrollTop: scrollEl.scrollTop,
-    scrollLeft: scrollEl.scrollLeft,
-    scale: view.getScale(),
-  };
-};
-
-(window as any).zoomPdfToOverflow = async () => {
-  const view = activeState!.view as ReaderView;
-  await view.setScale(3.2);
-  await view.renderPage(1);
-  await frame();
-  await wait(40);
-  const scrollEl = view.getScrollContainer();
-  scrollEl.scrollLeft = 0;
-  await frame();
-  return (window as any).getPdfMetrics();
-};
-
-(window as any).resetPdfFitWidth = async () => {
-  const view = activeState!.view as ReaderView;
-  await view.fitWidth();
-  await view.renderPage(1);
-  await frame();
-  await wait(40);
-  const scrollEl = view.getScrollContainer();
-  scrollEl.scrollLeft = 0;
-  scrollEl.scrollTop = 0;
-  await frame();
-  return (window as any).getPdfMetrics();
-};
-
-(window as any).selectPdfText = () => {
-  const view = activeState!.view as ReaderView;
-  const span = view.getScrollContainer().querySelector<HTMLElement>(".ms-text-layer span");
-  assert(span && span.firstChild, "Missing PDF text span for selection test");
-  const range = document.createRange();
-  range.setStart(span!.firstChild!, 0);
-  range.setEnd(span!.firstChild!, (span!.firstChild!.textContent ?? "").length);
-  const sel = window.getSelection()!;
-  sel.removeAllRanges();
-  sel.addRange(range);
-  return { selectedText: sel.toString(), isCollapsed: sel.isCollapsed };
-};
-
-(window as any).clearSelection = () => {
-  window.getSelection()?.removeAllRanges();
-  return { isCollapsed: window.getSelection()?.isCollapsed ?? true };
-};
-
-(window as any).setBlockSidebarSwipe = (enabled: boolean) => {
-  activeState!.store.settings.blockSidebarSwipe = enabled;
-  return { blockSidebarSwipe: activeState!.store.settings.blockSidebarSwipe };
-};
-
-// Coverage: Word / HTML / EPUB / StudyWorkspace + Exclusions + Settings UI
 function buildMinimalEpub(): Uint8Array {
-  // Store-only ZIP builder for minimal valid EPUB
   const enc = new TextEncoder();
   const entries: { name: string; data: Uint8Array }[] = [
     { name: "mimetype", data: enc.encode("application/epub+zip") },
@@ -352,22 +245,220 @@ function buildMinimalEpub(): Uint8Array {
   return out;
 }
 
-(window as any).setupWordFixture = async () => {
+function inspectNode(node: Element | null) {
+  const matched = node?.closest<HTMLElement>("[data-ignore-swipe]") ?? null;
+  return {
+    found: matched !== null,
+    attrValue: matched?.getAttribute("data-ignore-swipe") ?? null,
+    ebIgnored: obsidianEbShouldIgnore(node),
+  };
+}
+
+// Run A, B, C, D across all 5 hosts (PDF / Word / HTML / EPUB / StudyWorkspace readerHost)
+(window as any).runHostsABCD = async () => {
+  document.body.classList.add("is-mobile");
+  (Platform as any).isMobile = true;
+  const results: Record<string, any> = {};
+
+  // 1. PDF ReaderView
+  {
+    await cleanupActive();
+    const { app, host } = makeEnv({ "a.pdf": { name: "a", pages: 2, textItems: pageItems } });
+    const store = new Store(host);
+    await store.load();
+    const plugin = makePlugin(app, store);
+    const view = new ReaderView(makeLeaf(app), plugin);
+    view.containerEl.style.cssText = "position:relative;width:100vw;height:100vh;display:flex;flex-direction:column;";
+    fixturesHost.append(view.containerEl);
+    await view.onOpen();
+    await view.loadFileByPath("a.pdf");
+    await view.renderPage(1);
+    await frame();
+    const scrollEl = view.getScrollContainer();
+    const inner = scrollEl.querySelector(".ms-text-layer span") ?? scrollEl;
+    const toolbar = view.containerEl.querySelector(".ms-toolbar");
+    const onState = { hostAttr: scrollEl.getAttribute("data-ignore-swipe"), inner: inspectNode(inner), toolbar: inspectNode(toolbar) };
+    // Instant toggle OFF without reopening
+    store.settings.blockSidebarSwipe = false;
+    store.save();
+    await Promise.resolve();
+    const offState = { hostHasAttr: scrollEl.hasAttribute("data-ignore-swipe"), hostAttr: scrollEl.getAttribute("data-ignore-swipe"), inner: inspectNode(inner) };
+    // Instant toggle ON without reopening
+    store.settings.blockSidebarSwipe = true;
+    store.save();
+    await Promise.resolve();
+    const reOnState = { hostHasAttr: scrollEl.hasAttribute("data-ignore-swipe"), hostAttr: scrollEl.getAttribute("data-ignore-swipe"), inner: inspectNode(inner) };
+    await view.onClose();
+    results.pdf = { onState, offState, reOnState };
+  }
+
+  // 2. WordReaderView
+  {
+    await cleanupActive();
+    const html = "<h1>Word Title</h1>" + Array.from({ length: 12 }, (_, i) => "<p>Word paragraph " + (i + 1) + "</p>").join("");
+    const { app, host } = makeEnv({ "a.docx": html });
+    const store = new Store(host);
+    await store.load();
+    const plugin = makePlugin(app, store);
+    const view = new WordReaderView(makeLeaf(app), plugin);
+    view.containerEl.style.cssText = "position:relative;width:100vw;height:100vh;display:flex;flex-direction:column;";
+    fixturesHost.append(view.containerEl);
+    await view.onOpen();
+    await view.loadFileByPath("a.docx");
+    await frame();
+    const scrollEl = view.getScrollContainer();
+    const inner = scrollEl.querySelector("p") ?? scrollEl;
+    const toolbar = view.containerEl.querySelector(".ms-toolbar");
+    const onState = { hostAttr: scrollEl.getAttribute("data-ignore-swipe"), inner: inspectNode(inner), toolbar: inspectNode(toolbar) };
+    store.settings.blockSidebarSwipe = false;
+    store.save();
+    await Promise.resolve();
+    const offState = { hostHasAttr: scrollEl.hasAttribute("data-ignore-swipe"), hostAttr: scrollEl.getAttribute("data-ignore-swipe"), inner: inspectNode(inner) };
+    store.settings.blockSidebarSwipe = true;
+    store.save();
+    await Promise.resolve();
+    const reOnState = { hostHasAttr: scrollEl.hasAttribute("data-ignore-swipe"), hostAttr: scrollEl.getAttribute("data-ignore-swipe"), inner: inspectNode(inner) };
+    await view.onClose();
+    results.word = { onState, offState, reOnState };
+  }
+
+  // 3. HTML & 4. EPUB (DocumentReaderView)
+  for (const ext of ["html", "epub"] as const) {
+    await cleanupActive();
+    const files: Record<string, any> = ext === "html"
+      ? { "a.html": "<html><body><h1>HTML Title</h1><p>HTML paragraph content</p></body></html>" }
+      : { "a.epub": buildMinimalEpub() };
+    const { app, host } = makeEnv(files);
+    const store = new Store(host);
+    await store.load();
+    const plugin = makePlugin(app, store);
+    const view = new DocumentReaderView(makeLeaf(app), plugin);
+    view.containerEl.style.cssText = "position:relative;width:100vw;height:100vh;display:flex;flex-direction:column;";
+    fixturesHost.append(view.containerEl);
+    await view.onOpen();
+    await view.loadFileByPath("a." + ext);
+    await frame();
+    const scrollEl = view.getScrollContainer();
+    const inner = scrollEl.querySelector("p") ?? scrollEl;
+    const toolbar = view.containerEl.querySelector(".ms-toolbar");
+    const searchInput = view.containerEl.querySelector("input[type='search']");
+    const onState = { hostAttr: scrollEl.getAttribute("data-ignore-swipe"), inner: inspectNode(inner), toolbar: inspectNode(toolbar), searchInput: inspectNode(searchInput) };
+    store.settings.blockSidebarSwipe = false;
+    store.save();
+    await Promise.resolve();
+    const offState = { hostHasAttr: scrollEl.hasAttribute("data-ignore-swipe"), hostAttr: scrollEl.getAttribute("data-ignore-swipe"), inner: inspectNode(inner) };
+    store.settings.blockSidebarSwipe = true;
+    store.save();
+    await Promise.resolve();
+    const reOnState = { hostHasAttr: scrollEl.hasAttribute("data-ignore-swipe"), hostAttr: scrollEl.getAttribute("data-ignore-swipe"), inner: inspectNode(inner) };
+    await view.onClose();
+    results[ext] = { onState, offState, reOnState };
+  }
+
+  // 5. StudyWorkspaceView readerHost + exclusions (toolbar, map, auxiliary, input) + Settings Tab live toggle
+  {
+    await cleanupActive();
+    const { app, host } = makeEnv({ "ws.pdf": { name: "ws", pages: 2, textItems: pageItems } });
+    const store = new Store(host);
+    await store.load();
+    const plugin = makePlugin(app, store);
+    const leaf = makeLeaf(app);
+    app.workspace.activeLeaf = leaf;
+    app.workspace.centerLeaf = leaf;
+    const view = new StudyWorkspaceView(leaf, plugin);
+    (leaf as any).view = view;
+    view.containerEl.style.cssText = "position:relative;width:100vw;height:100vh;display:flex;flex-direction:column;";
+    fixturesHost.append(view.containerEl);
+    await view.setState({ activePath: "ws.pdf", reader: true, mindmap: true, auxiliary: "cards" });
+    await view.onOpen();
+    await frame();
+    await wait(60);
+
+    const readerHost = view.containerEl.querySelector<HTMLElement>(".ms-workspace-reader-host")!;
+    const innerReader = readerHost.querySelector(".ms-text-layer span") ?? readerHost.querySelector(".ms-scroll") ?? readerHost;
+    const toolbar = view.containerEl.querySelector(".ms-workspace-toolbar");
+    const map = view.containerEl.querySelector(".ms-workspace-map");
+    const auxiliary = view.containerEl.querySelector(".ms-workspace-auxiliary");
+    const input = view.containerEl.querySelector(".ms-workspace-library input");
+
+    // Also test Settings Tab live toggle without reopening workspace
+    const tab = new MarginStudySettingTab(app, plugin);
+    tab.display();
+    const headings = [...tab.containerEl.querySelectorAll("h3")].map(h => h.textContent?.trim());
+    const swipeItem = [...tab.containerEl.querySelectorAll<HTMLElement>(".setting-item")]
+      .find(i => i.querySelector(".setting-item-name")?.textContent?.trim() === "阅读区禁止左右滑动开侧栏");
+    assert(swipeItem, "Missing '阅读区禁止左右滑动开侧栏' setting");
+    const desc = swipeItem!.querySelector(".setting-item-description")?.textContent?.trim() ?? "";
+    const toggle = swipeItem!.querySelector<HTMLInputElement>("input[type='checkbox']")!;
+
+    const onState = {
+      hostAttr: readerHost.getAttribute("data-ignore-swipe"),
+      inner: inspectNode(innerReader),
+      toolbar: inspectNode(toolbar),
+      map: inspectNode(map),
+      auxiliary: inspectNode(auxiliary),
+      input: inspectNode(input),
+      settingsToggleChecked: toggle.checked,
+      headings,
+      desc,
+    };
+
+    // Toggle OFF via Settings UI -> instant DOM removal on BOTH readerHost & child scrollEl
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event("change", { bubbles: true }));
+    const offState = {
+      hostHasAttr: readerHost.hasAttribute("data-ignore-swipe"),
+      hostAttr: readerHost.getAttribute("data-ignore-swipe"),
+      inner: inspectNode(innerReader),
+      settingValue: store.settings.blockSidebarSwipe,
+    };
+
+    // Toggle ON via Settings UI -> instant DOM restore
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change", { bubbles: true }));
+    const reOnState = {
+      hostHasAttr: readerHost.hasAttribute("data-ignore-swipe"),
+      hostAttr: readerHost.getAttribute("data-ignore-swipe"),
+      inner: inspectNode(innerReader),
+      settingValue: store.settings.blockSidebarSwipe,
+    };
+
+    await view.onClose();
+    results.workspace = { onState, offState, reOnState };
+  }
+
+  return results;
+};
+
+// Setup PDF for E (real CDP gestures: zoom horizontal pan, vertical scroll, pinch zoom, text selection)
+(window as any).setupPdfForE = async () => {
   await cleanupActive();
   document.body.classList.add("is-mobile");
   (Platform as any).isMobile = true;
-  const html = "<h1>Word Swipe Test</h1>" + Array.from({ length: 40 }, (_, i) => "<p>Word paragraph " + (i + 1) + " content.</p>").join("");
-  const { app, host } = makeEnv({ "swipe.docx": html });
+  const { app, host } = makeEnv({ "e.pdf": { name: "e", pages: 4, textItems: pageItems } });
   const store = new Store(host);
   await store.load();
   const plugin = makePlugin(app, store);
-  const view = new WordReaderView(makeLeaf(app), plugin);
+  const view = new ReaderView(makeLeaf(app), plugin);
   view.containerEl.style.cssText = "position:relative;width:100vw;height:100vh;display:flex;flex-direction:column;";
   fixturesHost.append(view.containerEl);
   await view.onOpen();
-  await view.loadFileByPath("swipe.docx");
+  await view.loadFileByPath("e.pdf");
+  await view.fitWidth();
+  await view.renderPage(1);
+  await view.renderPage(2);
   await frame();
-  activeState = { view, store, plugin, kind: "word" };
+  await wait(40);
+  const scrollEl = view.getScrollContainer();
+  scrollEl.scrollTop = 0;
+  scrollEl.scrollLeft = 0;
+  await frame();
+  activeState = { view, store, plugin, kind: "pdf" };
+  return (window as any).getPdfMetrics();
+};
+
+(window as any).getPdfMetrics = () => {
+  const view = activeState!.view as ReaderView;
   const scrollEl = view.getScrollContainer();
   const rect = scrollEl.getBoundingClientRect();
   return {
@@ -375,103 +466,51 @@ function buildMinimalEpub(): Uint8Array {
     cy: Math.round(rect.top + rect.height / 2),
     scrollWidth: scrollEl.scrollWidth,
     clientWidth: scrollEl.clientWidth,
+    scrollTop: scrollEl.scrollTop,
+    scrollLeft: scrollEl.scrollLeft,
+    scale: view.getScale(),
+    ignoreSwipeAttr: scrollEl.getAttribute("data-ignore-swipe"),
   };
 };
 
-(window as any).setupDocumentFixture = async (ext: "html" | "epub") => {
-  await cleanupActive();
-  document.body.classList.add("is-mobile");
-  (Platform as any).isMobile = true;
-  const files: Record<string, any> = ext === "html"
-    ? { "swipe.html": "<html><body><h1>HTML Swipe Test</h1>" + Array.from({ length: 40 }, (_, i) => "<p>HTML paragraph " + (i + 1) + " content.</p>").join("") + "</body></html>" }
-    : { "swipe.epub": buildMinimalEpub() };
-  const { app, host } = makeEnv(files);
-  const store = new Store(host);
-  await store.load();
-  const plugin = makePlugin(app, store);
-  const view = new DocumentReaderView(makeLeaf(app), plugin);
-  view.containerEl.style.cssText = "position:relative;width:100vw;height:100vh;display:flex;flex-direction:column;";
-  fixturesHost.append(view.containerEl);
-  await view.onOpen();
-  await view.loadFileByPath("swipe." + ext);
+(window as any).zoomPdfToOverflow = async () => {
+  const view = activeState!.view as ReaderView;
+  await view.setScale(3.2);
+  await view.renderPage(1);
   await frame();
-  activeState = { view, store, plugin, kind: ext };
+  await wait(40);
   const scrollEl = view.getScrollContainer();
-  const rect = scrollEl.getBoundingClientRect();
-  return {
-    cx: Math.round(rect.left + rect.width / 2),
-    cy: Math.round(rect.top + rect.height / 2),
-    scrollWidth: scrollEl.scrollWidth,
-    clientWidth: scrollEl.clientWidth,
-  };
+  scrollEl.scrollLeft = 0;
+  await frame();
+  return (window as any).getPdfMetrics();
 };
 
-(window as any).setupWorkspaceFixture = async () => {
-  await cleanupActive();
-  document.body.classList.add("is-mobile");
-  (Platform as any).isMobile = true;
-  const { app, host } = makeEnv({
-    "ws.pdf": { name: "ws", pages: 2, textItems: pageItems },
-  });
-  const store = new Store(host);
-  await store.load();
-  const plugin = makePlugin(app, store);
-  const leaf = makeLeaf(app);
-  app.workspace.activeLeaf = leaf;
-  app.workspace.centerLeaf = leaf;
-  const view = new StudyWorkspaceView(leaf, plugin);
-  (leaf as any).view = view;
-  view.containerEl.style.cssText = "position:relative;width:100vw;height:100vh;display:flex;flex-direction:column;";
-  fixturesHost.append(view.containerEl);
-  await view.setState({ activePath: "ws.pdf", reader: true, mindmap: true, auxiliary: "cards" });
-  await view.onOpen();
+(window as any).resetPdfFitWidth = async () => {
+  const view = activeState!.view as ReaderView;
+  await view.fitWidth();
+  await view.renderPage(1);
   await frame();
-  await wait(80);
-  // Add an input inside workspace for input-exclusion test
-  const testInput = document.createElement("input");
-  testInput.type = "text";
-  testInput.className = "ms-swipe-test-input";
-  testInput.style.cssText = "position:fixed;left:16px;bottom:16px;width:200px;height:36px;z-index:9999;";
-  view.containerEl.append(testInput);
+  await wait(40);
+  const scrollEl = view.getScrollContainer();
+  scrollEl.scrollLeft = 0;
+  scrollEl.scrollTop = 0;
   await frame();
-  activeState = { view, store, plugin, kind: "workspace" };
-
-  const centerOf = (sel: string) => {
-    const node = view.containerEl.querySelector<HTMLElement>(sel);
-    if (!node) return null;
-    const r = node.getBoundingClientRect();
-    if (r.width < 10 || r.height < 10) return null;
-    return { cx: Math.round(r.left + r.width / 2), cy: Math.round(r.top + r.height / 2), width: r.width, height: r.height };
-  };
-  return {
-    readerHost: centerOf(".ms-workspace-reader-host"),
-    toolbar: centerOf(".ms-workspace-toolbar"),
-    map: centerOf(".ms-workspace-map"),
-    auxiliary: centerOf(".ms-workspace-auxiliary"),
-    input: centerOf(".ms-swipe-test-input"),
-  };
+  return (window as any).getPdfMetrics();
 };
 
-(window as any).verifySettingsUi = async () => {
-  const { app, host } = makeEnv({});
-  const store = new Store(host);
-  await store.load();
-  const plugin = makePlugin(app, store);
-  const tab = new MarginStudySettingTab(app, plugin);
-  tab.display();
-  const headings = [...tab.containerEl.querySelectorAll("h3")].map(h => h.textContent?.trim());
-  assert(headings.includes("阅读"), "Missing '阅读' heading in settings tab: " + JSON.stringify(headings));
-  const items = [...tab.containerEl.querySelectorAll<HTMLElement>(".setting-item")];
-  const swipeItem = items.find(i => i.querySelector(".setting-item-name")?.textContent?.trim() === "阅读区禁止左右滑动开侧栏");
-  assert(swipeItem, "Missing '阅读区禁止左右滑动开侧栏' setting item");
-  const desc = swipeItem!.querySelector(".setting-item-description")?.textContent?.trim() ?? "";
-  assert(desc.includes("只在 MarginStudy 阅读器内生效") && desc.includes("不影响上下翻页") && desc.includes("不影响双指缩放"), "Unexpected desc: " + desc);
-  const toggle = swipeItem!.querySelector<HTMLInputElement>("input[type='checkbox']");
-  assert(toggle && toggle.checked === true, "Expected default toggle checked === true");
-  toggle!.checked = false;
-  toggle!.dispatchEvent(new Event("change", { bubbles: true }));
-  assert(store.settings.blockSidebarSwipe === false, "Expected toggle off to update store.settings.blockSidebarSwipe === false");
-  return { passed: true, headingFound: true, label: "阅读区禁止左右滑动开侧栏", desc, defaultChecked: true, afterToggle: store.settings.blockSidebarSwipe };
+(window as any).testLongPressTextSelection = () => {
+  const view = activeState!.view as ReaderView;
+  const span = view.getScrollContainer().querySelector<HTMLElement>(".ms-text-layer span");
+  assert(span && span.firstChild, "Missing text span");
+  const range = document.createRange();
+  range.setStart(span!.firstChild!, 0);
+  range.setEnd(span!.firstChild!, 10);
+  const sel = window.getSelection()!;
+  sel.removeAllRanges();
+  sel.addRange(range);
+  const selectedText = sel.toString();
+  sel.removeAllRanges();
+  return { selectedText, length: selectedText.length };
 };
 
 (window as any).getErrors = () => [...errors];
@@ -479,7 +518,6 @@ function buildMinimalEpub(): Uint8Array {
 `;
 
 try {
-  // Reuse synthetic adapters from docFixtures
   for (const name of ["obsidian", "fakeMammoth", "fakePdf"]) {
     let src = await readFile(join(docFixtures, name + ".txt"), "utf8");
     if (name === "obsidian") {
@@ -633,7 +671,7 @@ export class Setting {
       await new Promise(r => setTimeout(r, 40));
     };
 
-    const twoFingerPinch = async (cx, cy, startHalf = 40, endHalf = 92, steps = 6) => {
+    const twoFingerPinch = async (cx, cy, startHalf = 40, endHalf = 96, steps = 6) => {
       await sendCdp("Input.dispatchTouchEvent", {
         type: "touchStart",
         touchPoints: [{ id: 1, x: cx - startHalf, y: cy }, { id: 2, x: cx + startHalf, y: cy }],
@@ -650,8 +688,6 @@ export class Setting {
       await new Promise(r => setTimeout(r, 60));
     };
 
-    const assert = (ok, msg) => { if (!ok) throw new Error(msg); };
-
     try {
       await sendCdp("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
 
@@ -660,11 +696,11 @@ export class Setting {
         { label: "1510x962@DPR2", width: 1510, height: 962, dpr: 2 },
       ];
 
-      const viewportResults = {};
       let passedChecks = 0;
       let totalChecks = 0;
       const record = (ok, msg) => { totalChecks++; if (!ok) throw new Error(msg); passedChecks++; };
 
+      const summary = {};
       for (const vp of viewports) {
         await sendCdp("Emulation.setDeviceMetricsOverride", {
           width: vp.width,
@@ -672,117 +708,75 @@ export class Setting {
           deviceScaleFactor: vp.dpr,
           mobile: true,
         });
-        const init = await evalCdp("window.setupPdfFixture()");
-        record(init.isMobileBody === true, `[${vp.label}] body.is-mobile missing`);
-        record(init.scrollWidth <= init.clientWidth + 1, `[${vp.label}] fit-width has unexpected horizontal overflow: ${init.scrollWidth} vs ${init.clientWidth}`);
 
-        // A1: Horizontal drag 60px on fit-width -> intercepted
-        await evalCdp("window.resetTouchStats()");
-        await singleFingerDrag(init.cx, init.cy, init.cx + 60, init.cy, 6);
-        const aHoriz = await evalCdp("window.getTouchStats()");
-        record(aHoriz.prevented > 0 && aHoriz.lastDefaultPrevented === true, `[${vp.label}] A1 horizontal swipe not intercepted: ${JSON.stringify(aHoriz)}`);
+        // A, B, C, D across all 5 hosts
+        const hosts = await evalCdp("window.runHostsABCD()");
+        for (const hostKey of ["pdf", "word", "html", "epub", "workspace"]) {
+          const h = hosts[hostKey];
+          // A: default ON -> closest('[data-ignore-swipe]') found and non-empty
+          record(h.onState.inner.found === true && Boolean(h.onState.inner.attrValue), `[${vp.label}][${hostKey}] A attr missing: ${JSON.stringify(h.onState)}`);
+          // B: Obsidian Eb loop -> reader inner ignored; toolbar (and map/auxiliary/input) NOT ignored
+          record(h.onState.inner.ebIgnored === true, `[${vp.label}][${hostKey}] B Eb loop did not ignore reader inner`);
+          record(h.onState.toolbar.ebIgnored === false && h.onState.toolbar.found === false, `[${vp.label}][${hostKey}] B toolbar wrongly ignored`);
+          // C: setting OFF -> attribute removed (not "false"), Eb loop returns false
+          record(h.offState.hostHasAttr === false && h.offState.hostAttr === null && h.offState.inner.found === false && h.offState.inner.ebIgnored === false, `[${vp.label}][${hostKey}] C attr not removed on disable: ${JSON.stringify(h.offState)}`);
+          // D: instant toggle back ON without reopening -> attribute restored
+          record(h.reOnState.hostHasAttr === true && h.reOnState.hostAttr === "true" && h.reOnState.inner.ebIgnored === true, `[${vp.label}][${hostKey}] D attr not restored on re-enable: ${JSON.stringify(h.reOnState)}`);
+        }
+        // Workspace extra exclusions (map, auxiliary, input) + Settings UI
+        const wsOn = hosts.workspace.onState;
+        record(wsOn.map.ebIgnored === false && wsOn.auxiliary.ebIgnored === false && wsOn.input.ebIgnored === false, `[${vp.label}] B workspace exclusions failed: ${JSON.stringify(wsOn)}`);
+        record(wsOn.headings.includes("阅读") && wsOn.settingsToggleChecked === true && wsOn.desc.includes("只在 MarginStudy 阅读器内生效"), `[${vp.label}] Settings UI check failed`);
 
-        // A2: Vertical drag on same surface -> NOT intercepted, page scrolls vertically
-        await evalCdp("window.resetTouchStats()");
+        // E: No regression on native gestures while data-ignore-swipe="true" is active
+        const initE = await evalCdp("window.setupPdfForE()");
+        record(initE.ignoreSwipeAttr === "true", `[${vp.label}] E data-ignore-swipe missing on PDF scrollEl`);
+
+        // E1: Vertical scroll
         const beforeVert = await evalCdp("window.getPdfMetrics()");
-        await singleFingerDrag(init.cx, init.cy + 100, init.cx, init.cy - 100, 8);
-        const aVert = await evalCdp("window.getTouchStats()");
+        await singleFingerDrag(initE.cx, initE.cy + 100, initE.cx, initE.cy - 100, 8);
         const afterVert = await evalCdp("window.getPdfMetrics()");
-        record(aVert.prevented === 0 && aVert.lastDefaultPrevented === false, `[${vp.label}] A2 vertical scroll was intercepted: ${JSON.stringify(aVert)}`);
-        record(afterVert.scrollTop > beforeVert.scrollTop, `[${vp.label}] A2 vertical scroll did not move: ${beforeVert.scrollTop} -> ${afterVert.scrollTop}`);
+        record(afterVert.scrollTop > beforeVert.scrollTop, `[${vp.label}] E1 vertical scroll failed: ${beforeVert.scrollTop} -> ${afterVert.scrollTop}`);
 
-        // B: Zoomed in with horizontal overflow -> NOT intercepted, scrollLeft changes
+        // E2: Zoomed horizontal pan
         const zoomed = await evalCdp("window.zoomPdfToOverflow()");
-        record(zoomed.scrollWidth > zoomed.clientWidth + 1, `[${vp.label}] B zoomed page did not overflow horizontally: ${zoomed.scrollWidth} vs ${zoomed.clientWidth}`);
-        await evalCdp("window.resetTouchStats()");
+        record(zoomed.scrollWidth > zoomed.clientWidth + 1, `[${vp.label}] E2 zoomed page has no horizontal overflow`);
         await singleFingerDrag(zoomed.cx + 90, zoomed.cy, zoomed.cx - 90, zoomed.cy, 8);
-        const bStats = await evalCdp("window.getTouchStats()");
         const afterPan = await evalCdp("window.getPdfMetrics()");
-        record(bStats.prevented === 0 && bStats.lastDefaultPrevented === false, `[${vp.label}] B zoomed horizontal pan was intercepted: ${JSON.stringify(bStats)}`);
-        record(afterPan.scrollLeft > zoomed.scrollLeft, `[${vp.label}] B zoomed horizontal pan did not scroll: ${zoomed.scrollLeft} -> ${afterPan.scrollLeft}`);
+        record(afterPan.scrollLeft > zoomed.scrollLeft, `[${vp.label}] E2 zoomed horizontal pan failed: ${zoomed.scrollLeft} -> ${afterPan.scrollLeft}`);
 
-        // C: Two-finger pinch -> NOT intercepted, scale changes
+        // E3: Two-finger pinch zoom
         const fitAgain = await evalCdp("window.resetPdfFitWidth()");
-        const scaleBefore = fitAgain.scale;
-        await evalCdp("window.resetTouchStats()");
         await twoFingerPinch(fitAgain.cx, fitAgain.cy, 40, 96, 6);
         const afterPinch = await evalCdp("window.getPdfMetrics()");
-        record(afterPinch.scale > scaleBefore, `[${vp.label}] C pinch zoom did not increase scale: ${scaleBefore} -> ${afterPinch.scale}`);
+        record(afterPinch.scale > fitAgain.scale, `[${vp.label}] E3 pinch zoom failed: ${fitAgain.scale} -> ${afterPinch.scale}`);
 
-        // D: Active text selection -> horizontal drag NOT intercepted
-        const fitD = await evalCdp("window.resetPdfFitWidth()");
-        const sel = await evalCdp("window.selectPdfText()");
-        record(!sel.isCollapsed && sel.selectedText.length > 0, `[${vp.label}] D failed to create active selection`);
-        await evalCdp("window.resetTouchStats()");
-        await singleFingerDrag(fitD.cx, fitD.cy, fitD.cx + 60, fitD.cy, 6);
-        const dStats = await evalCdp("window.getTouchStats()");
-        await evalCdp("window.clearSelection()");
-        record(dStats.prevented === 0 && dStats.lastDefaultPrevented === false, `[${vp.label}] D horizontal drag with active selection was intercepted: ${JSON.stringify(dStats)}`);
+        // E4: Text selection
+        const sel = await evalCdp("window.testLongPressTextSelection()");
+        record(sel.length === 10, `[${vp.label}] E4 text selection failed: ${JSON.stringify(sel)}`);
 
-        // E: Setting OFF (blockSidebarSwipe = false) -> A scenario NOT intercepted
-        await evalCdp("window.setBlockSidebarSwipe(false)");
-        await evalCdp("window.resetTouchStats()");
-        await singleFingerDrag(fitD.cx, fitD.cy, fitD.cx + 60, fitD.cy, 6);
-        const eStats = await evalCdp("window.getTouchStats()");
-        await evalCdp("window.setBlockSidebarSwipe(true)");
-        record(eStats.prevented === 0 && eStats.lastDefaultPrevented === false, `[${vp.label}] E horizontal swipe still intercepted when disabled: ${JSON.stringify(eStats)}`);
-
-        viewportResults[vp.label] = {
-          A_horizontal: aHoriz,
-          A_vertical: { ...aVert, scrollTopBefore: beforeVert.scrollTop, scrollTopAfter: afterVert.scrollTop },
-          B_zoomPan: { ...bStats, scrollWidth: zoomed.scrollWidth, clientWidth: zoomed.clientWidth, scrollLeftBefore: zoomed.scrollLeft, scrollLeftAfter: afterPan.scrollLeft },
-          C_pinch: { scaleBefore, scaleAfter: afterPinch.scale },
-          D_selection: dStats,
-          E_disabled: eStats,
+        summary[vp.label] = {
+          hosts_ABCD: {
+            pdf: { on: hosts.pdf.onState.hostAttr, off: hosts.pdf.offState.hostAttr, reOn: hosts.pdf.reOnState.hostAttr, ebOn: hosts.pdf.onState.inner.ebIgnored, ebOff: hosts.pdf.offState.inner.ebIgnored, toolbarEb: hosts.pdf.onState.toolbar.ebIgnored },
+            word: { on: hosts.word.onState.hostAttr, off: hosts.word.offState.hostAttr, reOn: hosts.word.reOnState.hostAttr, ebOn: hosts.word.onState.inner.ebIgnored, ebOff: hosts.word.offState.inner.ebIgnored, toolbarEb: hosts.word.onState.toolbar.ebIgnored },
+            html: { on: hosts.html.onState.hostAttr, off: hosts.html.offState.hostAttr, reOn: hosts.html.reOnState.hostAttr, ebOn: hosts.html.onState.inner.ebIgnored, ebOff: hosts.html.offState.inner.ebIgnored, toolbarEb: hosts.html.onState.toolbar.ebIgnored },
+            epub: { on: hosts.epub.onState.hostAttr, off: hosts.epub.offState.hostAttr, reOn: hosts.epub.reOnState.hostAttr, ebOn: hosts.epub.onState.inner.ebIgnored, ebOff: hosts.epub.offState.inner.ebIgnored, toolbarEb: hosts.epub.onState.toolbar.ebIgnored },
+            workspace: { on: hosts.workspace.onState.hostAttr, off: hosts.workspace.offState.hostAttr, reOn: hosts.workspace.reOnState.hostAttr, ebOn: hosts.workspace.onState.inner.ebIgnored, ebOff: hosts.workspace.offState.inner.ebIgnored, exclusionsEb: { toolbar: wsOn.toolbar.ebIgnored, map: wsOn.map.ebIgnored, auxiliary: wsOn.auxiliary.ebIgnored, input: wsOn.input.ebIgnored } },
+          },
+          E_gestures: {
+            verticalScrollTop: [beforeVert.scrollTop, afterVert.scrollTop],
+            zoomedPanScrollLeft: [zoomed.scrollLeft, afterPan.scrollLeft],
+            zoomedWidth: [zoomed.scrollWidth, zoomed.clientWidth],
+            pinchScale: [fitAgain.scale, afterPinch.scale],
+            textSelectionLen: sel.length,
+          },
         };
       }
-
-      // Coverage: Word, HTML, EPUB
-      const coverage = {};
-      for (const [kind, setupExpr] of [
-        ["word", "window.setupWordFixture()"],
-        ["html", 'window.setupDocumentFixture("html")'],
-        ["epub", 'window.setupDocumentFixture("epub")'],
-      ]) {
-        const info = await evalCdp(setupExpr);
-        await evalCdp("window.resetTouchStats()");
-        await singleFingerDrag(info.cx, info.cy, info.cx + 60, info.cy, 6);
-        const onStats = await evalCdp("window.getTouchStats()");
-        record(onStats.prevented > 0 && onStats.lastDefaultPrevented === true, `[${kind}] horizontal swipe not intercepted: ${JSON.stringify(onStats)}`);
-        await evalCdp("window.setBlockSidebarSwipe(false)");
-        await evalCdp("window.resetTouchStats()");
-        await singleFingerDrag(info.cx, info.cy, info.cx + 60, info.cy, 6);
-        const offStats = await evalCdp("window.getTouchStats()");
-        record(offStats.prevented === 0 && offStats.lastDefaultPrevented === false, `[${kind}] horizontal swipe still intercepted when disabled: ${JSON.stringify(offStats)}`);
-        coverage[kind] = { on: onStats, off: offStats };
-      }
-
-      // Workspace host + exclusion zones (toolbar, map, auxiliary, input)
-      const wsInfo = await evalCdp("window.setupWorkspaceFixture()");
-      assert(wsInfo.readerHost && wsInfo.toolbar && wsInfo.map && wsInfo.auxiliary && wsInfo.input, "Missing workspace regions: " + JSON.stringify(wsInfo));
-      await evalCdp("window.resetTouchStats()");
-      await singleFingerDrag(wsInfo.readerHost.cx, wsInfo.readerHost.cy, wsInfo.readerHost.cx + 60, wsInfo.readerHost.cy, 6);
-      const wsReaderStats = await evalCdp("window.getTouchStats()");
-      record(wsReaderStats.prevented > 0 && wsReaderStats.lastDefaultPrevented === true, `[workspace.readerHost] horizontal swipe not intercepted: ${JSON.stringify(wsReaderStats)}`);
-
-      const exclusions = {};
-      for (const zone of ["toolbar", "map", "auxiliary", "input"]) {
-        const pt = wsInfo[zone];
-        await evalCdp("window.resetTouchStats()");
-        await singleFingerDrag(pt.cx, pt.cy, pt.cx + 60, pt.cy, 6);
-        const stats = await evalCdp("window.getTouchStats()");
-        record(stats.prevented === 0 && stats.lastDefaultPrevented === false, `[workspace.${zone}] excluded zone was wrongly intercepted: ${JSON.stringify(stats)}`);
-        exclusions[zone] = stats;
-      }
-
-      // Settings UI check
-      const settingsCheck = await evalCdp("window.verifySettingsUi()");
-      record(settingsCheck.passed === true, "Settings UI check failed");
 
       const errs = await evalCdp("window.getErrors()");
       record(errs.length === 0, "Unhandled browser errors: " + JSON.stringify(errs));
 
-      console.log(JSON.stringify({ viewports: viewportResults, coverage, workspace: { readerHost: wsReaderStats, exclusions }, settings: settingsCheck }, null, 2));
+      console.log(JSON.stringify(summary, null, 2));
       console.log(`PASS reader-swipe-guard: ${passedChecks}/${totalChecks} assertions passed`);
     } finally {
       ws.close();

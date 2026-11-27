@@ -866,11 +866,7 @@ export class ReaderView extends ItemView {
       });
     }
     this.disposeSwipeGuard?.();
-    this.disposeSwipeGuard = attachReaderSwipeGuard(this.scrollEl, {
-      isEnabled: () => this.plugin.store.settings.blockSidebarSwipe !== false,
-      getScrollEl: () => this.scrollEl,
-      isSelectionOrMultiSelectActive: () => this.isPinching() || this.getBlockSelectionMode(),
-    });
+    this.disposeSwipeGuard = attachReaderSwipeGuard(this.scrollEl, this.plugin.store);
     this.scrollEl.addEventListener("click", this.extendNotes.onPlace, true);
     this.scrollEl.addEventListener("click",event=>{
       if(!this.plugin.store.settings.tapPageEdges||this.annController?.getHandwritingMode()!=="off"||this.annController?.isLassoMode()||!(event.target instanceof HTMLElement)||!event.target.matches(".ms-page-canvas,.ms-text-layer")||window.getSelection()?.toString())return;

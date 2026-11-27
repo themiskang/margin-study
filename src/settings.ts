@@ -10,6 +10,7 @@ import { BRANCH_STYLES, ACCENTS, ThemeMode } from "./types";
 import { applyTheme } from "./theme";
 import { setInkPredictionReader } from "./annot/pen";
 import { el } from "./utils/dom";
+import { syncReaderSwipeGuards } from "./utils/swipeGuard";
 
 export class MarginStudySettingTab extends PluginSettingTab {
   plugin: MarginStudyPlugin;
@@ -133,6 +134,7 @@ export class MarginStudySettingTab extends PluginSettingTab {
         tg.setValue(s.blockSidebarSwipe !== false);
         tg.onChange((v) => {
           s.blockSidebarSwipe = v;
+          syncReaderSwipeGuards(v);
           this.plugin.store.save();
         });
       });

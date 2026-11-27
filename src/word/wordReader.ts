@@ -148,11 +148,7 @@ export class WordReaderView extends ItemView implements HtmlReader {
     this.reading.connect(this.scrollEl, this.bodyEl);
     this.scrollEl.addEventListener("scroll", this.onScroll, { passive: true });
     this.disposeSwipeGuard?.();
-    this.disposeSwipeGuard = attachReaderSwipeGuard(this.scrollEl, {
-      isEnabled: () => this.plugin.store.settings.blockSidebarSwipe !== false,
-      getScrollEl: () => this.scrollEl,
-      isSelectionOrMultiSelectActive: () => this.getBlockSelectionMode(),
-    });
+    this.disposeSwipeGuard = attachReaderSwipeGuard(this.scrollEl, this.plugin.store);
     this.scrollEl.addEventListener("pointerdown", () => { this.plugin.activeReader = this; });
     this.scrollEl.addEventListener("focusin", () => { this.plugin.activeReader = this; });
     this.containerEl.addEventListener("keydown", this.onStandaloneHistoryKey);
