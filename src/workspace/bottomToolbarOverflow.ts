@@ -18,58 +18,64 @@ export interface BottomToolbarOverflowPlan {
   overflowIds: string[];
 }
 
-export interface ClearanceRect {
-  left: number;
-  right: number;
-  top: number;
-  bottom: number;
-  width: number;
-  height: number;
-}
-
-export interface BottomClearanceOptions {
+export interface BottomBarClearanceInput {
+  barHeight: number;
+  barBottomOffset: number;
+  gap?: number;
   cleanView: boolean;
   statusBarHidden: boolean;
   collapsed: boolean;
-  capsuleVisible: boolean;
-  gap?: number;
+  barVisible: boolean;
+  /** 底部浮层与阅读区在水平 X 轴上是否相交（与垂直 margin-bottom 完全正交，默认 true）。 */
+  horizontalOverlap?: boolean;
+  /** 阅读区底边到工作区底边的固有距离（px；横排/单文档为 0，竖排 reader 在上时为脑图顶边到容器底边距离）。 */
+  readerBottomInset?: number;
+  containerHeight?: number;
   minReaderHeight?: number;
 }
 
-/** 计算底部胶囊与阅读区重叠时所需的底部安全区高度（px）。 */
-export function computeBottomBarClearance(
-  readerRect: ClearanceRect | null,
-  capsuleRect: ClearanceRect | null,
-  options: BottomClearanceOptions,
-): number {
+/** 仅由底部浮层自身几何与底距推导安全区高度（px），按几何覆盖深度判断，不依赖会被自身修改的阅读区垂直矩形。 */
+export function computeBottomBarClearance(input: BottomBarClearanceInput): number {
   if (
-    options.cleanView ||
-    options.statusBarHidden ||
-    options.collapsed ||
-    !options.capsuleVisible ||
-    !readerRect ||
-    !capsuleRect
+    input.cleanView ||
+    input.statusBarHidden ||
+    input.collapsed ||
+    !input.barVisible ||
+    input.horizontalOverlap === false
   ) {
     return 0;
   }
-  if (
-    capsuleRect.width <= 0 ||
-    capsuleRect.height <= 0 ||
-    readerRect.width <= 0 ||
-    readerRect.height <= 0
-  ) {
-    return 0;
+  const barHeight = Number.isFinite(input.barHeight) ? Math.max(0, input.barHeight) : 0;
+  if (barHeight <= 0) return 0;
+  const barBottomOffset = Number.isFinite(input.barBottomOffset)
+    ? Math.max(0, input.barBottomOffset)
+    : 0;
+  const readerBottomInset = Number.isFinite(input.readerBottomInset)
+    ? Math.max(0, input.readerBottomInset!)
+    : 0;
+  const overlapDepth = barHeight + barBottomOffset - readerBottomInset;
+  if (overlapDepth <= 0) return 0;
+  const gap = Number.isFinite(input.gap) ? Math.max(0, input.gap!) : 8;
+  const raw = Math.max(0, Math.ceil(overlapDepth + gap));
+  if (Number.isFinite(input.containerHeight) && input.containerHeight! > 0) {
+    const minReaderHeight = input.minReaderHeight ?? 64;
+    const availableReaderHeight = Math.max(0, input.containerHeight! - readerBottomInset);
+    const maxAllowed = Math.max(0, Math.floor(availableReaderHeight - minReaderHeight));
+    return Math.min(raw, maxAllowed);
   }
-  const horizontalOverlap =
-    capsuleRect.left < readerRect.right && capsuleRect.right > readerRect.left;
-  if (!horizontalOverlap) return 0;
-  if (readerRect.bottom <= capsuleRect.top) return 0;
+  return raw;
+}
 
-  const gap = options.gap ?? 8;
-  const raw = Math.max(0, Math.ceil(readerRect.bottom - capsuleRect.top + gap));
-  const minReaderHeight = options.minReaderHeight ?? 64;
-  const maxAllowed = Math.max(0, Math.floor(readerRect.height - minReaderHeight));
-  return Math.min(raw, maxAllowed);
+/** 按当前可见底部浮层集合（胶囊、溢出菜单、底部更多菜单、格式条）取最大安全区高度（px）。 */
+export function computeMaxBottomOverlayClearance(
+  overlays: ReadonlyArray<BottomBarClearanceInput>,
+): number {
+  let maxClearance = 0;
+  for (const overlay of overlays) {
+    const value = computeBottomBarClearance(overlay);
+    if (value > maxClearance) maxClearance = value;
+  }
+  return maxClearance;
 }
 
 /** 按可用宽度与优先级计算底部工具行的可见项与溢出项；不超宽时零溢出。 */
@@ -167,14 +173,20 @@ export class BottomToolbarOverflowController {
   private toggle: HTMLButtonElement | null = null;
   private overflowButtons: HTMLButtonElement[] = [];
   private open = false;
+  private suppressMenuNotify = false;
 
   constructor(
     private readonly root: HTMLElement,
     private readonly dock: HTMLElement,
+    private readonly onMenuVisibilityChange?: () => void,
   ) {}
 
   getToggle(): HTMLButtonElement | null {
     return this.toggle;
+  }
+
+  getMenuElement(): HTMLElement | null {
+    return this.open && this.menu?.isConnected ? this.menu : null;
   }
 
   getOverflowCount(): number {
@@ -186,10 +198,14 @@ export class BottomToolbarOverflowController {
   }
 
   closeMenu(): void {
+    const wasOpen = this.open || !!this.menu;
     this.open = false;
     this.menu?.remove();
     this.menu = null;
     this.toggle?.setAttribute("aria-expanded", "false");
+    if (wasOpen && !this.suppressMenuNotify) {
+      this.onMenuVisibilityChange?.();
+    }
   }
 
   dispose(): void {
@@ -227,6 +243,15 @@ export class BottomToolbarOverflowController {
   }
 
   sync(): void {
+    this.suppressMenuNotify = true;
+    try {
+      this.syncInner();
+    } finally {
+      this.suppressMenuNotify = false;
+    }
+  }
+
+  private syncInner(): void {
     if (
       !this.root.isConnected ||
       !this.dock.isConnected ||
@@ -447,6 +472,9 @@ export class BottomToolbarOverflowController {
     this.open = true;
     this.toggle.setAttribute("aria-expanded", "true");
     this.positionMenu(menu, this.toggle);
+    if (!this.suppressMenuNotify) {
+      this.onMenuVisibilityChange?.();
+    }
   }
 
   private positionMenu(menu: HTMLElement, toggle: HTMLButtonElement): void {
@@ -454,7 +482,17 @@ export class BottomToolbarOverflowController {
     const toggleRect = toggle.getBoundingClientRect();
     const pad = 8;
 
-    const availAbove = Math.max(80, Math.floor(toggleRect.top - rootRect.top - pad * 2));
+    const toolbarBottom =
+      this.root.querySelector<HTMLElement>(".ms-workspace-toolbar")?.getBoundingClientRect().bottom ??
+      rootRect.top;
+    const tabHeight =
+      this.root.querySelector<HTMLElement>(".ms-workspace-reader-tab-row")?.offsetHeight ?? 0;
+    const topBase = Math.max(0, toolbarBottom - rootRect.top) + tabHeight;
+    const bottomFromRoot = Math.max(0, rootRect.bottom - toggleRect.top + pad);
+    const desiredTopReserve = Math.ceil(topBase + 140);
+    const maxTopReserve = Math.max(pad, Math.floor(rootRect.height - bottomFromRoot - 120));
+    const topReserve = Math.min(desiredTopReserve, maxTopReserve);
+    const availAbove = Math.max(80, Math.floor(toggleRect.top - rootRect.top - topReserve - pad));
     menu.style.maxHeight = `${availAbove}px`;
 
     const menuRect = menu.getBoundingClientRect();
