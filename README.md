@@ -29,9 +29,11 @@
 
 要求 Obsidian 1.4.0 及以上。已知问题见 [已知问题](docs/known-issues.md)。
 
+> **第一次用？** 先看 [完整使用手册](docs/使用教程.md)：19 章、覆盖阅读/摘录/手写/卡片/脑图/复习/设置逐项说明，所有按钮名与默认值都对着源码核过。
+
 ## 文档
 
-- [用户使用教程](docs/使用教程.md)
+- [完整使用手册（19 章）](docs/使用教程.md)
 - [当前状态](docs/STATUS.md) · [路线图](docs/ROADMAP.md) · [MN5 差距](docs/MN5-PARITY-GAP.md)
 - [架构决策](docs/architecture/decisions-mn502.md) · [实现差异](docs/architecture/implementation-deltas.md) · [技术评审](docs/architecture/optimization-review.md)
 - [5.0.2 规格](docs/specs/mn5-5.0.2-delta.md) · [完整验收定义](docs/specs/full-mn5-replication.md) · [菜单矩阵](docs/specs/page-menu-state-matrix.md)
