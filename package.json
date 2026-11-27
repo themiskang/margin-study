@@ -1,6 +1,6 @@
 {
   "name": "margin-study",
-  "version": "1.5.5",
+  "version": "1.5.6",
   "description": "MarginNote 5 风格 Obsidian 学习插件（PDF/Word 阅读 / 标注 / 语音手写 / 卡片 / 思维导图 / 复习 / 导出）",
   "main": "main.js",
   "scripts": {
