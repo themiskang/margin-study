@@ -265,3 +265,17 @@ G10b-03 **3/3 次确定性失败**（切本后 `refreshExtendLayout` 打断导�
 3. `db33efc`：移除「竖排=0」一刀切，改为统一几何侵入深度 `barHeight + barBottomOffset - readerBottomInset`；竖排「更多」展开 231px、横排 624px，三滚动位交叠 0；竖排保留 130.02px 可滚阅读区。
 
 门禁：`verify:public` **117/117**、`px-gap` 295/298 exceeded 0。已装 1.5.6 到 Mac `yan` 与 Pad 两个库。
+
+## 2026-11-27 · 阅读区禁止左右滑动开侧栏（合并 `eba84b9`，**不发版**，版本号仍 1.5.6）
+
+业主实机：平板上**手指或笔**横向滑动会拉出 Obsidian 左右侧栏，打断书写。业主要求默认开启、不加版本号、当 bug 修复推送。
+
+**机制来源**（从 `/Applications/Obsidian.app/Contents/Resources/obsidian.asar` 的 `app.js` 解包取证）：侧栏手势在 `touchstart` 阶段就按 DOM 判定，命中以下任一即放弃——触摸目标或祖先带 `data-ignore-swipe`（任意非空字符串）、或祖先行内 `style.touchAction === "none"`、或目标是 `HTMLAudioElement`。`touchmove` 阶段的 `preventDefault()` **拦不住**（第一版方案因此作废）。另注：包内 `touchType === "stylus"` 判断从未被赋值，属死代码，笔同样会触发手势。
+
+**实现**：新增 `settings.blockSidebarSwipe`（默认 `true`，设置面板「阅读」分组「阅读区禁止左右滑动开侧栏」）；`src/utils/swipeGuard.ts` 只负责挂/卸 `data-ignore-swipe`，并订阅 Store 即时增删（关闭时 `removeAttribute`）。挂载点：PDF / Word / HTML / EPUB 的 `scrollEl` 与学习工作区 `readerHost`。
+
+**规格订正（记录在案，非放宽）**：属性经祖先链继承，无法对子树豁免。判据由「工具栏/输入框不挂属性」订正为：① 阅读器**外部**工具栏/脑图/卡片面板/输入框不得被覆盖；② 阅读器**内部**浮层控件允许继承，但必须**完全可用**。
+
+**验收**：`reader-swipe-guard` 71/71（五宿主属性、官方祖先循环复刻、设置关移除、即时切换、页内控件可用性、双视口 `1131×800@DPR3` / `1510×962@DPR2`）；页内控件实测角度 `0°→35°`（复核独立测到 `0°→57°`）、留白高度 `+73px`、位移 `+67px`；`verify:public` **118/118**；`px-gap` 295/298 exceeded 0。复核 PASS，Red 对照忽略 0/5、退出 1。
+
+**局限**：macOS 桌面包代码取证，iPad 包无法在 Mac 拆包，属同代码库推断；iPad 原生侧栏手势与选区手柄留业主真机签收。
