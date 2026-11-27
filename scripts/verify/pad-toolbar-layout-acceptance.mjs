@@ -1597,6 +1597,196 @@ async function openPdfInlineTextBox(h: Awaited<ReturnType<typeof createHarness>>
   };
 };
 
+(window as any).measureU106MenuClearance = async (cfg: {
+  label: string;
+  mobile: boolean;
+  mindmap: boolean;
+}) => {
+  const h = activeHarness!;
+  const raf = () => new Promise<void>(r => requestAnimationFrame(() => r()));
+  document.body.classList.toggle("is-mobile", cfg.mobile);
+  h.store.setStudyInterface("set-1", "scenes");
+  (h.view as any).state.ratio = 0.5;
+  (h.view as any).state.mindmap = cfg.mindmap;
+  (h.view as any).state.reader = true;
+  (h.view as any).state.bottomCollapsed = false;
+  (h.view as any).state.cleanView = false;
+  h.root.style.removeProperty("--ms-capsule-bottom");
+  (h.view as any).applyLayout();
+  await h.openDoc("pdf");
+  await h.selectScene("excerpt");
+  await frame(); await frame();
+
+  const readClearance = () =>
+    Number((parseFloat(getComputedStyle(h.root).getPropertyValue("--ms-bottom-bar-clearance")) || 0).toFixed(2));
+  const baseClearance = readClearance();
+
+  const measureMenuOverlapAtScrolls = async (menuSelector: string) => {
+    const scroll = h.root.querySelector<HTMLElement>(".ms-scroll")!;
+    const host = h.root.querySelector<HTMLElement>(".ms-workspace-reader-host")!;
+    const maxScroll = Math.max(0, scroll.scrollHeight - scroll.clientHeight);
+    const checks: any[] = [];
+    let maxOverlapArea = 0;
+    for (const [posName, targetScroll] of [["top", 0], ["mid", Math.round(maxScroll / 2)], ["bottom", maxScroll]] as const) {
+      scroll.scrollTop = targetScroll;
+      await frame();
+      const menu = h.root.querySelector<HTMLElement>(menuSelector);
+      assert(menu && menu.checkVisibility(), \`[U1-06 \${cfg.label}] menu \${menuSelector} not visible at \${posName}\`);
+      const menuRect = menu.getBoundingClientRect();
+      const hostRect = host.getBoundingClientRect();
+      const lines = [...host.querySelectorAll<HTMLElement>(".ms-text-layer > span")];
+      let posMaxArea = 0;
+      for (const line of lines) {
+        const r = line.getBoundingClientRect();
+        const clipped = {
+          left: Math.max(r.left, hostRect.left),
+          right: Math.min(r.right, hostRect.right),
+          top: Math.max(r.top, hostRect.top),
+          bottom: Math.min(r.bottom, hostRect.bottom),
+        };
+        if (clipped.bottom - clipped.top <= 0.5 || clipped.right - clipped.left <= 0.5) continue;
+        const inter = intersectionArea(clipped, menuRect);
+        if (inter.area > posMaxArea) posMaxArea = inter.area;
+      }
+      if (posMaxArea > maxOverlapArea) maxOverlapArea = posMaxArea;
+      checks.push({
+        posName,
+        maxArea: Number(posMaxArea.toFixed(2)),
+        hostHeight: Number(hostRect.height.toFixed(2)),
+        clearance: readClearance(),
+      });
+    }
+    scroll.scrollTop = 0;
+    await frame();
+    return { maxOverlapArea: Number(maxOverlapArea.toFixed(2)), checks };
+  };
+
+  const sample30 = async () => {
+    const samples: number[] = [];
+    for (let i = 0; i < 30; i++) {
+      await raf();
+      samples.push(readClearance());
+    }
+    let flips = 0;
+    for (let i = 1; i < samples.length; i++) {
+      if ((samples[i - 1] === 0) !== (samples[i] === 0)) flips++;
+    }
+    const range = Number((Math.max(...samples) - Math.min(...samples)).toFixed(2));
+    return { samples, min: Math.min(...samples), max: Math.max(...samples), range, flips, final: samples[samples.length - 1] };
+  };
+
+  const testMenu = async (
+    kind: "overflow" | "document-more",
+    openFn: () => Promise<void>,
+    closeFn: () => Promise<void>,
+    selector: string,
+  ) => {
+    const roundTrips: any[] = [];
+    let maxOverlapArea = 0;
+    let scrollChecks: any[] = [];
+    for (let round = 1; round <= 3; round++) {
+      await openFn();
+      const openSyncClearance = readClearance();
+      const openStability = await sample30();
+      if (round === 1) {
+        const scrollRes = await measureMenuOverlapAtScrolls(selector);
+        maxOverlapArea = scrollRes.maxOverlapArea;
+        scrollChecks = scrollRes.checks;
+      }
+      await closeFn();
+      const closeSyncClearance = readClearance();
+      const closeStability = await sample30();
+      roundTrips.push({
+        round,
+        openSyncClearance,
+        openFinal: openStability.final,
+        openRange: openStability.range,
+        openFlips: openStability.flips,
+        closeSyncClearance,
+        closeFinal: closeStability.final,
+        closeRange: closeStability.range,
+        closeFlips: closeStability.flips,
+      });
+    }
+    const stableOk = roundTrips.every(
+      r =>
+        r.openRange === 0 &&
+        r.openFlips === 0 &&
+        r.closeRange === 0 &&
+        r.closeFlips === 0 &&
+        Math.abs(r.closeSyncClearance - baseClearance) <= 1 &&
+        Math.abs(r.closeFinal - baseClearance) <= 1,
+    );
+    return {
+      kind,
+      maxOverlapArea,
+      scrollChecks,
+      roundTrips,
+      passed: maxOverlapArea === 0 && stableOk,
+    };
+  };
+
+  const results: any[] = [];
+
+  // 1. Overflow menu (if present at this viewport)
+  const toggle = h.root.querySelector<HTMLButtonElement>(".ms-bottom-overflow-toggle");
+  if (toggle && toggle.checkVisibility()) {
+    results.push(
+      await testMenu(
+        "overflow",
+        async () => {
+          const t = h.root.querySelector<HTMLButtonElement>(".ms-bottom-overflow-toggle")!;
+          t.click();
+          await raf();
+        },
+        async () => {
+          window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+          await raf();
+        },
+        ".ms-bottom-overflow-menu",
+      ),
+    );
+  }
+
+  // 2. Unified "更多" menu (.ms-document-more)
+  results.push(
+    await testMenu(
+      "document-more",
+      async () => {
+        const t = h.root.querySelector<HTMLButtonElement>(".ms-bottom-overflow-toggle");
+        if (t && t.checkVisibility()) {
+          t.click();
+          await raf();
+          const moreItem = h.root.querySelector<HTMLButtonElement>('.ms-bottom-overflow-menu [data-ms-tool="excerpt.more"]')!;
+          moreItem.click();
+        } else {
+          h.root.querySelector<HTMLButtonElement>('[data-ms-tool="excerpt.more"]')!.click();
+        }
+        await raf();
+      },
+      async () => {
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+        await raf();
+      },
+      ".ms-document-more",
+    ),
+  );
+
+  // Restore defaults
+  (h.view as any).state.mindmap = true;
+  document.body.classList.remove("is-mobile");
+  (h.view as any).applyLayout();
+  await frame();
+
+  return {
+    label: cfg.label,
+    mindmap: cfg.mindmap,
+    baseClearance,
+    menus: results,
+    passed: results.every(r => r.passed),
+  };
+};
+
 (window as any).ready = true;
 `;
 
@@ -1676,6 +1866,7 @@ try {
       u103: [],
       u104: [],
       u105: [],
+      u106: [],
       u201: [],
       u202: null,
       u203: [],
@@ -1765,6 +1956,26 @@ try {
       throw new Error("U1-05 FAILED: " + JSON.stringify(u105Failures, null, 2));
     }
 
+    // U1-06: bottom overflow & unified more menus expand clearance (0 overlap, 3x round-trip 30f stability, scroll-safe)
+    const u106Profiles = [
+      { label: "380x700@DPR2-readerOnly", w: 380, h: 700, dpr: 2, mobile: true, mindmap: false },
+      { label: "380x700@DPR2-split", w: 380, h: 700, dpr: 2, mobile: true, mindmap: true },
+      { label: "590x800@DPR3-readerOnly", w: 590, h: 800, dpr: 3, mobile: true, mindmap: false },
+      { label: "590x800@DPR3-split", w: 590, h: 800, dpr: 3, mobile: true, mindmap: true },
+    ];
+    for (const p of u106Profiles) {
+      await browser("set", "viewport", String(p.w), String(p.h), String(p.dpr));
+      report.u106.push(await evalJson(`window.measureU106MenuClearance(${JSON.stringify({
+        label: p.label,
+        mobile: p.mobile,
+        mindmap: p.mindmap,
+      })})`));
+    }
+    const u106Failures = report.u106.filter(r => !r.passed);
+    if (u106Failures.length > 0) {
+      throw new Error("U1-06 FAILED: " + JSON.stringify(u106Failures, null, 2));
+    }
+
     // U2-01: legacy top extra-tools toggle & controls completely removed, top capsule 100% unobstructed
     for (const [w, hSize, dpr] of [[1131, 800, 3], [1512, 851, 1], [756, 851, 1], [380, 700, 1]]) {
       await browser("set", "viewport", String(w), String(hSize), String(dpr));
@@ -1808,7 +2019,7 @@ try {
     const totalU101Checks = report.u101.reduce((s, r) => s + r.checkedCount, 0);
     const totalU103Items = report.u103.reduce((s, r) => s + r.scenes.reduce((a, b) => a + b.clickedCount, 0), 0);
     console.log(
-      `PASS pad-toolbar-layout: U1-01 (${totalU101Checks}/${totalU101Checks}, maxOverlapArea=0), U1-02 (3/3), U1-03 (${totalU103Items}/${totalU103Items}), U1-04 (3/3), U1-05 (${report.u105.length}/${report.u105.length}, 30f stable), U2-01 (4/4), U2-02 (${report.u202.total}/24, ${report.u202.uniqueCount}/9 unique), U2-03 (3/3), U3-01 (3/3 single-slot), U3-02 (${report.u302.count}/10 exit paths, ${report.u302.outsideTargets.length}/4 outside, ${report.u302.whitelist.length}/3 whitelist), U-JOINT-01 (PASS)`,
+      `PASS pad-toolbar-layout: U1-01 (${totalU101Checks}/${totalU101Checks}, maxOverlapArea=0), U1-02 (3/3), U1-03 (${totalU103Items}/${totalU103Items}), U1-04 (3/3), U1-05 (${report.u105.length}/${report.u105.length}, 30f stable), U1-06 (${report.u106.length}/${report.u106.length}, menus 0 overlap), U2-01 (4/4), U2-02 (${report.u202.total}/24, ${report.u202.uniqueCount}/9 unique), U2-03 (3/3), U3-01 (3/3 single-slot), U3-02 (${report.u302.count}/10 exit paths, ${report.u302.outsideTargets.length}/4 outside, ${report.u302.whitelist.length}/3 whitelist), U-JOINT-01 (PASS)`,
     );
   } finally {
     await browser("close").catch(() => {});

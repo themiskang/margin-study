@@ -60,6 +60,18 @@ export function computeBottomBarClearance(input: BottomBarClearanceInput): numbe
   return raw;
 }
 
+/** 按当前可见底部浮层集合（胶囊、溢出菜单、底部更多菜单、格式条）取最大安全区高度（px）。 */
+export function computeMaxBottomOverlayClearance(
+  overlays: ReadonlyArray<BottomBarClearanceInput>,
+): number {
+  let maxClearance = 0;
+  for (const overlay of overlays) {
+    const value = computeBottomBarClearance(overlay);
+    if (value > maxClearance) maxClearance = value;
+  }
+  return maxClearance;
+}
+
 /** 按可用宽度与优先级计算底部工具行的可见项与溢出项；不超宽时零溢出。 */
 export function computeBottomToolbarOverflow(
   items: BottomToolbarItemMetric[],
@@ -155,14 +167,20 @@ export class BottomToolbarOverflowController {
   private toggle: HTMLButtonElement | null = null;
   private overflowButtons: HTMLButtonElement[] = [];
   private open = false;
+  private suppressMenuNotify = false;
 
   constructor(
     private readonly root: HTMLElement,
     private readonly dock: HTMLElement,
+    private readonly onMenuVisibilityChange?: () => void,
   ) {}
 
   getToggle(): HTMLButtonElement | null {
     return this.toggle;
+  }
+
+  getMenuElement(): HTMLElement | null {
+    return this.open && this.menu?.isConnected ? this.menu : null;
   }
 
   getOverflowCount(): number {
@@ -174,10 +192,14 @@ export class BottomToolbarOverflowController {
   }
 
   closeMenu(): void {
+    const wasOpen = this.open || !!this.menu;
     this.open = false;
     this.menu?.remove();
     this.menu = null;
     this.toggle?.setAttribute("aria-expanded", "false");
+    if (wasOpen && !this.suppressMenuNotify) {
+      this.onMenuVisibilityChange?.();
+    }
   }
 
   dispose(): void {
@@ -215,6 +237,15 @@ export class BottomToolbarOverflowController {
   }
 
   sync(): void {
+    this.suppressMenuNotify = true;
+    try {
+      this.syncInner();
+    } finally {
+      this.suppressMenuNotify = false;
+    }
+  }
+
+  private syncInner(): void {
     if (
       !this.root.isConnected ||
       !this.dock.isConnected ||
@@ -435,6 +466,9 @@ export class BottomToolbarOverflowController {
     this.open = true;
     this.toggle.setAttribute("aria-expanded", "true");
     this.positionMenu(menu, this.toggle);
+    if (!this.suppressMenuNotify) {
+      this.onMenuVisibilityChange?.();
+    }
   }
 
   private positionMenu(menu: HTMLElement, toggle: HTMLButtonElement): void {
@@ -442,7 +476,17 @@ export class BottomToolbarOverflowController {
     const toggleRect = toggle.getBoundingClientRect();
     const pad = 8;
 
-    const availAbove = Math.max(80, Math.floor(toggleRect.top - rootRect.top - pad * 2));
+    const toolbarBottom =
+      this.root.querySelector<HTMLElement>(".ms-workspace-toolbar")?.getBoundingClientRect().bottom ??
+      rootRect.top;
+    const tabHeight =
+      this.root.querySelector<HTMLElement>(".ms-workspace-reader-tab-row")?.offsetHeight ?? 0;
+    const topBase = Math.max(0, toolbarBottom - rootRect.top) + tabHeight;
+    const bottomFromRoot = Math.max(0, rootRect.bottom - toggleRect.top + pad);
+    const desiredTopReserve = Math.ceil(topBase + 140);
+    const maxTopReserve = Math.max(pad, Math.floor(rootRect.height - bottomFromRoot - 120));
+    const topReserve = Math.min(desiredTopReserve, maxTopReserve);
+    const availAbove = Math.max(80, Math.floor(toggleRect.top - rootRect.top - topReserve - pad));
     menu.style.maxHeight = `${availAbove}px`;
 
     const menuRect = menu.getBoundingClientRect();

@@ -52,7 +52,7 @@ import { hasDeviceRecallHintProvider, requestDeviceRecallHint } from "../recall/
 import { uid } from "../utils/id";
 import type { HandwritingSource, ReaderReturnPosition } from "../documents/readingPosition";
 import { INLINE_TEXT_EDITOR_CHANGE_EVENT } from "../annot/inlineTextEditor";
-import { BottomToolbarOverflowController, computeBottomBarClearance } from "./bottomToolbarOverflow";
+import { BottomToolbarOverflowController, computeBottomBarClearance, computeMaxBottomOverlayClearance, type BottomBarClearanceInput } from "./bottomToolbarOverflow";
 
 export const VIEW_TYPE_STUDY_WORKSPACE = "margin-study-workspace";
 type ChildReader = ReaderView | WordReaderView | DocumentReaderView;
@@ -314,7 +314,7 @@ export class StudyWorkspaceView extends ItemView {
     const floatingResize = new ResizeObserver(positionFloatingActions);
     floatingResize.observe(this.root); floatingResize.observe(this.mapPane);
     this.register(() => floatingResize.disconnect());
-    this.bottomOverflow = new BottomToolbarOverflowController(this.root, this.bottomCapsule);
+    this.bottomOverflow = new BottomToolbarOverflowController(this.root, this.bottomCapsule, () => this.syncBottomClearance());
     this.bottomLayoutResize = new ResizeObserver(() => this.scheduleBottomLayoutSync());
     this.bottomLayoutResize.observe(this.root);
     this.bottomLayoutResize.observe(this.bottomCapsule);
@@ -1468,21 +1468,55 @@ export class StudyWorkspaceView extends ItemView {
       capsuleStyle.visibility !== "hidden" &&
       (typeof this.bottomCapsule.checkVisibility !== "function" ||
         this.bottomCapsule.checkVisibility());
-    const capsuleRect = this.bottomCapsule.getBoundingClientRect();
-    const capsuleHeight = Math.max(this.bottomCapsule.offsetHeight, capsuleRect.height);
-    const capsuleBottom = this.readElementBottomOffset(this.bottomCapsule);
-    const clearance = computeBottomBarClearance({
-      barHeight: capsuleHeight,
-      barBottomOffset: capsuleBottom,
-      gap: 8,
+    const rootRect = this.root.getBoundingClientRect();
+    const stackedAboveMap = this.isReaderStackedAboveMap();
+    const baseFlags = {
       cleanView: this.state.cleanView,
       statusBarHidden: this.root.dataset.statusBar === "hidden",
       collapsed: this.state.bottomCollapsed,
-      barVisible: capsuleVisible && capsuleHeight > 0,
-      horizontalOverlap: this.hasHorizontalOverlapWithReader(capsuleRect),
-      readerStackedAboveMap: this.isReaderStackedAboveMap(),
+      readerStackedAboveMap: stackedAboveMap,
       containerHeight: this.root.clientHeight,
-    });
+    };
+    const capsuleRect = this.bottomCapsule.getBoundingClientRect();
+    const capsuleHeight = Math.max(this.bottomCapsule.offsetHeight, capsuleRect.height);
+    const capsuleBottom = this.readElementBottomOffset(this.bottomCapsule);
+    const overlays: BottomBarClearanceInput[] = [
+      {
+        ...baseFlags,
+        barHeight: capsuleHeight,
+        barBottomOffset: capsuleBottom,
+        gap: 8,
+        barVisible: capsuleVisible && capsuleHeight > 0,
+        horizontalOverlap: this.hasHorizontalOverlapWithReader(capsuleRect),
+      },
+    ];
+    const extraMenus: HTMLElement[] = [];
+    const overflowMenu = this.bottomOverflow?.getMenuElement();
+    if (overflowMenu) extraMenus.push(overflowMenu);
+    if (this.popup?.isConnected && this.popup.dataset.bottomAnchored === "true") {
+      extraMenus.push(this.popup);
+    }
+    for (const menu of extraMenus) {
+      const menuStyle = getComputedStyle(menu);
+      const menuVisible =
+        menuStyle.display !== "none" &&
+        menuStyle.visibility !== "hidden" &&
+        (typeof menu.checkVisibility !== "function" || menu.checkVisibility());
+      if (!menuVisible) continue;
+      const menuRect = menu.getBoundingClientRect();
+      const menuHeight = Math.max(menu.offsetHeight, menuRect.height);
+      if (menuHeight <= 0) continue;
+      const menuBottomOffset = Math.max(0, rootRect.bottom - menuRect.bottom);
+      overlays.push({
+        ...baseFlags,
+        barHeight: menuHeight,
+        barBottomOffset: menuBottomOffset,
+        gap: 8,
+        barVisible: true,
+        horizontalOverlap: this.hasHorizontalOverlapWithReader(menuRect),
+      });
+    }
+    const clearance = computeMaxBottomOverlayClearance(overlays);
     this.writeBottomClearance(clearance);
   }
   private syncBottomLayout(): void {
@@ -1956,7 +1990,12 @@ export class StudyWorkspaceView extends ItemView {
     this.root.classList.toggle("is-focused-stage",this.focusedStage);this.drawToolbar();
     if(reader&&state)void reader.setState(state).catch(error=>{if(!this.closed&&this.reader===reader)new Notice("恢复阅读位置失败："+String(error));});
   }
-  private dismissPopup(): void { this.popup?.remove();this.popup=null; }
+  private dismissPopup(): void {
+    const hadBottomAnchored = this.popup?.dataset.bottomAnchored === "true";
+    this.popup?.remove();
+    this.popup = null;
+    if (hadBottomAnchored) this.syncBottomClearance();
+  }
   private popover(title:string): HTMLElement {
     this.dismissPopup();
     const pane=el("section",{class:"ms-native-popover",role:"dialog","aria-label":title});
@@ -2640,14 +2679,19 @@ export class StudyWorkspaceView extends ItemView {
     if (inLowerHalf) {
       const ctxBottom = this.toolbar.querySelector<HTMLElement>(".ms-workspace-context")?.getBoundingClientRect().bottom ?? 0;
       const headerBottom = Math.max(this.toolbar.getBoundingClientRect().bottom, ctxBottom) - root.top;
-      const topGuard = Math.max(12, Math.ceil(headerBottom) + 8);
+      const tabHeight = this.readerTabRow ? this.readerTabRow.offsetHeight : 0;
       const bottomOffset = Math.max(12, Math.round(root.bottom - anchor.top + 8));
+      const desiredTopGuard = Math.ceil(headerBottom + tabHeight + 140);
+      const maxTopGuard = Math.max(Math.ceil(headerBottom) + 8, Math.floor(root.height - bottomOffset - 160));
+      const topGuard = Math.max(12, Math.min(desiredTopGuard, maxTopGuard));
       const availHeight = Math.max(120, Math.floor(root.height - bottomOffset - topGuard));
       pane.style.top = "auto";
       pane.style.bottom = bottomOffset + "px";
       pane.style.maxHeight = availHeight + "px";
       pane.style.setProperty("--ms-document-menu-height", availHeight + "px");
+      pane.dataset.bottomAnchored = "true";
     } else {
+      delete pane.dataset.bottomAnchored;
       const top = clamp(anchor.bottom - root.top + 12, 12, Math.max(12, root.height - 140));
       const availHeight = Math.max(70, Math.floor(root.height - top - 12));
       pane.style.bottom = "auto";
@@ -2655,6 +2699,7 @@ export class StudyWorkspaceView extends ItemView {
       pane.style.maxHeight = availHeight + "px";
       pane.style.setProperty("--ms-document-menu-height", availHeight + "px");
     }
+    this.syncBottomClearance();
   }
   /** 5.0.2 合并：把当前页 / 页范围 / 整本 PDF 或重组文档合并进另一份文档（目标为 .msref 时追加引用，否则新建集合）。 */
   private openMergeIntoDocument(): void {
