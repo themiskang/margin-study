@@ -423,6 +423,7 @@ export interface MarginStudySettings {
   showFootnotesLinksOnMargin?: boolean;
   hideMarginNumbers?: boolean;
   tapPageEdges?: boolean;
+  blockSidebarSwipe?: boolean;
   mobileLowRes?: boolean;
   inkPrediction?: boolean;
   assistiveExcerpt?: boolean;
@@ -478,6 +479,7 @@ export const DEFAULT_SETTINGS: MarginStudySettings = {
   readingTheme: "white",
   readingMode: "vertical",
   doublePage: false,
+  blockSidebarSwipe: true,
   mobileLowRes: true,
   assistiveExcerpt: true,
   excerptPopup: true,

@@ -96,7 +96,7 @@ check("every settings feature names an existing rendered setting", () => {
   tab.display();
   settingHost.append(tab.containerEl);
   const names = [...settingHost.querySelectorAll(".setting-item-name")].map((node) => (node as HTMLElement).textContent!.trim());
-  assert(names.length === 23, "expected 23 desktop settings, got " + names.length + ": " + names.join(","));
+  assert(names.length === 24, "expected 24 desktop settings, got " + names.length + ": " + names.join(","));
   const settingEntries = FEATURE_INDEX.filter((entry) => entry.kind === "setting");
   assert(settingEntries.length === names.length, "settings entries " + settingEntries.length + " != rendered " + names.length);
   for (const entry of settingEntries) assert(names.includes(entry.setting!), "setting missing: " + entry.setting);
@@ -104,6 +104,7 @@ check("every settings feature names an existing rendered setting", () => {
     assert(queryFeatures(query).some((entry) => entry.id === "settings.ink-prediction" && entry.setting === "手写笔迹预测"), "prediction setting not found: " + query);
   }
   assert(queryFeatures("hideHostTabBar").some((entry) => entry.id === "settings.hide-host-tab-bar" && entry.setting === "隐藏宿主标签栏"), "host tab bar setting not found");
+  assert(queryFeatures("blockSidebarSwipe").some((entry) => entry.id === "settings.block-sidebar-swipe" && entry.setting === "阅读区禁止左右滑动开侧栏"), "blockSidebarSwipe setting not found");
   for (const query of ["拖选", "autoHighlightOnSelect"]) {
     assert(queryFeatures(query).some((entry) => entry.id === "settings.auto-highlight-select" && entry.setting === "拖选文本自动高亮"), "auto-highlight-select setting not found: " + query);
   }

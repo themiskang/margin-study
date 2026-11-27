@@ -9,6 +9,7 @@ import type MarginStudyPlugin from "./main";
 import { BRANCH_STYLES, ACCENTS, ThemeMode } from "./types";
 import { applyTheme } from "./theme";
 import { setInkPredictionReader } from "./annot/pen";
+import { el } from "./utils/dom";
 
 export class MarginStudySettingTab extends PluginSettingTab {
   plugin: MarginStudyPlugin;
@@ -115,6 +116,23 @@ export class MarginStudySettingTab extends PluginSettingTab {
         dd.setValue(s.defaultColor);
         dd.onChange((v) => {
           s.defaultColor = v;
+          this.plugin.store.save();
+        });
+      });
+
+    if (typeof containerEl.createEl === "function") {
+      containerEl.createEl("h3", { cls: "ms-settings-heading", text: "阅读" });
+    } else if (typeof containerEl.append === "function" && typeof document !== "undefined") {
+      containerEl.append(el("h3", { class: "ms-settings-heading", text: "阅读" }));
+    }
+
+    new Setting(containerEl)
+      .setName("阅读区禁止左右滑动开侧栏")
+      .setDesc("只在 MarginStudy 阅读器内生效，不影响上下翻页、不影响双指缩放。")
+      .addToggle((tg) => {
+        tg.setValue(s.blockSidebarSwipe !== false);
+        tg.onChange((v) => {
+          s.blockSidebarSwipe = v;
           this.plugin.store.save();
         });
       });

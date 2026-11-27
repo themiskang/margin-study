@@ -85,6 +85,7 @@ export const FEATURE_INDEX: FeatureEntry[] = [
   setting("settings.ink-prediction", "手写笔迹预测", "根据手写速度预测一帧笔迹，松笔后只保留真实笔迹", ["手写预测", "笔迹预测", "ink prediction", "handwriting prediction", "inkPrediction"]),
   setting("settings.colors", "标注颜色", "编辑可选的标注颜色列表", ["标注颜色", "颜色", "colors"]),
   setting("settings.default-color", "默认标注颜色", "选择新标注使用的默认颜色", ["默认颜色", "默认标注颜色"]),
+  setting("settings.block-sidebar-swipe", "阅读区禁止左右滑动开侧栏", "只在 MarginStudy 阅读器内生效，不影响上下翻页、不影响双指缩放", ["侧栏", "左右滑动", "防误触", "手写", "swipe", "blockSidebarSwipe"]),
   setting("settings.scale", "默认缩放", "调整新打开 PDF 的默认缩放比例", ["缩放", "scale", "默认缩放"]),
   setting("settings.page-gap", "页间距 (px)", "调整阅读时页面之间的间距", ["页间距", "页面间距", "gap"]),
   setting("settings.branch-style", "默认分支样式", "选择新建或打开脑图时的分支布局", ["分支样式", "布局", "branch"]),

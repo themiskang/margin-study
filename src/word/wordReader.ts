@@ -5,6 +5,7 @@ import type { HandwritingMode } from "../annot/penGeometry";
 import type { ReaderEditHistoryState } from "../annot/baseController";
 import { HtmlAnnotationController, HtmlReader } from "./htmlAnnot";
 import { el, clear, hasBlockingHistoryOverlay } from "../utils/dom";
+import { attachReaderSwipeGuard } from "../utils/swipeGuard";
 import * as mammoth from "mammoth";
 import { ReadingSpeechControls, documentSpeechSections } from "../audio/speechControls";
 import { ReadingPositionTracker } from "../documents/readingPosition";
@@ -28,6 +29,7 @@ export class WordReaderView extends ItemView implements HtmlReader {
   private workspaceChrome = false;
   private reading = new ReadingPositionTracker();
   private saveTimer: number | null = null;
+  private disposeSwipeGuard: (() => void) | null = null;
 
   constructor(leaf: WorkspaceLeaf, plugin: MarginStudyPlugin) {
     super(leaf);
@@ -145,6 +147,12 @@ export class WordReaderView extends ItemView implements HtmlReader {
     this.bodyEl = el("div", { class: "ms-word-body markdown-rendered" });
     this.reading.connect(this.scrollEl, this.bodyEl);
     this.scrollEl.addEventListener("scroll", this.onScroll, { passive: true });
+    this.disposeSwipeGuard?.();
+    this.disposeSwipeGuard = attachReaderSwipeGuard(this.scrollEl, {
+      isEnabled: () => this.plugin.store.settings.blockSidebarSwipe !== false,
+      getScrollEl: () => this.scrollEl,
+      isSelectionOrMultiSelectActive: () => this.getBlockSelectionMode(),
+    });
     this.scrollEl.addEventListener("pointerdown", () => { this.plugin.activeReader = this; });
     this.scrollEl.addEventListener("focusin", () => { this.plugin.activeReader = this; });
     this.containerEl.addEventListener("keydown", this.onStandaloneHistoryKey);
@@ -162,6 +170,8 @@ export class WordReaderView extends ItemView implements HtmlReader {
     this.speech?.dispose(); this.speech = null;
     this.destroyed = true;
     this.reading.disconnect();
+    this.disposeSwipeGuard?.();
+    this.disposeSwipeGuard = null;
     this.scrollEl?.removeEventListener("scroll", this.onScroll);
     this.containerEl?.removeEventListener("keydown", this.onStandaloneHistoryKey);
     window.removeEventListener("keydown", this.onStandaloneHistoryKey);
