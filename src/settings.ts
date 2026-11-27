@@ -196,6 +196,17 @@ export class MarginStudySettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
+      .setName("拖选文本自动高亮")
+      .setDesc("在「摘录 / 书写」场景拖选文字松手后自动生成高亮（默认关闭，仅选中文字并弹出操作菜单；开启「连续摘录」时不受此开关限制，始终逐笔自动摘录）。")
+      .addToggle((tg) => {
+        tg.setValue(s.autoHighlightOnSelect ?? false);
+        tg.onChange((v) => {
+          s.autoHighlightOnSelect = v;
+          this.plugin.store.save();
+        });
+      });
+
+    new Setting(containerEl)
       .setName("高亮后自动成卡")
       .setDesc("在 PDF/Word 中做高亮或下划线时，自动生成一张摘录卡（否则需手动点「摘录卡」）。")
       .addToggle((tg) => {

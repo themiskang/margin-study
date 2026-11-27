@@ -328,11 +328,51 @@ async function openStandaloneHtml(htmlPath: string, html: string) {
 (window as any).runAll = async () => {
   const report: Record<string, any> = {};
 
-  // ===== C1: 工作区微拖 4px / 3 字 0 产物 + 正常 6 字摘录 + 1 次 Cmd+Z 全部归 0 + Cmd+Shift+Z 恢复 =====
+  // ===== C1: 工作区默认仅选中→点菜单「高亮」→1 次 Cmd+Z 撤净 + 显式开启自动高亮（微拖 4px / 3 字 0 产物 + 正常 6 字摘录 + 1 次 Cmd+Z 全部归 0 + Cmd+Shift+Z 恢复）=====
   {
     const ws = await openWorkspace("c1.pdf");
     try {
+      // 0) 默认态（autoHighlightOnSelect=false）：拖选 6 字仅选中不建标注，点菜单「高亮」生成 1 标注 + 1 卡 + 2 节点，1 次 Cmd+Z 撤净
+      assert(ws.store.settings.autoHighlightOnSelect === false, "C1 default autoHighlightOnSelect must be false");
+      await dragSelectPdfText(ws.scroll, "六个中文字符", 160, 0, 240);
+      const afterDefaultSelect = {
+        annotations: (await ws.store.loadAnnotations("c1.pdf")).length,
+        cards: ws.store.cards.length,
+        nodes: ws.store.nodes.length,
+        hasPop: !!document.querySelector(".ms-ann-pop.ms-context-selection"),
+      };
+      assert(afterDefaultSelect.annotations === 0 && afterDefaultSelect.cards === 0 && afterDefaultSelect.nodes === 0 && afterDefaultSelect.hasPop,
+        "C1 default select-only mismatch: " + JSON.stringify(afterDefaultSelect));
+      const hlBtn = document.querySelector<HTMLButtonElement>('.ms-ann-pop [data-action-id="highlight"]');
+      assert(hlBtn, "C1 missing highlight button in selection menu");
+      hlBtn!.click();
+      await wait(60);
+      await frame();
+      const afterMenuHighlight = {
+        annotations: (await ws.store.loadAnnotations("c1.pdf")).length,
+        cards: ws.store.cards.length,
+        nodes: ws.store.nodes.length,
+      };
+      assert(afterMenuHighlight.annotations === 1 && afterMenuHighlight.cards === 1 && afterMenuHighlight.nodes === 2,
+        "C1 menu highlight mismatch: " + JSON.stringify(afterMenuHighlight));
+      dispatchCmdZ(ws.root, false);
+      await wait(40);
+      await frame();
+      const afterMenuUndo = {
+        annotations: (await ws.store.loadAnnotations("c1.pdf")).length,
+        cards: ws.store.cards.length,
+        nodes: ws.store.nodes.length,
+      };
+      assert(afterMenuUndo.annotations === 0 && afterMenuUndo.cards === 0 && afterMenuUndo.nodes === 0,
+        "C1 menu highlight 1x Cmd+Z not zero: " + JSON.stringify(afterMenuUndo));
+
+      // 开启显式 autoHighlightOnSelect=true 覆盖原自动高亮链路
+      ws.store.settings.autoHighlightOnSelect = true;
+      ws.store.save();
+      await frame();
+
       // 1) 4px 微拖
+      await clearSelection();
       await dragSelectPdfText(ws.scroll, "六个中文字符", 4, 0, 240);
       const afterMicro = {
         annotations: (await ws.store.loadAnnotations("c1.pdf")).length,
@@ -394,7 +434,7 @@ async function openStandaloneHtml(htmlPath: string, html: string) {
       assert(afterRedo.annotations === 1 && afterRedo.cards === 1 && afterRedo.nodes === 2,
         "C1 after Cmd+Shift+Z not restored: " + JSON.stringify(afterRedo));
 
-      report.C1 = { afterMicro, after3Chars, afterCreate, afterUndo, afterRedo };
+      report.C1 = { afterDefaultSelect, afterMenuHighlight, afterMenuUndo, afterMicro, after3Chars, afterCreate, afterUndo, afterRedo };
     } finally {
       await ws.dispose();
     }
@@ -402,7 +442,7 @@ async function openStandaloneHtml(htmlPath: string, html: string) {
 
   // ===== C2: 连续两次摘录 + 两次 Cmd+Z -> 全部归 0，store.history 未增长、无卡片复活 =====
   {
-    const ws = await openWorkspace("c2.pdf");
+    const ws = await openWorkspace("c2.pdf", { settings: { autoHighlightOnSelect: true } });
     try {
       const initHistLen = (ws.store as any).history.length;
       const initRev = ws.store.getLibraryHistoryState().revision;
@@ -466,6 +506,7 @@ async function openStandaloneHtml(htmlPath: string, html: string) {
   // ===== C3: 跨栈交替不串栈 =====
   {
     const ws = await openWorkspace("c3.pdf", {
+      settings: { autoHighlightOnSelect: true },
       cards: [{ id: "c-ind", type: "excerpt", docPath: "c3.pdf", front: "Independent Card", tags: [], links: [], createdAt: stamp }],
       nodes: [{ id: "n-ind", cardId: "c-ind", canvasId: "canvas-1", parentId: null, title: "Independent Node", collapsed: false, x: 120, y: 120 }],
     });
@@ -614,7 +655,7 @@ async function openStandaloneHtml(htmlPath: string, html: string) {
     }
 
     // Part C: StudyWorkspaceView 内防双触发（在嵌入的 reader scroll 上派发 1 次 Cmd+Z，冒泡经 reader -> workspace -> window，严格只撤高亮 2）
-    const ws = await openWorkspace("c4-ws.pdf");
+    const ws = await openWorkspace("c4-ws.pdf", { settings: { autoHighlightOnSelect: true } });
     let noDoubleTriggerResult: any;
     try {
       await dragSelectPdfText(ws.scroll, "六个中文字符", 160, 0, 60);
@@ -660,6 +701,7 @@ async function openStandaloneHtml(htmlPath: string, html: string) {
   // ===== C5: 6 类浮层打开时 Cmd+Z 不得误撤背后文档 + 关闭后恢复正常撤销 =====
   {
     const ws = await openWorkspace("c5-overlays.pdf", {
+      settings: { autoHighlightOnSelect: true },
       cards: [{ id: "c-ind", type: "excerpt", docPath: "c5-overlays.pdf", front: "Independent Card", tags: [], links: [], createdAt: stamp }],
       nodes: [{ id: "n-ind", cardId: "c-ind", canvasId: "canvas-1", parentId: null, title: "Independent Node", collapsed: false, x: 120, y: 120 }],
     });
@@ -747,6 +789,7 @@ async function openStandaloneHtml(htmlPath: string, html: string) {
       // 3) 格式条字号下拉浮层 (.ms-text-style-popover) —— 独立验证避免临时文字框干扰其余 5 类计数
       {
         const wsFont = await openWorkspace("c5-fontsize.pdf", {
+          settings: { autoHighlightOnSelect: true },
           cards: [{ id: "c-ind", type: "excerpt", docPath: "c5-fontsize.pdf", front: "Independent Card", tags: [], links: [], createdAt: stamp }],
           nodes: [{ id: "n-ind", cardId: "c-ind", canvasId: "canvas-1", parentId: null, title: "Independent Node", collapsed: false, x: 120, y: 120 }],
         });

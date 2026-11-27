@@ -440,6 +440,8 @@ export interface MarginStudySettings {
   immersive: boolean; // 沉浸模式
   theme: ThemeMode; // 界面主题：亮/暗/跟随系统
   accent: string; // 主题色预设 id（见 ACCENTS）
+  /** 在「摘录 / 书写」场景拖选文字松手后是否自动生成高亮（默认 false，仅选中并弹出操作菜单）。 */
+  autoHighlightOnSelect?: boolean;
   autoCardOnHighlight: boolean; // 高亮/下划线后自动生成摘录卡
   /** 自动摘录与自动成卡的最短有效字数（中文，英文自动按 2 倍折算；0 表示关闭，默认 4）。 */
   autoExcerptMinChars?: number;
@@ -484,6 +486,7 @@ export const DEFAULT_SETTINGS: MarginStudySettings = {
   appleOcrEngine: true,
   ocrSelectionCorrection: false,
   accent: "indigo",
+  autoHighlightOnSelect: false, // 默认拖选仅选中并弹出操作菜单；开启后在摘录/书写场景松手自动高亮
   autoCardOnHighlight: true, // 对齐 MN：每画一笔摘录即自动成卡（旧用户 data.json 已存值不受影响）
   autoExcerptMinChars: 4,
   autoCardOnRegion: true,

@@ -392,6 +392,7 @@ export class StudyWorkspaceView extends ItemView {
       const signature=JSON.stringify(this.plugin.store.getLibraryHistoryState());
       if(signature!==this.libraryHistorySignature){this.libraryHistorySignature=signature;this.historyScope="library";}
       this.syncHistoryButtons();
+      if (!change) this.syncAutomaticTextExcerpt();
       if (change) this.renderer?.updateMovedNodes(change.movedNodeIds); else this.scheduleRefresh();
     }));
     this.registerEvent(this.app.vault.on("create", file => { if (file.path !== "_marginstudy-recovery" && !file.path.startsWith("_marginstudy-recovery/")) this.scheduleRefresh(); }));
@@ -626,23 +627,37 @@ export class StudyWorkspaceView extends ItemView {
     else if(path&&collections.has(path)&&this.reader instanceof ReaderView)await this.reader.refreshPageCollection();
     this.refresh(true);this.saveLayout();
   }
+  private shouldEnableAutomaticTextExcerpt(reader: ChildReader | null = this.reader): boolean {
+    if (!reader || this.readerTool !== "text") return false;
+    if (reader.getBlockSelectionMode?.()) return false;
+    // P0: 连续摘录会话（文本笔激活）——最高优先级，逐笔自动提交
+    if (reader instanceof ReaderView && reader.getContinuousExcerpt().active) return true;
+    // P1: 显式设置「拖选文本自动高亮」（默认 false）+ 场景为摘录或书写
+    if (!this.plugin.store.settings.autoHighlightOnSelect) return false;
+    const scene = this.plugin.store.getStudyScene(this.plugin.store.activeStudySetId ?? "");
+    return scene?.interfaceMode === "scenes" && (scene.sceneId === "excerpt" || scene.sceneId === "writing");
+  }
+  private syncAutomaticTextExcerpt(reader: ChildReader | null = this.reader): void {
+    reader?.setAutomaticTextExcerpt(this.shouldEnableAutomaticTextExcerpt(reader));
+  }
   private connectHandwriting(reader:ChildReader):void {
     const scene = this.plugin.store.getStudyScene(this.plugin.store.activeStudySetId ?? "");
     if (scene?.interfaceMode === "scenes") reader.setRecallMode(scene.sceneId === "recall");
-    reader.setAutomaticTextExcerpt(scene?.interfaceMode === "scenes" && (scene.sceneId === "excerpt" || scene.sceneId === "writing") && this.readerTool === "text");
     this.readerHandwritingDisposers.splice(0).forEach(dispose=>dispose());
-    if(reader instanceof ReaderView){reader.setContinuousExcerptListener(()=>{if(!this.closed&&this.reader===reader)this.drawToolbar();});this.readerHandwritingDisposers.push(()=>reader.setContinuousExcerptListener(null));}
+    if(reader instanceof ReaderView){reader.setContinuousExcerptListener(()=>{if(!this.closed&&this.reader===reader){this.syncAutomaticTextExcerpt(reader);this.drawToolbar();}});this.readerHandwritingDisposers.push(()=>reader.setContinuousExcerptListener(null));}
     if (reader instanceof ReaderView) this.readerHandwritingDisposers.push(reader.subscribeReadingStateChange(() => {
       if (!this.closed && this.reader === reader) this.saveLayout();
     }));
     this.readerHandwritingDisposers.push(reader.subscribeHandwritingModeChange(mode=>{
       this.readerTool=mode==="off"?"text":mode;
       if(!this.syncingHandwriting&&reader.getHandwritingSyncPreference()&&this.renderer){this.syncingHandwriting=true;try{this.renderer.setHandwritingMode(mode);}finally{this.syncingHandwriting=false;}}
+      this.syncAutomaticTextExcerpt(reader);
       this.drawToolbar();
     }),reader.subscribeHandwritingSyncPreference(enabled=>{if(enabled&&this.renderer)this.renderer.setHandwritingMode(reader.getHandwritingMode());}),reader.subscribeEditHistory(state=>{if(state.canUndo||state.canRedo)this.historyScope="reader";this.syncHistoryButtons();}));
     if("setHandwritingSyncAvailable"in reader)(reader as ChildReader & {setHandwritingSyncAvailable(value:boolean):void}).setHandwritingSyncAvailable(!!this.renderer);
     if(reader.getHandwritingSyncPreference())this.renderer?.setHandwritingMode(reader.getHandwritingMode());
     this.readerTool=reader.getHandwritingMode()==="off"?"text":reader.getHandwritingMode();
+    this.syncAutomaticTextExcerpt(reader);
     this.syncCleanPenStrip();
   }
   private recallHintProvider = async (request: import("../types").RecallHintRequest): Promise<import("../types").RecallHintResult> => {
@@ -687,6 +702,7 @@ export class StudyWorkspaceView extends ItemView {
     const editing = focused instanceof HTMLElement && !!focused.closest("input,textarea,[contenteditable=true]");
     const store = this.plugin.store;
     this.restoreRecallSettings();
+    this.syncAutomaticTextExcerpt();
     const fixedKey=JSON.stringify([store.activeStudySetId,store.activeCanvasId,store.studySets.find(set=>set.id===store.activeStudySetId)?.fixedViews,store.canvases.map(canvas=>[canvas.id,canvas.studySetId]),store.nodes.map(node=>[node.id,node.canvasId])]);
     if(fixedKey!==this.fixedViewsSignature){this.fixedViewsSignature=fixedKey;this.drawFixedViews();}
     const toolbarKey = this.currentToolbarSignature();
@@ -1272,7 +1288,7 @@ export class StudyWorkspaceView extends ItemView {
       if(sceneId!==selection.sceneId)this.plugin.store.selectStudyScene(studySetId,template.id,sceneId);
       if(sceneId==="recall"){this.reader?.setHandwritingMode("off");this.readerTool="text";if(this.reader instanceof ReaderView)this.reader.stopExtend();}
       this.setRecallActive(sceneId==="recall");
-      this.reader?.setAutomaticTextExcerpt((sceneId==="excerpt"||sceneId==="writing")&&this.readerTool==="text");
+      this.syncAutomaticTextExcerpt();
       this.drawToolbar();this.saveLayout();
     };
     const openScenePicker=()=>{
@@ -1510,17 +1526,16 @@ export class StudyWorkspaceView extends ItemView {
   }
   private setReaderHandwritingMode(mode:"pen"|"highlight"|"eraser"|"lasso"|"off",toggle=true):void {
     if(!this.reader){this.chooseDocument();return;}
-    this.reader.setAutomaticTextExcerpt(false);
     if(this.reader instanceof ReaderView)this.reader.setContinuousExcerptPen("inactive");
     this.reader.setBlockSelectionMode(false);this.reader.setRegionMode(false);
     const current=this.reader.getHandwritingMode();
     this.reader.setHandwritingMode(toggle&&current===mode?"off":mode);
     this.readerTool=this.reader.getHandwritingMode()==="off"?"text":this.reader.getHandwritingMode();
+    this.syncAutomaticTextExcerpt();
     this.state.bottomMode="writing";this.drawToolbar();
   }
   private setReaderHandwritingPreset(preset:HandwritingPresetId,toggle=true):void {
     if(!this.reader){this.chooseDocument();return;}
-    this.reader.setAutomaticTextExcerpt(false);
     if(this.reader instanceof ReaderView)this.reader.setContinuousExcerptPen("inactive");
     this.reader.setBlockSelectionMode(false);this.reader.setRegionMode(false);
     const mode=this.handwritingPresets().find(item=>item.id===preset)?.type==="highlighter"?"highlight":"pen";
@@ -1528,6 +1543,7 @@ export class StudyWorkspaceView extends ItemView {
     this.reader.setActiveHandwritingPreset?.(preset);
     this.reader.setHandwritingMode(toggle&&same?"off":mode);
     this.readerTool=this.reader.getHandwritingMode()==="off"?"text":this.reader.getHandwritingMode();
+    this.syncAutomaticTextExcerpt();
     this.state.bottomMode="writing";this.drawToolbar();
   }
   private handwritingPresets():HandwritingPresetSpec[] {
@@ -1546,10 +1562,9 @@ export class StudyWorkspaceView extends ItemView {
   }
   private toggleBlockSelection():void {
     if(!this.reader)return;
-    this.reader.setAutomaticTextExcerpt(false);
     const on=!this.reader.getBlockSelectionMode();
     if(on){closeCardActionMenu();if(this.reader instanceof ReaderView)this.reader.stopExtend();this.setRecallActive(false);this.reader.setRegionMode(false);this.reader.setHandwritingMode("off");this.readerTool="text";}
-    this.reader.setBlockSelectionMode(on);this.drawToolbar();
+    this.reader.setBlockSelectionMode(on);this.syncAutomaticTextExcerpt();this.drawToolbar();
   }
   private openRecallSettings(anchor:HTMLElement):void {
     if(!this.reader){new Notice("当前阅读器没有可用的回忆设置");return;}
@@ -1676,8 +1691,7 @@ export class StudyWorkspaceView extends ItemView {
   }
   public toggleInterfaceMode(): void {
     if (!toggleStudyInterface(this.plugin.store)) { new Notice("请先选择学习集"); return; }
-    const scene = this.plugin.store.getStudyScene(this.plugin.store.activeStudySetId ?? "");
-    this.reader?.setAutomaticTextExcerpt(scene?.interfaceMode === "scenes" && (scene.sceneId === "excerpt" || scene.sceneId === "writing") && this.readerTool === "text");
+    this.syncAutomaticTextExcerpt();
     this.reader?.refreshSceneSettings?.();
     this.refresh(true);
   }
@@ -1752,7 +1766,7 @@ export class StudyWorkspaceView extends ItemView {
       menu.addItem(item=>item.setTitle(label).setIsLabel(true));
       for(const template of items)menu.addItem(item=>item.setTitle(template.name).setChecked(selection?.templateId===template.id).setDisabled(!studySetId).onClick(()=>{
         if(!studySetId)return;
-        store.selectStudyScene(studySetId,template.id,template.scenes[0].id);this.reader?.refreshSceneSettings?.();this.drawToolbar();this.saveLayout();
+        store.selectStudyScene(studySetId,template.id,template.scenes[0].id);this.syncAutomaticTextExcerpt();this.reader?.refreshSceneSettings?.();this.drawToolbar();this.saveLayout();
       }));
     };
     group("系统场景模板",templates.filter(template=>systemIds.has(template.id)));
@@ -1878,8 +1892,8 @@ export class StudyWorkspaceView extends ItemView {
     for(const [value,text] of [["full","完整状态栏"],["compact","精简状态栏"],["hidden","隐藏状态栏"]] as const)statusBar.append(el("option",{value,text}));
     statusBar.value=draft.statusBar??"full";
     const statusLabel=el("label",{text:"状态栏 "});statusLabel.append(statusBar);pane.append(statusLabel);
-    const menuGroup=el("fieldset");menuGroup.append(el("legend",{text:"选区菜单"}));const menuIds=draft.textSelectionMenuActions??this.plugin.store.settings.textSelectionMenuActions??["copy","fold","extend-ink","extend-text","ask","research"];
-    let menuChanged=false;const menuOptions=[["copy","复制"],["fold","折叠"],["extend-ink","手写留白"],["extend-text","文字留白"],["ask","向 AI 提问"],["research","研究"],["speech","朗读"]] as const;const menuInputs=menuOptions.map(([id,label])=>{const box=el("input",{type:"checkbox","aria-label":"选区菜单："+label}) as HTMLInputElement;box.checked=menuIds.includes(id);box.addEventListener("change",()=>{menuChanged=true;});const row=el("label",{text:label});row.prepend(box);menuGroup.append(row);return{id,box};});pane.append(menuGroup);
+    const menuGroup=el("fieldset");menuGroup.append(el("legend",{text:"选区菜单"}));const menuIds=draft.textSelectionMenuActions??this.plugin.store.settings.textSelectionMenuActions??["highlight","excerpt-card","copy","fold","extend-ink","extend-text","ask","research"];
+    let menuChanged=false;const menuOptions=[["highlight","高亮"],["excerpt-card","摘录卡"],["copy","复制"],["fold","折叠"],["extend-ink","手写留白"],["extend-text","文字留白"],["ask","向 AI 提问"],["research","研究"],["speech","朗读"]] as const;const menuInputs=menuOptions.map(([id,label])=>{const box=el("input",{type:"checkbox","aria-label":"选区菜单："+label}) as HTMLInputElement;box.checked=menuIds.includes(id);box.addEventListener("change",()=>{menuChanged=true;});const row=el("label",{text:label});row.prepend(box);menuGroup.append(row);return{id,box};});pane.append(menuGroup);
     const presets=JSON.parse(JSON.stringify(draft.handwritingPresets??handwritingPresets(this.plugin.store.settings))) as HandwritingPresetSpec[];
     const penInputs=presets.map(preset=>{const row=el("div"),label=el("input",{type:"text","aria-label":"笔名称 "+preset.id}) as HTMLInputElement,color=el("input",{type:"color","aria-label":"笔颜色 "+preset.id}) as HTMLInputElement,width=el("input",{type:"number",min:"0.5",max:preset.type==="highlighter"?"64":"24",step:"0.1","aria-label":"笔宽 "+preset.id}) as HTMLInputElement;label.value=preset.label;color.value=preset.color;width.value=String(preset.width);row.append(label,color,width);pane.append(row);return{preset,label,color,width};});
     const save=el("button",{class:"ms-scene-template-save",text:"保存模板"});save.addEventListener("click",()=>{try{draft.name=name.value.trim();draft.colors=colors.value.split(",").map(value=>value.trim());draft.excerptPopup=popup.checked;draft.statusBar=statusBar.value as "full"|"compact"|"hidden";if(cardFields&&cardFront&&cardBack)draft.cardTemplate={fields:cardFields.value.split(/[,，]/).map(value=>value.trim()).filter(Boolean),front:cardFront.value,back:cardBack.value};if(menuChanged||draft.textSelectionMenuActions)draft.textSelectionMenuActions=[...menuInputs.filter(item=>item.box.checked).map(item=>item.id),...menuIds.filter(id=>!menuOptions.some(option=>option[0]===id))];draft.handwritingPresets=penInputs.map(({preset,label,color,width})=>({...preset,label:label.value.trim(),color:color.value,width:Number(width.value),...(Number(width.value)===preset.width?{}:{documentWidth:Number(width.value),mindmapWidth:Number(width.value),cardWidth:Number(width.value)})}));this.plugin.store.saveSceneTemplate(draft);this.reader?.refreshSceneSettings?.();this.drawToolbar();new Notice(saveFeedback(this.plugin.store, "模板已保存"));this.openSceneTemplateManager();}catch(error){new Notice("保存失败："+String(error));}});pane.append(save);
@@ -2060,8 +2074,6 @@ export class StudyWorkspaceView extends ItemView {
   }
   private useReaderTool(mode:string): void {
     if(!this.reader){this.chooseDocument();return;}
-    const scene=this.plugin.store.getStudyScene(this.plugin.store.activeStudySetId??"");
-    this.reader.setAutomaticTextExcerpt(mode==="text"&&scene?.interfaceMode==="scenes"&&(scene.sceneId==="excerpt"||scene.sceneId==="writing"));
     if(this.reader instanceof ReaderView)this.reader.setContinuousExcerptPen(mode);
     this.reader.setBlockSelectionMode(false);
     const controls=this.reader.getReaderToolbar();
@@ -2074,7 +2086,7 @@ export class StudyWorkspaceView extends ItemView {
     } else if(mode==="pen") {this.reader.setHandwritingMode(this.reader.getHandwritingMode()==="pen"?"off":"pen");mode=this.reader.getHandwritingMode()==="off"?"text":"pen";}
     else if(mode==="region") {this.reader.setHandwritingMode("off");this.reader.setRegionMode(true);}
     if (mode === "extend") { if (!(this.reader instanceof ReaderView) || !this.reader.getPdfPageEdits()) { new Notice("请先打开 PDF 后添加留白"); return; } this.reader.beginExtend(); }
-    this.readerTool=mode;this.drawToolbar();
+    this.readerTool=mode;this.syncAutomaticTextExcerpt();this.drawToolbar();
   }
   private readerAction(label:string): void {
     if(!this.reader){this.chooseDocument();return;}
@@ -2511,9 +2523,9 @@ export class StudyWorkspaceView extends ItemView {
       content.replaceChildren();content.setAttribute("aria-label",name==="UI Theme"?"界面主题":name);head.lastElementChild!.textContent=name==="UI Theme"?"界面主题":name;
       categories.forEach(button=>button.setAttribute("aria-pressed",String(button.textContent===(name==="UI Theme"?"界面主题":name))));
       const heading=(text:string)=>content.append(el("h3",{text}));
-      const toggle=(label:string,key:"showFootnotesLinksOnMargin"|"hideMarginNumbers"|"tapPageEdges"|"assistiveExcerpt"|"excerptPopup"|"excerptLockColors"|"excerptAutoExpandRect"|"autoCardOnHighlight"|"autoCardOnRegion"|"appleOcrEngine"|"ocrSelectionCorrection")=>{
+      const toggle=(label:string,key:"showFootnotesLinksOnMargin"|"hideMarginNumbers"|"tapPageEdges"|"assistiveExcerpt"|"autoHighlightOnSelect"|"excerptPopup"|"excerptLockColors"|"excerptAutoExpandRect"|"autoCardOnHighlight"|"autoCardOnRegion"|"appleOcrEngine"|"ocrSelectionCorrection")=>{
         const row=el("label",{class:"ms-reading-preference-row"}),input=el("input",{type:"checkbox","aria-label":label});input.checked=!!this.plugin.store.settings[key];
-        input.addEventListener("change",()=>{this.plugin.store.settings[key]=input.checked;this.plugin.store.save();if(key==="appleOcrEngine"&&this.reader instanceof ReaderView)this.reader.refreshOcr();});row.append(el("span",{text:label}),input);content.append(row);
+        input.addEventListener("change",()=>{this.plugin.store.settings[key]=input.checked;this.plugin.store.save();if(key==="autoHighlightOnSelect")this.syncAutomaticTextExcerpt();if(key==="appleOcrEngine"&&this.reader instanceof ReaderView)this.reader.refreshOcr();});row.append(el("span",{text:label}),input);content.append(row);
       };
       if(name==="Card Style"){
         const fontLabel="Card font - (Title & Highlight & Comments)",row=el("label",{class:"ms-reading-preference-row"}),font=el("select",{"aria-label":fontLabel});
@@ -2540,7 +2552,7 @@ export class StudyWorkspaceView extends ItemView {
         }
       }else if(name==="Excerpt"){
         heading("Assistive Excerpt");toggle("Assistive Excerpt","assistiveExcerpt");
-        heading("Highlight operation");toggle("Pop up menu after add excerpt","excerptPopup");toggle("Auto expand the rect selection horizontally","excerptAutoExpandRect");
+        heading("Highlight operation");toggle("拖选文本自动高亮","autoHighlightOnSelect");toggle("Pop up menu after add excerpt","excerptPopup");toggle("Auto expand the rect selection horizontally","excerptAutoExpandRect");
         heading("Excerpt color shortcuts");
         const reset=el("button",{text:"重置摘录颜色快捷键","aria-label":"重置摘录颜色快捷键"});reset.addEventListener("click",()=>{
           this.plugin.store.settings.colors=["#ffd54f","#ff8a80","#80cbc4","#9fa8da","#ce93d8","#a5d6a7"];this.plugin.store.settings.defaultColor="#ffd54f";this.plugin.store.save();new Notice("已重置摘录颜色快捷栏");
