@@ -1601,6 +1601,7 @@ async function openPdfInlineTextBox(h: Awaited<ReturnType<typeof createHarness>>
   label: string;
   mobile: boolean;
   mindmap: boolean;
+  placement?: "left" | "right" | "bottom";
 }) => {
   const h = activeHarness!;
   const raf = () => new Promise<void>(r => requestAnimationFrame(() => r()));
@@ -1609,6 +1610,7 @@ async function openPdfInlineTextBox(h: Awaited<ReturnType<typeof createHarness>>
   (h.view as any).state.ratio = 0.5;
   (h.view as any).state.mindmap = cfg.mindmap;
   (h.view as any).state.reader = true;
+  (h.view as any).state.placement = cfg.placement ?? "left";
   (h.view as any).state.bottomCollapsed = false;
   (h.view as any).state.cleanView = false;
   h.root.style.removeProperty("--ms-capsule-bottom");
@@ -1774,6 +1776,7 @@ async function openPdfInlineTextBox(h: Awaited<ReturnType<typeof createHarness>>
 
   // Restore defaults
   (h.view as any).state.mindmap = true;
+  (h.view as any).state.placement = "left";
   document.body.classList.remove("is-mobile");
   (h.view as any).applyLayout();
   await frame();
@@ -1958,10 +1961,12 @@ try {
 
     // U1-06: bottom overflow & unified more menus expand clearance (0 overlap, 3x round-trip 30f stability, scroll-safe)
     const u106Profiles = [
-      { label: "380x700@DPR2-readerOnly", w: 380, h: 700, dpr: 2, mobile: true, mindmap: false },
-      { label: "380x700@DPR2-split", w: 380, h: 700, dpr: 2, mobile: true, mindmap: true },
-      { label: "590x800@DPR3-readerOnly", w: 590, h: 800, dpr: 3, mobile: true, mindmap: false },
-      { label: "590x800@DPR3-split", w: 590, h: 800, dpr: 3, mobile: true, mindmap: true },
+      { label: "380x700@DPR2-readerOnly", w: 380, h: 700, dpr: 2, mobile: true, mindmap: false, placement: "left" },
+      { label: "380x700@DPR2-split", w: 380, h: 700, dpr: 2, mobile: true, mindmap: true, placement: "left" },
+      { label: "590x800@DPR3-readerOnly", w: 590, h: 800, dpr: 3, mobile: true, mindmap: false, placement: "left" },
+      { label: "590x800@DPR3-split", w: 590, h: 800, dpr: 3, mobile: true, mindmap: true, placement: "left" },
+      { label: "756x851@DPR2-stacked", w: 756, h: 851, dpr: 2, mobile: true, mindmap: true, placement: "left" },
+      { label: "756x851@DPR2-horizontal", w: 756, h: 851, dpr: 2, mobile: true, mindmap: true, placement: "right" },
     ];
     for (const p of u106Profiles) {
       await browser("set", "viewport", String(p.w), String(p.h), String(p.dpr));
@@ -1969,6 +1974,7 @@ try {
         label: p.label,
         mobile: p.mobile,
         mindmap: p.mindmap,
+        placement: p.placement,
       })})`));
     }
     const u106Failures = report.u106.filter(r => !r.passed);

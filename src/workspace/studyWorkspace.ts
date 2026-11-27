@@ -1418,6 +1418,12 @@ export class StudyWorkspaceView extends ItemView {
     if (this.state.placement === "bottom") return false;
     return getComputedStyle(this.body).flexDirection === "column";
   }
+  private getReaderBottomInset(rootRect: DOMRect): number {
+    if (!this.isReaderStackedAboveMap() || !this.mapPane) return 0;
+    const mapRect = this.mapPane.getBoundingClientRect();
+    if (mapRect.height <= 0) return 0;
+    return Math.max(0, rootRect.bottom - mapRect.top);
+  }
   private hasHorizontalOverlapWithReader(barRect: DOMRect): boolean {
     if (!this.readerPane) return true;
     const readerRect = this.readerPane.getBoundingClientRect();
@@ -1456,7 +1462,7 @@ export class StudyWorkspaceView extends ItemView {
         collapsed: false,
         barVisible: stylebarVisible,
         horizontalOverlap: stylebarRect ? this.hasHorizontalOverlapWithReader(stylebarRect) : false,
-        readerStackedAboveMap: false,
+        readerBottomInset: 0,
         containerHeight: this.root.clientHeight,
       });
       this.writeBottomClearance(clearance);
@@ -1469,12 +1475,12 @@ export class StudyWorkspaceView extends ItemView {
       (typeof this.bottomCapsule.checkVisibility !== "function" ||
         this.bottomCapsule.checkVisibility());
     const rootRect = this.root.getBoundingClientRect();
-    const stackedAboveMap = this.isReaderStackedAboveMap();
+    const readerBottomInset = this.getReaderBottomInset(rootRect);
     const baseFlags = {
       cleanView: this.state.cleanView,
       statusBarHidden: this.root.dataset.statusBar === "hidden",
       collapsed: this.state.bottomCollapsed,
-      readerStackedAboveMap: stackedAboveMap,
+      readerBottomInset,
       containerHeight: this.root.clientHeight,
     };
     const capsuleRect = this.bottomCapsule.getBoundingClientRect();

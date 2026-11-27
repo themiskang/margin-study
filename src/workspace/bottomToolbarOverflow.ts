@@ -28,20 +28,20 @@ export interface BottomBarClearanceInput {
   barVisible: boolean;
   /** 底部浮层与阅读区在水平 X 轴上是否相交（与垂直 margin-bottom 完全正交，默认 true）。 */
   horizontalOverlap?: boolean;
-  readerStackedAboveMap?: boolean;
+  /** 阅读区底边到工作区底边的固有距离（px；横排/单文档为 0，竖排 reader 在上时为脑图顶边到容器底边距离）。 */
+  readerBottomInset?: number;
   containerHeight?: number;
   minReaderHeight?: number;
 }
 
-/** 仅由底部浮层自身几何与底距推导安全区高度（px），不依赖会被自身修改的阅读区垂直矩形。 */
+/** 仅由底部浮层自身几何与底距推导安全区高度（px），按几何覆盖深度判断，不依赖会被自身修改的阅读区垂直矩形。 */
 export function computeBottomBarClearance(input: BottomBarClearanceInput): number {
   if (
     input.cleanView ||
     input.statusBarHidden ||
     input.collapsed ||
     !input.barVisible ||
-    input.horizontalOverlap === false ||
-    input.readerStackedAboveMap
+    input.horizontalOverlap === false
   ) {
     return 0;
   }
@@ -50,11 +50,17 @@ export function computeBottomBarClearance(input: BottomBarClearanceInput): numbe
   const barBottomOffset = Number.isFinite(input.barBottomOffset)
     ? Math.max(0, input.barBottomOffset)
     : 0;
+  const readerBottomInset = Number.isFinite(input.readerBottomInset)
+    ? Math.max(0, input.readerBottomInset!)
+    : 0;
+  const overlapDepth = barHeight + barBottomOffset - readerBottomInset;
+  if (overlapDepth <= 0) return 0;
   const gap = Number.isFinite(input.gap) ? Math.max(0, input.gap!) : 8;
-  const raw = Math.max(0, Math.ceil(barHeight + barBottomOffset + gap));
+  const raw = Math.max(0, Math.ceil(overlapDepth + gap));
   if (Number.isFinite(input.containerHeight) && input.containerHeight! > 0) {
     const minReaderHeight = input.minReaderHeight ?? 64;
-    const maxAllowed = Math.max(0, Math.floor(input.containerHeight! - minReaderHeight));
+    const availableReaderHeight = Math.max(0, input.containerHeight! - readerBottomInset);
+    const maxAllowed = Math.max(0, Math.floor(availableReaderHeight - minReaderHeight));
     return Math.min(raw, maxAllowed);
   }
   return raw;
