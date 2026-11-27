@@ -1472,6 +1472,131 @@ async function openPdfInlineTextBox(h: Awaited<ReturnType<typeof createHarness>>
   return { passed: true, toggleDelta: Number(toggleDelta.toFixed(2)), stylebarScrollDiff: Number((stylebar.scrollWidth - stylebar.clientWidth).toFixed(2)) };
 };
 
+(window as any).measureU105StabilityCase = async (cfg: {
+  label: string;
+  mobile: boolean;
+  ratio: number;
+  mindmap: boolean;
+  safeAreaInsetBottom: number;
+  feedbackProbe?: boolean;
+}) => {
+  const h = activeHarness!;
+  const raf = () => new Promise<void>(r => requestAnimationFrame(() => r()));
+  document.body.classList.toggle("is-mobile", cfg.mobile);
+  h.store.setStudyInterface("set-1", "scenes");
+  (h.view as any).state.ratio = cfg.ratio;
+  (h.view as any).state.mindmap = cfg.mindmap;
+  (h.view as any).state.reader = true;
+  (h.view as any).state.bottomCollapsed = false;
+  (h.view as any).state.cleanView = false;
+  if (cfg.safeAreaInsetBottom > 0) {
+    h.root.style.setProperty("--ms-capsule-bottom", \`calc(24px + \${cfg.safeAreaInsetBottom}px)\`);
+  } else {
+    h.root.style.removeProperty("--ms-capsule-bottom");
+  }
+  const readerPane = h.root.querySelector<HTMLElement>(".ms-workspace-reader")!;
+  readerPane.style.marginBottom = cfg.feedbackProbe ? "var(--ms-bottom-bar-clearance, 0px)" : "";
+  (h.view as any).applyLayout();
+  await h.openDoc("pdf");
+  await h.selectScene("excerpt");
+  window.dispatchEvent(new Event("resize"));
+  await raf();
+
+  const samples: number[] = [];
+  for (let i = 0; i < 30; i++) {
+    await raf();
+    const v = parseFloat(getComputedStyle(h.root).getPropertyValue("--ms-bottom-bar-clearance")) || 0;
+    samples.push(Number(v.toFixed(2)));
+  }
+
+  let zeroNonZeroFlips = 0;
+  for (let i = 1; i < samples.length; i++) {
+    if ((samples[i - 1] === 0) !== (samples[i] === 0)) zeroNonZeroFlips++;
+  }
+  const minVal = Math.min(...samples);
+  const maxVal = Math.max(...samples);
+  const rangeAll = Number((maxVal - minVal).toFixed(2));
+  const tail = samples.slice(5);
+  const rangeTail = Number((Math.max(...tail) - Math.min(...tail)).toFixed(2));
+  const capsule = h.root.querySelector<HTMLElement>(".ms-bottom-capsule-shell")!;
+  const capsuleRect = capsule.getBoundingClientRect();
+  const capsuleBottomCss = parseFloat(getComputedStyle(capsule).bottom) || 0;
+  const bodyFlexDir = getComputedStyle(h.root.querySelector<HTMLElement>(".ms-workspace-body")!).flexDirection;
+  const stackedAboveMap = cfg.mindmap && bodyFlexDir === "column";
+  const expectedClearance = stackedAboveMap ? 0 : Math.ceil(capsuleRect.height + capsuleBottomCss + 8);
+
+  // 3 scroll positions zero-overlap & bottom last-line visibility check (when reader is not feedback-probed)
+  const scrollChecks: any[] = [];
+  if (!cfg.feedbackProbe) {
+    const scroll = h.root.querySelector<HTMLElement>(".ms-scroll")!;
+    const maxScroll = Math.max(0, scroll.scrollHeight - scroll.clientHeight);
+    for (const [posName, targetScroll] of [["top", 0], ["mid", Math.round(maxScroll / 2)], ["bottom", maxScroll]] as const) {
+      scroll.scrollTop = targetScroll;
+      await frame();
+      const host = h.root.querySelector<HTMLElement>(".ms-workspace-reader-host")!;
+      const hostRect = host.getBoundingClientRect();
+      const barRect = capsule.getBoundingClientRect();
+      const horizOverlap = barRect.left < hostRect.right && barRect.right > hostRect.left;
+      const lines = [...host.querySelectorAll<HTMLElement>(".ms-text-layer > span")];
+      let maxArea = 0;
+      for (const line of lines) {
+        const r = line.getBoundingClientRect();
+        const clipped = {
+          left: Math.max(r.left, hostRect.left),
+          right: Math.min(r.right, hostRect.right),
+          top: Math.max(r.top, hostRect.top),
+          bottom: Math.min(r.bottom, hostRect.bottom),
+        };
+        if (clipped.bottom - clipped.top <= 0.5 || clipped.right - clipped.left <= 0.5) continue;
+        const inter = intersectionArea(clipped, barRect);
+        if (inter.area > maxArea) maxArea = inter.area;
+      }
+      let lastLineOk = true;
+      if (posName === "bottom") {
+        const lastRect = lines[lines.length - 1].getBoundingClientRect();
+        lastLineOk =
+          lastRect.top >= hostRect.top - 1 &&
+          lastRect.bottom <= hostRect.bottom + 1 &&
+          (!horizOverlap || lastRect.bottom <= barRect.top + 1);
+      }
+      scrollChecks.push({ posName, maxArea: Number(maxArea.toFixed(2)), lastLineOk });
+    }
+  }
+
+  // Cleanup inline overrides
+  readerPane.style.marginBottom = "";
+  h.root.style.removeProperty("--ms-capsule-bottom");
+  (h.view as any).state.mindmap = true;
+  (h.view as any).state.ratio = 0.5;
+  document.body.classList.remove("is-mobile");
+  (h.view as any).applyLayout();
+  await frame();
+
+  const finalVal = samples[samples.length - 1];
+  const scrollPassed = scrollChecks.every(c => c.maxArea === 0 && c.lastLineOk);
+  const stablePassed = zeroNonZeroFlips === 0 && rangeTail === 0 && Math.abs(finalVal - expectedClearance) <= 1;
+
+  return {
+    label: cfg.label,
+    mobile: cfg.mobile,
+    mindmap: cfg.mindmap,
+    safeAreaInsetBottom: cfg.safeAreaInsetBottom,
+    feedbackProbe: !!cfg.feedbackProbe,
+    capsuleHeight: Number(capsuleRect.height.toFixed(2)),
+    capsuleBottomCss: Number(capsuleBottomCss.toFixed(2)),
+    expectedClearance,
+    finalClearance: finalVal,
+    minVal,
+    maxVal,
+    rangeAll,
+    rangeTail,
+    zeroNonZeroFlips,
+    samples,
+    scrollChecks,
+    passed: stablePassed && scrollPassed,
+  };
+};
+
 (window as any).ready = true;
 `;
 
@@ -1550,6 +1675,7 @@ try {
       u102: null,
       u103: [],
       u104: [],
+      u105: [],
       u201: [],
       u202: null,
       u203: [],
@@ -1612,6 +1738,33 @@ try {
       report.u104.push(await evalJson(`window.measureU104Viewport(${w}, ${hSize})`));
     }
 
+    // U1-05: 30-frame clearance stability, feedback-loop immunity, mobile DPR3 split & safe-area-inset-bottom
+    const u105Profiles = [
+      { label: "1131x800@DPR3-mobile", w: 1131, h: 800, dpr: 3, mobile: true, ratio: 0.5, mindmap: true, safeAreaInsetBottom: 0 },
+      { label: "1131x800@DPR3-mobile-safe24", w: 1131, h: 800, dpr: 3, mobile: true, ratio: 0.5, mindmap: true, safeAreaInsetBottom: 24 },
+      { label: "1131x800@DPR3-feedback-probe", w: 1131, h: 800, dpr: 3, mobile: true, ratio: 0.5, mindmap: true, safeAreaInsetBottom: 0, feedbackProbe: true },
+      { label: "590x800@DPR3-mobile-split", w: 590, h: 800, dpr: 3, mobile: true, ratio: 0.5, mindmap: true, safeAreaInsetBottom: 20 },
+      { label: "756x800@DPR3-mobile-stacked", w: 756, h: 800, dpr: 3, mobile: true, ratio: 0.5, mindmap: true, safeAreaInsetBottom: 20 },
+      { label: "756x800@DPR3-mobile-readerOnly", w: 756, h: 800, dpr: 3, mobile: true, ratio: 0.5, mindmap: false, safeAreaInsetBottom: 20 },
+      { label: "756x427", w: 756, h: 427, dpr: 1, mobile: false, ratio: 0.5, mindmap: true, safeAreaInsetBottom: 0 },
+      { label: "380x700", w: 380, h: 700, dpr: 1, mobile: false, ratio: 0.5, mindmap: true, safeAreaInsetBottom: 0 },
+    ];
+    for (const p of u105Profiles) {
+      await browser("set", "viewport", String(p.w), String(p.h), String(p.dpr));
+      report.u105.push(await evalJson(`window.measureU105StabilityCase(${JSON.stringify({
+        label: p.label,
+        mobile: p.mobile,
+        ratio: p.ratio,
+        mindmap: p.mindmap,
+        safeAreaInsetBottom: p.safeAreaInsetBottom,
+        feedbackProbe: !!p.feedbackProbe,
+      })})`));
+    }
+    const u105Failures = report.u105.filter(r => !r.passed);
+    if (u105Failures.length > 0) {
+      throw new Error("U1-05 FAILED: " + JSON.stringify(u105Failures, null, 2));
+    }
+
     // U2-01: legacy top extra-tools toggle & controls completely removed, top capsule 100% unobstructed
     for (const [w, hSize, dpr] of [[1131, 800, 3], [1512, 851, 1], [756, 851, 1], [380, 700, 1]]) {
       await browser("set", "viewport", String(w), String(hSize), String(dpr));
@@ -1655,7 +1808,7 @@ try {
     const totalU101Checks = report.u101.reduce((s, r) => s + r.checkedCount, 0);
     const totalU103Items = report.u103.reduce((s, r) => s + r.scenes.reduce((a, b) => a + b.clickedCount, 0), 0);
     console.log(
-      `PASS pad-toolbar-layout: U1-01 (${totalU101Checks}/${totalU101Checks}, maxOverlapArea=0), U1-02 (3/3), U1-03 (${totalU103Items}/${totalU103Items}), U1-04 (3/3), U2-01 (4/4), U2-02 (${report.u202.total}/24, ${report.u202.uniqueCount}/9 unique), U2-03 (3/3), U3-01 (3/3 single-slot), U3-02 (${report.u302.count}/10 exit paths, ${report.u302.outsideTargets.length}/4 outside, ${report.u302.whitelist.length}/3 whitelist), U-JOINT-01 (PASS)`,
+      `PASS pad-toolbar-layout: U1-01 (${totalU101Checks}/${totalU101Checks}, maxOverlapArea=0), U1-02 (3/3), U1-03 (${totalU103Items}/${totalU103Items}), U1-04 (3/3), U1-05 (${report.u105.length}/${report.u105.length}, 30f stable), U2-01 (4/4), U2-02 (${report.u202.total}/24, ${report.u202.uniqueCount}/9 unique), U2-03 (3/3), U3-01 (3/3 single-slot), U3-02 (${report.u302.count}/10 exit paths, ${report.u302.outsideTargets.length}/4 outside, ${report.u302.whitelist.length}/3 whitelist), U-JOINT-01 (PASS)`,
     );
   } finally {
     await browser("close").catch(() => {});

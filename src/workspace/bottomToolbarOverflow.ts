@@ -18,58 +18,46 @@ export interface BottomToolbarOverflowPlan {
   overflowIds: string[];
 }
 
-export interface ClearanceRect {
-  left: number;
-  right: number;
-  top: number;
-  bottom: number;
-  width: number;
-  height: number;
-}
-
-export interface BottomClearanceOptions {
+export interface BottomBarClearanceInput {
+  barHeight: number;
+  barBottomOffset: number;
+  gap?: number;
   cleanView: boolean;
   statusBarHidden: boolean;
   collapsed: boolean;
-  capsuleVisible: boolean;
-  gap?: number;
+  barVisible: boolean;
+  /** 底部浮层与阅读区在水平 X 轴上是否相交（与垂直 margin-bottom 完全正交，默认 true）。 */
+  horizontalOverlap?: boolean;
+  readerStackedAboveMap?: boolean;
+  containerHeight?: number;
   minReaderHeight?: number;
 }
 
-/** 计算底部胶囊与阅读区重叠时所需的底部安全区高度（px）。 */
-export function computeBottomBarClearance(
-  readerRect: ClearanceRect | null,
-  capsuleRect: ClearanceRect | null,
-  options: BottomClearanceOptions,
-): number {
+/** 仅由底部浮层自身几何与底距推导安全区高度（px），不依赖会被自身修改的阅读区垂直矩形。 */
+export function computeBottomBarClearance(input: BottomBarClearanceInput): number {
   if (
-    options.cleanView ||
-    options.statusBarHidden ||
-    options.collapsed ||
-    !options.capsuleVisible ||
-    !readerRect ||
-    !capsuleRect
+    input.cleanView ||
+    input.statusBarHidden ||
+    input.collapsed ||
+    !input.barVisible ||
+    input.horizontalOverlap === false ||
+    input.readerStackedAboveMap
   ) {
     return 0;
   }
-  if (
-    capsuleRect.width <= 0 ||
-    capsuleRect.height <= 0 ||
-    readerRect.width <= 0 ||
-    readerRect.height <= 0
-  ) {
-    return 0;
+  const barHeight = Number.isFinite(input.barHeight) ? Math.max(0, input.barHeight) : 0;
+  if (barHeight <= 0) return 0;
+  const barBottomOffset = Number.isFinite(input.barBottomOffset)
+    ? Math.max(0, input.barBottomOffset)
+    : 0;
+  const gap = Number.isFinite(input.gap) ? Math.max(0, input.gap!) : 8;
+  const raw = Math.max(0, Math.ceil(barHeight + barBottomOffset + gap));
+  if (Number.isFinite(input.containerHeight) && input.containerHeight! > 0) {
+    const minReaderHeight = input.minReaderHeight ?? 64;
+    const maxAllowed = Math.max(0, Math.floor(input.containerHeight! - minReaderHeight));
+    return Math.min(raw, maxAllowed);
   }
-  const horizontalOverlap =
-    capsuleRect.left < readerRect.right && capsuleRect.right > readerRect.left;
-  if (!horizontalOverlap) return 0;
-  if (readerRect.bottom <= capsuleRect.top) return 0;
-
-  const gap = options.gap ?? 8;
-  const raw = Math.max(0, Math.ceil(readerRect.bottom - capsuleRect.top + gap));
-  const minReaderHeight = options.minReaderHeight ?? 64;
-  const maxAllowed = Math.max(0, Math.floor(readerRect.height - minReaderHeight));
-  return Math.min(raw, maxAllowed);
+  return raw;
 }
 
 /** 按可用宽度与优先级计算底部工具行的可见项与溢出项；不超宽时零溢出。 */

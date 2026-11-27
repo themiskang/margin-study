@@ -163,6 +163,7 @@ export class StudyWorkspaceView extends ItemView {
   private workspaceNoticeLayer: HTMLElement | null = null;
   private workspaceNoticeTimer: number | null = null;
   private bottomPressDisposers: (() => void)[] = [];
+  private lastBottomClearance: string | null = null;
   private bottomOverflow: BottomToolbarOverflowController | null = null;
   private bottomLayoutResize: ResizeObserver | null = null;
   private bottomLayoutRaf: number | null = null;
@@ -317,7 +318,13 @@ export class StudyWorkspaceView extends ItemView {
     this.bottomLayoutResize = new ResizeObserver(() => this.scheduleBottomLayoutSync());
     this.bottomLayoutResize.observe(this.root);
     this.bottomLayoutResize.observe(this.bottomCapsule);
-    this.bottomLayoutResize.observe(this.readerPane);
+    this.registerDomEvent(window, "resize", () => this.scheduleBottomLayoutSync());
+    const visualViewport = window.visualViewport;
+    if (visualViewport) {
+      const onVisualViewportResize = () => this.scheduleBottomLayoutSync();
+      visualViewport.addEventListener("resize", onVisualViewportResize);
+      this.register(() => visualViewport.removeEventListener("resize", onVisualViewportResize));
+    }
     const inlineEditorChanged = () => {
       if (this.root.dataset.inlineTextEditing === "true") {
         this.bottomOverflow?.closeMenu();
@@ -333,6 +340,7 @@ export class StudyWorkspaceView extends ItemView {
     this.register(() => {
       this.root.removeEventListener(INLINE_TEXT_EDITOR_CHANGE_EVENT, inlineEditorChanged);
       this.bottomLayoutResize?.disconnect(); this.bottomLayoutResize = null;
+      this.lastBottomClearance = null;
       if (this.bottomLayoutRaf !== null) { window.cancelAnimationFrame(this.bottomLayoutRaf); this.bottomLayoutRaf = null; }
       this.bottomOverflow?.dispose(); this.bottomOverflow = null;
     });
@@ -1401,39 +1409,81 @@ export class StudyWorkspaceView extends ItemView {
     primary.append(sceneNav,tools);
     dock.replaceChildren(collapse,primary);
   }
+  private readElementBottomOffset(element: HTMLElement): number {
+    const parsed = parseFloat(getComputedStyle(element).bottom);
+    return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+  }
+  private isReaderStackedAboveMap(): boolean {
+    if (!this.body || !this.state.reader || !this.state.mindmap) return false;
+    if (this.state.placement === "bottom") return false;
+    return getComputedStyle(this.body).flexDirection === "column";
+  }
+  private hasHorizontalOverlapWithReader(barRect: DOMRect): boolean {
+    if (!this.readerPane) return true;
+    const readerRect = this.readerPane.getBoundingClientRect();
+    if (readerRect.width <= 0 || barRect.width <= 0) return false;
+    return barRect.left < readerRect.right && barRect.right > readerRect.left;
+  }
+  private writeBottomClearance(clearance: number): void {
+    const nextValue = `${clearance}px`;
+    if (
+      this.lastBottomClearance !== nextValue ||
+      this.root.style.getPropertyValue("--ms-bottom-bar-clearance") !== nextValue
+    ) {
+      this.lastBottomClearance = nextValue;
+      this.root.style.setProperty("--ms-bottom-bar-clearance", nextValue);
+    }
+  }
   private syncBottomClearance(): void {
-    if (!this.root || !this.bottomCapsule || !this.readerPane) return;
+    if (!this.root || !this.bottomCapsule) return;
     if (this.root.dataset.inlineTextEditing === "true") {
       const stylebar = this.root.querySelector<HTMLElement>(".ms-overlay-stylebar");
       const stylebarRect = stylebar?.getBoundingClientRect() ?? null;
-      const clearance = computeBottomBarClearance(
-        this.readerPane.getBoundingClientRect(),
-        stylebarRect,
-        {
-          cleanView: false,
-          statusBarHidden: false,
-          collapsed: false,
-          capsuleVisible: !!stylebar && !!stylebarRect && stylebarRect.height > 0,
-          gap: 4,
-        },
-      );
-      this.root.style.setProperty("--ms-bottom-bar-clearance", `${clearance}px`);
+      const stylebarHeight = stylebar
+        ? Math.max(stylebar.offsetHeight, stylebarRect?.height ?? 0)
+        : 0;
+      const stylebarBottom = stylebar ? this.readElementBottomOffset(stylebar) : 0;
+      const stylebarVisible =
+        !!stylebar &&
+        stylebarHeight > 0 &&
+        getComputedStyle(stylebar).display !== "none";
+      const clearance = computeBottomBarClearance({
+        barHeight: stylebarHeight,
+        barBottomOffset: stylebarBottom,
+        gap: 4,
+        cleanView: false,
+        statusBarHidden: false,
+        collapsed: false,
+        barVisible: stylebarVisible,
+        horizontalOverlap: stylebarRect ? this.hasHorizontalOverlapWithReader(stylebarRect) : false,
+        readerStackedAboveMap: false,
+        containerHeight: this.root.clientHeight,
+      });
+      this.writeBottomClearance(clearance);
       return;
     }
-    const capsuleVisible = typeof this.bottomCapsule.checkVisibility === "function"
-      ? this.bottomCapsule.checkVisibility()
-      : getComputedStyle(this.bottomCapsule).display !== "none";
-    const clearance = computeBottomBarClearance(
-      this.readerPane.getBoundingClientRect(),
-      this.bottomCapsule.getBoundingClientRect(),
-      {
-        cleanView: this.state.cleanView,
-        statusBarHidden: this.root.dataset.statusBar === "hidden",
-        collapsed: this.state.bottomCollapsed,
-        capsuleVisible,
-      },
-    );
-    this.root.style.setProperty("--ms-bottom-bar-clearance", `${clearance}px`);
+    const capsuleStyle = getComputedStyle(this.bottomCapsule);
+    const capsuleVisible =
+      capsuleStyle.display !== "none" &&
+      capsuleStyle.visibility !== "hidden" &&
+      (typeof this.bottomCapsule.checkVisibility !== "function" ||
+        this.bottomCapsule.checkVisibility());
+    const capsuleRect = this.bottomCapsule.getBoundingClientRect();
+    const capsuleHeight = Math.max(this.bottomCapsule.offsetHeight, capsuleRect.height);
+    const capsuleBottom = this.readElementBottomOffset(this.bottomCapsule);
+    const clearance = computeBottomBarClearance({
+      barHeight: capsuleHeight,
+      barBottomOffset: capsuleBottom,
+      gap: 8,
+      cleanView: this.state.cleanView,
+      statusBarHidden: this.root.dataset.statusBar === "hidden",
+      collapsed: this.state.bottomCollapsed,
+      barVisible: capsuleVisible && capsuleHeight > 0,
+      horizontalOverlap: this.hasHorizontalOverlapWithReader(capsuleRect),
+      readerStackedAboveMap: this.isReaderStackedAboveMap(),
+      containerHeight: this.root.clientHeight,
+    });
+    this.writeBottomClearance(clearance);
   }
   private syncBottomLayout(): void {
     this.bottomOverflow?.sync();
